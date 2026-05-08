@@ -1,0 +1,33 @@
+# Dependencies
+frontend/.next/
+frontend/node_modules/
+backend/.venv/
+backend/__pycache__/
+backend/**/*.pyc
+
+# Database
+backend/console.db
+backend/console.db-shm
+backend/console.db-wal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+**/.DS_Store
+
+# Task workspaces
+.task-workspaces/
+
+# References
+references/
+reference-cc-gui/
+scratch/
+
+# Temporary files
+*.log
+*.tmp

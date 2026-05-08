@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>冒泡排序算法演示</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 900px;
+            width: 100%;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            color: white;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .btn-start {
+            background: #4CAF50;
+        }
+
+        .btn-start:hover {
+            background: #45a049;
+        }
+
+        .btn-pause {
+            background: #ff9800;
+        }
+
+        .btn-pause:hover {
+            background: #e68900;
+        }
+
+        .btn-reset {
+            background: #f44336;
+        }
+
+        .btn-reset:hover {
+            background: #da190b;
+        }
+
+        .btn-generate {
+            background: #2196F3;
+        }
+
+        .btn-generate:hover {
+            background: #0b7dda;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .speed-control label {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .speed-control input {
+            width: 150px;
+        }
+
+        .visualization {
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            height: 400px;
+            gap: 4px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 10px;
+        }
+
+        .bar {
+            flex: 1;
+            background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+            border-radius: 4px 4px 0 0;
+            transition: all 0.3s;
+            position: relative;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            padding-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .bar.comparing {
+            background: linear-gradient(180deg, #ff9800 0%, #ff5722 100%);
+            transform: translateY(-10px);
+        }
+
+        .bar.swapping {
+            background: linear-gradient(180deg, #f44336 0%, #e91e63 100%);
+            transform: scale(1.1);
+        }
+
+        .bar.sorted {
+            background: linear-gradient(180deg, #4CAF50 0%, #8BC34A 100%);
+        }
+
+        .info {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .info-label {
+            font-weight: bold;
+            color: #666;
+        }
+
+        .info-value {
+            color: #333;
+            font-weight: bold;
+        }
+
+        .algorithm-info {
+            background: #e3f2fd;
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 4px solid #2196F3;
+        }
+
+        .algorithm-info h3 {
+            color: #1976D2;
+            margin-bottom: 10px;
+        }
+
+        .algorithm-info p {
+            color: #555;
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+
+        .algorithm-info code {
+            background: #fff;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: #d32f2f;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 冒泡排序算法演示</h1>
+        
+        <div class="info">
+            <div class="info-row">
+                <span class="info-label">比较次数:</span>
+                <span class="info-value" id="comparisons">0</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">交换次数:</span>
+                <span class="info-value" id="swaps">0</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">当前状态:</span>
+                <span class="info-value" id="status">就绪</span>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn-start" id="startBtn" onclick="startSort()">开始排序</button>
+            <button class="btn-pause" id="pauseBtn" onclick="pauseSort()" disabled>暂停</button>
+            <button class="btn-reset" id="resetBtn" onclick="resetSort()">重置</button>
+            <button class="btn-generate" onclick="generateNewArray()">生成新数组</button>
+        </div>
+
+        <div class="speed-control">
+            <label for="speedSlider">速度:</label>
+            <input type="range" id="speedSlider" min="10" max="1000" value="500" step="10">
+            <span id="speedValue">500ms</span>
+        </div>
+
+        <div class="visualization" id="visualization"></div>
+
+        <div class="algorithm-info">
+            <h3>📚 算法说明</h3>
+            <p><strong>冒泡排序</strong>是一种简单的排序算法。它重复地遍历要排序的数列，一次比较两个元素，如果它们的顺序错误就把它们交换过来。</p>
+            <p><strong>工作原理:</strong></p>
+            <p>1. 比较相邻的元素。如果第一个比第二个大，就交换它们两个。</p>
+            <p>2. 对每一对相邻元素做同样的工作，从开始第一对到结尾的最后一对。这步做完后，最后的元素会是最大的数。</p>
+            <p>3. 针对所有的元素重复以上的步骤，除了最后一个。</p>
+            <p>4. 持续每次对越来越少的元素重复上面的步骤，直到没有任何一对数字需要比较。</p>
+            <p><strong>时间复杂度:</strong> 最坏 <code>O(n²)</code>, 最好 <code>O(n)</code>, 平均 <code>O(n²)</code></p>
+            <p><strong>空间复杂度:</strong> <code>O(1)</code></p>
+        </div>
+    </div>
+
+    <script>
+        let array = [];
+        let comparisons = 0;
+        let swaps = 0;
+        let sorting = false;
+        let paused = false;
+        let speed = 500;
+
+        // 初始化
+        function init() {
+            generateNewArray();
+            updateSpeedDisplay();
+        }
+
+        // 生成新数组
+        function generateNewArray() {
+            array = [];
+            const size = 15;
+            for (let i = 0; i < size; i++) {
+                array.push(Math.floor(Math.random() * 90) + 10);
+            }
+            resetStats();
+            renderBars();
+        }
+
+        // 渲染柱状图
+        function renderBars(comparing = [], swapping = [], sorted = []) {
+            const visualization = document.getElementById('visualization');
+            visualization.innerHTML = '';
+            
+            const maxValue = Math.max(...array);
+            
+            array.forEach((value, index) => {
+                const bar = document.createElement('div');
+                bar.className = 'bar';
+                bar.style.height = `${(value / maxValue) * 100}%`;
+                bar.textContent = value;
+                
+                if (comparing.includes(index)) {
+                    bar.classList.add('comparing');
+                }
+                if (swapping.includes(index)) {
+                    bar.classList.add('swapping');
+                }
+                if (sorted.includes(index)) {
+                    bar.classList.add('sorted');
+                }
+                
+                visualization.appendChild(bar);
+            });
+        }
+
+        // 重置统计
+        function resetStats() {
+            comparisons = 0;
+            swaps = 0;
+            updateStats();
+            updateStatus('就绪');
+        }
+
+        // 更新统计
+        function updateStats() {
+            document.getElementById('comparisons').textContent = comparisons;
+            document.getElementById('swaps').textContent = swaps;
+        }
+
+        // 更新状态
+        function updateStatus(status) {
+            document.getElementById('status').textContent = status;
+        }
+
+        // 延迟函数
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // 冒泡排序算法
+        async function bubbleSort() {
+            const n = array.length;
+            const sortedIndices = [];
+            
+            for (let i = 0; i < n - 1; i++) {
+                let swapped = false;
+                
+                for (let j = 0; j < n - i - 1; j++) {
+                    if (!sorting) return;
+                    
+                    while (paused) {
+                        await sleep(100);
+                    }
+                    
+                    // 比较
+                    comparisons++;
+                    updateStats();
+                    renderBars([j, j + 1], [], sortedIndices);
+                    await sleep(speed);
+                    
+                    if (array[j] > array[j + 1]) {
+                        // 交换
+                        swaps++;
+                        updateStats();
+                        renderBars([], [j, j + 1], sortedIndices);
+                        await sleep(speed);
+                        
+                        [array[j], array[j + 1]] = [array[j + 1], array[j]];
+                        swapped = true;
+                        
+                        renderBars([], [], sortedIndices);
+                        await sleep(speed / 2);
+                    }
+                }
+                
+                sortedIndices.push(n - i - 1);
+                renderBars([], [], sortedIndices);
+                
+                if (!swapped) break;
+            }
+            
+            // 标记所有为已排序
+            for (let i = 0; i < n; i++) {
+                sortedIndices.push(i);
+            }
+            renderBars([], [], sortedIndices);
+            
+            updateStatus('排序完成! ✓');
+            sorting = false;
+            updateButtons();
+        }
+
+        // 开始排序
+        async function startSort() {
+            if (sorting) return;
+            
+            sorting = true;
+            paused = false;
+            updateStatus('排序中...');
+            updateButtons();
+            
+            await bubbleSort();
+        }
+
+        // 暂停排序
+        function pauseSort() {
+            paused = !paused;
+            const pauseBtn = document.getElementById('pauseBtn');
+            if (paused) {
+                pauseBtn.textContent = '继续';
+                updateStatus('已暂停');
+            } else {
+                pauseBtn.textContent = '暂停';
+                updateStatus('排序中...');
+            }
+        }
+
+        // 重置
+        function resetSort() {
+            sorting = false;
+            paused = false;
+            generateNewArray();
+            updateButtons();
+        }
+
+        // 更新按钮状态
+        function updateButtons() {
+            const startBtn = document.getElementById('startBtn');
+            const pauseBtn = document.getElementById('pauseBtn');
+            const resetBtn = document.getElementById('resetBtn');
+            
+            startBtn.disabled = sorting;
+            pauseBtn.disabled = !sorting;
+            resetBtn.disabled = sorting && !paused;
+            
+            if (!sorting) {
+                pauseBtn.textContent = '暂停';
+            }
+        }
+
+        // 速度控制
+        document.getElementById('speedSlider').addEventListener('input', function(e) {
+            speed = 1010 - parseInt(e.target.value);
+            updateSpeedDisplay();
+        });
+
+        function updateSpeedDisplay() {
+            const slider = document.getElementById('speedSlider');
+            const displaySpeed = 1010 - speed;
+            slider.value = displaySpeed;
+            document.getElementById('speedValue').textContent = speed + 'ms';
+        }
+
+        // 初始化应用
+        init();
+    </script>
+</body>
+</html>

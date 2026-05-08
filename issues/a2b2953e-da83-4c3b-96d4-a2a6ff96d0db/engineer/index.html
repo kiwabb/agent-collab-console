@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>冒泡排序算法演示</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 30px;
+      color: #00d9ff;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 30px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 14px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-start { background: #00d9ff; color: #1a1a2e; }
+    .btn-pause { background: #ff9800; color: #1a1a2e; }
+    .btn-reset { background: #e91e63; color: #fff; }
+
+    select {
+      padding: 10px 16px;
+      font-size: 14px;
+      border: none;
+      border-radius: 6px;
+      background: #333;
+      color: #eee;
+      cursor: pointer;
+    }
+
+    .array-container {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      height: 300px;
+      padding: 20px 30px;
+      background: #16213e;
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+
+    .array-bar {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: all 0.3s ease;
+    }
+
+    .bar {
+      width: 40px;
+      background: linear-gradient(180deg, #00d9ff 0%, #007bff 100%);
+      border-radius: 4px 4px 0 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 8px;
+    }
+
+    .bar-value {
+      font-size: 14px;
+      font-weight: bold;
+      color: #fff;
+    }
+
+    .bar-index {
+      font-size: 11px;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    .bar.comparing {
+      background: linear-gradient(180deg, #ff9800 0%, #f57c00 100%);
+      box-shadow: 0 0 12px rgba(255, 152, 0, 0.6);
+    }
+
+    .bar.swapping {
+      background: linear-gradient(180deg, #e91e63 0%, #c2185b 100%);
+      box-shadow: 0 0 12px rgba(233, 30, 99, 0.6);
+    }
+
+    .bar.sorted {
+      background: linear-gradient(180deg, #4caf50 0%, #388e3c 100%);
+    }
+
+    .status {
+      font-size: 16px;
+      color: #aaa;
+      min-height: 24px;
+      text-align: center;
+    }
+
+    .round-info {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>冒泡排序算法演示</h1>
+
+  <div class="controls">
+    <button id="btn-start" class="btn-start">开始</button>
+    <button id="btn-pause" class="btn-pause" disabled>暂停</button>
+    <button id="btn-reset" class="btn-reset">重置</button>
+    <select id="speed-select">
+      <option value="1000">慢速</option>
+      <option value="500" selected>中速</option>
+      <option value="150">快速</option>
+    </select>
+  </div>
+
+  <div class="array-container" id="array-container"></div>
+
+  <div class="round-info" id="round-info"></div>
+  <div class="status" id="status">点击「开始」按钮开始演示</div>
+
+  <script>
+    const container = document.getElementById('array-container');
+    const statusEl = document.getElementById('status');
+    const roundInfoEl = document.getElementById('round-info');
+    const btnStart = document.getElementById('btn-start');
+    const btnPause = document.getElementById('btn-pause');
+    const btnReset = document.getElementById('btn-reset');
+    const speedSelect = document.getElementById('speed-select');
+
+    let array = [];
+    let steps = [];
+    let currentStep = 0;
+    let isRunning = false;
+    let isPaused = false;
+    let timer = null;
+
+    function generateRandomArray(size = 8, min = 10, max = 99) {
+      return Array.from({ length: size }, () => Math.floor(Math.random() * (max - min + 1)) + min);
+    }
+
+    function buildBubbleSortSteps(arr) {
+      const steps = [];
+      const a = [...arr];
+      const n = a.length;
+
+      for (let round = 0; round < n - 1; round++) {
+        for (let j = 0; j < n - round - 1; j++) {
+          steps.push({
+            type: 'compare',
+            i: j,
+            j: j + 1,
+            round,
+            arraySnapshot: [...a],
+            message: `比较 arr[${j}]=${a[j]} 和 arr[${j + 1}]=${a[j + 1]}`
+          });
+
+          if (a[j] > a[j + 1]) {
+            [a[j], a[j + 1]] = [a[j + 1], a[j]];
+            steps.push({
+              type: 'swap',
+              i: j,
+              j: j + 1,
+              round,
+              arraySnapshot: [...a],
+              message: `交换 arr[${j}] 和 arr[${j + 1}]，得到 [${a.join(', ')}]`
+            });
+          }
+        }
+        steps.push({
+          type: 'sorted',
+          i: n - round - 1,
+          round,
+          arraySnapshot: [...a],
+          message: `第 ${round + 1} 轮结束，arr[${n - round - 1}] 已排序`
+        });
+      }
+
+      steps.push({
+        type: 'complete',
+        arraySnapshot: [...a],
+        message: '排序完成！'
+      });
+
+      return steps;
+    }
+
+    function renderArray(arr, highlightI = -1, highlightJ = -1, sortedIndices = []) {
+      container.innerHTML = '';
+      const maxVal = Math.max(...arr);
+
+      arr.forEach((value, index) => {
+        const barWrapper = document.createElement('div');
+        barWrapper.className = 'array-bar';
+
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+
+        if (sortedIndices.includes(index)) {
+          bar.classList.add('sorted');
+        } else if (index === highlightI || index === highlightJ) {
+          bar.classList.add('comparing');
+        }
+
+        const height = (value / maxVal) * 240 + 30;
+        bar.style.height = `${height}px`;
+
+        const valueEl = document.createElement('span');
+        valueEl.className = 'bar-value';
+        valueEl.textContent = value;
+        bar.appendChild(valueEl);
+
+        const indexEl = document.createElement('span');
+        indexEl.className = 'bar-index';
+        indexEl.textContent = index;
+
+        barWrapper.appendChild(bar);
+        barWrapper.appendChild(indexEl);
+        container.appendChild(barWrapper);
+      });
+    }
+
+    function getSortedIndices() {
+      const sorted = [];
+      const n = array.length;
+      for (let i = 0; i < n - 1; i++) {
+        sorted.push(n - 1 - i);
+      }
+      return sorted;
+    }
+
+    function playStep() {
+      if (currentStep >= steps.length) {
+        isRunning = false;
+        btnStart.disabled = true;
+        btnPause.disabled = true;
+        statusEl.textContent = '排序完成！';
+        return;
+      }
+
+      const step = steps[currentStep];
+
+      if (step.type === 'compare') {
+        renderArray(step.arraySnapshot, step.i, step.j);
+        statusEl.textContent = step.message;
+        roundInfoEl.textContent = `第 ${step.round + 1} 轮`;
+      } else if (step.type === 'swap') {
+        renderArray(step.arraySnapshot, step.i, step.j);
+        statusEl.textContent = step.message;
+        roundInfoEl.textContent = `第 ${step.round + 1} 轮`;
+      } else if (step.type === 'sorted') {
+        const sorted = getSortedIndices().slice(0, step.round + 1);
+        renderArray(step.arraySnapshot, -1, -1, sorted);
+        statusEl.textContent = step.message;
+        roundInfoEl.textContent = `第 ${step.round + 1} 轮结束`;
+      } else if (step.type === 'complete') {
+        renderArray(step.arraySnapshot, -1, -1, getSortedIndices());
+        statusEl.textContent = step.message;
+        roundInfoEl.textContent = '';
+      }
+
+      currentStep++;
+
+      if (isRunning && !isPaused) {
+        const delay = parseInt(speedSelect.value);
+        timer = setTimeout(playStep, delay);
+      }
+    }
+
+    function startDemo() {
+      if (isPaused) {
+        isPaused = false;
+        btnPause.textContent = '暂停';
+        const delay = parseInt(speedSelect.value);
+        timer = setTimeout(playStep, delay);
+        return;
+      }
+
+      if (currentStep >= steps.length) {
+        resetDemo();
+        return;
+      }
+
+      isRunning = true;
+      isPaused = false;
+      btnStart.disabled = true;
+      btnPause.disabled = false;
+      btnReset.disabled = false;
+
+      const delay = parseInt(speedSelect.value);
+      timer = setTimeout(playStep, delay);
+    }
+
+    function pauseDemo() {
+      isPaused = true;
+      btnPause.textContent = '继续';
+      clearTimeout(timer);
+    }
+
+    function resetDemo() {
+      clearTimeout(timer);
+      isRunning = false;
+      isPaused = false;
+      currentStep = 0;
+      steps = [];
+      array = generateRandomArray();
+      steps = buildBubbleSortSteps(array);
+      renderArray(array);
+      statusEl.textContent = '点击「开始」按钮开始演示';
+      roundInfoEl.textContent = '';
+      btnStart.disabled = false;
+      btnStart.textContent = '开始';
+      btnPause.disabled = true;
+      btnPause.textContent = '暂停';
+    }
+
+    btnStart.addEventListener('click', startDemo);
+    btnPause.addEventListener('click', pauseDemo);
+    btnReset.addEventListener('click', resetDemo);
+
+    array = generateRandomArray();
+    steps = buildBubbleSortSteps(array);
+    renderArray(array);
+  </script>
+</body>
+</html>
