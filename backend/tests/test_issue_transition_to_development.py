@@ -60,6 +60,12 @@ class TransitionStoreStub:
     async def load_codex_task(self, task_id: str):
         return self.tasks.get(task_id)
 
+    async def load_runtime_catalog(self):
+        return None
+
+    async def save_runtime_catalog(self, catalog):
+        pass
+
 
 @pytest.fixture
 def client():
@@ -102,14 +108,14 @@ def build_architecture_issue_bundle(tmp_path):
 
 
 def create_architecture_artifacts(tmp_path, issue_id: str, implementation_tasks: list[dict] | None = None):
-    issue_root = tmp_path / "issues" / issue_id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "system_design.json").write_text("{}" if not implementation_tasks else json.dumps({"tasks": []}), encoding="utf-8")
+    architect_dir = tmp_path / "issues" / issue_id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "system_design.json").write_text("{}" if not implementation_tasks else json.dumps({"tasks": []}), encoding="utf-8")
     if implementation_tasks is not None:
-        (issue_root / "implementation_plan.json").write_text(json.dumps(implementation_tasks), encoding="utf-8")
+        (architect_dir / "implementation_plan.json").write_text(json.dumps(implementation_tasks), encoding="utf-8")
         # Also create development_task_list.json with same order
         task_titles = [task["title"] for task in implementation_tasks]
-        (issue_root / "development_task_list.json").write_text(json.dumps(task_titles), encoding="utf-8")
+        (architect_dir / "development_task_list.json").write_text(json.dumps(task_titles), encoding="utf-8")
 
 
 def test_transition_to_development_updates_issue_and_creates_engineer_tasks(client, monkeypatch, tmp_path):
@@ -138,9 +144,9 @@ def test_transition_to_development_updates_issue_and_creates_engineer_tasks(clie
 
 def test_transition_to_development_rejects_missing_system_design_json(client, monkeypatch, tmp_path):
     session, issue, architect_task = build_architecture_issue_bundle(tmp_path)
-    issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "implementation_plan.json").write_text(
+    architect_dir = tmp_path / "issues" / issue.id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "implementation_plan.json").write_text(
         json.dumps([{"title": "Build UI shell", "description": "Implement layout", "priority": "P1"}]),
         encoding="utf-8",
     )
@@ -155,9 +161,9 @@ def test_transition_to_development_rejects_missing_system_design_json(client, mo
 
 def test_transition_to_development_rejects_missing_implementation_plan_json(client, monkeypatch, tmp_path):
     session, issue, architect_task = build_architecture_issue_bundle(tmp_path)
-    issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "system_design.json").write_text("{}", encoding="utf-8")
+    architect_dir = tmp_path / "issues" / issue.id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "system_design.json").write_text("{}", encoding="utf-8")
     store = TransitionStoreStub(issue=issue, session=session, tasks=[architect_task])
     monkeypatch.setattr(api_module, "codex_store", store)
 
@@ -169,10 +175,10 @@ def test_transition_to_development_rejects_missing_implementation_plan_json(clie
 
 def test_transition_to_development_rejects_empty_implementation_plan(client, monkeypatch, tmp_path):
     session, issue, architect_task = build_architecture_issue_bundle(tmp_path)
-    issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "system_design.json").write_text("{}", encoding="utf-8")
-    (issue_root / "implementation_plan.json").write_text("[]", encoding="utf-8")
+    architect_dir = tmp_path / "issues" / issue.id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "system_design.json").write_text("{}", encoding="utf-8")
+    (architect_dir / "implementation_plan.json").write_text("[]", encoding="utf-8")
     store = TransitionStoreStub(issue=issue, session=session, tasks=[architect_task])
     monkeypatch.setattr(api_module, "codex_store", store)
 
@@ -214,10 +220,10 @@ def test_transition_to_development_reuses_existing_engineer_tasks(client, monkey
 def test_transition_to_development_rejects_missing_development_task_list_json(client, monkeypatch, tmp_path):
     """Verify transition fails when development_task_list.json is missing."""
     session, issue, architect_task = build_architecture_issue_bundle(tmp_path)
-    issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "system_design.json").write_text("{}", encoding="utf-8")
-    (issue_root / "implementation_plan.json").write_text(
+    architect_dir = tmp_path / "issues" / issue.id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "system_design.json").write_text("{}", encoding="utf-8")
+    (architect_dir / "implementation_plan.json").write_text(
         json.dumps([{"title": "Build UI shell", "description": "Implement layout", "priority": "P1"}]),
         encoding="utf-8",
     )
@@ -234,10 +240,10 @@ def test_transition_to_development_rejects_missing_development_task_list_json(cl
 def test_transition_to_development_returns_tasks_with_sequence_fields(client, monkeypatch, tmp_path):
     """Verify transition returns tasks with correct sequence_index and sequence_group."""
     session, issue, architect_task = build_architecture_issue_bundle(tmp_path)
-    issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "system_design.json").write_text("{}", encoding="utf-8")
-    (issue_root / "implementation_plan.json").write_text(
+    architect_dir = tmp_path / "issues" / issue.id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "system_design.json").write_text("{}", encoding="utf-8")
+    (architect_dir / "implementation_plan.json").write_text(
         json.dumps([
             {"title": "Build UI shell", "description": "Implement page layout", "priority": "P1"},
             {"title": "Wire API client", "description": "Connect fetch layer", "priority": "P1"},
@@ -245,7 +251,7 @@ def test_transition_to_development_returns_tasks_with_sequence_fields(client, mo
         ]),
         encoding="utf-8",
     )
-    (issue_root / "development_task_list.json").write_text(
+    (architect_dir / "development_task_list.json").write_text(
         json.dumps(["Build UI shell", "Wire API client", "Add error handling"]),
         encoding="utf-8",
     )
@@ -272,11 +278,11 @@ def test_transition_to_development_returns_tasks_with_sequence_fields(client, mo
 def test_transition_to_development_respects_development_task_list_order(client, monkeypatch, tmp_path):
     """Verify transition respects development_task_list.json order, not implementation_plan.json order."""
     session, issue, architect_task = build_architecture_issue_bundle(tmp_path)
-    issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "system_design.json").write_text("{}", encoding="utf-8")
+    architect_dir = tmp_path / "issues" / issue.id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "system_design.json").write_text("{}", encoding="utf-8")
     # implementation_plan.json has one order
-    (issue_root / "implementation_plan.json").write_text(
+    (architect_dir / "implementation_plan.json").write_text(
         json.dumps([
             {"title": "Task A", "description": "First in plan", "priority": "P1"},
             {"title": "Task B", "description": "Second in plan", "priority": "P1"},
@@ -285,7 +291,7 @@ def test_transition_to_development_respects_development_task_list_order(client, 
         encoding="utf-8",
     )
     # development_task_list.json has different order
-    (issue_root / "development_task_list.json").write_text(
+    (architect_dir / "development_task_list.json").write_text(
         json.dumps(["Task C", "Task A", "Task B"]),  # Different order
         encoding="utf-8",
     )
@@ -310,10 +316,10 @@ def test_transition_to_development_respects_development_task_list_order(client, 
 def test_transition_to_development_rejects_duplicate_titles_in_development_task_list(client, monkeypatch, tmp_path):
     """Verify transition fails when development_task_list.json has duplicate titles."""
     session, issue, architect_task = build_architecture_issue_bundle(tmp_path)
-    issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "system_design.json").write_text("{}", encoding="utf-8")
-    (issue_root / "implementation_plan.json").write_text(
+    architect_dir = tmp_path / "issues" / issue.id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "system_design.json").write_text("{}", encoding="utf-8")
+    (architect_dir / "implementation_plan.json").write_text(
         json.dumps([
             {"title": "Build UI shell", "description": "Implement layout", "priority": "P1"},
             {"title": "Wire API client", "description": "Connect fetch", "priority": "P1"},
@@ -321,7 +327,7 @@ def test_transition_to_development_rejects_duplicate_titles_in_development_task_
         encoding="utf-8",
     )
     # development_task_list.json has duplicate
-    (issue_root / "development_task_list.json").write_text(
+    (architect_dir / "development_task_list.json").write_text(
         json.dumps(["Build UI shell", "Build UI shell"]),  # Duplicate
         encoding="utf-8",
     )
@@ -337,10 +343,10 @@ def test_transition_to_development_rejects_duplicate_titles_in_development_task_
 def test_transition_to_development_rejects_mismatched_development_task_list(client, monkeypatch, tmp_path):
     """Verify transition fails when development_task_list.json doesn't match implementation_plan.json."""
     session, issue, architect_task = build_architecture_issue_bundle(tmp_path)
-    issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "system_design.json").write_text("{}", encoding="utf-8")
-    (issue_root / "implementation_plan.json").write_text(
+    architect_dir = tmp_path / "issues" / issue.id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "system_design.json").write_text("{}", encoding="utf-8")
+    (architect_dir / "implementation_plan.json").write_text(
         json.dumps([
             {"title": "Build UI shell", "description": "Implement layout", "priority": "P1"},
             {"title": "Wire API client", "description": "Connect fetch", "priority": "P1"},
@@ -348,7 +354,7 @@ def test_transition_to_development_rejects_mismatched_development_task_list(clie
         encoding="utf-8",
     )
     # development_task_list.json has unknown title
-    (issue_root / "development_task_list.json").write_text(
+    (architect_dir / "development_task_list.json").write_text(
         json.dumps(["Build UI shell", "Unknown Task"]),  # "Unknown Task" not in implementation_plan
         encoding="utf-8",
     )
@@ -363,17 +369,17 @@ def test_transition_to_development_rejects_mismatched_development_task_list(clie
 def test_transition_to_development_rejects_duplicate_titles_in_implementation_plan(client, monkeypatch, tmp_path):
     """Verify transition fails when implementation_plan.json has duplicate titles."""
     session, issue, architect_task = build_architecture_issue_bundle(tmp_path)
-    issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "system_design.json").write_text("{}", encoding="utf-8")
-    (issue_root / "implementation_plan.json").write_text(
+    architect_dir = tmp_path / "issues" / issue.id / "architect"
+    architect_dir.mkdir(parents=True, exist_ok=True)
+    (architect_dir / "system_design.json").write_text("{}", encoding="utf-8")
+    (architect_dir / "implementation_plan.json").write_text(
         json.dumps([
             {"title": "Build UI shell", "description": "Implement layout", "priority": "P1"},
             {"title": "Build UI shell", "description": "Duplicate title", "priority": "P1"},  # Duplicate
         ]),
         encoding="utf-8",
     )
-    (issue_root / "development_task_list.json").write_text(
+    (architect_dir / "development_task_list.json").write_text(
         json.dumps(["Build UI shell"]),
         encoding="utf-8",
     )

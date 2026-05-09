@@ -1,13 +1,13 @@
 "use client";
 
-import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent } from "@/lib/types";
+import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCatalog } from "@/lib/types";
 import { RotateCcw, Trash2, Send, Terminal, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { normalizeLogs } from "@/lib/codexLogNormalizer";
-import { ExecutorToggle } from "@/components/ui/executor-toggle";
+import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
 
 interface RunDetailProps {
   process: ExecutionProcess | null;
@@ -16,13 +16,15 @@ interface RunDetailProps {
   logs: LogEvent[];
   isLoadingLogs: boolean;
   isLoadingMessages: boolean;
-  onRunInitial?: (executor: "codex" | "claude") => void;
-  onRunAgain: (executor: "codex" | "claude") => void;
+  onRunInitial?: (executor: "codex" | "claude", provider: string | null, model: string | null) => void;
+  onRunAgain: (executor: "codex" | "claude", provider: string | null, model: string | null) => void;
   onDelete: () => void;
   onSendMessage: (content: string) => void;
   allTasks?: CodexTask[];
   selectedExecutor?: "codex" | "claude";
-  onExecutorChange?: (executor: "codex" | "claude") => void;
+  selectedProvider?: string | null;
+  selectedModel?: string | null;
+  onExecutorChange?: (executor: "codex" | "claude", provider: string | null, model: string | null) => void;
   showTransitionToArchitecture?: boolean;
   canTransitionToArchitecture?: boolean;
   isTransitioningToArchitecture?: boolean;
@@ -34,10 +36,11 @@ interface RunDetailProps {
   onSubmitForReview?: () => Promise<void> | void;
   onReview?: (decision: "approve" | "reject", comment: string) => Promise<void> | void;
   onTerminate?: () => Promise<void> | void;
+  catalog?: RuntimeCatalog | null;
 }
 
 function getDevelopmentTaskUnlockStatus(task: CodexTask, allTasks: CodexTask[]): { unlocked: boolean; reason: string | null } {
-  if (task.phase !== "development" || task.sequence_index === null) {
+  if (task.phase !== "development" || task.sequence_index == null) {
     return { unlocked: true, reason: null };
   }
   if (task.sequence_index === 0) {
@@ -69,6 +72,8 @@ export function RunDetail({
   onSendMessage,
   allTasks = [],
   selectedExecutor = "codex",
+  selectedProvider = null,
+  selectedModel = null,
   onExecutorChange,
   showTransitionToArchitecture,
   canTransitionToArchitecture,
@@ -81,11 +86,23 @@ export function RunDetail({
   onSubmitForReview,
   onReview,
   onTerminate,
+  catalog,
 }: RunDetailProps) {
   const { t } = useI18n();
   const [message, setMessage] = useState("");
   const [reviewComment, setReviewComment] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const baseExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
+    catalog || null,
+    selectedExecutor,
+    selectedProvider,
+    selectedModel,
+  ), [catalog, selectedExecutor, selectedProvider, selectedModel]);
+  const [executionConfig, setExecutionConfig] = useState<ExecutionConfigValue>(baseExecutionConfig);
+
+  useEffect(() => {
+    setExecutionConfig(baseExecutionConfig);
+  }, [baseExecutionConfig]);
 
   const normalizedLogs = useMemo(() => normalizeLogs(logs), [logs]);
   const errorEntry = useMemo(
@@ -98,14 +115,14 @@ export function RunDetail({
   const blockedReason = !unlockStatus.unlocked ? unlockStatus.reason : null;
 
   const handleRunInitial = () => {
-    if (onRunInitial && selectedExecutor) {
-      onRunInitial(selectedExecutor);
+    if (onRunInitial) {
+      onRunInitial(executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
     }
   };
 
   const handleRunAgain = () => {
-    if (onRunAgain && selectedExecutor) {
-      onRunAgain(selectedExecutor);
+    if (onRunAgain) {
+      onRunAgain(executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
     }
   };
 
@@ -114,17 +131,15 @@ export function RunDetail({
       <div className="flex flex-col h-full items-center justify-center text-text-muted">
         <MessageSquare size={48} strokeWidth={1} className="mb-4 opacity-10" />
         <p className="text-sm font-medium">{t("run.empty")}</p>
-        {canRunInitial && onRunInitial && onExecutorChange && (
+        {canRunInitial && onRunInitial && (
           <div className="mt-6 flex flex-col items-center gap-3">
             {!unlockStatus.unlocked && blockedReason && (
               <p className="text-[10px] font-black uppercase tracking-widest text-warning">{t(blockedReason as any)}</p>
             )}
-            <ExecutorToggle
-              value={selectedExecutor}
-              onChange={onExecutorChange}
-              codexLabel={t("executor.codex")}
-              claudeLabel={t("executor.claude")}
-              className="w-48"
+            <ExecutionConfigSelector
+              value={executionConfig}
+              onChange={setExecutionConfig}
+              catalog={catalog || null}
             />
             <button
               type="button"
@@ -156,17 +171,13 @@ export function RunDetail({
           <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-text-muted">{t("run.console")}</h2>
           <StatusBadge status={process.status} />
         </div>
-        {onExecutorChange && (
-          <div className="mb-4">
-            <ExecutorToggle
-              value={selectedExecutor}
-              onChange={onExecutorChange}
-              codexLabel={t("executor.codex")}
-              claudeLabel={t("executor.claude")}
-              className="w-48"
-            />
-          </div>
-        )}
+        <div className="mb-4">
+          <ExecutionConfigSelector
+            value={executionConfig}
+            onChange={setExecutionConfig}
+            catalog={catalog || null}
+          />
+        </div>
         <div className="flex gap-2.5">
           {process.status?.toLowerCase() === "completed" && (
             <>

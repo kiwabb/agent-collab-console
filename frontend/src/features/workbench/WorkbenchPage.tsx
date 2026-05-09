@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import type {
   Workspace,
   CodexIssue,
@@ -39,8 +40,9 @@ import {
   submitCodexTask,
   reviewCodexTask,
   terminateCodexTask,
-  updateCodexTaskExecutor,
+  updateCodexTask,
 } from "@/lib/api";
+import { getRuntimeCatalog } from "@/lib/api";
 import { ExecutionProcessesProvider } from "@/providers/ExecutionProcessesProvider";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { WorkspaceGrid } from "@/features/workspaces/WorkspaceGrid";
@@ -54,24 +56,15 @@ import { PHASE_CONFIG, type Phase } from "@/features/issues/phaseUtils";
 import { pickLatestExecutionProcessForTask } from "@/lib/task-selection";
 import { isTaskRuntimeActive } from "@/lib/task-selection";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { useTheme, type ThemePreference } from "@/providers/ThemeProvider";
 import { useI18n } from "@/providers/I18nProvider";
-import type { Locale } from "@/lib/i18n";
 import {
   Activity,
   RotateCcw,
   ChevronRight,
   Home,
   Layout,
-  MessageSquare,
   Settings,
   Bell,
-  Check,
-  Languages,
-  Moon,
-  Sun,
-  Monitor,
   Terminal,
   AlertCircle,
 } from "lucide-react";
@@ -108,11 +101,11 @@ function WorkbenchInner({
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedExecutor, setSelectedExecutor] = useState<"codex" | "claude">("codex");
+  const [runtimeCatalog, setRuntimeCatalog] = useState<import("@/lib/types").RuntimeCatalog | null>(null);
 
-  const { executionProcessesAll, isConnected, lastEvent } = useExecutionProcessesContext();
-  const { theme, resolvedTheme, setTheme } = useTheme();
-  const { locale, setLocale, t } = useI18n();
+  const { isConnected, lastEvent, executionProcessesAll } = useExecutionProcessesContext();
+  const { t } = useI18n();
+  const router = useRouter();
 
   const currentWorkspace = workspaces.find(w => w.id === currentWorkspaceId);
   const currentIssue = issues.find((i) => i.id === currentIssueId) ?? null;
@@ -155,11 +148,6 @@ function WorkbenchInner({
   const hasActiveIssueTask = currentTasks.some((task) => {
     return isTaskRuntimeActive(task, Object.values(executionProcessesAll) as ExecutionProcess[]);
   });
-  const transitionToArchitectureDisabledReason = hasActiveIssueTask
-    ? t("task.running")
-    : isPmTaskDone
-      ? null
-      : t("issue.transition.requiresArtifacts");
   const currentIssueTaskIds = useMemo(
     () => new Set(currentTasks.map((task) => task.id)),
     [currentTasks],
@@ -237,6 +225,10 @@ function WorkbenchInner({
     }
     loadWorkspaceData(currentWorkspaceId);
   }, [currentWorkspaceId, loadWorkspaceData]);
+
+  useEffect(() => {
+    getRuntimeCatalog().then(setRuntimeCatalog).catch(() => setRuntimeCatalog(null));
+  }, []);
 
   useEffect(() => {
     if (!currentIssueId) {
@@ -350,7 +342,13 @@ function WorkbenchInner({
     }
   }
 
-  async function handleCreateIssue(title: string, description: string, executor: "codex" | "claude") {
+  async function handleCreateIssue(
+    title: string,
+    description: string,
+    executor: "codex" | "claude",
+    provider: string | null,
+    model: string | null
+  ) {
     if (!currentWorkspaceId) return;
     try {
       const { issue, initialTask, executionProcess } = await createIssueAndInitialTask({
@@ -362,6 +360,8 @@ function WorkbenchInner({
         createCodexIssue,
         createCodexTask,
         runCodexTask,
+        provider,
+        model,
       });
       setIssues((prev) => [...prev, issue]);
       setTasks((prev) => [...prev, initialTask]);
@@ -393,10 +393,6 @@ function WorkbenchInner({
       setSelectedProcessId(task.last_execution_process_id);
     } else {
       setSelectedProcessId(null);
-    }
-
-    if (task?.executor === "codex" || task?.executor === "claude") {
-      setSelectedExecutor(task.executor);
     }
 
     setCurrentTaskId(id);
@@ -480,7 +476,12 @@ function WorkbenchInner({
     }
   }
 
-  async function handleRunPhaseRole(phase: string, executor: "codex" | "claude") {
+  async function handleRunPhaseRole(
+    phase: string,
+    executor: "codex" | "claude",
+    provider: string | null,
+    model: string | null
+  ) {
     if (!currentIssue || !currentWorkspaceId) return;
     setIsRunning(true);
     try {
@@ -494,9 +495,11 @@ function WorkbenchInner({
         config.role,
         currentIssue.id,
         phase,
+        provider,
+        model,
       );
       setTasks((prev) => [...prev, task]);
-      const executionProcess = await runCodexTask(task.id);
+      const executionProcess = await runCodexTask(task.id, { executor, provider, model });
       setSelectedProcessId(executionProcess.id);
       setSelectedProcessSnapshot(executionProcess);
       setCurrentTaskId(task.id);
@@ -530,16 +533,6 @@ function WorkbenchInner({
     } catch {}
   }
 
-  const themeOptions: { value: ThemePreference; label: string; icon: React.ReactNode }[] = [
-    { value: "light", label: t("settings.theme.light"), icon: <Sun size={14} /> },
-    { value: "dark", label: t("settings.theme.dark"), icon: <Moon size={14} /> },
-    { value: "system", label: t("settings.theme.system"), icon: <Monitor size={14} /> },
-  ];
-
-  const localeOptions: { value: Locale; label: string }[] = [
-    { value: "zh-CN", label: t("settings.language.zh") },
-    { value: "en-US", label: t("settings.language.en") },
-  ];
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background font-sans">
@@ -589,56 +582,14 @@ function WorkbenchInner({
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-4 text-text-muted">
             <Bell size={18} className="hover:text-foreground cursor-pointer transition-colors" />
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild>
-                <button 
-                  className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors cursor-pointer outline-none" 
-                  aria-label={t("settings.title")} 
-                  title={t("settings.title")}
-                >
-                  <Settings size={18} />
-                </button>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content 
-                  align="end" 
-                  sideOffset={8}
-                  className="w-56 bg-surface-raised border border-border-subtle rounded-xl shadow-2xl p-1.5 z-[100] animate-in fade-in zoom-in-95 duration-200"
-                >
-                  <DropdownMenu.Label className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-text-muted">
-                    {t("settings.theme")}
-                  </DropdownMenu.Label>
-                  {themeOptions.map((option) => (
-                    <DropdownMenu.Item 
-                      key={option.value} 
-                      onClick={() => setTheme(option.value)}
-                      className="flex items-center gap-3 px-3 py-2 text-xs font-bold rounded-lg cursor-pointer outline-none hover:bg-surface-hover hover:text-brand transition-colors"
-                    >
-                      {option.icon}
-                      <span>{option.label}</span>
-                      {theme === option.value && <Check size={14} className="ml-auto text-brand" />}
-                    </DropdownMenu.Item>
-                  ))}
-                  
-                  <div className="h-px bg-border-subtle my-1.5 mx-1" />
-                  
-                  <DropdownMenu.Label className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-text-muted">
-                    {t("settings.language")}
-                  </DropdownMenu.Label>
-                  {localeOptions.map((option) => (
-                    <DropdownMenu.Item 
-                      key={option.value} 
-                      onClick={() => setLocale(option.value)}
-                      className="flex items-center gap-3 px-3 py-2 text-xs font-bold rounded-lg cursor-pointer outline-none hover:bg-surface-hover hover:text-brand transition-colors"
-                    >
-                      <Languages size={14} />
-                      <span>{option.label}</span>
-                      {locale === option.value && <Check size={14} className="ml-auto text-brand" />}
-                    </DropdownMenu.Item>
-                  ))}
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
+            <button 
+              onClick={() => router.push("/settings")}
+              className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors cursor-pointer outline-none" 
+              aria-label={t("settings.title")} 
+              title={t("settings.title")}
+            >
+              <Settings size={18} />
+            </button>
           </div>
 
           <div className="h-4 w-px bg-border-subtle" />
@@ -696,6 +647,7 @@ function WorkbenchInner({
               onSelect={handleSelectIssue}
               onCreate={handleCreateIssue}
               onDelete={handleDeleteIssue}
+              catalog={runtimeCatalog}
             />
           </div>
         )}
@@ -796,13 +748,11 @@ function WorkbenchInner({
                         isLoadingMessages={isLoadingMessages && displayedProcessMessages.length === 0}
                         onSubmitForReview={handleTaskSubmitForReview}
                         onReview={handleTaskReview}
-                        onRunInitial={async (executor) => {
+                        onRunInitial={async (executor, provider, model) => {
                           if (!currentTask) return;
                           try {
-                            if (executor !== currentTask.executor) {
-                              await updateCodexTaskExecutor(currentTask.id, executor);
-                            }
-                            const newProcess = await runCodexTask(currentTask.id);
+                            await updateCodexTask(currentTask.id, executor, provider, model);
+                            const newProcess = await runCodexTask(currentTask.id, { executor, provider, model });
                             setSelectedProcessId(newProcess.id);
                             setSelectedProcessSnapshot(newProcess);
                             if (currentWorkspaceId) {
@@ -812,14 +762,11 @@ function WorkbenchInner({
                             setError(err instanceof Error ? err.message : "Failed to run task");
                           }
                         }}
-                        onRunAgain={async (executor) => {
+                        onRunAgain={async (executor, provider, model) => {
                           if (selectedProcess) {
                             try {
-                              const currentTask = tasks.find(t => t.id === selectedProcess.task_id);
-                              if (executor !== currentTask?.executor) {
-                                await updateCodexTaskExecutor(selectedProcess.task_id, executor);
-                              }
-                              const newProcess = await runCodexTask(selectedProcess.task_id);
+                              await updateCodexTask(selectedProcess.task_id, executor, provider, model);
+                              const newProcess = await runCodexTask(selectedProcess.task_id, { executor, provider, model });
                               setSelectedProcessId(newProcess.id);
                               setSelectedProcessSnapshot(newProcess);
                             } catch (err) {
@@ -841,8 +788,7 @@ function WorkbenchInner({
                         }}
                         onSendMessage={handleSendMessage}
                         allTasks={tasks}
-                        selectedExecutor={selectedExecutor}
-                        onExecutorChange={setSelectedExecutor}
+                        catalog={runtimeCatalog}
                         showTransitionToArchitecture={currentIssue?.current_phase === "requirements"}
                         canTransitionToArchitecture={
                           currentIssue?.current_phase === "requirements" &&
@@ -907,6 +853,7 @@ function WorkbenchInner({
           onClose={() => setPendingApprovals((prev) => prev.slice(1))}
         />
       )}
+
     </div>
   );
 }

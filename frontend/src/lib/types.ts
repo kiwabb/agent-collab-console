@@ -130,6 +130,8 @@ export interface CodexTask {
   prompt: string;
   role: string;
   executor: string;
+  provider?: string | null;
+  model?: string | null;
   status: string;
   result: string | null;
   parent_task_id: string | null;
@@ -139,8 +141,9 @@ export interface CodexTask {
   resume_session_id: string | null;
   resume_message_id: string | null;
   last_execution_process_id: string | null;
-  sequence_index: number | null;
-  sequence_group: string | null;
+  sequence_index?: number | null;
+  sequence_group?: string | null;
+  review_comment?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -170,6 +173,9 @@ export interface ExecutionProcess {
   session_id: string;
   status: string;
   exit_code: number | null;
+  executor?: string | null;
+  provider?: string | null;
+  model?: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string | null;
@@ -246,6 +252,8 @@ export interface CreateTaskRequest {
   prompt: string;
   parent_task_id?: string | null;
   executor?: string;
+  provider?: string | null;
+  model?: string | null;
   role?: string;
 }
 
@@ -278,4 +286,49 @@ export interface ResolveApprovalRequest {
 
 export interface UpdateCodexTaskRequest {
   executor?: "codex" | "claude";
+  provider?: string | null;
+  model?: string | null;
+}
+
+// Runtime Catalog Types
+
+export interface RuntimeModelConfig {
+  id: string;
+  label: string;
+  enabled: boolean;
+}
+
+export interface RuntimeProviderConfig {
+  id: string;
+  label: string;
+  enabled: boolean;
+  models: RuntimeModelConfig[];
+  default_model_id: string | null;
+  command_template?: string | null;
+  env_template?: Record<string, string> | null;
+}
+
+export interface RuntimeExecutorConfig {
+  id: string;
+  label: string;
+  enabled: boolean;
+  executor_type: "claude" | "codex";
+  api_endpoint?: string | null;
+  api_key?: string | null;
+  default_model?: string | null;
+  providers: RuntimeProviderConfig[];
+  default_provider_id: string | null;
+}
+
+export interface RuntimeCatalog {
+  executors: RuntimeExecutorConfig[];
+}
+
+export interface RuntimeCatalogRequest {
+  catalog: RuntimeCatalog;
+}
+
+export interface ValidateRuntimeCatalogResponse {
+  valid: boolean;
+  error?: string;
 }

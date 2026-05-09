@@ -19,6 +19,9 @@ import type {
   IssuePhaseTransitionResult,
   IssuePhaseMultiTaskTransitionResult,
   UpdateCodexTaskRequest,
+  RuntimeCatalog,
+  RuntimeCatalogRequest,
+  ValidateRuntimeCatalogResponse,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
@@ -99,7 +102,9 @@ export async function createCodexTask(
   executor = "codex",
   role = "general",
   issueId: string | null = null,
-  phase = "requirements"
+  phase = "requirements",
+  provider: string | null = null,
+  model: string | null = null
 ): Promise<CodexTask> {
   const body: CreateTaskRequest = {
     session_id: sessionId,
@@ -109,6 +114,8 @@ export async function createCodexTask(
     prompt,
     parent_task_id: parentTaskId,
     executor,
+    provider,
+    model,
     role,
   };
   const response = await fetch(`${API_BASE}/codex/tasks`, {
@@ -201,9 +208,14 @@ export async function getCodexTask(taskId: string): Promise<CodexTask> {
   return handleResponse<CodexTask>(response);
 }
 
-export async function runCodexTask(taskId: string): Promise<ExecutionProcess> {
+export async function runCodexTask(
+  taskId: string,
+  overrides?: { executor?: "codex" | "claude"; provider?: string | null; model?: string | null }
+): Promise<ExecutionProcess> {
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/run`, {
     method: "POST",
+    headers: overrides ? { "Content-Type": "application/json" } : undefined,
+    body: overrides ? JSON.stringify(overrides) : undefined,
   });
   return handleResponse<ExecutionProcess>(response);
 }
@@ -285,6 +297,51 @@ export async function updateCodexTaskExecutor(taskId: string, executor: "codex" 
     body: JSON.stringify(body),
   });
   return handleResponse<CodexTask>(response);
+}
+
+export async function updateCodexTask(
+  taskId: string,
+  executor?: "codex" | "claude",
+  provider?: string | null,
+  model?: string | null
+): Promise<CodexTask> {
+  const body: UpdateCodexTaskRequest = {};
+  if (executor !== undefined) body.executor = executor;
+  if (provider !== undefined) body.provider = provider;
+  if (model !== undefined) body.model = model;
+  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<CodexTask>(response);
+}
+
+// Runtime Catalog APIs
+
+export async function getRuntimeCatalog(): Promise<RuntimeCatalog> {
+  const response = await fetch(`${API_BASE}/runtime-catalog`);
+  return handleResponse<RuntimeCatalog>(response);
+}
+
+export async function updateRuntimeCatalog(catalog: RuntimeCatalog): Promise<RuntimeCatalog> {
+  const body: RuntimeCatalogRequest = { catalog };
+  const response = await fetch(`${API_BASE}/runtime-catalog`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<RuntimeCatalog>(response);
+}
+
+export async function validateRuntimeCatalog(catalog: RuntimeCatalog): Promise<ValidateRuntimeCatalogResponse> {
+  const body: RuntimeCatalogRequest = { catalog };
+  const response = await fetch(`${API_BASE}/runtime-catalog/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<ValidateRuntimeCatalogResponse>(response);
 }
 
 export async function submitCodexTask(taskId: string): Promise<CodexTask> {

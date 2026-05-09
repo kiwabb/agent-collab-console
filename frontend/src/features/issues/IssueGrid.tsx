@@ -1,11 +1,11 @@
 "use client";
 
-import type { CodexIssue } from "@/lib/types";
+import type { CodexIssue, RuntimeCatalog } from "@/lib/types";
 import { ListTodo, Plus, ChevronRight, MessageSquare, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
-import { ExecutorToggle } from "@/components/ui/executor-toggle";
+import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,30 +15,42 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { getRuntimeCatalog } from "@/lib/api";
 
 interface IssueGridProps {
   issues: CodexIssue[];
   onSelect: (id: string) => void;
-  onCreate: (title: string, desc: string, executor: "codex" | "claude") => void;
+  onCreate: (title: string, desc: string, executor: "codex" | "claude", provider: string | null, model: string | null) => void;
   onDelete: (id: string) => Promise<void> | void;
+  catalog: RuntimeCatalog | null;
 }
 
-export function IssueGrid({ issues, onSelect, onCreate, onDelete }: IssueGridProps) {
+export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog }: IssueGridProps) {
   const { t } = useI18n();
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newDesc, setNewDesc] = useState("");
-  const [newExecutor, setNewExecutor] = useState<"codex" | "claude">("codex");
+  const defaultExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
+    catalog,
+    "codex",
+    null,
+    null,
+  ), [catalog]);
+  const [executionConfig, setExecutionConfig] = useState<ExecutionConfigValue>(defaultExecutionConfig);
   const [deleteTarget, setDeleteTarget] = useState<CodexIssue | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    setExecutionConfig(defaultExecutionConfig);
+  }, [defaultExecutionConfig]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (newTitle.trim()) {
-      onCreate(newTitle.trim(), newDesc.trim(), newExecutor);
+      onCreate(newTitle.trim(), newDesc.trim(), executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
       setNewTitle("");
       setNewDesc("");
-      setNewExecutor("codex");
+      setExecutionConfig(defaultExecutionConfig);
       setIsCreating(false);
     }
   };
@@ -98,11 +110,10 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete }: IssueGridPro
               <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-text-muted mb-2">
                 {t("task.executor")}
               </label>
-              <ExecutorToggle
-                value={newExecutor}
-                onChange={setNewExecutor}
-                codexLabel={t("executor.codex")}
-                claudeLabel={t("executor.claude")}
+              <ExecutionConfigSelector
+                value={executionConfig}
+                onChange={setExecutionConfig}
+                catalog={catalog}
               />
             </div>
             <div className="flex gap-2">

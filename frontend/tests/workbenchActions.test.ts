@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createIssueAndInitialTask, runCodexTaskWithExecutor } from "../src/features/workbench/workbenchActions";
-import { transitionIssueToArchitecture, transitionIssueToDevelopment } from "../src/lib/api";
+import { transitionIssueToArchitecture, transitionIssueToDevelopment, updateCodexTaskExecutor } from "../src/lib/api";
 import type { CodexTask } from "@/lib/types";
 
 test("createIssueAndInitialTask runs the initial task after creating it", async () => {
@@ -27,7 +27,7 @@ test("createIssueAndInitialTask runs the initial task after creating it", async 
         updated_at: null,
       };
     },
-    createCodexTask: async (workspaceId, title, prompt, parentTaskId, executor, role, issueId, phase) => {
+    createCodexTask: async (workspaceId, title, prompt, parentTaskId, executor, role, issueId, phase, provider, model) => {
       calls.push(`task:${workspaceId}:${title}:${prompt}:${parentTaskId}:${executor}:${role}:${issueId}:${phase}`);
       return {
         id: "task-1",
@@ -38,6 +38,8 @@ test("createIssueAndInitialTask runs the initial task after creating it", async 
         prompt,
         role,
         executor,
+        provider,
+        model,
         status: "pending",
         result: null,
         parent_task_id: parentTaskId,
@@ -142,6 +144,8 @@ test("transitionIssueToArchitecture returns a pending architect task that can be
           prompt: "请基于当前需求产物进行架构设计。",
           role: "architect",
           executor: "codex",
+          provider: null,
+          model: null,
           status: "pending",
           result: null,
           parent_task_id: null,
@@ -223,6 +227,8 @@ test("updateCodexTaskExecutor posts PATCH with executor to the update endpoint",
         prompt: "实现购物车增删改查接口",
         role: "engineer",
         executor: "claude",
+        provider: null,
+        model: null,
         status: "pending",
         result: null,
         parent_task_id: null,
@@ -242,7 +248,7 @@ test("updateCodexTaskExecutor posts PATCH with executor to the update endpoint",
   };
 
   try {
-    const result = await import("../src/lib/api").then(m => m.updateCodexTaskExecutor("task-1", "claude"));
+    const result = await updateCodexTaskExecutor("task-1", "claude");
     assert.equal(result.executor, "claude");
     assert.equal(String(calls[0].input), "/api/codex/tasks/task-1");
     assert.equal(calls[0].init?.method, "PATCH");
@@ -260,7 +266,11 @@ test("runCodexTaskWithExecutor skips update when executor unchanged", async () =
     taskId: "task-1",
     selectedExecutor: "codex",
     currentExecutor: "codex",
-    updateExecutor: async (taskId, executor) => {
+    selectedProvider: null,
+    currentProvider: null,
+    selectedModel: null,
+    currentModel: null,
+    updateTask: async (taskId, executor) => {
       calls.push(`update:${taskId}:${executor}`);
       return { id: taskId, executor } as CodexTask;
     },
@@ -290,7 +300,11 @@ test("runCodexTaskWithExecutor calls update then run when executor changed", asy
     taskId: "task-1",
     selectedExecutor: "claude",
     currentExecutor: "codex",
-    updateExecutor: async (taskId, executor) => {
+    selectedProvider: null,
+    currentProvider: null,
+    selectedModel: null,
+    currentModel: null,
+    updateTask: async (taskId, executor) => {
       calls.push(`update:${taskId}:${executor}`);
       return { id: taskId, executor } as CodexTask;
     },
@@ -321,7 +335,11 @@ test("runCodexTaskWithExecutor does not call run when update fails", async () =>
       taskId: "task-1",
       selectedExecutor: "claude",
       currentExecutor: "codex",
-      updateExecutor: async (_taskId, _executor) => {
+      selectedProvider: null,
+      currentProvider: null,
+      selectedModel: null,
+      currentModel: null,
+      updateTask: async (_taskId, _executor) => {
         calls.push("update:fail");
         throw new Error("Update failed");
       },

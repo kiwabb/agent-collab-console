@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -144,6 +145,8 @@ class CodexTask(BaseModel):
     prompt: str
     role: str = "general"
     executor: str = "codex" # "codex" or "claude"
+    provider: str | None = None  # Provider override (e.g., "anthropic", "openai")
+    model: str | None = None     # Model override (e.g., "claude-sonnet-4-6", "gpt-4o")
     status: str = "pending"
     result: str | None = None
     parent_task_id: str | None = None  # Task this was continued from, if any
@@ -204,6 +207,9 @@ class ExecutionProcess(BaseModel):
     session_id: str
     status: str = "Running"  # Running | Completed | Failed | Killed
     exit_code: int | None = None
+    executor: str | None = None  # Resolved executor at run time
+    provider: str | None = None  # Resolved provider at run time
+    model: str | None = None     # Resolved model at run time
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime | None = None
@@ -232,3 +238,44 @@ class HelpRequest(BaseModel):
     completed_at: datetime | None = None
     timeout_at: datetime | None = None
     consumed_at: datetime | None = None
+
+
+# --- Runtime Catalog Models ---
+
+class RuntimeModelConfig(BaseModel):
+    """Configuration for a single model within a provider."""
+    id: str  # Unique ID within the catalog (e.g., "claude-sonnet-4-6")
+    label: str  # Human-readable label (e.g., "Claude Sonnet 4.6")
+    enabled: bool = True
+
+
+class RuntimeProviderConfig(BaseModel):
+    """Configuration for a provider that belongs to an executor."""
+    id: str  # Unique ID within the catalog (e.g., "anthropic")
+    label: str  # Human-readable label (e.g., "Anthropic")
+    enabled: bool = True
+    models: list[RuntimeModelConfig] = Field(default_factory=list)
+    default_model_id: str | None = None  # ID of the default model
+    # Template for additional command-line arguments (supports {model}, {provider}, {workspace_cwd}, {task_id})
+    command_template: str | None = None
+    # Template for environment variable overrides (key = env var name, value = template)
+    env_template: dict[str, str] | None = None
+
+
+class RuntimeExecutorConfig(BaseModel):
+    """Configuration for a top-level executor (e.g., codex, claude)."""
+    id: str  # Unique ID (e.g., "codex", "claude")
+    label: str  # Human-readable label
+    enabled: bool = True
+    executor_type: Literal["claude", "codex"] = "claude"
+    api_endpoint: str | None = None
+    api_key: str | None = None
+    default_model: str | None = None
+    providers: list[RuntimeProviderConfig] = Field(default_factory=list)
+    default_provider_id: str | None = None  # ID of the default provider
+
+
+class RuntimeCatalog(BaseModel):
+    """Global runtime catalog containing all executor/provider/model configurations."""
+    executors: list[RuntimeExecutorConfig] = Field(default_factory=list)
+

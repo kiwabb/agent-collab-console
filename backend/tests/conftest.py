@@ -77,7 +77,7 @@ def reset_sqlite_store():
     yield
     import app.bootstrap as bootstrap_module
     try:
-        store = bootstrap_module.codex_store
+        store = bootstrap_module.store
         if store is not None:
             store.reset()
     except Exception:

@@ -267,3 +267,58 @@
   - workbenchActions.test.ts: 新增 updateCodexTaskExecutor 测试
   - Frontend: 32/32 tests pass, Backend: 9/9 tests pass
 - 等待: review
+
+### Task: Multi-Provider Model Configuration Implementation
+- Status: **DONE**
+- 日期: 2026-05-09
+
+#### Backend Changes
+
+**1. Domain Models (`backend/app/domain/models.py`)**
+- CodexTask: 新增 `provider` 和 `model` 字段
+- ExecutionProcess: 新增 `executor`, `provider`, `model` 快照字段
+- 新增 RuntimeCatalog 相关模型: RuntimeModelConfig, RuntimeProviderConfig, RuntimeExecutorConfig, RuntimeCatalog
+
+**2. SQLite Storage (`sqlite_store.py`, `async_sqlite_store.py`)**
+- codex_tasks 表新增 provider, model 列
+- execution_processes 表新增 executor, provider, model 列
+- 新增 runtime_catalog_settings 表
+- 更新 save/load 方法
+
+**3. Runtime Catalog Service (`runtime_catalog_service.py`)**
+- 加载/保存catalog
+- 验证唯一性和交叉引用
+- 解析有效配置 (run override > task default > executor default)
+- 模板渲染 (支持 {model}, {provider}, {workspace_cwd}, {task_id})
+
+**4. API Changes (`api.py`)**
+- CreateTaskRequest, UpdateCodexTaskRequest 新增 provider/model
+- 新增端点: GET/PUT /api/runtime-catalog, POST /api/runtime-catalog/validate
+
+**5. Task Runner (`codex_task_runner.py`)**
+- _create_execution_process 接受并存储 executor/provider/model 快照
+- start_task_run 从 runtime catalog 解析有效配置
+- 新增 _resolve_effective_config 方法
+
+**6. Process Manager & Runtimes**
+- codex_process_manager.py: write_input_async 新增 provider/model 参数
+- codex_app_server_runtime.py: 设置 CODEX_APP_SERVER_PROVIDER, CODEX_APP_SERVER_MODEL 环境变量
+- claude_process_runtime.py: 设置 CLAUDE_PROVIDER, CLAUDE_MODEL 环境变量
+
+#### Frontend Changes
+
+**1. Types (`types.ts`)**
+- CodexTask, ExecutionProcess 新增 provider/model
+- CreateTaskRequest, UpdateCodexTaskRequest 新增 provider/model
+- 新增 RuntimeCatalog 相关类型
+
+**2. API (`api.ts`)**
+- createCodexTask 新增 provider/model 参数
+- 新增 updateCodexTask 函数
+- 新增 getRuntimeCatalog, updateRuntimeCatalog, validateRuntimeCatalog 函数
+
+**3. UI Components (`components/runtime/`)**
+- ExecutionConfigSelector.tsx: 三级选择器 (Executor → Provider → Model)
+- RuntimeCatalogEditor.tsx: 完整的 runtime catalog 编辑器
+
+#### 等待: review

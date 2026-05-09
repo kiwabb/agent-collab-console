@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.domain.models import CodexSession, CodexTask
 import app.interfaces.api as api_module
+import app.bootstrap as bootstrap_module
 
 
 class TaskRunStoreStub:
@@ -50,6 +51,12 @@ class TaskRunStoreStub:
         pass
 
     async def save_execution_process(self, *args, **kwargs):
+        pass
+
+    async def load_runtime_catalog(self):
+        return None
+
+    async def save_runtime_catalog(self, catalog):
         pass
 
 
@@ -273,10 +280,9 @@ class TestCodexTaskAPI:
         assert response.status_code == 400
 
     def test_delete_issue_cascades_issue_related_records_without_deleting_workspace_source(self, client, tmp_path):
-        import app.bootstrap as bootstrap_module
         from app.domain.models import CodexTaskMessage, ExecutionProcess, HelpRequest, LogEvent
 
-        store = bootstrap_module.codex_store
+        store = bootstrap_module.store
 
         source_root = tmp_path / "project-root"
         source_root.mkdir()
@@ -622,7 +628,7 @@ class TestCodexTaskAPI:
             },
         ).json()
 
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "zh-CN",
@@ -641,11 +647,11 @@ class TestCodexTaskAPI:
             "open_questions": ["Issue 模型后续再引入"],
             "risks": ["旧 UI 仍然 task-first"],
         }, ensure_ascii=False)
-        api_module._refresh_task_result(task_model)
+        api_module.role_workflow_service.persist_result(task_model)
 
         issue_root = Path(task_model.workspace_path) / "issues" / task_model.id
-        prd_json_path = issue_root / "prd.json"
-        prd_md_path = issue_root / "prd.md"
+        prd_json_path = issue_root / "pm" / "prd.json"
+        prd_md_path = issue_root / "pm" / "prd.md"
 
         assert prd_json_path.exists()
         assert prd_md_path.exists()
@@ -679,7 +685,7 @@ class TestCodexTaskAPI:
             },
         ).json()
 
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "zh-CN",
@@ -698,11 +704,11 @@ class TestCodexTaskAPI:
             "open_questions": [],
             "risks": [],
         }, ensure_ascii=False)
-        api_module._refresh_task_result(task_model)
+        api_module.role_workflow_service.persist_result(task_model)
 
         issue_root = Path(task_model.workspace_path) / "issues" / issue["id"]
-        assert (issue_root / "prd.json").exists()
-        assert (issue_root / "prd.md").exists()
+        assert (issue_root / "pm" / "prd.json").exists()
+        assert (issue_root / "pm" / "prd.md").exists()
 
     def test_get_issue_artifacts_reads_prd_files(self, client):
         from app.interfaces import api as api_module
@@ -726,7 +732,7 @@ class TestCodexTaskAPI:
                 "role": "product_manager",
             },
         ).json()
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "zh-CN",
@@ -743,14 +749,14 @@ class TestCodexTaskAPI:
             "open_questions": [],
             "risks": [],
         }, ensure_ascii=False)
-        api_module._refresh_task_result(task_model)
+        api_module.role_workflow_service.persist_result(task_model)
 
         response = client.get(f"/api/codex/issues/{issue['id']}/artifacts")
         assert response.status_code == 200
         artifacts = response.json()
         names = {item["name"] for item in artifacts}
-        assert "prd.json" in names
-        assert "prd.md" in names
+        assert "pm/prd.json" in names
+        assert "pm/prd.md" in names
 
     def test_get_issue_artifacts_backfills_missing_prd_files_from_done_product_manager_task(self, client):
         from app.interfaces import api as api_module
@@ -774,7 +780,7 @@ class TestCodexTaskAPI:
                 "role": "product_manager",
             },
         ).json()
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "zh-CN",
@@ -791,18 +797,18 @@ class TestCodexTaskAPI:
             "open_questions": [],
             "risks": [],
         }, ensure_ascii=False)
-        api_module.codex_store.save_codex_task(task_model)
+        bootstrap_module.store.save_codex_task(task_model)
 
         issue_root = Path(task_model.workspace_path) / "issues" / issue["id"]
-        assert not (issue_root / "prd.json").exists()
-        assert not (issue_root / "prd.md").exists()
+        assert not (issue_root / "pm" / "prd.json").exists()
+        assert not (issue_root / "pm" / "prd.md").exists()
 
         response = client.get(f"/api/codex/issues/{issue['id']}/artifacts")
         assert response.status_code == 200
         artifacts = response.json()
         names = {item["name"] for item in artifacts}
-        assert "prd.json" in names
-        assert "prd.md" in names
+        assert "pm/prd.json" in names
+        assert "pm/prd.md" in names
 
     def test_get_issue_artifacts_backfills_architect_design_artifacts(self, client):
         from app.interfaces import api as api_module
@@ -822,7 +828,7 @@ class TestCodexTaskAPI:
                 "role": "architect",
             },
         ).json()
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "en",
@@ -835,10 +841,11 @@ class TestCodexTaskAPI:
             "interfaces": ["REST"],
             "data_flow": "Client -> API -> DB",
             "implementation_tasks": [{"title": "Setup", "description": "Init", "priority": "P0"}],
+            "development_task_list": ["Setup"],
             "risks": [],
-"open_questions": [],
+            "open_questions": [],
         }, ensure_ascii=False)
-        api_module.codex_store.save_codex_task(task_model)
+        bootstrap_module.store.save_codex_task(task_model)
         # New architecture: persist at task completion, not on reads
         api_module.role_workflow_service.persist_result(task_model, workspace_title=session["title"])
 
@@ -846,7 +853,7 @@ class TestCodexTaskAPI:
         assert response.status_code == 200
         artifacts = response.json()
         names = {item["name"] for item in artifacts}
-        assert "implementation_plan.json" in names
+        assert "architect/implementation_plan.json" in names
 
     def test_get_issue_artifacts_backfills_engineer_implementation_report(self, client):
         from app.interfaces import api as api_module
@@ -866,7 +873,7 @@ class TestCodexTaskAPI:
                 "role": "engineer",
             },
         ).json()
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "en",
@@ -882,7 +889,7 @@ class TestCodexTaskAPI:
             "verification_commands": ["pytest"],
             "qa_notes": [],
         }, ensure_ascii=False)
-        api_module.codex_store.save_codex_task(task_model)
+        bootstrap_module.store.save_codex_task(task_model)
         # New architecture: persist at task completion, not on reads
         api_module.role_workflow_service.persist_result(task_model, workspace_title=session["title"])
 
@@ -890,7 +897,7 @@ class TestCodexTaskAPI:
         assert response.status_code == 200
         artifacts = response.json()
         names = {item["name"] for item in artifacts}
-        assert "implementation.md" in names
+        assert any(n.startswith("engineer/implementation") and n.endswith(".md") for n in names)
 
     def test_get_issue_artifacts_backfills_qa_report(self, client):
         from app.interfaces import api as api_module
@@ -910,7 +917,7 @@ class TestCodexTaskAPI:
                 "role": "qa",
             },
         ).json()
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "en",
@@ -928,7 +935,7 @@ class TestCodexTaskAPI:
             "test_gaps": [],
             "final_recommendation": "Ready",
         }, ensure_ascii=False)
-        api_module.codex_store.save_codex_task(task_model)
+        bootstrap_module.store.save_codex_task(task_model)
         # New architecture: persist at task completion, not on reads
         api_module.role_workflow_service.persist_result(task_model, workspace_title=session["title"])
 
@@ -936,8 +943,8 @@ class TestCodexTaskAPI:
         assert response.status_code == 200
         artifacts = response.json()
         names = {item["name"] for item in artifacts}
-        assert "qa_plan.json" in names
-        assert "qa_report.md" in names
+        assert "qa/qa_plan.json" in names
+        assert "qa/qa_report.md" in names
 
     def test_get_issue_artifacts_no_duplicate_names(self, client):
         """Multiple tasks with same artifact names should not return duplicates."""
@@ -960,7 +967,7 @@ class TestCodexTaskAPI:
                     "role": role,
                 },
             ).json()
-            task_model = api_module.codex_store.load_codex_task(task["id"])
+            task_model = bootstrap_module.store.load_codex_task(task["id"])
             task_model.status = "done"
             if role == "product_manager":
                 task_model.result = json.dumps({
@@ -975,7 +982,9 @@ class TestCodexTaskAPI:
                     "language": "en", "project_name": "test", "issue_id": issue["id"],
                     "issue_title": f"{role} task", "architecture_summary": "test",
                     "components": [], "data_models": [], "interfaces": [], "data_flow": "",
-                    "implementation_tasks": [], "risks": [], "open_questions": [],
+                    "implementation_tasks": [{"title": "Task", "description": "Do it", "priority": "P0"}],
+                    "development_task_list": ["Task"],
+                    "risks": [], "open_questions": [],
                 }, ensure_ascii=False)
             elif role == "engineer":
                 task_model.result = json.dumps({
@@ -992,7 +1001,7 @@ class TestCodexTaskAPI:
                     "manual_scenarios": [], "bugs_found": [], "risks": [], "test_gaps": [],
                     "final_recommendation": "test",
                 }, ensure_ascii=False)
-            api_module.codex_store.save_codex_task(task_model)
+            bootstrap_module.store.save_codex_task(task_model)
 
         response = client.get(f"/api/codex/issues/{issue['id']}/artifacts")
         assert response.status_code == 200
@@ -1024,7 +1033,7 @@ class TestCodexTaskAPI:
             },
         ).json()
 
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "zh-CN",
@@ -1038,12 +1047,12 @@ class TestCodexTaskAPI:
             "acceptance_criteria": [],
             "risks": [],
         }, ensure_ascii=False)
-        api_module._refresh_task_result(task_model)
+        api_module.role_workflow_service.persist_result(task_model)
 
         artifacts = client.get(f"/api/codex/issues/{issue['id']}/artifacts").json()
         names = {item["name"] for item in artifacts}
-        assert "bugfix.md" in names
-        bugfix_artifact = next(item for item in artifacts if item["name"] == "bugfix.md")
+        assert "pm/bugfix.md" in names
+        bugfix_artifact = next(item for item in artifacts if item["name"] == "pm/bugfix.md")
         assert "extra codex task" in bugfix_artifact["content"]
 
     def test_product_manager_requirement_update_keeps_existing_prd_content_shape(self, client):
@@ -1069,7 +1078,7 @@ class TestCodexTaskAPI:
                 "phase": "requirements",
             },
         ).json()
-        first_model = api_module.codex_store.load_codex_task(first_task["id"])
+        first_model = bootstrap_module.store.load_codex_task(first_task["id"])
         first_model.status = "done"
         first_model.result = json.dumps({
             "language": "zh-CN",
@@ -1086,7 +1095,7 @@ class TestCodexTaskAPI:
             "open_questions": [],
             "risks": [],
         }, ensure_ascii=False)
-        api_module._refresh_task_result(first_model)
+        api_module.role_workflow_service.persist_result(first_model)
 
         update_task = client.post(
             "/api/codex/tasks",
@@ -1099,7 +1108,7 @@ class TestCodexTaskAPI:
                 "phase": "requirements",
             },
         ).json()
-        update_model = api_module.codex_store.load_codex_task(update_task["id"])
+        update_model = bootstrap_module.store.load_codex_task(update_task["id"])
         update_model.status = "done"
         update_model.result = json.dumps({
             "language": "zh-CN",
@@ -1116,10 +1125,10 @@ class TestCodexTaskAPI:
             "open_questions": [],
             "risks": [],
         }, ensure_ascii=False)
-        api_module._refresh_task_result(update_model)
+        api_module.role_workflow_service.persist_result(update_model)
 
         artifacts = client.get(f"/api/codex/issues/{issue['id']}/artifacts").json()
-        prd_json = next(item for item in artifacts if item["name"] == "prd.json")
+        prd_json = next(item for item in artifacts if item["name"] == "pm/prd.json")
         payload = json.loads(prd_json["content"])
         assert payload["product_goals"] == ["updated goal"]
         assert payload["acceptance_criteria"] == ["new criterion"]
@@ -1251,8 +1260,8 @@ class TestCodexTaskAPI:
             def check_availability(self):
                 return True
 
-            def write_input(self, *args, **kwargs):
-                assert kwargs["wait"] is False, "Real manager must pass wait=False"
+            async def write_input_async(self, session_id=None, input_text="", wait=False, **kwargs):
+                assert wait is False, "Real manager must pass wait=False"
                 return "running"
 
             def terminate(self, workspace_id):
@@ -1279,7 +1288,6 @@ class TestCodexTaskAPI:
 
     def test_run_claude_task_does_not_reuse_workspace_thread_id_without_parent_resume(self, client, monkeypatch):
         import app.interfaces.api as api_module
-        import app.bootstrap as bootstrap_module
 
         captured = {}
 
@@ -1287,7 +1295,7 @@ class TestCodexTaskAPI:
             def check_availability(self):
                 return True
 
-            def write_input(self, session_id, prompt, wait, task_id, **kwargs):
+            async def write_input_async(self, session_id=None, input_text="", wait=True, task_id=None, **kwargs):
                 captured["session_id"] = session_id
                 captured["task_id"] = task_id
                 captured["resume_session_id"] = kwargs.get("resume_session_id")
@@ -1297,7 +1305,7 @@ class TestCodexTaskAPI:
         session_resp = client.post("/api/codex/sessions", json={"title": "Claude Resume Isolation", "cwd": "/tmp"})
         session_id = session_resp.json()["id"]
 
-        store = bootstrap_module.codex_store
+        store = bootstrap_module.store
         session = store.load_codex_session(session_id)
         session.thread_id = "stale-codex-thread"
         store.save_codex_session(session)
@@ -1321,9 +1329,8 @@ class TestCodexTaskAPI:
     def test_run_task_preserves_terminal_status_from_callback(self, client, monkeypatch):
         """A callback that marks the task done before write_input returns should not be overwritten."""
         import app.interfaces.api as api_module
-        import app.bootstrap as bootstrap_module
 
-        store = bootstrap_module.codex_store
+        store = bootstrap_module.store
 
         class RacingManager:
             def __init__(self, codex_store):
@@ -1332,11 +1339,11 @@ class TestCodexTaskAPI:
             def check_availability(self):
                 return True
 
-            def write_input(self, session_id, prompt, wait, task_id, **kwargs):
-                task = self.codex_store.load_codex_task(task_id)
+            async def write_input_async(self, session_id=None, input_text="", wait=True, task_id=None, **kwargs):
+                task = await self.codex_store.load_codex_task(task_id)
                 task.status = "done"
                 task.result = "callback result"
-                self.codex_store.save_codex_task(task)
+                await self.codex_store.save_codex_task(task)
                 return "responding"
 
         session_resp = client.post("/api/codex/sessions", json={"title": "Race Workspace", "cwd": "/tmp"})
@@ -1348,7 +1355,7 @@ class TestCodexTaskAPI:
         })
         task_id = task_resp.json()["id"]
 
-        monkeypatch.setattr(api_module, "get_codex_process_manager", lambda: RacingManager(store))
+        monkeypatch.setattr(api_module, "get_codex_process_manager", lambda: RacingManager(api_module.codex_store))
 
         run_resp = client.post(f"/api/codex/tasks/{task_id}/run")
         assert run_resp.status_code == 200
@@ -1375,8 +1382,7 @@ class TestCodexTaskAPI:
         task_id = task_resp.json()["id"]
 
         # Manually set to running to simulate in-progress state
-        import app.bootstrap as bootstrap_module
-        store = bootstrap_module.codex_store
+        store = bootstrap_module.store
         task = store.load_codex_task(task_id)
         task.status = "running"
         store.save_codex_task(task)
@@ -1443,7 +1449,7 @@ class TestCodexTaskAPI:
             },
         ).json()
 
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "en",
@@ -1456,15 +1462,16 @@ class TestCodexTaskAPI:
             "interfaces": ["REST"],
             "data_flow": "Client -> API -> Service -> DB",
             "implementation_tasks": [{"title": "Setup project", "description": "Init", "priority": "P0"}],
+            "development_task_list": ["Setup project"],
             "risks": ["Scalability"],
             "open_questions": ["Which DB?"],
         }, ensure_ascii=False)
-        api_module._refresh_task_result(task_model)
+        api_module.role_workflow_service.persist_result(task_model)
 
         issue_root = Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
-        assert (issue_root / "system_design.json").exists()
-        assert (issue_root / "system_design.md").exists()
-        assert (issue_root / "implementation_plan.json").exists()
+        assert (issue_root / "architect" / "system_design.json").exists()
+        assert (issue_root / "architect" / "system_design.md").exists()
+        assert (issue_root / "architect" / "implementation_plan.json").exists()
         assert "system_design.json" in task_model.result
 
     def test_engineer_refresh_persists_implementation_md(self, client):
@@ -1486,7 +1493,7 @@ class TestCodexTaskAPI:
             },
         ).json()
 
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "en",
@@ -1502,7 +1509,7 @@ class TestCodexTaskAPI:
             "verification_commands": ["pytest"],
             "qa_notes": [],
         }, ensure_ascii=False)
-        api_module._refresh_task_result(task_model)
+        api_module.role_workflow_service.persist_result(task_model)
 
         issue_root = Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
         # Check that implementation file with task ID exists
@@ -1529,7 +1536,7 @@ class TestCodexTaskAPI:
             },
         ).json()
 
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = json.dumps({
             "language": "en",
@@ -1547,11 +1554,11 @@ class TestCodexTaskAPI:
             "test_gaps": [],
             "final_recommendation": "Ready",
         }, ensure_ascii=False)
-        api_module._refresh_task_result(task_model)
+        api_module.role_workflow_service.persist_result(task_model)
 
         issue_root = Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
-        assert (issue_root / "qa_plan.json").exists()
-        assert (issue_root / "qa_report.md").exists()
+        assert (issue_root / "qa" / "qa_plan.json").exists()
+        assert (issue_root / "qa" / "qa_report.md").exists()
         assert "qa_plan.json" in task_model.result
 
     def test_general_task_refresh_does_not_persist_structured_artifacts(self, client):
@@ -1568,11 +1575,11 @@ class TestCodexTaskAPI:
             },
         ).json()
 
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
         task_model.result = "Some arbitrary text result from a general task"
         original_result = task_model.result
-        api_module._refresh_task_result(task_model)
+        api_module.role_workflow_service.persist_result(task_model)
 
         assert task_model.result == original_result
         assert task_model.status == "done"
@@ -1596,7 +1603,7 @@ class TestCodexTaskAPI:
             },
         ).json()
 
-        task_model = api_module.codex_store.load_codex_task(task["id"])
+        task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "pending"
         task_model.result = json.dumps({
             "language": "en",
@@ -1612,10 +1619,11 @@ class TestCodexTaskAPI:
             "risks": [],
             "open_questions": [],
         }, ensure_ascii=False)
-        api_module._refresh_task_result(task_model)
+        import asyncio
+        asyncio.run(api_module._refresh_task_result(task_model))
 
         issue_root = Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
-        assert not (issue_root / "system_design.json").exists()
+        assert not (issue_root / "architect" / "system_design.json").exists()
 
 
 class TestCodexTaskContinuation:
@@ -1666,8 +1674,7 @@ class TestCodexTaskContinuation:
         })
         follow_id = follow_resp.json()["id"]
 
-        import app.bootstrap as bootstrap_module
-        store = bootstrap_module.codex_store
+        store = bootstrap_module.store
         original = store.load_codex_task(orig_id)
         original.resume_session_id = None
         store.save_codex_task(original)
@@ -2012,7 +2019,7 @@ class TestTaskExecutorWiring:
         # Mock task runner to capture which executor is passed
         captured_executor = []
         class MockTaskRunner:
-            async def start_task_run(self, task, resume_session_id=None, resume_message_id=None, prompt_override=None):
+            async def start_task_run(self, task, resume_session_id=None, resume_message_id=None, prompt_override=None, run_executor=None, run_provider=None, run_model=None):
                 captured_executor.append(task.executor)
                 from app.domain.models import ExecutionProcess
                 return ExecutionProcess(

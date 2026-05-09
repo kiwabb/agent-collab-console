@@ -1,13 +1,13 @@
 "use client";
 
-import type { CodexTask, ExecutionProcess } from "@/lib/types";
+import type { CodexTask, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
 import { Plus, Layout, Activity, Clock, Terminal, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { type Phase, PHASE_CONFIG } from "@/features/issues/phaseUtils";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
 import { pickLatestExecutionProcessForTask } from "@/lib/task-selection";
-import { ExecutorToggle } from "@/components/ui/executor-toggle";
+import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,9 +17,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { getRuntimeCatalog } from "@/lib/api";
 
 function isDevelopmentTaskUnlocked(task: CodexTask, allTasks: CodexTask[]): boolean {
-  if (task.phase !== "development" || task.sequence_index === null) return true;
+  if (task.phase !== "development" || task.sequence_index == null) return true;
   if (task.sequence_index === 0) return true;
   const prevIndex = task.sequence_index - 1;
   const prevTask = allTasks.find(
@@ -33,7 +34,7 @@ interface TaskBoardProps {
   tasks: CodexTask[];
   executionProcesses: ExecutionProcess[];
   onSelectTask: (id: string) => void;
-  onRunPhase: (phase: Phase, executor: "codex" | "claude") => void;
+  onRunPhase: (phase: Phase, executor: "codex" | "claude", provider: string | null, model: string | null) => void;
   issueTitle?: string | null;
   onDeleteIssue?: () => Promise<void> | void;
 }
@@ -47,9 +48,24 @@ export function TaskBoard({
   onDeleteIssue,
 }: TaskBoardProps) {
   const { t } = useI18n();
-  const [executor, setExecutor] = useState<"codex" | "claude">("codex");
+  const [catalog, setCatalog] = useState<RuntimeCatalog | null>(null);
+  const defaultExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
+    catalog,
+    "codex",
+    null,
+    null,
+  ), [catalog]);
+  const [executionConfig, setExecutionConfig] = useState<ExecutionConfigValue>(defaultExecutionConfig);
   const [deleteIssueOpen, setDeleteIssueOpen] = useState(false);
   const [isDeletingIssue, setIsDeletingIssue] = useState(false);
+
+  useEffect(() => {
+    getRuntimeCatalog().then(setCatalog).catch(() => setCatalog(null));
+  }, []);
+
+  useEffect(() => {
+    setExecutionConfig(defaultExecutionConfig);
+  }, [defaultExecutionConfig]);
 
   const boardPhases: { id: Phase; labelKey: string; color: string }[] = [
     { id: "requirements", labelKey: "phase.requirements", color: "bg-text-muted" },
@@ -98,12 +114,11 @@ export function TaskBoard({
             <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-text-muted mb-2">
               {t("task.executor")}
             </label>
-            <ExecutorToggle
-              value={executor}
-              onChange={setExecutor}
-              codexLabel={t("executor.codex")}
-              claudeLabel={t("executor.claude")}
-              className="w-56"
+            <ExecutionConfigSelector
+              value={executionConfig}
+              onChange={setExecutionConfig}
+              catalog={catalog}
+              className="w-full min-w-[36rem] lg:min-w-0"
             />
           </div>
           {onDeleteIssue && (
@@ -139,8 +154,8 @@ export function TaskBoard({
                       {phaseTasks.length}
                     </span>
                   </div>
-                  <button 
-                    onClick={() => onRunPhase(phase.id, executor)}
+                  <button
+                    onClick={() => onRunPhase(phase.id, executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model)}
                     className="p-1.5 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover/column:opacity-100"
                     title={t("issue.runPhase")}
                   >
@@ -186,7 +201,7 @@ export function TaskBoard({
                             </span>
                           </div>
                             <div className="flex items-center gap-2">
-                              {task.phase === "development" && task.sequence_index !== null && (
+                              {task.phase === "development" && task.sequence_index != null && (
                                 <span className={cn(
                                   "text-[9px] font-black px-1.5 py-0.5 rounded-md",
                                   unlocked ? "text-brand bg-brand/10" : "text-warning bg-warning/10"

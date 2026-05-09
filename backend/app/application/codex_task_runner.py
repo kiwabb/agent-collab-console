@@ -21,7 +21,7 @@ class CodexTaskRunner:
         self._help_orchestrator_factory = help_orchestrator_factory
         self._role_workflow_service = role_workflow_service or RoleWorkflowService()
 
-    async def _create_execution_process(self, task):
+    async def _create_execution_process(self, task, executor: str, provider: str | None, model: str | None):
         now = datetime.now()
         process = ExecutionProcess(
             id=str(uuid4()),
@@ -29,6 +29,9 @@ class CodexTaskRunner:
             session_id=task.session_id,
             status="Running",
             exit_code=None,
+            executor=executor,
+            provider=provider,
+            model=model,
             started_at=now,
             completed_at=None,
             created_at=now,
@@ -47,14 +50,26 @@ class CodexTaskRunner:
         prompt_override=None,
         resume_session_id=None,
         resume_message_id=None,
+        run_executor=None,
+        run_provider=None,
+        run_model=None,
     ):
         if task.status == "running":
             raise ValueError("Task already running")
 
+        # Resolve effective executor/provider/model from runtime catalog
+        # Also get rendered command args and env vars from templates
+        executor, provider, model, rendered_env, rendered_command_args, executor_type = await self._resolve_effective_config(
+            task,
+            run_executor=run_executor,
+            run_provider=run_provider,
+            run_model=run_model,
+        )
+
         task.status = "running"
         task.updated_at = datetime.now()
         await self.codex_store.save_codex_task(task)
-        exec_process = await self._create_execution_process(task)
+        exec_process = await self._create_execution_process(task, executor, provider, model)
         await self.event_bus.append({
             "type": "task_status",
             "task_id": task.id,
@@ -87,10 +102,14 @@ class CodexTaskRunner:
                 prompt_text + "\n",
                 wait=wait_for_completion,
                 task_id=task.id,
-                executor=task.executor,
+                executor=executor_type,  # Use executor_type for runtime routing
+                provider=provider,
+                model=model,
                 resume_session_id=resume_session_id,
                 resume_message_id=resume_message_id,
                 cwd=task.workspace_path,
+                env_overrides=rendered_env,
+                command_args=rendered_command_args,
             )
         except Exception:
             task.status = "failed"
@@ -194,3 +213,79 @@ class CodexTaskRunner:
             child_status=task.status,
             child_result=task.result,
         )
+
+    async def _resolve_effective_config(
+        self,
+        task,
+        run_executor=None,
+        run_provider=None,
+        run_model=None,
+    ) -> tuple[str, str | None, str | None, dict[str, str] | None, list[str] | None, str]:
+        """Resolve effective executor/provider/model for a task.
+
+        Uses the runtime catalog to fill in defaults when task doesn't specify
+        provider/model explicitly.
+
+        Run-time overrides (run_executor, run_provider, run_model) take precedence
+        over task defaults.
+
+        Returns (executor, provider, model, rendered_env_overrides, rendered_command_args, executor_type).
+        """
+        from app.application.runtime_catalog_service import RuntimeCatalogService
+
+        service = RuntimeCatalogService(self.codex_store)
+        catalog = await service.load_catalog()
+
+        # Priority: run override > task default > executor default
+        executor = run_executor if run_executor is not None else (task.executor or "codex")
+        provider = run_provider if run_provider is not None else task.provider
+        model = run_model if run_model is not None else task.model
+
+        resolved_executor, resolved_provider, resolved_model, executor_env_overrides, executor_type = service.resolve_effective_config(
+            catalog,
+            executor,
+            provider=provider,
+            model=model,
+        )
+
+        # If resolved config differs from task defaults, update the task
+        # This persists the override as the new task default
+        if task.executor != resolved_executor or task.provider != resolved_provider or task.model != resolved_model:
+            task.executor = resolved_executor
+            task.provider = resolved_provider
+            task.model = resolved_model
+
+        # Start with executor-level env overrides
+        rendered_env = dict(executor_env_overrides) if executor_env_overrides else None
+
+        # Render env templates and command template from provider config
+        rendered_command_args = None
+        if resolved_provider:
+            provider_config = service._find_provider(catalog, resolved_executor, resolved_provider)
+            if provider_config:
+                context = {
+                    "model": resolved_model or "",
+                    "provider": resolved_provider or "",
+                    "workspace_cwd": task.workspace_path or "",
+                    "task_id": task.id,
+                }
+                # Render env_template (dict of env var names to template strings)
+                if provider_config.env_template:
+                    try:
+                        if rendered_env is None:
+                            rendered_env = {}
+                        for env_key, env_template in provider_config.env_template.items():
+                            rendered_env[env_key] = service.render_template(env_template, context)
+                    except Exception:
+                        pass  # Keep existing executor env overrides
+
+                # Render command_template (string template for additional command args)
+                if provider_config.command_template:
+                    try:
+                        rendered_cmd = service.render_template(provider_config.command_template, context)
+                        # Split by whitespace to get individual args
+                        rendered_command_args = rendered_cmd.split()
+                    except Exception:
+                        rendered_command_args = None
+
+        return (resolved_executor, resolved_provider, resolved_model, rendered_env, rendered_command_args, executor_type)

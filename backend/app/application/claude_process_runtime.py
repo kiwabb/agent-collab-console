@@ -39,9 +39,13 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         wait: bool = True,
         task_id: str | None = None,
         executor: str = "claude",
+        provider: str | None = None,
+        model: str | None = None,
         resume_session_id: str | None = None,
         resume_message_id: str | None = None,
         cwd: str | None = None,
+        env_overrides: dict[str, str] | None = None,
+        command_args: list[str] | None = None,
         **legacy_kwargs,
     ) -> str:
         """Write input using asyncio subprocess."""
@@ -61,6 +65,10 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
                 task_id=task_id,
                 waiter=evt,
                 cwd=cwd,
+                provider=provider,
+                model=model,
+                env_overrides=env_overrides,
+                command_args=command_args,
             )
         else:
             if evt:
@@ -82,10 +90,11 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
                 task_id=task_id,
                 waiter=evt,
                 cwd=cwd,
+                provider=provider,
+                model=model,
+                env_overrides=env_overrides,
+                command_args=command_args,
             )
-            await self._append_log(workspace_id, "stdin", input_text, task_id)
-            entry.proc.stdin.write(self._encode_claude_input(input_text).encode("utf-8"))
-            await entry.proc.stdin.drain()
 
         if wait and evt:
             try:
@@ -107,6 +116,10 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         task_id: str | None,
         waiter: asyncio.Event | None,
         cwd: str | None,
+        provider: str | None = None,
+        model: str | None = None,
+        env_overrides: dict[str, str] | None = None,
+        command_args: list[str] | None = None,
     ) -> AsyncProcessEntry:
         """Async version of _spawn_process using asyncio.create_subprocess_exec."""
         workspace = await self.codex_store.load_codex_workspace(workspace_id)
@@ -129,11 +142,26 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         cmd = self._build_claude_command(
             resume_session_id or workspace.claude_thread_id,
             resume_message_id=resume_message_id,
+            model=model,
         )
-        
+
         env = os.environ.copy()
         paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin", os.path.expanduser("~/.npm-global/bin")]
         env["PATH"] = ":".join(paths) + ":" + env.get("PATH", "")
+
+        # Set provider/model env vars if specified
+        if provider:
+            env["CLAUDE_PROVIDER"] = provider
+        if model:
+            env["CLAUDE_MODEL"] = model
+
+        # Apply rendered env overrides from runtime catalog templates
+        if env_overrides:
+            env.update(env_overrides)
+
+        # Append rendered command args from runtime catalog templates
+        if command_args:
+            cmd.extend(command_args)
 
         proc = await asyncio.create_subprocess_exec(
             cmd[0],

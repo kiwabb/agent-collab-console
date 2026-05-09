@@ -81,10 +81,13 @@ class CodexProcessManager:
         wait: bool = True,
         task_id: str | None = None,
         executor: str = "codex",
+        provider: str | None = None,
+        model: str | None = None,
         resume_session_id: str | None = None,
         resume_message_id: str | None = None,
         cwd: str | None = None,
         workspace_id: str | None = None,
+        env_overrides: dict[str, str] | None = None,
         **legacy_kwargs,
     ) -> str:
         """Async write_input - awaits runtime's write_input_async directly."""
@@ -97,9 +100,12 @@ class CodexProcessManager:
             wait=wait,
             task_id=task_id,
             executor=executor,
+            provider=provider,
+            model=model,
             resume_session_id=resume_session_id,
             resume_message_id=resume_message_id,
             cwd=cwd,
+            env_overrides=env_overrides,
             **legacy_kwargs,
         )
 

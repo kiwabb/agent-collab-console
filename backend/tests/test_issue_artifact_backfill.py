@@ -56,8 +56,9 @@ async def test_issue_artifacts_backfill_missing_prd_files(monkeypatch, tmp_path)
         last_active_at=now,
     )
     issue_root = tmp_path / "issues" / issue.id
-    issue_root.mkdir(parents=True, exist_ok=True)
-    (issue_root / "requirement.md").write_text("# Requirement\n", encoding="utf-8")
+    pm_dir = issue_root / "pm"
+    pm_dir.mkdir(parents=True, exist_ok=True)
+    (pm_dir / "requirement.md").write_text("# Requirement\n", encoding="utf-8")
     task_title = "需求 - 1+1"
 
     task = CodexTask(
@@ -94,8 +95,8 @@ async def test_issue_artifacts_backfill_missing_prd_files(monkeypatch, tmp_path)
     artifacts = await api_module.get_codex_issue_artifacts(issue.id)
 
     names = {artifact["name"] for artifact in artifacts}
-    assert "prd.json" in names
-    assert "prd.md" in names
-    assert (issue_root / "prd.json").exists()
-    assert (issue_root / "prd.md").exists()
-    assert task_title in (issue_root / "prd.md").read_text(encoding="utf-8")
+    assert "pm/prd.json" in names
+    assert "pm/prd.md" in names
+    assert (pm_dir / "prd.json").exists()
+    assert (pm_dir / "prd.md").exists()
+    assert task_title in (pm_dir / "prd.md").read_text(encoding="utf-8")

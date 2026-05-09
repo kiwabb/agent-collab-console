@@ -14,7 +14,10 @@ def build_execution_process_view(
         "status": process.status,
         "exit_code": process.exit_code,
         "title": task.title if task else process.task_id,
-        "executor": task.executor if task else "codex",
+        # Use execution process snapshot fields (actual runtime config)
+        "executor": process.executor if process.executor else (task.executor if task else "codex"),
+        "provider": process.provider if process.provider else (task.provider if task else None),
+        "model": process.model if process.model else (task.model if task else None),
         "workspace_path": task.workspace_path if task else None,
         "resume_session_id": task.resume_session_id if task else None,
         "created_at": process.created_at.isoformat() if process.created_at else None,

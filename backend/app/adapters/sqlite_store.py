@@ -4,7 +4,7 @@ from pathlib import Path
 
 import sqlite3
 
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest
+from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog
 
 
 class SQLiteStore:
@@ -123,6 +123,8 @@ class SQLiteStore:
                 prompt TEXT NOT NULL,
                 role TEXT DEFAULT 'general',
                 executor TEXT DEFAULT 'codex',
+                provider TEXT,
+                model TEXT,
                 status TEXT DEFAULT 'pending',
                 result TEXT,
                 parent_task_id TEXT,
@@ -132,6 +134,9 @@ class SQLiteStore:
                 resume_session_id TEXT,
                 resume_message_id TEXT,
                 last_execution_process_id TEXT,
+                sequence_index INTEGER,
+                sequence_group TEXT,
+                review_comment TEXT,
                 created_at TEXT,
                 updated_at TEXT,
                 FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
@@ -257,6 +262,47 @@ class SQLiteStore:
             conn.execute("ALTER TABLE codex_tasks ADD COLUMN blocked_by_help_id TEXT")
         except sqlite3.OperationalError:
             pass  # Column already exists
+        # Add provider and model columns to codex_tasks
+        try:
+            conn.execute("ALTER TABLE codex_tasks ADD COLUMN provider TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            conn.execute("ALTER TABLE codex_tasks ADD COLUMN model TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        # Add executor/provider/model snapshot columns to execution_processes
+        try:
+            conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            conn.execute("ALTER TABLE execution_processes ADD COLUMN provider TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            conn.execute("ALTER TABLE execution_processes ADD COLUMN model TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_index INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_group TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE codex_tasks ADD COLUMN review_comment TEXT")
+        except sqlite3.OperationalError:
+            pass
+        # Create runtime_catalog_settings table if not exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS runtime_catalog_settings (
+                id TEXT PRIMARY KEY,
+                data TEXT NOT NULL
+            )
+        """)
         conn.commit()
         conn.close()
 
@@ -583,9 +629,10 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO codex_tasks (id, session_id, issue_id, phase, title, prompt, role, executor, status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO codex_tasks (id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (task.id, task.session_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
-             task.status, task.result, task.parent_task_id, task.task_kind, task.blocked_by_help_id, task.workspace_path, task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
+             task.provider, task.model, task.status, task.result, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
+             task.workspace_path, task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
              self._format_datetime(task.created_at),
              self._format_datetime(task.updated_at)),
         )
@@ -609,6 +656,8 @@ class SQLiteStore:
             prompt=row["prompt"],
             role=row["role"] if "role" in row.keys() and row["role"] else "general",
             executor=row["executor"] if row["executor"] else "codex",
+            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
+            model=row["model"] if "model" in row.keys() and row["model"] else None,
             status=row["status"],
             result=row["result"],
             parent_task_id=row["parent_task_id"] if row["parent_task_id"] else None,
@@ -627,7 +676,7 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        select_sql = "SELECT id, session_id, issue_id, phase, title, prompt, role, executor, status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at FROM codex_tasks"
+        select_sql = "SELECT id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at FROM codex_tasks"
         if session_id and issue_id:
             rows = conn.execute(
                 f"{select_sql} WHERE session_id = ? AND issue_id = ? ORDER BY created_at ASC",
@@ -894,8 +943,9 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO execution_processes (id, task_id, session_id, status, exit_code, started_at, completed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO execution_processes (id, task_id, session_id, status, exit_code, executor, provider, model, started_at, completed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (process.id, process.task_id, process.session_id, process.status, process.exit_code,
+             process.executor, process.provider, process.model,
              self._format_datetime(process.started_at),
              self._format_datetime(process.completed_at),
              self._format_datetime(process.created_at),
@@ -919,6 +969,9 @@ class SQLiteStore:
             session_id=row["session_id"],
             status=row["status"],
             exit_code=row["exit_code"],
+            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
+            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
+            model=row["model"] if "model" in row.keys() and row["model"] else None,
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
@@ -957,6 +1010,9 @@ class SQLiteStore:
                 session_id=r["session_id"],
                 status=r["status"],
                 exit_code=r["exit_code"],
+                executor=r["executor"] if "executor" in r.keys() and r["executor"] else None,
+                provider=r["provider"] if "provider" in r.keys() and r["provider"] else None,
+                model=r["model"] if "model" in r.keys() and r["model"] else None,
                 started_at=self._parse_datetime(r["started_at"]),
                 completed_at=self._parse_datetime(r["completed_at"]),
                 created_at=self._parse_datetime(r["created_at"]),
@@ -987,3 +1043,32 @@ class SQLiteStore:
         )
         conn.commit()
         conn.close()
+
+    # --- Runtime Catalog ---
+
+    def save_runtime_catalog(self, catalog: "RuntimeCatalog"):
+        """Save the runtime catalog to the database."""
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO runtime_catalog_settings (id, data) VALUES (?, ?)",
+            ("runtime_catalog", json.dumps(catalog.model_dump())),
+        )
+        conn.commit()
+        conn.close()
+
+    def load_runtime_catalog(self) -> "RuntimeCatalog | None":
+        """Load the runtime catalog from the database."""
+        self._ensure_db()
+        from app.domain.models import RuntimeCatalog
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT data FROM runtime_catalog_settings WHERE id = ?", ("runtime_catalog",)).fetchone()
+        conn.close()
+        if not row:
+            return None
+        try:
+            data = json.loads(row["data"])
+            return RuntimeCatalog(**data)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None

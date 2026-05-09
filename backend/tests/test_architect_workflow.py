@@ -56,7 +56,7 @@ def test_architect_persists_development_task_list_json(architect_workflow, sampl
     design = architect_workflow.persist_result(sample_task, workspace_title="电商系统")
 
     issue_root = Path(sample_task.workspace_path) / "issues" / sample_task.issue_id
-    dev_task_list_path = issue_root / "development_task_list.json"
+    dev_task_list_path = issue_root / "architect" / "development_task_list.json"
 
     assert dev_task_list_path.exists(), "development_task_list.json should be created"
 
@@ -172,6 +172,7 @@ def test_architect_rejects_mismatched_development_task_list(architect_workflow, 
             "development_task_list": [
                 "实现购物车API",
                 "实现价格计算",  # Not in implementation_tasks
+                "额外任务",  # Extra item to make counts differ
             ],
             "risks": [],
             "open_questions": [],

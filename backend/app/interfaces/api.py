@@ -39,6 +39,52 @@ def _try_parse_json_line(line: str) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+async def _resolve_runtime_config(
+    executor: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> tuple[str, str, str, dict[str, str] | None, str]:
+    catalog_service = _get_runtime_catalog_service()
+    catalog = await catalog_service.load_catalog()
+    try:
+        return catalog_service.resolve_effective_config(
+            catalog,
+            executor or "codex",
+            provider,
+            model,
+        )
+    except RuntimeCatalogValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+async def _resolve_task_runtime_config(task) -> tuple[str, str, str, dict[str, str] | None, str]:
+    return await _resolve_runtime_config(task.executor, task.provider, task.model)
+
+
+def _serialize_task_payload(task) -> dict:
+    return {
+        "id": task.id,
+        "session_id": task.session_id,
+        "issue_id": task.issue_id,
+        "phase": task.phase,
+        "title": task.title,
+        "prompt": task.prompt,
+        "role": task.role,
+        "status": task.status,
+        "result": task.result,
+        "executor": task.executor,
+        "provider": task.provider,
+        "model": task.model,
+        "parent_task_id": task.parent_task_id,
+        "task_kind": task.task_kind,
+        "blocked_by_help_id": task.blocked_by_help_id,
+        "resume_session_id": task.resume_session_id,
+        "workspace_path": task.workspace_path,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+
+
 async def _list_task_messages(task_id: str, execution_process_id: str | None = None):
     if execution_process_id:
         try:
@@ -381,6 +427,8 @@ def _is_task_running(status: str | None) -> bool:
 
 def _should_use_workspace_root_for_task(workspace, request: "CreateTaskRequest") -> bool:
     """Return True if task should use workspace root, False for a dedicated task workspace."""
+    if request.issue_id:
+        return True
     if request.role in ("product_manager", "architect"):
         return True
     return False
@@ -727,16 +775,22 @@ class RequestTaskHelpRequest(BaseModel):
 
 class UpdateCodexTaskRequest(BaseModel):
     executor: Literal["codex", "claude"] | None = None
+    provider: str | None = None
+    model: str | None = None
+
+
+class RunTaskRequest(BaseModel):
+    """Optional run-time overrides for task execution."""
+    executor: Literal["codex", "claude"] | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 @router.patch("/codex/tasks/{task_id}")
 async def update_codex_task(task_id: str, request: UpdateCodexTaskRequest):
-    """Update a task's mutable fields. Only executor is supported."""
+    """Update a task's mutable fields. Supports executor, provider, and model."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    if request.executor is None:
-        raise HTTPException(status_code=400, detail="No fields to update")
-
     task = await codex_store.load_codex_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -744,7 +798,26 @@ async def update_codex_task(task_id: str, request: UpdateCodexTaskRequest):
     if task.status == "running":
         raise HTTPException(status_code=409, detail="Cannot update a running task")
 
-    task.executor = request.executor
+    if request.executor is None and request.provider is None and request.model is None:
+        raise HTTPException(status_code=400, detail="Must specify at least one field to update")
+
+    # Validate and resolve executor/provider/model against runtime catalog
+    new_executor = request.executor if request.executor is not None else task.executor
+    new_provider = request.provider if request.provider is not None else task.provider
+    new_model = request.model if request.model is not None else task.model
+
+    catalog_service = _get_runtime_catalog_service()
+    catalog = await catalog_service.load_catalog()
+    try:
+        resolved_executor, resolved_provider, resolved_model, _, _ = catalog_service.resolve_effective_config(
+            catalog, new_executor, new_provider, new_model
+        )
+    except RuntimeCatalogValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    task.executor = resolved_executor
+    task.provider = resolved_provider
+    task.model = resolved_model
     task.updated_at = datetime.now()
     await codex_store.save_codex_task(task)
 
@@ -792,7 +865,7 @@ async def request_codex_task_help(task_id: str, request: RequestTaskHelpRequest)
 
     try:
         orchestrator = get_help_orchestrator(_refresh_task_result)
-        help_request = orchestrator.request_help(
+        help_request = await orchestrator.request_help(
             parent_task_id=task.id,
             target_executor=request.target_executor,
             title=help_title,
@@ -830,6 +903,8 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
     from datetime import datetime
     from app.domain.models import CodexTask
 
+    resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config()
+
     resume_session_id = workspace.thread_id or None
 
     # Derive title from first line of input
@@ -843,7 +918,9 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
         session_id=workspace_id,
         title=task_title,
         prompt=request.input,
-        executor="codex",
+        executor=resolved_executor,
+        provider=resolved_provider,
+        model=resolved_model,
         status="pending",
         result=None,
         parent_task_id=None,
@@ -857,21 +934,7 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
     # Broadcast new task with complete data structure
     await event_bus.append({
         "type": "task_created",
-        "task": {
-            "id": task.id,
-            "session_id": task.session_id,
-            "title": task.title,
-            "prompt": task.prompt,
-            "role": task.role,
-            "status": task.status,
-            "result": task.result,
-            "executor": task.executor,
-            "parent_task_id": task.parent_task_id,
-            "resume_session_id": task.resume_session_id,
-            "workspace_path": task.workspace_path,
-            "created_at": task.created_at.isoformat() if task.created_at else None,
-            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
-        }
+        "task": _serialize_task_payload(task),
     })
 
     try:
@@ -985,6 +1048,8 @@ class CreateTaskRequest(BaseModel):
     prompt: str
     role: str = "general"
     executor: str = "codex"
+    provider: str | None = None
+    model: str | None = None
     parent_task_id: str | None = None
     task_kind: str = "normal"
     blocked_by_help_id: str | None = None
@@ -1097,6 +1162,7 @@ async def transition_codex_issue_to_architecture(issue_id: str):
         from app.domain.models import CodexTask
 
         now = datetime.now()
+        resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config()
         architect_task = CodexTask(
             id=str(uuid4()),
             session_id=issue.session_id,
@@ -1105,7 +1171,9 @@ async def transition_codex_issue_to_architecture(issue_id: str):
             title=f"架构 - {issue.title}",
             prompt="请基于当前需求产物进行架构设计。",
             role="architect",
-            executor="codex",
+            executor=resolved_executor,
+            provider=resolved_provider,
+            model=resolved_model,
             status="pending",
             result=None,
             parent_task_id=None,
@@ -1189,6 +1257,7 @@ async def transition_codex_issue_to_development(issue_id: str):
                 await codex_store.save_codex_task(engineer_task)
         else:
             now = datetime.now()
+            resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config()
             engineer_task = CodexTask(
                 id=str(uuid4()),
                 session_id=issue.session_id,
@@ -1197,7 +1266,9 @@ async def transition_codex_issue_to_development(issue_id: str):
                 title=task_title,
                 prompt=task_prompt,
                 role="engineer",
-                executor="codex",
+                executor=resolved_executor,
+                provider=resolved_provider,
+                model=resolved_model,
                 status="pending",
                 result=None,
                 parent_task_id=None,
@@ -1233,6 +1304,11 @@ async def get_codex_issue_artifacts(issue_id: str):
     if issue is None:
         raise HTTPException(status_code=404, detail="Issue not found")
 
+    workspace = await codex_store.load_codex_workspace(issue.session_id)
+    if workspace is None:
+        return []
+    issue_root = Path(workspace.cwd) / "issues" / issue_id
+
     tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
     sorted_tasks = sorted(
         tasks,
@@ -1248,7 +1324,6 @@ async def get_codex_issue_artifacts(issue_id: str):
         workspace_path = task_row.get("workspace_path")
         if not workspace_path:
             continue
-        issue_root = Path(workspace_path) / "issues" / issue_id
         pm_dir = issue_root / "pm"
         
         # Check in pm/ subdirectory
@@ -1373,6 +1448,14 @@ async def create_codex_task(request: CreateTaskRequest):
             status_code=400,
             detail=f"Role '{request.role}' must run in phase '{expected_phase}', got '{resolved_phase}'",
         )
+
+    # Resolve and validate executor/provider/model against runtime catalog
+    resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(
+        request.executor,
+        request.provider,
+        request.model,
+    )
+
     parent_task = None
     parent_workspace_path = None
     if request.parent_task_id:
@@ -1396,7 +1479,9 @@ async def create_codex_task(request: CreateTaskRequest):
         title=request.title,
         prompt=request.prompt,
         role=request.role,
-        executor=request.executor,
+        executor=resolved_executor,
+        provider=resolved_provider,
+        model=resolved_model,
         status="pending",
         result=None,
         parent_task_id=request.parent_task_id,
@@ -1412,25 +1497,7 @@ async def create_codex_task(request: CreateTaskRequest):
     # Broadcast new task with complete data structure
     await event_bus.append({
         "type": "task_created",
-        "task": {
-            "id": task.id,
-            "session_id": task.session_id,
-            "issue_id": task.issue_id,
-            "phase": task.phase,
-            "title": task.title,
-            "prompt": task.prompt,
-            "role": task.role,
-            "status": task.status,
-            "result": task.result,
-            "executor": task.executor,
-            "parent_task_id": task.parent_task_id,
-            "task_kind": task.task_kind,
-            "blocked_by_help_id": task.blocked_by_help_id,
-            "resume_session_id": task.resume_session_id,
-            "workspace_path": task.workspace_path,
-            "created_at": task.created_at.isoformat() if task.created_at else None,
-            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
-        }
+        "task": _serialize_task_payload(task),
     })
     return task
 
@@ -1465,12 +1532,16 @@ async def get_codex_task(task_id: str):
 
 
 @router.post("/codex/tasks/{task_id}/run")
-async def run_codex_task(task_id: str):
+async def run_codex_task(task_id: str, request: RunTaskRequest | None = None):
     """Run a task using initial or follow-up CLI semantics based on resume metadata.
 
     Returns an ExecutionProcess record which is bound to the task via
     task.last_execution_process_id, allowing the frontend to re-subscribe to
     the process stream after reload.
+
+    Optional run-time overrides can be provided to change the executor/provider/model
+    for this specific run. If provided and different from task defaults, the new
+    values will be persisted as the task's new defaults.
     """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
@@ -1508,6 +1579,9 @@ async def run_codex_task(task_id: str):
             task,
             resume_session_id=resume_session_id,
             resume_message_id=resume_message_id,
+            run_executor=request.executor if request else None,
+            run_provider=request.provider if request else None,
+            run_model=request.model if request else None,
         )
         return exec_process
     except ValueError as e:
@@ -1686,6 +1760,7 @@ async def submit_codex_task_for_review(task_id: str):
     print(f"DEBUG: Spawning automated review task for parent_task={task.id}")
     from app.domain.models import CodexTask
     review_task_id = str(uuid4())
+    review_executor, review_provider, review_model, _, _ = await _resolve_task_runtime_config(task)
     review_task = CodexTask(
         id=review_task_id,
         session_id=task.session_id,
@@ -1694,7 +1769,9 @@ async def submit_codex_task_for_review(task_id: str):
         title=f"代码评审 - {task.title}",
         prompt=f"请评审任务 '{task.title}' 的实现代码。",
         role="architect",
-        executor=task.executor,
+        executor=review_executor,
+        provider=review_provider,
+        model=review_model,
         status="pending",
         parent_task_id=task.id,
         task_kind="review",
@@ -1707,7 +1784,7 @@ async def submit_codex_task_for_review(task_id: str):
     await event_bus.append({
         "type": "task_created",
         "session_id": task.session_id,
-        "task": review_task.model_dump(),
+        "task": _serialize_task_payload(review_task),
     })
 
     # 3. Run the review task automatically
@@ -1821,3 +1898,57 @@ async def get_execution_process_logs(process_id: str):
         execution_process_id=process.id,
         limit=1000,
     )
+
+
+# --- Runtime Catalog APIs ---
+
+from app.application.runtime_catalog_service import RuntimeCatalogService, RuntimeCatalogValidationError
+
+
+def _get_runtime_catalog_service() -> RuntimeCatalogService:
+    """Get or create the runtime catalog service."""
+    return RuntimeCatalogService(codex_store)
+
+
+class RuntimeCatalogRequest(BaseModel):
+    catalog: RuntimeCatalog
+
+
+@router.get("/runtime-catalog")
+async def get_runtime_catalog():
+    """Get the global runtime catalog."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    service = _get_runtime_catalog_service()
+    catalog = await service.load_catalog()
+    return catalog
+
+
+@router.put("/runtime-catalog")
+async def update_runtime_catalog(request: RuntimeCatalogRequest):
+    """Update the global runtime catalog.
+
+    Validates the catalog before saving. Returns the saved catalog.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    service = _get_runtime_catalog_service()
+    try:
+        catalog = await service.save_catalog(request.catalog)
+        return catalog
+    except RuntimeCatalogValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/runtime-catalog/validate")
+async def validate_runtime_catalog(request: RuntimeCatalogRequest):
+    """Validate the runtime catalog without saving.
+
+    Returns validation result: {"valid": true} or {"valid": false, "error": "..."}
+    """
+    service = RuntimeCatalogService(codex_store)
+    try:
+        service.validate_catalog(request.catalog)
+        return {"valid": True}
+    except RuntimeCatalogValidationError as e:
+        return {"valid": False, "error": str(e)}

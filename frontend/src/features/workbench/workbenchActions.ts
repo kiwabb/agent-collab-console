@@ -10,9 +10,11 @@ type CreateCodexTaskFn = (
   role: string,
   issueId: string | null,
   phase: string,
+  provider?: string | null,
+  model?: string | null,
 ) => Promise<CodexTask>;
-type RunCodexTaskFn = (taskId: string) => Promise<ExecutionProcess>;
-type UpdateExecutorFn = (taskId: string, executor: "codex" | "claude") => Promise<CodexTask>;
+type RunCodexTaskFn = (taskId: string, overrides?: { executor?: "codex" | "claude"; provider?: string | null; model?: string | null }) => Promise<ExecutionProcess>;
+type UpdateTaskFn = (taskId: string, executor?: "codex" | "claude", provider?: string | null, model?: string | null) => Promise<CodexTask>;
 
 export async function createIssueAndInitialTask({
   workspaceId,
@@ -23,6 +25,8 @@ export async function createIssueAndInitialTask({
   createCodexIssue,
   createCodexTask,
   runCodexTask,
+  provider,
+  model,
 }: {
   workspaceId: string;
   title: string;
@@ -32,6 +36,8 @@ export async function createIssueAndInitialTask({
   createCodexIssue: CreateCodexIssueFn;
   createCodexTask: CreateCodexTaskFn;
   runCodexTask: RunCodexTaskFn;
+  provider?: string | null;
+  model?: string | null;
 }): Promise<{ issue: CodexIssue; initialTask: CodexTask; executionProcess: ExecutionProcess }> {
   const issue = await createCodexIssue(workspaceId, title, description);
   const createdTask = await createCodexTask(
@@ -43,8 +49,10 @@ export async function createIssueAndInitialTask({
     "product_manager",
     issue.id,
     "requirements",
+    provider,
+    model,
   );
-  const executionProcess = await runCodexTask(createdTask.id);
+  const executionProcess = await runCodexTask(createdTask.id, { executor, provider, model });
   const processStatus = executionProcess.status.toLowerCase();
   const initialTask = {
     ...createdTask,
@@ -58,17 +66,31 @@ export async function runCodexTaskWithExecutor({
   taskId,
   selectedExecutor,
   currentExecutor,
-  updateExecutor,
+  selectedProvider,
+  currentProvider,
+  selectedModel,
+  currentModel,
+  updateTask,
   runTask,
 }: {
   taskId: string;
   selectedExecutor: "codex" | "claude";
   currentExecutor: "codex" | "claude";
-  updateExecutor: UpdateExecutorFn;
+  selectedProvider: string | null;
+  currentProvider: string | null;
+  selectedModel: string | null;
+  currentModel: string | null;
+  updateTask: UpdateTaskFn;
   runTask: RunCodexTaskFn;
 }): Promise<ExecutionProcess> {
-  if (selectedExecutor !== currentExecutor) {
-    await updateExecutor(taskId, selectedExecutor);
+  // Check if anything changed
+  const needsUpdate =
+    selectedExecutor !== currentExecutor ||
+    selectedProvider !== currentProvider ||
+    selectedModel !== currentModel;
+
+  if (needsUpdate) {
+    await updateTask(taskId, selectedExecutor, selectedProvider, selectedModel);
   }
-  return runTask(taskId);
+  return runTask(taskId, { executor: selectedExecutor, provider: selectedProvider, model: selectedModel });
 }

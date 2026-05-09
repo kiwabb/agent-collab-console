@@ -73,9 +73,13 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         wait: bool = True,
         task_id: str | None = None,
         executor: str = "codex",
+        provider: str | None = None,
+        model: str | None = None,
         resume_session_id: str | None = None,
         resume_message_id: str | None = None,
         cwd: str | None = None,
+        env_overrides: dict[str, str] | None = None,
+        command_args: list[str] | None = None,
         **legacy_kwargs,
     ) -> str:
         workspace_id = self._resolve_workspace_id(workspace_id, **legacy_kwargs)
@@ -95,6 +99,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             prompt_text=prompt_text,
             waiter=evt,
             cwd=cwd,
+            provider=provider,
+            model=model,
+            env_overrides=env_overrides,
+            command_args=command_args,
         )
 
         await self._append_log(workspace_id, "stdin", prompt_text, task_id)
@@ -152,6 +160,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         prompt_text: str,
         waiter: asyncio.Event | None,
         cwd: str | None,
+        provider: str | None = None,
+        model: str | None = None,
+        env_overrides: dict[str, str] | None = None,
+        command_args: list[str] | None = None,
     ) -> AsyncProcessEntry:
         import sys
 
@@ -173,7 +185,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
 
         effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
         cmd = list(self._app_server_cmd)
-        
+
         # Binary path resolution
         for common_path in ["~/.npm-global/bin/codex", "/usr/local/bin/codex", "/opt/homebrew/bin/codex"]:
             expanded = os.path.expanduser(common_path)
@@ -184,6 +196,20 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         env = os.environ.copy()
         paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", os.path.expanduser("~/.npm-global/bin")]
         env["PATH"] = ":".join(paths) + ":" + env.get("PATH", "")
+
+        # Set provider/model env vars if specified
+        if provider:
+            env["CODEX_APP_SERVER_PROVIDER"] = provider
+        if model:
+            env["CODEX_APP_SERVER_MODEL"] = model
+
+        # Apply rendered env overrides from runtime catalog templates
+        if env_overrides:
+            env.update(env_overrides)
+
+        # Append rendered command args from runtime catalog templates
+        if command_args:
+            cmd.extend(command_args)
 
         print(f"[DEBUG] spawning async app-server cmd={cmd} cwd={effective_cwd}", file=sys.stderr, flush=True)
 

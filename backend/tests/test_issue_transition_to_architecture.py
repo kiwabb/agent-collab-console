@@ -59,6 +59,12 @@ class TransitionStoreStub:
     async def load_codex_task(self, task_id: str):
         return self.tasks.get(task_id)
 
+    async def load_runtime_catalog(self):
+        return None
+
+    async def save_runtime_catalog(self, catalog):
+        pass
+
 
 @pytest.fixture
 def client():
@@ -101,10 +107,10 @@ def build_issue_bundle(tmp_path):
 
 
 def create_issue_artifacts(tmp_path, issue_id: str, names: set[str]):
-    issue_root = tmp_path / "issues" / issue_id
-    issue_root.mkdir(parents=True, exist_ok=True)
+    pm_dir = tmp_path / "issues" / issue_id / "pm"
+    pm_dir.mkdir(parents=True, exist_ok=True)
     for name in names:
-        (issue_root / name).write_text(f"{name} content", encoding="utf-8")
+        (pm_dir / name).write_text(f"{name} content", encoding="utf-8")
 
 
 def test_transition_to_architecture_updates_issue_and_creates_task(client, monkeypatch, tmp_path):

@@ -138,9 +138,14 @@ class MockCodexProcessManager:
         wait: bool = True,
         task_id: str | None = None,
         executor: str = "codex",
+        provider: str | None = None,
+        model: str | None = None,
         resume_session_id: str | None = None,
         resume_message_id: str | None = None,
         cwd: str | None = None,
+        env_overrides: dict | None = None,
+        command_args: list | None = None,
+        **_extra,
     ) -> str:
         """In per-turn model: just log input and mark session done. No real process."""
         session = await self.codex_store.load_codex_session(session_id)
@@ -167,9 +172,14 @@ class MockCodexProcessManager:
         await self.codex_store.save_codex_session(session)
         return "done" if wait else "responding"
 
-    async def write_input_async(self, **kwargs) -> str:
-        """Async version of write_input - delegates to sync version for mock."""
-        return await self.write_input(**kwargs)
+    async def write_input_async(
+        self,
+        session_id: str | None = None,
+        input_text: str = "",
+        **kwargs,
+    ) -> str:
+        """Async version of write_input - delegates to write_input for mock."""
+        return await self.write_input(session_id, input_text, **kwargs)
 
     async def terminate(self, session_id: str):
         """Set session back to idle (stops any in-progress turn)."""

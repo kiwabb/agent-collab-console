@@ -43,6 +43,12 @@ class StoreStub:
     async def save_codex_task_message(self, message):
         return None
 
+    async def load_runtime_catalog(self):
+        return None
+
+    async def save_runtime_catalog(self, catalog):
+        pass
+
 
 class EventBusStub:
     def __init__(self):
