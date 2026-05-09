@@ -50,13 +50,31 @@ export async function checkBackendHealth(): Promise<HealthResponse> {
 }
 
 export async function getCodexStatus(): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/codex/status`);
-  return response.json();
+  try {
+    const response = await fetch(`${API_BASE}/codex/status`);
+    if (!response.ok) {
+      console.error(`getCodexStatus failed: HTTP ${response.status}`);
+      return null;
+    }
+    return response.json();
+  } catch (err) {
+    console.error(`getCodexStatus failed:`, err);
+    return null;
+  }
 }
 
 export async function getWorkspaces(): Promise<Workspace[]> {
-  const response = await fetch(`${API_BASE}/codex/workspaces`);
-  return response.json();
+  try {
+    const response = await fetch(`${API_BASE}/codex/workspaces`);
+    if (!response.ok) {
+      console.error(`getWorkspaces failed: HTTP ${response.status}`);
+      return [];
+    }
+    return response.json();
+  } catch (err) {
+    console.error(`getWorkspaces failed:`, err);
+    return [];
+  }
 }
 
 export async function createWorkspace(title: string, cwd = ""): Promise<Workspace> {
@@ -326,8 +344,13 @@ export async function updateCodexTask(
 // Runtime Catalog APIs
 
 export async function getRuntimeCatalog(): Promise<RuntimeCatalog> {
-  const response = await fetch(`${API_BASE}/runtime-catalog`);
-  return handleResponse<RuntimeCatalog>(response);
+  try {
+    const response = await fetch(`${API_BASE}/runtime-catalog`);
+    return handleResponse<RuntimeCatalog>(response);
+  } catch (err) {
+    console.error(`getRuntimeCatalog failed:`, err);
+    throw err;
+  }
 }
 
 export async function updateRuntimeCatalog(catalog: RuntimeCatalog): Promise<RuntimeCatalog> {
@@ -368,8 +391,13 @@ export async function reviewCodexTask(taskId: string, decision: "approve" | "rej
 }
 
 export async function getExecutionProcess(processId: string): Promise<ExecutionProcess> {
-  const response = await fetch(`${API_BASE}/codex/execution-processes/${processId}`);
-  return handleResponse<ExecutionProcess>(response);
+  try {
+    const response = await fetch(`${API_BASE}/codex/execution-processes/${processId}`);
+    return handleResponse<ExecutionProcess>(response);
+  } catch (err) {
+    console.error(`getExecutionProcess(${processId}) failed:`, err);
+    throw err;
+  }
 }
 
 export async function getExecutionProcesses(
@@ -397,13 +425,23 @@ export async function continueCodexTask(taskId: string): Promise<unknown> {
 }
 
 export async function getExecutionProcessMessages(processId: string): Promise<CodexTaskMessage[]> {
-  const response = await fetch(`${API_BASE}/codex/execution-processes/${processId}/messages`);
-  return handleResponse<CodexTaskMessage[]>(response);
+  try {
+    const response = await fetch(`${API_BASE}/codex/execution-processes/${processId}/messages`);
+    return handleResponse<CodexTaskMessage[]>(response);
+  } catch (err) {
+    console.error(`getExecutionProcessMessages(${processId}) failed:`, err);
+    throw err;
+  }
 }
 
 export async function getExecutionProcessLogs(processId: string): Promise<LogEvent[]> {
-  const response = await fetch(`${API_BASE}/codex/execution-processes/${processId}/logs`);
-  return handleResponse<LogEvent[]>(response);
+  try {
+    const response = await fetch(`${API_BASE}/codex/execution-processes/${processId}/logs`);
+    return handleResponse<LogEvent[]>(response);
+  } catch (err) {
+    console.error(`getExecutionProcessLogs(${processId}) failed:`, err);
+    throw err;
+  }
 }
 
 export async function resolveApproval(itemId: string, decision: string, feedback: string | null = null): Promise<unknown> {
