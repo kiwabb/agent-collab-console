@@ -5,18 +5,44 @@ import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, 
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface ArtifactPanelProps {
   artifacts: Artifact[];
+  isLoading?: boolean;
 }
 
-export function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
+export function ArtifactPanel({ artifacts, isLoading }: ArtifactPanelProps) {
   const { t } = useI18n();
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col h-full bg-background overflow-hidden">
+        <div className="p-5 border-b border-border-subtle bg-surface/50">
+          <Skeleton variant="text" className="w-24 h-4" />
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-8 no-scrollbar pb-20">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="animate-pulse">
+              <Skeleton variant="text" className="w-32 h-3 mb-5" />
+              <div className="space-y-3">
+                <Skeleton variant="card" className="h-16" />
+                <Skeleton variant="card" className="h-16" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (!artifacts || artifacts.length === 0) {
     return (
-      <div className="flex flex-col h-full items-center justify-center text-text-muted">
-        <Package size={48} strokeWidth={1} className="mb-4 opacity-10" />
-        <p className="text-sm font-medium">{t("artifacts.empty")}</p>
+      <div className="flex flex-col h-full items-center justify-center text-text-muted/30 py-16">
+        <div className="size-14 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-4">
+          <Package size={24} strokeWidth={1} className="opacity-50" />
+        </div>
+        <p className="text-xs font-bold uppercase tracking-widest">{t("artifacts.empty")}</p>
       </div>
     );
   }
