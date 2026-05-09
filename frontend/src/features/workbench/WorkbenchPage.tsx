@@ -56,6 +56,7 @@ import { PHASE_CONFIG, type Phase } from "@/features/issues/phaseUtils";
 import { pickLatestExecutionProcessForTask } from "@/lib/task-selection";
 import { isTaskRuntimeActive } from "@/lib/task-selection";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useI18n } from "@/providers/I18nProvider";
 import {
   Activity,
@@ -110,6 +111,53 @@ function WorkbenchInner({
   const { isConnected, lastEvent, executionProcessesAll } = useExecutionProcessesContext();
   const { t } = useI18n();
   const router = useRouter();
+
+  // Keyboard shortcuts
+  useKeyboardShortcuts([
+    {
+      key: "Escape",
+      action: () => {
+        if (currentTaskId) {
+          setCurrentTaskId(null);
+        } else if (view !== "home" && currentWorkspaceId) {
+          if (view === "workspace") {
+            onWorkspaceChange(null);
+          } else if (view === "issue") {
+            setView("workspace");
+          }
+        }
+      },
+      description: "Go back / Close panel",
+    },
+    {
+      key: "h",
+      action: () => {
+        if (view !== "home") {
+          onWorkspaceChange(null);
+          setView("home");
+        }
+      },
+      description: "Go to home",
+    },
+    {
+      key: "w",
+      action: () => {
+        if (currentWorkspaceId && view === "home") {
+          setView("workspace");
+        }
+      },
+      description: "Go to workspace",
+    },
+    {
+      key: "i",
+      action: () => {
+        if (currentIssueId && view === "workspace") {
+          setView("issue");
+        }
+      },
+      description: "Go to issue",
+    },
+  ]);
 
   // Watch connection status and show warning when disconnected
   useEffect(() => {
