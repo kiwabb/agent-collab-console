@@ -2,7 +2,7 @@
 
 import type { Artifact } from "@/lib/types";
 import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, Search } from "lucide-react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 
@@ -21,15 +21,15 @@ export function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
     );
   }
 
-  const productArtifacts = artifacts.filter((a) => a.kind === "product");
-  const architectureArtifacts = artifacts.filter((a) => a.kind === "architecture");
-  const developmentArtifacts = artifacts.filter((a) => a.kind === "development");
-  const testingArtifacts = artifacts.filter((a) => a.kind === "testing");
-  const otherArtifacts = artifacts.filter(
+  const productArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "product"), [artifacts]);
+  const architectureArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "architecture"), [artifacts]);
+  const developmentArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "development"), [artifacts]);
+  const testingArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "testing"), [artifacts]);
+  const planArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "plan"), [artifacts]);
+  const execArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "execution_result"), [artifacts]);
+  const otherArtifacts = useMemo(() => artifacts.filter(
     (a) => !["product", "architecture", "development", "testing", "plan", "execution_result"].includes(a.kind)
-  );
-  const planArtifacts = artifacts.filter((a) => a.kind === "plan");
-  const execArtifacts = artifacts.filter((a) => a.kind === "execution_result");
+  ), [artifacts]);
 
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">

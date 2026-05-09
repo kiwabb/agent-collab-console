@@ -326,7 +326,7 @@ function WorkbenchInner({
     }
   }
 
-  function handleSelectWorkspace(id: string) {
+  const handleSelectWorkspace = useCallback((id: string) => {
     onWorkspaceChange(id);
     setView("workspace");
     setCurrentIssueId(null);
@@ -337,7 +337,7 @@ function WorkbenchInner({
     setIsLoadingProcess(false);
     setProcessLogs([]);
     setProcessMessages([]);
-  }
+  }, [onWorkspaceChange]);
 
   async function handleDeleteWorkspace(id: string) {
     try {
@@ -383,13 +383,13 @@ function WorkbenchInner({
     }
   }
 
-  function handleSelectIssue(id: string) {
+  const handleSelectIssue = useCallback((id: string) => {
     setCurrentIssueId(id);
     setView("issue");
     setCurrentTaskId(null);
-  }
+  }, []);
 
-  function handleSelectTask(id: string) {
+  const handleSelectTask = useCallback((id: string) => {
     const task = tasks.find(t => t.id === id);
     const localProcess = pickLatestExecutionProcessForTask(
       Object.values(executionProcessesAll) as ExecutionProcess[],
@@ -405,7 +405,7 @@ function WorkbenchInner({
     }
 
     setCurrentTaskId(id);
-  }
+  }, [tasks, executionProcessesAll]);
 
   async function handleChangePhase(phase: string) {
     if (!currentIssue) return;

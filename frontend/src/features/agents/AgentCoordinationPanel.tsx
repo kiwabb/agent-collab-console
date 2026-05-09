@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import type { CodexTask, HelpRequest, ExecutionProcess } from "@/lib/types";
 import { HelpCircle, ArrowRight, Activity, Clock, Users } from "lucide-react";
 import { getTaskRuntimeStatus, pickLatestExecutionProcessForTask } from "@/lib/task-selection";
@@ -22,17 +23,21 @@ export function AgentCoordinationPanel({
   onSelectProcess,
 }: AgentCoordinationPanelProps) {
   const { t } = useI18n();
-  const byRole: Record<string, CodexTask[]> = {};
-  for (const task of tasks) {
-    const role = task.role || "unknown";
-    if (!byRole[role]) byRole[role] = [];
-    byRole[role].push(task);
-  }
+  const byRole = useMemo(() => {
+    const result: Record<string, CodexTask[]> = {};
+    for (const task of tasks) {
+      const role = task.role || "unknown";
+      if (!result[role]) result[role] = [];
+      result[role].push(task);
+    }
+    return result;
+  }, [tasks]);
 
-  const activeProcesses = executionProcesses.filter(
+  const activeProcesses = useMemo(() => executionProcesses.filter(
     (p) => p.status === "running" || p.status === "responding",
-  );
-  const recentProcesses = [...executionProcesses].sort((a, b) => {
+  ), [executionProcesses]);
+
+  const recentProcesses = useMemo(() => [...executionProcesses].sort((a, b) => {
     const aTime = Math.max(
       Date.parse(a.created_at || "") || 0,
       Date.parse(a.started_at || "") || 0,
@@ -46,7 +51,7 @@ export function AgentCoordinationPanel({
       Date.parse(b.completed_at || "") || 0,
     );
     return bTime - aTime;
-  });
+  }), [executionProcesses]);
 
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">

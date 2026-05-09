@@ -2,7 +2,7 @@
 
 import type { CodexTask, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
 import { Plus, Layout, Activity, Clock, Terminal, Trash2 } from "lucide-react";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { type Phase, PHASE_CONFIG } from "@/features/issues/phaseUtils";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
@@ -74,7 +74,7 @@ export function TaskBoard({
     { id: "testing", labelKey: "phase.testing", color: "bg-success" },
   ];
 
-  const tasksByPhase = boardPhases.reduce((acc, phase) => {
+  const tasksByPhase = useMemo(() => boardPhases.reduce((acc, phase) => {
     let phaseTasks = tasks.filter((t) => t.phase === phase.id);
     if (phase.id === "development") {
       phaseTasks = phaseTasks
@@ -83,9 +83,9 @@ export function TaskBoard({
     }
     acc[phase.id] = phaseTasks;
     return acc;
-  }, {} as Record<Phase, CodexTask[]>);
+  }, {} as Record<Phase, CodexTask[]>), [tasks]);
 
-  async function handleDeleteIssue() {
+  const handleDeleteIssue = useCallback(async () => {
     if (!onDeleteIssue) return;
     setIsDeletingIssue(true);
     try {
@@ -94,7 +94,7 @@ export function TaskBoard({
     } finally {
       setIsDeletingIssue(false);
     }
-  }
+  }, [onDeleteIssue]);
 
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">

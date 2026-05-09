@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import type { CodexIssue, CodexTask } from "@/lib/types";
 import { IssueCard } from "./IssueCard";
 import { PHASES, type Phase, groupIssuesByPhase } from "./phaseUtils";
@@ -28,9 +28,9 @@ export function IssueBoard({
   const [newDesc, setNewDesc] = useState("");
   const [showForm, setShowForm] = useState(false);
 
-  const byPhase = groupIssuesByPhase(issues);
+  const byPhase = useMemo(() => groupIssuesByPhase(issues), [issues]);
 
-  function getTaskCounts(issueId: string) {
+  const getTaskCounts = useMemo(() => (issueId: string) => {
     const issueTasks = tasks.filter((t) => t.issue_id === issueId);
     return {
       total: issueTasks.length,
@@ -38,7 +38,7 @@ export function IssueBoard({
       failed: issueTasks.filter((t) => t.status === "failed").length,
       waiting: issueTasks.filter((t) => t.status === "waiting" || t.status === "blocked").length,
     };
-  }
+  }, [tasks]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
