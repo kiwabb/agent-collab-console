@@ -18,6 +18,8 @@ async def events():
                 yield f"data: {json.dumps(event)}\n\n"
         except asyncio.CancelledError:
             event_bus.unsubscribe(queue)
+        except Exception:
+            event_bus.unsubscribe(queue)
 
     return StreamingResponse(
         event_generator(),

@@ -599,7 +599,10 @@ async def create_task(session_id: str, request: CreateTaskRequest):
     except KeyError:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    task = await orchestration_service.plan_task(session_id, request.title, request.assignee)
+    try:
+        task = await orchestration_service.plan_task(session_id, request.title, request.assignee)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create task: {e}")
     return task
 
 
@@ -610,6 +613,8 @@ async def run_task(task_id: str):
         return result
     except KeyError:
         raise HTTPException(status_code=404, detail="Task not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to run task: {e}")
 
 
 @router.post("/tasks/{task_id}/retry")
@@ -629,7 +634,10 @@ async def request_approval(task_id: str):
     for session in session_service.sessions.values():
         for task in session.tasks:
             if task.id == task_id:
-                approval = await approval_service.request_submission(session.id, task_id)
+                try:
+                    approval = await approval_service.request_submission(session.id, task_id)
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Failed to request approval: {e}")
                 return approval
     raise HTTPException(status_code=404, detail="Task not found")
 
@@ -1658,7 +1666,12 @@ async def run_codex_task(task_id: str, request: RunTaskRequest | None = None):
 
 @router.post("/codex/tasks/{task_id}/terminate")
 async def terminate_codex_task(task_id: str):
-    await get_codex_process_manager().terminate_task(task_id)
+    try:
+        await get_codex_process_manager().terminate_task(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Task not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to terminate task: {e}")
     return {"status": "ok"}
 
 
@@ -1843,8 +1856,11 @@ async def submit_codex_task_for_review(task_id: str):
     })
 
     # 3. Run the review task automatically
-    await run_codex_task(review_task_id)
-    
+    try:
+        await run_codex_task(review_task_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start review task: {e}")
+
     return task
 
 
@@ -1903,7 +1919,10 @@ async def resolve_approval(request: ResolveApprovalRequest):
     Called when user approves or rejects a file change or command execution request.
     """
     mgr = get_codex_process_manager()
-    success = await mgr.resolve_approval(request.item_id, request.decision)
+    try:
+        success = await mgr.resolve_approval(request.item_id, request.decision)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to resolve approval: {e}")
     if not success:
         raise HTTPException(status_code=404, detail="Pending approval not found")
     return {"resolved": True, "item_id": request.item_id, "decision": request.decision}
