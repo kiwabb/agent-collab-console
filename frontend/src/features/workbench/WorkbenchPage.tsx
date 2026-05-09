@@ -90,7 +90,6 @@ function WorkbenchInner({
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
-  const [selectedProcessSnapshot, setSelectedProcessSnapshot] = useState<ExecutionProcess | null>(null);
   const [processLogs, setProcessLogs] = useState<LogEvent[]>([]);
   const [processMessages, setProcessMessages] = useState<CodexTaskMessage[]>([]);
   const [helpRequests, setHelpRequests] = useState<HelpRequest[]>([]);
@@ -187,9 +186,9 @@ function WorkbenchInner({
       .join("|");
   }, [currentIssueTaskIds, executionProcessesAll]);
   const selectedProcess = selectedProcessId
-    ? ((Object.values(executionProcessesAll) as ExecutionProcess[]).find(
+    ? (Object.values(executionProcessesAll) as ExecutionProcess[]).find(
         (p) => p.id === selectedProcessId,
-      ) ?? (selectedProcessSnapshot?.id === selectedProcessId ? selectedProcessSnapshot : null))
+      ) ?? null
     : null;
   const liveProcessLogs = selectedProcess?.logs ?? [];
   const liveProcessMessages = selectedProcess?.messages ? Object.values(selectedProcess.messages) : [];
@@ -278,7 +277,6 @@ function WorkbenchInner({
       setIsLoadingMessages(false);
       setProcessLogs([]);
       setProcessMessages([]);
-      setSelectedProcessSnapshot(null);
       return;
     }
     let cancelled = false;
@@ -332,7 +330,6 @@ function WorkbenchInner({
     setCurrentIssueId(null);
     setCurrentTaskId(null);
     setSelectedProcessId(null);
-    setSelectedProcessSnapshot(null);
     setIsLoadingLogs(false);
     setIsLoadingMessages(false);
     setIsLoadingProcess(false);
@@ -378,7 +375,6 @@ function WorkbenchInner({
       setTasks((prev) => [...prev, initialTask]);
       handleSelectIssue(issue.id);
       setSelectedProcessId(executionProcess.id);
-      setSelectedProcessSnapshot(executionProcess);
       setCurrentTaskId(initialTask.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create issue");
@@ -427,7 +423,6 @@ function WorkbenchInner({
         setCurrentIssueId(null);
         setCurrentTaskId(null);
         setSelectedProcessId(null);
-        setSelectedProcessSnapshot(null);
         setProcessLogs([]);
         setProcessMessages([]);
         setArtifacts([]);
@@ -512,7 +507,6 @@ function WorkbenchInner({
       setTasks((prev) => [...prev, task]);
       const executionProcess = await runCodexTask(task.id, { executor, provider, model });
       setSelectedProcessId(executionProcess.id);
-      setSelectedProcessSnapshot(executionProcess);
       setCurrentTaskId(task.id);
       await loadWorkspaceData(currentWorkspaceId);
     } catch (err) {
@@ -768,7 +762,6 @@ function WorkbenchInner({
                             await updateCodexTask(currentTask.id, executor, provider, model);
                             const newProcess = await runCodexTask(currentTask.id, { executor, provider, model });
                             setSelectedProcessId(newProcess.id);
-                            setSelectedProcessSnapshot(newProcess);
                             if (currentWorkspaceId) {
                               await loadWorkspaceData(currentWorkspaceId);
                             }
@@ -782,7 +775,6 @@ function WorkbenchInner({
                               await updateCodexTask(selectedProcess.task_id, executor, provider, model);
                               const newProcess = await runCodexTask(selectedProcess.task_id, { executor, provider, model });
                               setSelectedProcessId(newProcess.id);
-                              setSelectedProcessSnapshot(newProcess);
                             } catch (err) {
                               setError(err instanceof Error ? err.message : "Failed to rerun task");
                             }
@@ -793,7 +785,6 @@ function WorkbenchInner({
                             try {
                               await deleteCodexTask(selectedProcess.task_id);
                               setSelectedProcessId(null);
-                              setSelectedProcessSnapshot(null);
                               if (currentWorkspaceId) await loadWorkspaceData(currentWorkspaceId);
                             } catch (err) {
                               setError(err instanceof Error ? err.message : "Failed to delete task");
