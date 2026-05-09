@@ -110,7 +110,7 @@ async def _load_task_logs(
                 limit=limit,
                 reverse=reverse,
             )
-        except Exception:
+        except TypeError:
             return await codex_store.load_log_events(session_id, task_id=task_id, limit=limit, reverse=reverse)
     return await codex_store.load_log_events(session_id, task_id=task_id, limit=limit, reverse=reverse)
 
