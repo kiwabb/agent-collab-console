@@ -131,8 +131,13 @@ export function RunDetail({
   const handleSend = useCallback((e: React.FormEvent) => {
     e.preventDefault();
     if (!message.trim()) return;
-    onSendMessage(message.trim());
-    setMessage("");
+    const content = message.trim();
+    try {
+      onSendMessage(content);
+      setMessage("");
+    } catch (err) {
+      console.error("Failed to send message:", err);
+    }
   }, [message, onSendMessage]);
 
   if (isLoadingProcess) {

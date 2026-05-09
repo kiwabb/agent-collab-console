@@ -90,7 +90,30 @@ export async function runCodexTaskWithExecutor({
     selectedModel !== currentModel;
 
   if (needsUpdate) {
-    await updateTask(taskId, selectedExecutor, selectedProvider, selectedModel);
+    // Capture previous values for rollback on failure
+    const previousExecutor = currentExecutor;
+    const previousProvider = currentProvider;
+    const previousModel = currentModel;
+
+    try {
+      await updateTask(taskId, selectedExecutor, selectedProvider, selectedModel);
+    } catch (updateError) {
+      // Revert to previous values if update succeeded but runTask fails
+      // The update was already persisted, but we need to revert on runTask failure
+      throw updateError;
+    }
+
+    try {
+      return await runTask(taskId, { executor: selectedExecutor, provider: selectedProvider, model: selectedModel });
+    } catch (runError) {
+      // Revert executor/provider/model on runTask failure
+      try {
+        await updateTask(taskId, previousExecutor, previousProvider, previousModel);
+      } catch (revertError) {
+        console.error("Failed to revert task executor after runTask failure:", revertError);
+      }
+      throw runError;
+    }
   }
   return runTask(taskId, { executor: selectedExecutor, provider: selectedProvider, model: selectedModel });
 }

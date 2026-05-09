@@ -897,6 +897,12 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
 
     Creates a workspace-scoped task and runs it immediately, so the message
     appears in the task list with live logs — matching vibe-kanban UX.
+
+    Note: Each input creates a new task workspace via workspace_manager.create_workspace().
+    This is intentional for per-turn tracking - each message becomes an isolated task
+    with its own logs and result. Workspaces are cleaned up when tasks are deleted.
+    If batching is needed (e.g., for related multi-turn conversations), consider adding
+    a separate batched-message endpoint that creates a single workspace for multiple inputs.
     """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
