@@ -34,12 +34,6 @@ export function WorkspaceSidebar({
     setShowForm(false);
   }
 
-  function handleDelete(e: React.MouseEvent, id: string) {
-    e.stopPropagation();
-    if (!window.confirm("Delete this workspace and all its data?")) return;
-    onDelete(id);
-  }
-
   function handleDeleteAll(e: React.MouseEvent) {
     e.stopPropagation();
     if (!window.confirm(`Delete all ${workspaces.length} workspaces? This cannot be undone.`)) return;
@@ -103,24 +97,32 @@ export function WorkspaceSidebar({
           </div>
         ) : (
           workspaces.map((ws) => (
-            <button
+            <div
               key={ws.id}
-              onClick={() => onSelect(ws.id)}
               className={`w-full text-left px-4 py-2.5 rounded-xl text-[13px] transition-all flex items-center justify-between group relative ${
                 ws.id === currentWorkspaceId
                   ? "bg-surface-raised text-brand border border-border-strong shadow-sm"
                   : "text-text-secondary hover:bg-surface-hover hover:text-foreground border border-transparent"
               }`}
             >
-              <span className="truncate flex-1 font-medium">{ws.title}</span>
-              <span
-                onClick={(e) => handleDelete(e, ws.id)}
+              <button
+                onClick={() => onSelect(ws.id)}
+                className="flex-1 truncate font-medium text-left"
+              >
+                {ws.title}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!window.confirm("Delete this workspace and all its data?")) return;
+                  onDelete(ws.id);
+                }}
                 className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all active:scale-90"
-                role="button"
+                aria-label="Delete workspace"
               >
                 <Trash2 size={12} />
-              </span>
-            </button>
+              </button>
+            </div>
           ))
         )}
       </nav>

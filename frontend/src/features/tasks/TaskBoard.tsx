@@ -158,6 +158,7 @@ export function TaskBoard({
                     onClick={() => onRunPhase(phase.id, executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model)}
                     className="p-1.5 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover/column:opacity-100"
                     title={t("issue.runPhase")}
+                    aria-label={t("issue.runPhase")}
                   >
                     <Plus size={14} />
                   </button>
