@@ -966,7 +966,7 @@ async def terminate_codex_workspace(workspace_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     mgr = get_codex_process_manager()
     try:
-        return mgr.terminate(workspace_id)
+        return await mgr.terminate(workspace_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -1199,46 +1199,17 @@ async def transition_codex_issue_to_architecture(issue_id: str):
     }
 
 
-@router.post("/codex/issues/{issue_id}/transition-to-development")
-async def transition_codex_issue_to_development(issue_id: str):
-    if codex_store is None:
-        raise HTTPException(status_code=503, detail="SQLite store not available")
+async def _create_development_tasks(
+    codex_store,
+    issue: "CodexIssue",
+    ordered_tasks: list[dict],
+    existing_by_title: dict[str, dict],
+    workspace_path: str,
+) -> tuple[list["CodexTask"], bool]:
+    """Create or update development tasks for an issue.
 
-    issue = await codex_store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
-    if issue.current_phase not in ["architecture", "development"]:
-        raise HTTPException(status_code=409, detail="只有架构或开发阶段的 issue 才能流转到开发")
-
-    session = await codex_store.load_codex_session(issue.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
-    if any(_is_task_running(task.get("status")) for task in tasks):
-        raise HTTPException(status_code=409, detail="当前有任务仍在运行，请等待完成后再流转")
-
-    workspace_path = next((task.get("workspace_path") for task in tasks if task.get("workspace_path")), None) or session.cwd
-    has_artifacts, artifact_error = _has_architecture_artifacts(workspace_path, issue_id)
-    if not has_artifacts:
-        raise HTTPException(status_code=409, detail=artifact_error)
-
-    # Load and validate development_task_list.json
-    success, error_msg, dev_task_list = _load_development_task_list(workspace_path, issue_id)
-    if not success:
-        raise HTTPException(status_code=409, detail=error_msg)
-
-    # Load implementation_plan.json
-    implementation_tasks = _load_implementation_tasks(workspace_path, issue_id)
-
-    # Validate and order tasks according to development_task_list
-    success, error_msg, ordered_tasks = _validate_and_order_implementation_tasks(implementation_tasks, dev_task_list)
-    if not success:
-        raise HTTPException(status_code=409, detail=error_msg)
-
-    existing_rows = [task for task in tasks if task.get("role") == "engineer" and task.get("issue_id") == issue_id]
-    existing_by_title = {str(task.get("title") or "").strip().lower(): task for task in existing_rows}
-
+    Returns a tuple of (engineer_tasks, created_any).
+    """
     from app.domain.models import CodexTask
 
     engineer_tasks = []
@@ -1249,7 +1220,6 @@ async def transition_codex_issue_to_development(issue_id: str):
         existing_row = existing_by_title.get(task_title.strip().lower())
         if existing_row is not None:
             engineer_task = await codex_store.load_codex_task(existing_row["id"])
-            # Update sequence fields if they changed
             if engineer_task.sequence_index != idx or engineer_task.sequence_group != issue.id:
                 engineer_task.sequence_index = idx
                 engineer_task.sequence_group = issue.id
@@ -1285,6 +1255,48 @@ async def transition_codex_issue_to_development(issue_id: str):
             await codex_store.save_codex_task(engineer_task)
             created_any = True
         engineer_tasks.append(engineer_task)
+    return engineer_tasks, created_any
+
+
+@router.post("/codex/issues/{issue_id}/transition-to-development")
+async def transition_codex_issue_to_development(issue_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if issue.current_phase not in ["architecture", "development"]:
+        raise HTTPException(status_code=409, detail="只有架构或开发阶段的 issue 才能流转到开发")
+
+    session = await codex_store.load_codex_session(issue.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
+    if any(_is_task_running(task.get("status")) for task in tasks):
+        raise HTTPException(status_code=409, detail="当前有任务仍在运行，请等待完成后再流转")
+
+    workspace_path = next((task.get("workspace_path") for task in tasks if task.get("workspace_path")), None) or session.cwd
+    has_artifacts, artifact_error = _has_architecture_artifacts(workspace_path, issue_id)
+    if not has_artifacts:
+        raise HTTPException(status_code=409, detail=artifact_error)
+
+    success, error_msg, dev_task_list = _load_development_task_list(workspace_path, issue_id)
+    if not success:
+        raise HTTPException(status_code=409, detail=error_msg)
+
+    implementation_tasks = _load_implementation_tasks(workspace_path, issue_id)
+    success, error_msg, ordered_tasks = _validate_and_order_implementation_tasks(implementation_tasks, dev_task_list)
+    if not success:
+        raise HTTPException(status_code=409, detail=error_msg)
+
+    existing_rows = [task for task in tasks if task.get("role") == "engineer" and task.get("issue_id") == issue_id]
+    existing_by_title = {str(task.get("title") or "").strip().lower(): task for task in existing_rows}
+
+    engineer_tasks, created_any = await _create_development_tasks(
+        codex_store, issue, ordered_tasks, existing_by_title, workspace_path
+    )
 
     issue.current_phase = "development"
     issue.updated_at = datetime.now()

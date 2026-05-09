@@ -110,7 +110,29 @@ function WorkbenchInner({
 
   const currentWorkspace = workspaces.find(w => w.id === currentWorkspaceId);
   const currentIssue = issues.find((i) => i.id === currentIssueId) ?? null;
-  async function handleTaskSubmitForReview() {
+
+  const loadWorkspaceData = useCallback(async (workspaceId: string) => {
+    try {
+      const [iss, tks] = await Promise.all([
+        getCodexIssues(workspaceId),
+        getCodexTasks(workspaceId, null),
+      ]);
+      setIssues(iss);
+      setTasks(tks);
+      const hrs: HelpRequest[] = [];
+      for (const task of tks) {
+        try {
+          const reqs = await getTaskHelpRequests(task.id);
+          hrs.push(...reqs);
+        } catch {}
+      }
+      setHelpRequests(hrs);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load workspace data");
+    }
+  }, []);
+
+  const handleTaskSubmitForReview = useCallback(async () => {
     if (!currentTaskId) return;
     try {
       const updated = await submitCodexTask(currentTaskId);
@@ -121,9 +143,9 @@ function WorkbenchInner({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to submit task for review");
     }
-  }
+  }, [currentTaskId, currentWorkspaceId, loadWorkspaceData]);
 
-  async function handleTaskReview(decision: "approve" | "reject", comment: string) {
+  const handleTaskReview = useCallback(async (decision: "approve" | "reject", comment: string) => {
     if (!currentTaskId) return;
     try {
       const updated = await reviewCodexTask(currentTaskId, decision, comment);
@@ -131,7 +153,7 @@ function WorkbenchInner({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to submit review");
     }
-  }
+  }, [currentTaskId]);
 
   const currentTask = tasks.find((task) => task.id === currentTaskId) ?? null;
   const currentTasks = currentIssueId ? tasks.filter((t) => t.issue_id === currentIssueId) : [];
@@ -191,27 +213,6 @@ function WorkbenchInner({
       return left - right;
     });
   }, [processMessages, liveProcessMessages]);
-
-  const loadWorkspaceData = useCallback(async (workspaceId: string) => {
-    try {
-      const [iss, tks] = await Promise.all([
-        getCodexIssues(workspaceId),
-        getCodexTasks(workspaceId, null),
-      ]);
-      setIssues(iss);
-      setTasks(tks);
-      const hrs: HelpRequest[] = [];
-      for (const task of tks) {
-        try {
-          const reqs = await getTaskHelpRequests(task.id);
-          hrs.push(...reqs);
-        } catch {}
-      }
-      setHelpRequests(hrs);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load workspace data");
-    }
-  }, []);
 
   useEffect(() => {
     getWorkspaces()
@@ -434,7 +435,7 @@ function WorkbenchInner({
     }
   }
 
-  async function handleTransitionToArchitecture() {
+  const handleTransitionToArchitecture = useCallback(async () => {
     if (!currentIssue) return;
     setIsTransitioningToArchitecture(true);
     try {
@@ -457,9 +458,9 @@ function WorkbenchInner({
     } finally {
       setIsTransitioningToArchitecture(false);
     }
-  }
+  }, [currentIssue]);
 
-  async function handleTransitionToDevelopment() {
+  const handleTransitionToDevelopment = useCallback(async () => {
     if (!currentIssue) return;
     setIsTransitioningToDevelopment(true);
     try {
@@ -477,7 +478,7 @@ function WorkbenchInner({
     } finally {
       setIsTransitioningToDevelopment(false);
     }
-  }
+  }, [currentIssue]);
 
   async function handleRunPhaseRole(
     phase: string,
@@ -527,14 +528,14 @@ function WorkbenchInner({
     }
   }
 
-  async function handleSendMessage(content: string) {
+  const handleSendMessage = useCallback(async (content: string) => {
     if (!selectedProcess) return;
     try {
       await sendCodexTaskMessage(selectedProcess.task_id, content);
       const msgs = await getExecutionProcessMessages(selectedProcess.id);
       setProcessMessages(msgs);
     } catch {}
-  }
+  }, [selectedProcess]);
 
 
   return (
