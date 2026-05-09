@@ -146,6 +146,7 @@ export async function getCodexIssues(sessionId: string | null = null): Promise<C
     : `${API_BASE}/codex/issues`;
   const response = await fetch(url);
   if (!response.ok) {
+    console.error(`getCodexIssues failed: HTTP ${response.status}`);
     return [];
   }
   return response.json();
@@ -154,6 +155,7 @@ export async function getCodexIssues(sessionId: string | null = null): Promise<C
 export async function getCodexIssueArtifacts(issueId: string): Promise<Artifact[]> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}/artifacts`);
   if (!response.ok) {
+    console.error(`getCodexIssueArtifacts(${issueId}) failed: HTTP ${response.status}`);
     return [];
   }
   return response.json();
@@ -198,6 +200,7 @@ export async function getCodexTasks(sessionId: string | null = null, issueId: st
   const url = query ? `${API_BASE}/codex/tasks?${query}` : `${API_BASE}/codex/tasks`;
   const response = await fetch(url);
   if (!response.ok) {
+    console.error(`getCodexTasks failed: HTTP ${response.status}`);
     return [];
   }
   return response.json();
@@ -258,6 +261,7 @@ export async function terminateCodexTask(taskId: string): Promise<unknown> {
 export async function getCodexTaskLogs(taskId: string): Promise<unknown[]> {
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/logs`);
   if (!response.ok) {
+    console.error(`getCodexTaskLogs(${taskId}) failed: HTTP ${response.status}`);
     return [];
   }
   return response.json();
@@ -266,6 +270,7 @@ export async function getCodexTaskLogs(taskId: string): Promise<unknown[]> {
 export async function getCodexTaskMessages(taskId: string): Promise<CodexTaskMessage[]> {
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/messages`);
   if (!response.ok) {
+    console.error(`getCodexTaskMessages(${taskId}) failed: HTTP ${response.status}`);
     return [];
   }
   return response.json();
@@ -274,6 +279,7 @@ export async function getCodexTaskMessages(taskId: string): Promise<CodexTaskMes
 export async function getTaskHelpRequests(taskId: string): Promise<HelpRequest[]> {
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/help-requests`);
   if (!response.ok) {
+    console.error(`getTaskHelpRequests(${taskId}) failed: HTTP ${response.status}`);
     return [];
   }
   return response.json();
@@ -377,6 +383,7 @@ export async function getExecutionProcesses(
   const url = query ? `${API_BASE}/codex/execution-processes?${query}` : `${API_BASE}/codex/execution-processes`;
   const response = await fetch(url);
   if (!response.ok) {
+    console.error(`getExecutionProcesses failed: HTTP ${response.status}`);
     return [];
   }
   return response.json();
@@ -412,6 +419,7 @@ export async function resolveApproval(itemId: string, decision: string, feedback
 export async function getPendingApprovals(): Promise<PendingApprovalsResponse> {
   const response = await fetch(`${API_BASE}/codex/approvals/pending`);
   if (!response.ok) {
+    console.error(`getPendingApprovals failed: HTTP ${response.status}`);
     return { pending: [] };
   }
   return response.json();

@@ -546,17 +546,32 @@ class SQLiteStore:
         return self.list_codex_sessions()
 
     def delete_codex_session(self, session_id: str):
-        """Delete a codex session and all its log events, messages, tasks, and task messages."""
+        """Delete a codex session and all its related records in proper cascade order."""
         self._ensure_db()
         conn = self._get_conn()
-        # Delete task messages for all tasks in this session first (FK constraint)
+        # Delete help_requests for this workspace first (references tasks)
+        conn.execute("DELETE FROM help_requests WHERE workspace_id = ?", (session_id,))
+        # Delete task messages for all tasks in this session (FK to tasks)
         conn.execute(
             "DELETE FROM codex_task_messages WHERE task_id IN (SELECT id FROM codex_tasks WHERE session_id = ?)",
             (session_id,),
         )
+        # Delete execution processes for tasks in this session (FK to tasks)
+        conn.execute(
+            "DELETE FROM execution_processes WHERE task_id IN (SELECT id FROM codex_tasks WHERE session_id = ?)",
+            (session_id,),
+        )
+        # Delete log events for tasks in this session (FK to tasks, not just session_id)
+        conn.execute(
+            "DELETE FROM log_events WHERE task_id IN (SELECT id FROM codex_tasks WHERE session_id = ?)",
+            (session_id,),
+        )
+        # Delete issues (session-level, no task dependencies)
         conn.execute("DELETE FROM codex_issues WHERE session_id = ?", (session_id,))
-        conn.execute("DELETE FROM codex_messages WHERE session_id = ?", (session_id,))
+        # Delete tasks (now no task-level dependents remain)
         conn.execute("DELETE FROM codex_tasks WHERE session_id = ?", (session_id,))
+        # Delete session-level records (no FK dependencies remain)
+        conn.execute("DELETE FROM codex_messages WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM log_events WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM codex_sessions WHERE id = ?", (session_id,))
         conn.commit()
