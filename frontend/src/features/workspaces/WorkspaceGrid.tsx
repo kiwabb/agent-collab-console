@@ -5,12 +5,14 @@ import type { Workspace } from "@/lib/types";
 import { Folder, ChevronRight, Clock, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface WorkspaceGridProps {
   workspaces: Workspace[];
   onSelect: (id: string) => void;
   onCreate: (title: string) => void;
   onDelete: (id: string) => void;
+  isLoading?: boolean;
 }
 
 export function WorkspaceGrid({
@@ -18,6 +20,7 @@ export function WorkspaceGrid({
   onSelect,
   onCreate,
   onDelete,
+  isLoading = false,
 }: WorkspaceGridProps) {
   const { t } = useI18n();
   const [isCreating, setIsCreating] = useState(false);
@@ -49,6 +52,20 @@ export function WorkspaceGrid({
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        {isLoading && (
+          <>
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="p-6 rounded-2xl bg-surface/40 border border-border-subtle overflow-hidden">
+                <div className="flex items-start justify-between mb-6">
+                  <Skeleton variant="circle" className="size-12" />
+                </div>
+                <Skeleton variant="text" className="w-3/4 mb-2" />
+                <Skeleton variant="text" className="w-1/3" />
+              </div>
+            ))}
+          </>
+        )}
+
         {isCreating && (
           <form
             onSubmit={handleSubmit}

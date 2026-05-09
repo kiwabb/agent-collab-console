@@ -100,17 +100,37 @@ function WorkbenchInner({
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isLoadingProcess, setIsLoadingProcess] = useState(false);
+  const [isLoadingIssues, setIsLoadingIssues] = useState(false);
+  const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runtimeCatalog, setRuntimeCatalog] = useState<import("@/lib/types").RuntimeCatalog | null>(null);
+  const [connectionWarning, setConnectionWarning] = useState<string | null>(null);
+  const [wasConnected, setWasConnected] = useState(false);
 
   const { isConnected, lastEvent, executionProcessesAll } = useExecutionProcessesContext();
   const { t } = useI18n();
   const router = useRouter();
 
+  // Watch connection status and show warning when disconnected
+  useEffect(() => {
+    if (isConnected) {
+      setWasConnected(true);
+      if (wasConnected && connectionWarning) {
+        setConnectionWarning(t("nav.reconnectSuccess"));
+        const timer = setTimeout(() => setConnectionWarning(null), 3000);
+        return () => clearTimeout(timer);
+      }
+      setConnectionWarning(null);
+    } else if (wasConnected && currentWorkspaceId) {
+      setConnectionWarning(t("nav.connectionLost"));
+    }
+  }, [isConnected, currentWorkspaceId, t, wasConnected, connectionWarning]);
+
   const currentWorkspace = workspaces.find(w => w.id === currentWorkspaceId);
   const currentIssue = issues.find((i) => i.id === currentIssueId) ?? null;
 
   const loadWorkspaceData = useCallback(async (workspaceId: string) => {
+    setIsLoadingIssues(true);
     try {
       const [iss, tks] = await Promise.all([
         getCodexIssues(workspaceId),
@@ -130,6 +150,8 @@ function WorkbenchInner({
       setHelpRequests(hrs);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load workspace data");
+    } finally {
+      setIsLoadingIssues(false);
     }
   }, []);
 
@@ -216,9 +238,11 @@ function WorkbenchInner({
   }, [processMessages, liveProcessMessages]);
 
   useEffect(() => {
+    setIsLoadingWorkspaces(true);
     getWorkspaces()
       .then(setWorkspaces)
-      .catch((err) => setError(err.message));
+      .catch((err) => setError(err.message))
+      .finally(() => setIsLoadingWorkspaces(false));
   }, []);
 
   useEffect(() => {
@@ -617,7 +641,7 @@ function WorkbenchInner({
 
       <main className="flex-1 min-h-0 relative overflow-hidden bg-background flex flex-col">
         {error && (
-          <div className="mx-8 mt-6 p-4 rounded-xl bg-error/10 border border-error/20 flex items-center justify-between animate-in slide-in-from-top-4 duration-300">
+          <div className="mx-8 mt-6 p-4 rounded-xl bg-error/10 border border-error/20 flex items-center justify-between animate-in slide-in-from-top-4 duration-300 gap-4">
             <div className="flex items-center gap-3">
               <div className="size-8 rounded-lg bg-error/10 flex items-center justify-center">
                 <AlertCircle size={16} className="text-error" />
@@ -629,12 +653,37 @@ function WorkbenchInner({
                 <p className="text-xs font-bold text-error break-words">{error}</p>
               </div>
             </div>
-            <button 
-              onClick={() => setError(null)}
-              className="p-2 hover:bg-error/10 rounded-lg text-error/60 hover:text-error transition-all"
-            >
-              <RotateCcw size={14} className="rotate-45" />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => {
+                  setError(null);
+                  if (currentWorkspaceId) loadWorkspaceData(currentWorkspaceId);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-error/20 text-error text-[10px] font-bold uppercase tracking-widest hover:bg-error/30 transition-all"
+              >
+                {t("settings.retryConnection")}
+              </button>
+              <button
+                onClick={() => setError(null)}
+                className="p-2 hover:bg-error/10 rounded-lg text-error/60 hover:text-error transition-all"
+              >
+                <RotateCcw size={14} className="rotate-45" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {connectionWarning && (
+          <div className="mx-8 mt-6 p-4 rounded-xl bg-warning/10 border border-warning/20 flex items-center gap-3 animate-in slide-in-from-top-4 duration-300">
+            <div className="size-8 rounded-lg bg-warning/10 flex items-center justify-center">
+              <AlertCircle size={16} className="text-warning" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-widest text-warning opacity-60">
+                {t("nav.coreOffline")}
+              </p>
+              <p className="text-xs font-bold text-warning break-words">{connectionWarning}</p>
+            </div>
           </div>
         )}
 
@@ -645,6 +694,7 @@ function WorkbenchInner({
               onSelect={handleSelectWorkspace}
               onCreate={handleCreateWorkspace}
               onDelete={handleDeleteWorkspace}
+              isLoading={isLoadingWorkspaces}
             />
           </div>
         )}
@@ -657,6 +707,7 @@ function WorkbenchInner({
               onCreate={handleCreateIssue}
               onDelete={handleDeleteIssue}
               catalog={runtimeCatalog}
+              isLoading={isLoadingIssues}
             />
           </div>
         )}

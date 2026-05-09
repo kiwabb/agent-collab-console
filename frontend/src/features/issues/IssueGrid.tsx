@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -23,9 +24,10 @@ interface IssueGridProps {
   onCreate: (title: string, desc: string, executor: "codex" | "claude", provider: string | null, model: string | null) => void;
   onDelete: (id: string) => Promise<void> | void;
   catalog: RuntimeCatalog | null;
+  isLoading?: boolean;
 }
 
-export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog }: IssueGridProps) {
+export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoading = false }: IssueGridProps) {
   const { t } = useI18n();
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -83,6 +85,24 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog }: Iss
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        {isLoading && (
+          <>
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="p-6 rounded-2xl bg-surface/40 border border-border-subtle flex flex-col h-full min-h-[180px]">
+                <div className="flex items-start justify-between mb-4">
+                  <Skeleton variant="card" className="size-10" />
+                  <Skeleton variant="default" className="w-16 h-5" />
+                </div>
+                <Skeleton variant="text" className="w-3/4 mb-2" />
+                <Skeleton variant="text" className="w-1/2 mb-6" />
+                <div className="mt-auto">
+                  <Skeleton variant="text" className="w-24" />
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
         {isCreating && (
           <form
             onSubmit={handleSubmit}
