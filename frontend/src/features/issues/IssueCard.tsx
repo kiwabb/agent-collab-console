@@ -4,6 +4,7 @@ import type { CodexIssue } from "@/lib/types";
 import { PHASE_CONFIG, type Phase } from "./phaseUtils";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
+import { InlineEdit } from "@/components/ui/inline-edit";
 
 interface IssueCardProps {
   issue: CodexIssue;
@@ -13,6 +14,7 @@ interface IssueCardProps {
   failedCount: number;
   waitingCount: number;
   onClick: () => void;
+  onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
 }
 
 export function IssueCard({
@@ -23,10 +25,17 @@ export function IssueCard({
   failedCount,
   waitingCount,
   onClick,
+  onUpdateIssue,
 }: IssueCardProps) {
   const { t } = useI18n();
   const phase = issue.current_phase as Phase;
   const config = PHASE_CONFIG[phase] ?? PHASE_CONFIG.requirements;
+
+  const handleTitleSave = (newTitle: string) => {
+    if (onUpdateIssue) {
+      onUpdateIssue(issue.id, { title: newTitle });
+    }
+  };
 
   return (
     <button
@@ -35,7 +44,7 @@ export function IssueCard({
         "w-full text-left p-5 transition-all duration-200 group relative overflow-hidden outline-none",
         isSelected
           ? "bg-surface-active"
-          : "bg-transparent hover:bg-surface-hover",
+          : "bg-transparent hover:bg-surface-hover"
       )}
     >
       {isSelected && (
@@ -43,12 +52,15 @@ export function IssueCard({
       )}
       
       <div className="flex flex-col gap-3 relative z-10">
-        <h3 className={cn(
-          "text-[13.5px] font-bold tracking-tight line-clamp-2 leading-snug transition-colors",
-          isSelected ? "text-brand" : "text-foreground group-hover:text-foreground"
-        )}>
-          {issue.title}
-        </h3>
+        <InlineEdit
+          value={issue.title}
+          onSave={handleTitleSave}
+          textClassName={cn(
+            "text-[13.5px] font-bold tracking-tight line-clamp-2 leading-snug transition-colors",
+            isSelected ? "text-brand" : "text-foreground group-hover:text-foreground"
+          )}
+          disabled={!onUpdateIssue}
+        />
         
         {issue.description && (
           <p className="text-[12px] leading-relaxed text-text-secondary line-clamp-2 opacity-70">

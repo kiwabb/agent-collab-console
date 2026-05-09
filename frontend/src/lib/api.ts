@@ -210,6 +210,18 @@ export async function deleteCodexIssue(issueId: string): Promise<unknown> {
   return handleResponse(response);
 }
 
+export async function updateCodexIssue(
+  issueId: string,
+  updates: { title?: string; description?: string }
+): Promise<CodexIssue> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  return handleResponse<CodexIssue>(response);
+}
+
 export async function getCodexTasks(sessionId: string | null = null, issueId: string | null = null): Promise<CodexTask[]> {
   const params = new URLSearchParams();
   if (sessionId) params.set("session_id", sessionId);

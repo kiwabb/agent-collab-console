@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import type { Workspace } from "@/lib/types";
 import { Folder, ChevronRight, Clock, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 
 interface WorkspaceGridProps {
   workspaces: Workspace[];
@@ -24,8 +26,14 @@ export function WorkspaceGrid({
   isLoading = false,
 }: WorkspaceGridProps) {
   const { t } = useI18n();
+  const { addToast } = useToast();
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [optimisticWorkspaces, setOptimisticWorkspaces] = useState<Workspace[]>([]);
+
+  const displayedWorkspaces = workspaces;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,6 +43,34 @@ export function WorkspaceGrid({
       setIsCreating(false);
     }
   };
+
+  const handleDeleteClick = useCallback((ws: Workspace) => {
+    setDeleteTarget(ws);
+  }, []);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    
+    // Optimistically remove
+    setOptimisticWorkspaces((prev) => prev.filter((w) => w.id !== deleteTarget.id));
+    
+    try {
+      await onDelete(deleteTarget.id);
+      addToast({ type: "success", title: "Workspace deleted" });
+      setDeleteTarget(null);
+    } catch (err) {
+      // Rollback - re-add to optimistic list
+      setOptimisticWorkspaces((prev) => [...prev, deleteTarget]);
+      addToast({
+        type: "error",
+        title: "Failed to delete workspace",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [deleteTarget, onDelete, addToast]);
 
   return (
     <div className="p-8 max-w-7xl mx-auto w-full animate-in fade-in duration-700">
@@ -101,7 +137,7 @@ export function WorkspaceGrid({
           </form>
         )}
 
-        {workspaces.map((ws) => (
+        {displayedWorkspaces.map((ws) => (
           <div
             key={ws.id}
             onClick={() => onSelect(ws.id)}
@@ -111,7 +147,7 @@ export function WorkspaceGrid({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onDelete(ws.id);
+                  handleDeleteClick(ws);
                 }}
                 className="p-2 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all"
               >
@@ -137,7 +173,7 @@ export function WorkspaceGrid({
           </div>
         ))}
 
-        {workspaces.length === 0 && !isCreating && (
+        {displayedWorkspaces.length === 0 && !isCreating && (
           <EmptyState
             icon="workspace"
             title={t("workspace.empty")}
@@ -155,6 +191,17 @@ export function WorkspaceGrid({
           />
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("workspace.delete")}
+        description={deleteTarget ? `Are you sure you want to delete "${deleteTarget.title}"? This action cannot be undone.` : undefined}
+        confirmText={t("workspace.delete")}
+        onConfirm={handleDeleteConfirm}
+        isLoading={isDeleting}
+        variant="destructive"
+      />
     </div>
   );
 }

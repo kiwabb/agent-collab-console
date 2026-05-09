@@ -3,10 +3,25 @@
 import { useState, useMemo } from "react";
 import type { CodexIssue, CodexTask } from "@/lib/types";
 import { IssueCard } from "./IssueCard";
+import { SortableIssueCard } from "./SortableIssueCard";
 import { PHASES, type Phase, groupIssuesByPhase } from "./phaseUtils";
 import { Plus, Layout } from "lucide-react";
 import { useI18n } from "@/providers/I18nProvider";
 import type { TranslationKey } from "@/lib/i18n";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 
 interface IssueBoardProps {
   issues: CodexIssue[];
@@ -14,6 +29,8 @@ interface IssueBoardProps {
   currentIssueId: string | null;
   onSelectIssue: (id: string) => void;
   onCreateIssue: (title: string, description: string) => void;
+  onReorderIssues?: (activeId: string, overId: string) => void;
+  onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
 }
 
 export function IssueBoard({
@@ -22,11 +39,24 @@ export function IssueBoard({
   currentIssueId,
   onSelectIssue,
   onCreateIssue,
+  onReorderIssues,
+  onUpdateIssue,
 }: IssueBoardProps) {
   const { t } = useI18n();
   const [newTitle, setNewTitle] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [showForm, setShowForm] = useState(false);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   const byPhase = useMemo(() => groupIssuesByPhase(issues), [issues]);
 
@@ -47,6 +77,13 @@ export function IssueBoard({
     setNewTitle("");
     setNewDesc("");
     setShowForm(false);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (over && active.id !== over.id && onReorderIssues) {
+      onReorderIssues(active.id as string, over.id as string);
+    }
   }
 
   const boardPhases: { id: Phase; labelKey: string; color: string }[] = [
@@ -116,63 +153,75 @@ export function IssueBoard({
       )}
 
       {/* Swimlanes */}
-      <div className="flex-1 overflow-x-auto no-scrollbar bg-surface/5">
-        <div className="flex h-full min-w-max p-6 gap-6">
-          {boardPhases.map((phase) => {
-            const phaseIssues = byPhase[phase.id];
-            return (
-              <div key={phase.id} className="flex flex-col w-[350px] shrink-0 group/column">
-                <div className="flex items-center justify-between mb-6 px-1">
-                  <div className="flex items-center gap-3">
-                    <div className={`size-2.5 rounded-full ${phase.color} shadow-sm`} />
-                    <h3 className="text-[11px] font-black uppercase tracking-[0.25em] text-text-secondary group-hover/column:text-foreground transition-colors">
-                      {t(phase.labelKey as TranslationKey)}
-                    </h3>
-                    <span className="text-[10px] font-black text-text-muted bg-surface-raised px-2.5 py-0.5 rounded-full border border-border-subtle shadow-sm">
-                      {phaseIssues.length}
-                    </span>
-                  </div>
-                  <button 
-                    onClick={() => {
-                      setNewTitle("");
-                      setNewDesc("");
-                      setShowForm(true);
-                    }}
-                    className="p-1.5 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover/column:opacity-100"
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-
-                <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20">
-                  {phaseIssues.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-20 opacity-[0.03] border-2 border-dashed border-foreground rounded-3xl">
-                      <p className="text-[10px] uppercase tracking-widest font-black">{t("issue.ready")}</p>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="flex-1 overflow-x-auto no-scrollbar bg-surface/5">
+          <div className="flex h-full min-w-max p-6 gap-6">
+            {boardPhases.map((phase) => {
+              const phaseIssues = byPhase[phase.id];
+              return (
+                <div key={phase.id} className="flex flex-col w-[350px] shrink-0 group/column">
+                  <div className="flex items-center justify-between mb-6 px-1">
+                    <div className="flex items-center gap-3">
+                      <div className={`size-2.5 rounded-full ${phase.color} shadow-sm`} />
+                      <h3 className="text-[11px] font-black uppercase tracking-[0.25em] text-text-secondary group-hover/column:text-foreground transition-colors">
+                        {t(phase.labelKey as TranslationKey)}
+                      </h3>
+                      <span className="text-[10px] font-black text-text-muted bg-surface-raised px-2.5 py-0.5 rounded-full border border-border-subtle shadow-sm">
+                        {phaseIssues.length}
+                      </span>
                     </div>
-                  ) : (
-                    phaseIssues.map((issue) => {
-                      const counts = getTaskCounts(issue.id);
-                      return (
-                        <div key={issue.id} className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-                          <IssueCard
-                            issue={issue}
-                            isSelected={issue.id === currentIssueId}
-                            taskCount={counts.total}
-                            runningCount={counts.running}
-                            failedCount={counts.failed}
-                            waitingCount={counts.waiting}
-                            onClick={() => onSelectIssue(issue.id)}
-                          />
+                    <button 
+                      onClick={() => {
+                        setNewTitle("");
+                        setNewDesc("");
+                        setShowForm(true);
+                      }}
+                      className="p-1.5 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover/column:opacity-100"
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
+
+                  <SortableContext
+                    items={phaseIssues.map(i => i.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20">
+                      {phaseIssues.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-20 opacity-[0.03] border-2 border-dashed border-foreground rounded-3xl">
+                          <p className="text-[10px] uppercase tracking-widest font-black">{t("issue.ready")}</p>
                         </div>
-                      );
-                    })
-                  )}
+                      ) : (
+                        phaseIssues.map((issue) => {
+                          const counts = getTaskCounts(issue.id);
+                          return (
+                            <div key={issue.id} className="animate-in fade-in slide-in-from-bottom-2 duration-500">
+                              <SortableIssueCard
+                                issue={issue}
+                                isSelected={issue.id === currentIssueId}
+                                taskCount={counts.total}
+                                runningCount={counts.running}
+                                failedCount={counts.failed}
+                                waitingCount={counts.waiting}
+                                onClick={() => onSelectIssue(issue.id)}
+                                onUpdateIssue={onUpdateIssue}
+                              />
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </SortableContext>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
-      </div>
+      </DndContext>
     </div>
 
 
