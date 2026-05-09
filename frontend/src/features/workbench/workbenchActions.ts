@@ -53,11 +53,10 @@ export async function createIssueAndInitialTask({
     model,
   );
   const executionProcess = await runCodexTask(createdTask.id, { executor, provider, model });
-  const processStatus = executionProcess.status.toLowerCase();
   const initialTask = {
     ...createdTask,
     last_execution_process_id: executionProcess.id,
-    status: createdTask.status === "pending" ? processStatus : createdTask.status,
+    status: executionProcess.status.toLowerCase(),
   };
   return { issue, initialTask, executionProcess };
 }

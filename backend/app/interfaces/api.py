@@ -425,8 +425,8 @@ def _validate_and_order_implementation_tasks(
 
 
 def _is_task_running(status: str | None) -> bool:
-    # Also treat 'pending' as running since it indicates the task is queued/awaiting execution.
-    return str(status or "").lower() in {"running", "responding", "pending"}
+    # Only running/responding states block transitions. Pending tasks are queued, not active.
+    return str(status or "").lower() in {"running", "responding"}
 
 
 def _should_use_workspace_root_for_task(workspace, request: "CreateTaskRequest") -> bool:
@@ -1395,14 +1395,16 @@ async def get_codex_issue_artifacts(issue_id: str):
                 # Use relative path as name for better context if in subfolder
                 display_name = str(rel_path)
                 
+                from datetime import datetime
                 artifact_map[display_name] = {
                     "id": f"{issue_id}:{display_name}",
                     "issue_id": issue_id,
-                    "task_id": None, # Could be linked if needed
+                    "task_id": None,
                     "kind": category,
                     "name": display_name,
                     "path": str(item),
                     "content": item.read_text(encoding="utf-8", errors="replace")[:MAX_FILE_SIZE] if item.suffix in (".md", ".json", ".txt", ".html", ".js", ".css") else "Binary content",
+                    "created_at": datetime.fromtimestamp(item.stat().st_mtime).isoformat() if item.exists() else None,
                 }
 
     scan_dir(issue_root)
