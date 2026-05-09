@@ -2,7 +2,7 @@
 
 import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCatalog } from "@/lib/types";
 import { RotateCcw, Trash2, Send, Terminal, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
@@ -116,17 +116,24 @@ export function RunDetail({
   const unlockStatus = taskMeta ? getDevelopmentTaskUnlockStatus(taskMeta, allTasks) : { unlocked: true, reason: null };
   const blockedReason = !unlockStatus.unlocked ? unlockStatus.reason : null;
 
-  const handleRunInitial = () => {
+  const handleRunInitial = useCallback(() => {
     if (onRunInitial) {
       onRunInitial(executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
     }
-  };
+  }, [onRunInitial, executionConfig.executor, executionConfig.provider, executionConfig.model]);
 
-  const handleRunAgain = () => {
+  const handleRunAgain = useCallback(() => {
     if (onRunAgain) {
       onRunAgain(executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
     }
-  };
+  }, [onRunAgain, executionConfig.executor, executionConfig.provider, executionConfig.model]);
+
+  const handleSend = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    if (!message.trim()) return;
+    onSendMessage(message.trim());
+    setMessage("");
+  }, [message, onSendMessage]);
 
   if (isLoadingProcess) {
     return (
@@ -165,13 +172,6 @@ export function RunDetail({
         )}
       </div>
     );
-  }
-
-  function handleSend(e: React.FormEvent) {
-    e.preventDefault();
-    if (!message.trim()) return;
-    onSendMessage(message.trim());
-    setMessage("");
   }
 
   return (

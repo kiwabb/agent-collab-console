@@ -181,7 +181,10 @@ async def _extract_task_result_from_logs(
     if result_text:
         return result_text
 
-    # Fallback to last line of stdout
+    # Fallback to last line of stdout.
+    # WARNING: This may not be the actual task result - the last stdout line could be
+    # debug output, a progress message, or partial content. This is a best-effort
+    # fallback when structured result extraction fails.
     if not logs:
         # Load again without reverse for raw stdout fallback if needed
         logs = await _load_task_logs(session_id, task_id, execution_process_id=execution_process_id, limit=10)
@@ -422,7 +425,8 @@ def _validate_and_order_implementation_tasks(
 
 
 def _is_task_running(status: str | None) -> bool:
-    return str(status or "").lower() in {"running", "responding"}
+    # Also treat 'pending' as running since it indicates the task is queued/awaiting execution.
+    return str(status or "").lower() in {"running", "responding", "pending"}
 
 
 def _should_use_workspace_root_for_task(workspace, request: "CreateTaskRequest") -> bool:
