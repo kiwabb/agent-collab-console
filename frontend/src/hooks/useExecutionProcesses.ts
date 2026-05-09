@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { applyExecutionProcessPatch } from "@/lib/applyExecutionProcessPatch";
 import { getExecutionProcesses, getWorkspaceStreamUrl } from "@/lib/api";
 import type { ExecutionProcessesState, ExecutionProcess, LogEvent } from "@/lib/types";
+import type { BusEvent } from "@/contexts/ExecutionProcessesContext";
 
 function createEmptyExecutionProcesses(): ExecutionProcessesState {
   return { execution_processes: {} };
@@ -16,12 +17,12 @@ interface UseExecutionProcessesResult {
   isConnected: boolean;
   isInitialized: boolean;
   error: string | null;
-  lastEvent: LogEvent | null;
+  lastEvent: BusEvent | null;
 }
 
 export function useExecutionProcesses(workspaceId: string | null, onEvent?: (event: LogEvent) => void): UseExecutionProcessesResult {
   const [data, setData] = useState<ExecutionProcessesState>(createEmptyExecutionProcesses);
-  const [lastEvent, setLastEvent] = useState<LogEvent | null>(null);
+  const [lastEvent, setLastEvent] = useState<BusEvent | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);

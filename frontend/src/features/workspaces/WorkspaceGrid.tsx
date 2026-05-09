@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { Workspace } from "@/lib/types";
 import { Folder, ChevronRight, Clock, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,8 +20,8 @@ export function WorkspaceGrid({
   onDelete,
 }: WorkspaceGridProps) {
   const { t } = useI18n();
-  const [isCreating, setIsCreating] = (require("react")).useState(false);
-  const [newTitle, setNewTitle] = (require("react")).useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

@@ -255,18 +255,19 @@ function WorkbenchInner({
   useEffect(() => {
     if (!lastEvent) return;
 
-    if (lastEvent.type === "task_status") {
+    const event = lastEvent;
+    if (event.type === "task_status") {
       setTasks((prev) =>
         prev.map((t) =>
-          t.id === lastEvent.task_id
-            ? { ...t, status: lastEvent.status, review_comment: lastEvent.review_comment }
+          t.id === event.task_id
+            ? { ...t, status: event.status, review_comment: event.review_comment }
             : t
         )
       );
-    } else if (lastEvent.type === "task_created") {
+    } else if (event.type === "task_created") {
       setTasks((prev) => {
-        if (prev.some((t) => t.id === lastEvent.task.id)) return prev;
-        return [...prev, lastEvent.task];
+        if (prev.some((t) => t.id === event.task.id)) return prev;
+        return [...prev, event.task];
       });
     }
   }, [lastEvent]);

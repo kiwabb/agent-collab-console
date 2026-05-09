@@ -3,6 +3,40 @@
 import { createContext, useContext } from "react";
 import type { ExecutionProcess, LogEvent } from "@/lib/types";
 
+// Event types that come through the event bus stream
+export type BusEventType = "task_status" | "task_created" | "message_created" | "log" | "approval_required" | "approval_resolved" | "session_status" | "session_created" | "session_deleted" | "issue_deleted" | "task_deleted";
+
+export interface BusTaskStatusEvent {
+  type: "task_status";
+  task_id: string;
+  session_id?: string;
+  status: string;
+  result?: string | null;
+  review_comment?: string | null;
+  execution_process_id?: string | null;
+}
+
+export interface BusTaskCreatedEvent {
+  type: "task_created";
+  task: {
+    id: string;
+    session_id: string;
+    title: string;
+    status: string;
+    [key: string]: unknown;
+  };
+}
+
+export function isBusTaskStatusEvent(event: BusEvent): event is BusTaskStatusEvent {
+  return event.type === "task_status";
+}
+
+export function isBusTaskCreatedEvent(event: BusEvent): event is BusTaskCreatedEvent {
+  return event.type === "task_created";
+}
+
+export type BusEvent = BusTaskStatusEvent | BusTaskCreatedEvent | (LogEvent & { type?: BusEventType });
+
 export interface ExecutionProcessesContextValue {
   executionProcessesAll: ExecutionProcess[];
   executionProcessesByIdAll: Record<string, ExecutionProcess>;
@@ -13,7 +47,7 @@ export interface ExecutionProcessesContextValue {
   isLoading: boolean;
   isConnected: boolean;
   error: string | null;
-  lastEvent: LogEvent | null;
+  lastEvent: BusEvent | null;
 }
 
 export const ExecutionProcessesContext = createContext<ExecutionProcessesContextValue | null>(null);
