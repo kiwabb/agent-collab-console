@@ -925,7 +925,7 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
         result=None,
         parent_task_id=None,
         workspace_path=workspace_path,
-        resume_session_id=None,
+        resume_session_id=resume_session_id,
         resume_message_id=None,
         created_at=datetime.now(),
         updated_at=datetime.now(),
@@ -1316,6 +1316,7 @@ async def get_codex_issue_artifacts(issue_id: str):
         reverse=True,
     )
 
+    MAX_FILE_SIZE = 1024 * 1024
     for task_row in sorted_tasks:
         if task_row.get("role") != "product_manager":
             continue
@@ -1379,7 +1380,7 @@ async def get_codex_issue_artifacts(issue_id: str):
                     "kind": category,
                     "name": display_name,
                     "path": str(item),
-                    "content": item.read_text(encoding="utf-8") if item.suffix in (".md", ".json", ".txt", ".html", ".js", ".css") else "Binary content",
+                    "content": item.read_text(encoding="utf-8", errors="replace")[:MAX_FILE_SIZE] if item.suffix in (".md", ".json", ".txt", ".html", ".js", ".css") else "Binary content",
                 }
 
     scan_dir(issue_root)

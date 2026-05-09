@@ -11,6 +11,7 @@ import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue }
 
 interface RunDetailProps {
   process: ExecutionProcess | null;
+  isLoadingProcess?: boolean;
   taskMeta?: CodexTask | null;
   task: CodexTaskMessage[];
   logs: LogEvent[];
@@ -61,6 +62,7 @@ function getDevelopmentTaskUnlockStatus(task: CodexTask, allTasks: CodexTask[]):
 
 export function RunDetail({
   process,
+  isLoadingProcess = false,
   taskMeta,
   task,
   logs,
@@ -125,6 +127,15 @@ export function RunDetail({
       onRunAgain(executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
     }
   };
+
+  if (isLoadingProcess) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center gap-4 text-text-muted">
+        <Activity size={32} className="animate-spin text-brand" />
+        <p className="text-xs font-bold uppercase tracking-widest opacity-60">{t("run.loading")}</p>
+      </div>
+    );
+  }
 
   if (!process) {
     return (

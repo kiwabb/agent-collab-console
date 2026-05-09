@@ -100,6 +100,7 @@ function WorkbenchInner({
   const [isTransitioningToDevelopment, setIsTransitioningToDevelopment] = useState(false);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [isLoadingProcess, setIsLoadingProcess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runtimeCatalog, setRuntimeCatalog] = useState<import("@/lib/types").RuntimeCatalog | null>(null);
 
@@ -280,6 +281,7 @@ function WorkbenchInner({
     let cancelled = false;
     setIsLoadingLogs(true);
     setIsLoadingMessages(true);
+    setIsLoadingProcess(true);
     Promise.all([
       getExecutionProcessLogs(selectedProcessId),
       getExecutionProcessMessages(selectedProcessId),
@@ -298,6 +300,7 @@ function WorkbenchInner({
         if (cancelled) return;
         setIsLoadingLogs(false);
         setIsLoadingMessages(false);
+        setIsLoadingProcess(false);
       });
     return () => {
       cancelled = true;
@@ -741,6 +744,7 @@ function WorkbenchInner({
                     <TabsContent value="run-detail" className="h-full m-0 flex flex-col">
                       <RunDetail
                         process={selectedProcess ?? null}
+                        isLoadingProcess={isLoadingProcess}
                         taskMeta={currentTask}
                         task={displayedProcessMessages}
                         logs={displayedProcessLogs}
