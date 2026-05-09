@@ -44,7 +44,7 @@ import {
 } from "@/lib/api";
 import { getRuntimeCatalog } from "@/lib/api";
 import { ExecutionProcessesProvider } from "@/providers/ExecutionProcessesProvider";
-import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
+import { useExecutionProcessesContext, isBusTaskStatusEvent, isBusTaskCreatedEvent } from "@/contexts/ExecutionProcessesContext";
 import { WorkspaceGrid } from "@/features/workspaces/WorkspaceGrid";
 import { IssueGrid } from "@/features/issues/IssueGrid";
 import { TaskBoard } from "@/features/tasks/TaskBoard";
@@ -255,8 +255,8 @@ function WorkbenchInner({
   useEffect(() => {
     if (!lastEvent) return;
 
-    const event = lastEvent;
-    if (event.type === "task_status") {
+    if (isBusTaskStatusEvent(lastEvent)) {
+      const event = lastEvent;
       setTasks((prev) =>
         prev.map((t) =>
           t.id === event.task_id
@@ -264,10 +264,11 @@ function WorkbenchInner({
             : t
         )
       );
-    } else if (event.type === "task_created") {
+    } else if (isBusTaskCreatedEvent(lastEvent)) {
+      const event = lastEvent;
       setTasks((prev) => {
         if (prev.some((t) => t.id === event.task.id)) return prev;
-        return [...prev, event.task];
+        return [...prev, event.task as unknown as CodexTask];
       });
     }
   }, [lastEvent]);

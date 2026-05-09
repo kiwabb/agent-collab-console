@@ -436,7 +436,7 @@ def _is_task_running(status: str | None) -> bool:
     return str(status or "").lower() in {"running", "responding"}
 
 
-def _should_use_workspace_root_for_task(workspace, request: "CreateTaskRequest") -> bool:
+def _should_use_workspace_root_for_task(workspace: "CodexSession", request: "CreateTaskRequest") -> bool:
     """Return True if task should use workspace root, False for a dedicated task workspace."""
     if request.issue_id:
         return True
@@ -445,7 +445,7 @@ def _should_use_workspace_root_for_task(workspace, request: "CreateTaskRequest")
     return False
 
 
-def _is_managed_task_workspace(task, workspace) -> bool:
+def _is_managed_task_workspace(task: "CodexTask", workspace: "CodexSession | None") -> bool:
     if not task.workspace_path:
         return False
     if workspace is None:
@@ -1865,7 +1865,7 @@ async def submit_codex_task_for_review(task_id: str):
 
 
 class TaskReviewRequest(BaseModel):
-    decision: str  # "approve" | "reject"
+    decision: Literal["approve", "reject"]
     comment: str | None = None
 
 
