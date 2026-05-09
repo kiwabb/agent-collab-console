@@ -58,6 +58,8 @@ import { isTaskRuntimeActive } from "@/lib/task-selection";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useI18n } from "@/providers/I18nProvider";
+import { useToast } from "@/components/ui/toast";
+import { AsyncBoundary } from "@/components/ui/error-boundary";
 import {
   Activity,
   RotateCcw,
@@ -98,6 +100,7 @@ function WorkbenchInner({
   const [isRunning, setIsRunning] = useState(false);
   const [isTransitioningToArchitecture, setIsTransitioningToArchitecture] = useState(false);
   const [isTransitioningToDevelopment, setIsTransitioningToDevelopment] = useState(false);
+  const { addToast } = useToast();
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isLoadingProcess, setIsLoadingProcess] = useState(false);
@@ -197,7 +200,9 @@ function WorkbenchInner({
       }
       setHelpRequests(hrs);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load workspace data");
+      const msg = err instanceof Error ? err.message : "Failed to load workspace data";
+      setError(msg);
+      addToast({ type: "error", title: "Failed to load workspace", message: msg });
     } finally {
       setIsLoadingIssues(false);
     }
@@ -208,11 +213,14 @@ function WorkbenchInner({
     try {
       const updated = await submitCodexTask(currentTaskId);
       setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      addToast({ type: "success", title: "Task submitted for review" });
       if (currentWorkspaceId) {
         await loadWorkspaceData(currentWorkspaceId);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to submit task for review");
+      const msg = err instanceof Error ? err.message : "Failed to submit task for review";
+      setError(msg);
+      addToast({ type: "error", title: "Failed to submit for review", message: msg });
     }
   }, [currentTaskId, currentWorkspaceId, loadWorkspaceData]);
 
@@ -394,7 +402,9 @@ function WorkbenchInner({
       setWorkspaces((prev) => [...prev, ws]);
       handleSelectWorkspace(ws.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create workspace");
+      const msg = err instanceof Error ? err.message : "Failed to create workspace";
+      setError(msg);
+      addToast({ type: "error", title: "Failed to create workspace", message: msg });
     }
   }
 
@@ -415,12 +425,15 @@ function WorkbenchInner({
     try {
       await deleteWorkspace(id);
       setWorkspaces((prev) => prev.filter((w) => w.id !== id));
+      addToast({ type: "success", title: "Workspace deleted" });
       if (currentWorkspaceId === id) {
         onWorkspaceChange(null);
         setView("home");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete workspace");
+      const msg = err instanceof Error ? err.message : "Failed to delete workspace";
+      setError(msg);
+      addToast({ type: "error", title: "Failed to delete workspace", message: msg });
     }
   }
 
@@ -450,8 +463,11 @@ function WorkbenchInner({
       handleSelectIssue(issue.id);
       setSelectedProcessId(executionProcess.id);
       setCurrentTaskId(initialTask.id);
+      addToast({ type: "success", title: "Issue created" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create issue");
+      const msg = err instanceof Error ? err.message : "Failed to create issue";
+      setError(msg);
+      addToast({ type: "error", title: "Failed to create issue", message: msg });
     }
   }
 
@@ -529,8 +545,11 @@ function WorkbenchInner({
       }
       const freshArtifacts = await getCodexIssueArtifacts(currentIssue.id);
       setArtifacts(freshArtifacts);
+      addToast({ type: "success", title: "Transitioned to Architecture" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to transition issue to architecture");
+      const msg = err instanceof Error ? err.message : "Failed to transition issue to architecture";
+      setError(msg);
+      addToast({ type: "error", title: "Failed to transition", message: msg });
     } finally {
       setIsTransitioningToArchitecture(false);
     }
@@ -549,8 +568,11 @@ function WorkbenchInner({
       });
       const freshArtifacts = await getCodexIssueArtifacts(currentIssue.id);
       setArtifacts(freshArtifacts);
+      addToast({ type: "success", title: "Transitioned to Development" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to transition issue to development");
+      const msg = err instanceof Error ? err.message : "Failed to transition issue to development";
+      setError(msg);
+      addToast({ type: "error", title: "Failed to transition", message: msg });
     } finally {
       setIsTransitioningToDevelopment(false);
     }

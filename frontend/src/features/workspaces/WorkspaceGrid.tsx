@@ -6,6 +6,7 @@ import { Folder, ChevronRight, Clock, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 
 interface WorkspaceGridProps {
   workspaces: Workspace[];
@@ -137,19 +138,21 @@ export function WorkspaceGrid({
         ))}
 
         {workspaces.length === 0 && !isCreating && (
-          <div className="col-span-full flex flex-col items-center justify-center py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20">
-            <div className="size-16 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-6 shadow-sm">
-              <Folder size={32} className="text-text-muted/40" />
-            </div>
-            <p className="text-sm font-bold text-text-muted mb-6">{t("workspace.empty")}</p>
-            <button
-              onClick={() => setIsCreating(true)}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:bg-brand/90 transition-all"
-            >
-              <Plus size={16} />
-              {t("workspace.new")}
-            </button>
-          </div>
+          <EmptyState
+            icon="workspace"
+            title={t("workspace.empty")}
+            description="Create your first workspace to get started"
+            action={
+              <button
+                onClick={() => setIsCreating(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:bg-brand/90 transition-all"
+              >
+                <Plus size={16} />
+                {t("workspace.new")}
+              </button>
+            }
+            className="col-span-full py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20"
+          />
         )}
       </div>
     </div>

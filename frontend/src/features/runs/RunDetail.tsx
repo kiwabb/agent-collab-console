@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { normalizeLogs } from "@/lib/codexLogNormalizer";
 import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
+import { EmptyState } from "@/components/ui/empty-state";
 
 interface RunDetailProps {
   process: ExecutionProcess | null;
@@ -320,12 +321,12 @@ export function RunDetail({
                   <span>{t("run.loadingMessages")}</span>
                 </div>
               ) : task.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-24 text-text-muted/30">
-                  <div className="size-14 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-4">
-                    <MessageSquare size={24} strokeWidth={1} className="opacity-50" />
-                  </div>
-                  <p className="text-xs font-bold uppercase tracking-widest">{t("run.noMessages")}</p>
-                </div>
+                <EmptyState
+                  icon="message"
+                  title={t("run.noMessages")}
+                  description="Start a task to see communications"
+                  className="py-24"
+                />
               ) : (
                 <div className="space-y-8">
                   {taskMeta?.status === "awaiting_review" && (
@@ -372,12 +373,12 @@ export function RunDetail({
                   <span>{t("run.loadingLogs")}</span>
                 </div>
               ) : normalizedLogs.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-24 text-text-muted/30">
-                  <div className="size-14 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-4">
-                    <Terminal size={24} strokeWidth={1} className="opacity-50" />
-                  </div>
-                  <p className="text-xs font-bold uppercase tracking-widest">{t("run.noLogs")}</p>
-                </div>
+                <EmptyState
+                  icon="log"
+                  title={t("run.noLogs")}
+                  description="Logs will appear when the task runs"
+                  className="py-24"
+                />
               ) : (
                 <div className="selection:bg-brand/30 pb-10 space-y-2">
                   {normalizedLogs.map((log, i) => (
