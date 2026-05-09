@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { applyExecutionProcessPatch } from "@/lib/applyExecutionProcessPatch";
 import { getExecutionProcesses, getWorkspaceStreamUrl } from "@/lib/api";
-import type { ExecutionProcessesState, ExecutionProcess } from "@/lib/types";
+import type { ExecutionProcessesState, ExecutionProcess, LogEvent } from "@/lib/types";
 
 function createEmptyExecutionProcesses(): ExecutionProcessesState {
   return { execution_processes: {} };
@@ -16,12 +16,12 @@ interface UseExecutionProcessesResult {
   isConnected: boolean;
   isInitialized: boolean;
   error: string | null;
-  lastEvent: any | null;
+  lastEvent: LogEvent | null;
 }
 
-export function useExecutionProcesses(workspaceId: string | null, onEvent?: (event: any) => void): UseExecutionProcessesResult {
+export function useExecutionProcesses(workspaceId: string | null, onEvent?: (event: LogEvent) => void): UseExecutionProcessesResult {
   const [data, setData] = useState<ExecutionProcessesState>(createEmptyExecutionProcesses);
-  const [lastEvent, setLastEvent] = useState<any | null>(null);
+  const [lastEvent, setLastEvent] = useState<LogEvent | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -124,7 +124,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
           try {
             const msg = JSON.parse(event.data as string) as { 
               JsonPatch?: unknown[]; 
-              Events?: any[];
+              Events?: LogEvent[];
               Ready?: boolean; 
               finished?: boolean 
             };

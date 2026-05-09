@@ -1,18 +1,19 @@
 "use client";
 
 import { createContext, useContext } from "react";
+import type { ExecutionProcess, LogEvent } from "@/lib/types";
 
 export interface ExecutionProcessesContextValue {
-  executionProcessesAll: unknown[];
-  executionProcessesByIdAll: Record<string, unknown>;
+  executionProcessesAll: ExecutionProcess[];
+  executionProcessesByIdAll: Record<string, ExecutionProcess>;
   isAttemptRunningAll: boolean;
-  executionProcessesVisible: unknown[];
-  executionProcessesByIdVisible: Record<string, unknown>;
+  executionProcessesVisible: ExecutionProcess[];
+  executionProcessesByIdVisible: Record<string, ExecutionProcess>;
   isAttemptRunningVisible: boolean;
   isLoading: boolean;
   isConnected: boolean;
   error: string | null;
-  lastEvent: any | null;
+  lastEvent: LogEvent | null;
 }
 
 export const ExecutionProcessesContext = createContext<ExecutionProcessesContextValue | null>(null);
