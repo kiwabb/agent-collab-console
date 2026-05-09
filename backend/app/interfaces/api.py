@@ -321,6 +321,13 @@ def _has_architecture_artifacts(workspace_path: str | None, issue_id: str) -> tu
         return False, "implementation_plan.json 格式无效"
     if not isinstance(payload, list) or len(payload) == 0:
         return False, "架构产物 implementation_plan.json 为空，请先生成有效拆分任务后再流转到开发"
+    # Validate structure: each item must be a dict with a string title
+    for i, item in enumerate(payload):
+        if not isinstance(item, dict):
+            return False, f"implementation_plan.json 第 {i+1} 项必须是对象，请检查格式"
+        title = item.get("title")
+        if not isinstance(title, str) or not title.strip():
+            return False, f"implementation_plan.json 第 {i+1} 项缺少有效的 title 字段"
     return True, ""
 
 
