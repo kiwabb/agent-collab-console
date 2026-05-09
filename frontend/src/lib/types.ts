@@ -46,7 +46,7 @@ export interface PlanDetails {
 
 export interface Artifact {
   id: string;
-  task_id: string;
+  task_id: string | null;
   kind: string;
   name?: string;
   content: string | PlanDetails;

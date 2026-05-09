@@ -541,7 +541,9 @@ function WorkbenchInner({
       await sendCodexTaskMessage(selectedProcess.task_id, content);
       const msgs = await getExecutionProcessMessages(selectedProcess.id);
       setProcessMessages(msgs);
-    } catch {}
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send message");
+    }
   }, [selectedProcess]);
 
 
