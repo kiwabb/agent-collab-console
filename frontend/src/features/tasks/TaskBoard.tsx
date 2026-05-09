@@ -166,8 +166,11 @@ export function TaskBoard({
 
                 <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20">
                   {phaseTasks.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-20 opacity-[0.03] border-2 border-dashed border-foreground rounded-3xl">
-                      <p className="text-[10px] uppercase tracking-widest font-black">{t("task.ready")}</p>
+                    <div className="flex flex-col items-center justify-center py-16 px-4 border-2 border-dashed border-border-subtle rounded-2xl bg-surface/10">
+                      <div className="size-10 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-3 opacity-40">
+                        <Plus size={16} className="text-text-muted" />
+                      </div>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-text-muted/50">{t("task.ready")}</p>
                     </div>
                   ) : (
                     phaseTasks.map((task) => {

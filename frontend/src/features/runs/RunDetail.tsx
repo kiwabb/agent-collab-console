@@ -320,9 +320,11 @@ export function RunDetail({
                   <span>{t("run.loadingMessages")}</span>
                 </div>
               ) : task.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-32 opacity-10">
-                  <MessageSquare size={48} strokeWidth={1} className="mb-4" />
-                  <p className="text-[10px] font-black uppercase tracking-widest">{t("run.noMessages")}</p>
+                <div className="flex flex-col items-center justify-center py-24 text-text-muted/30">
+                  <div className="size-14 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-4">
+                    <MessageSquare size={24} strokeWidth={1} className="opacity-50" />
+                  </div>
+                  <p className="text-xs font-bold uppercase tracking-widest">{t("run.noMessages")}</p>
                 </div>
               ) : (
                 <div className="space-y-8">
@@ -370,9 +372,11 @@ export function RunDetail({
                   <span>{t("run.loadingLogs")}</span>
                 </div>
               ) : normalizedLogs.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-32 opacity-10">
-                  <Terminal size={48} strokeWidth={1} className="mb-4" />
-                  <p className="text-[10px] font-black uppercase tracking-widest">{t("run.noLogs")}</p>
+                <div className="flex flex-col items-center justify-center py-24 text-text-muted/30">
+                  <div className="size-14 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-4">
+                    <Terminal size={24} strokeWidth={1} className="opacity-50" />
+                  </div>
+                  <p className="text-xs font-bold uppercase tracking-widest">{t("run.noLogs")}</p>
                 </div>
               ) : (
                 <div className="selection:bg-brand/30 pb-10 space-y-2">

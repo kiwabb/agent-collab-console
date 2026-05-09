@@ -101,8 +101,11 @@ export function AgentCoordinationPanel({
           </h3>
           <div className="space-y-1.5">
             {recentProcesses.length === 0 ? (
-              <div className="py-12 flex flex-col items-center justify-center opacity-10">
-                <p className="text-[10px] uppercase tracking-widest font-black">{t("agents.noHistory")}</p>
+              <div className="py-12 flex flex-col items-center justify-center text-text-muted/30">
+                <div className="size-12 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-3">
+                  <Clock size={18} strokeWidth={1} className="opacity-50" />
+                </div>
+                <p className="text-xs font-bold uppercase tracking-widest">{t("agents.noHistory")}</p>
               </div>
             ) : (
               recentProcesses.slice(0, 5).map((proc) => {
