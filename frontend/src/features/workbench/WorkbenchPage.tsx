@@ -120,11 +120,13 @@ function WorkbenchInner({
       setIssues(iss);
       setTasks(tks);
       const hrs: HelpRequest[] = [];
-      for (const task of tks) {
-        try {
-          const reqs = await getTaskHelpRequests(task.id);
-          hrs.push(...reqs);
-        } catch {}
+      const helpResults = await Promise.allSettled(
+        tks.map((task) => getTaskHelpRequests(task.id))
+      );
+      for (const result of helpResults) {
+        if (result.status === "fulfilled") {
+          hrs.push(...result.value);
+        }
       }
       setHelpRequests(hrs);
     } catch (err) {

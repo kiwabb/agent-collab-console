@@ -113,7 +113,10 @@ export function RunDetail({
   );
   const taskStatus = String(taskMeta?.status || "").toLowerCase();
   const canRunInitial = !process && !!taskMeta && (taskStatus === "pending" || taskStatus === "failed");
-  const unlockStatus = taskMeta ? getDevelopmentTaskUnlockStatus(taskMeta, allTasks) : { unlocked: true, reason: null };
+  const unlockStatus = useMemo(
+    () => taskMeta ? getDevelopmentTaskUnlockStatus(taskMeta, allTasks) : { unlocked: true, reason: null },
+    [taskMeta, allTasks],
+  );
   const blockedReason = !unlockStatus.unlocked ? unlockStatus.reason : null;
 
   const handleRunInitial = useCallback(() => {
