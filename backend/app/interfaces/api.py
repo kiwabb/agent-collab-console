@@ -1311,9 +1311,32 @@ async def transition_codex_issue_to_development(issue_id: str):
     existing_rows = [task for task in tasks if task.get("role") == "engineer" and task.get("issue_id") == issue_id]
     existing_by_title = {str(task.get("title") or "").strip().lower(): task for task in existing_rows}
 
-    engineer_tasks, created_any = await _create_development_tasks(
-        codex_store, issue, ordered_tasks, existing_by_title, workspace_path
-    )
+    created_task_ids: set[str] = set()
+    for idx, item in enumerate(ordered_tasks):
+        task_title = f"开发 - {issue.title} - {item['title']}"
+        existing_row = existing_by_title.get(task_title.strip().lower())
+        if existing_row is not None:
+            existing_task = await codex_store.load_codex_task(existing_row["id"])
+            if existing_task is not None and (existing_task.sequence_index != idx or existing_task.sequence_group != issue.id):
+                existing_task.sequence_index = idx
+                existing_task.sequence_group = issue.id
+                existing_task.updated_at = datetime.now()
+                await codex_store.save_codex_task(existing_task)
+        else:
+            created_task_ids.add(str(idx))
+
+    if created_task_ids:
+        engineer_tasks, created_any = await _create_development_tasks(
+            codex_store, issue, ordered_tasks, existing_by_title, workspace_path
+        )
+    else:
+        engineer_tasks = [
+            await codex_store.load_codex_task(row["id"])
+            for row in existing_rows
+            if row["id"] is not None
+        ]
+        engineer_tasks = [t for t in engineer_tasks if t is not None]
+        created_any = False
 
     issue.current_phase = "development"
     issue.updated_at = datetime.now()

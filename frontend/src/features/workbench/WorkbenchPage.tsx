@@ -331,6 +331,11 @@ function WorkbenchInner({
     setCurrentTaskId(null);
     setSelectedProcessId(null);
     setSelectedProcessSnapshot(null);
+    setIsLoadingLogs(false);
+    setIsLoadingMessages(false);
+    setIsLoadingProcess(false);
+    setProcessLogs([]);
+    setProcessMessages([]);
   }
 
   async function handleDeleteWorkspace(id: string) {
