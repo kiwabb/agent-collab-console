@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import type { CodexIssue, CodexTask } from "@/lib/types";
 import { IssueCard } from "./IssueCard";
 import { SortableIssueCard } from "./SortableIssueCard";
@@ -33,6 +33,7 @@ interface IssueBoardProps {
   onReorderIssues?: (activeId: string, overId: string) => void;
   onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
   onPinIssue?: (id: string, isPinned: boolean) => void;
+  onDuplicateIssue?: (id: string) => void;
   isLoading?: boolean;
 }
 
@@ -60,6 +61,8 @@ export function IssueBoard({
   onCreateIssue,
   onReorderIssues,
   onUpdateIssue,
+  onPinIssue,
+  onDuplicateIssue,
   isLoading = false,
 }: IssueBoardProps) {
   const { t } = useI18n();
@@ -79,6 +82,34 @@ export function IssueBoard({
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
+
+  // Keyboard navigation
+  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
+  const flatIssues = useMemo(() => {
+    const all: CodexIssue[] = [];
+    PHASES.forEach(p => all.push(...(byPhase[p] || [])));
+    return all;
+  }, [byPhase]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!flatIssues.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setFocusedIndex(i => Math.min(i + 1, flatIssues.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setFocusedIndex(i => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (focusedIndex >= 0 && flatIssues[focusedIndex]) {
+        onSelectIssue(flatIssues[focusedIndex].id);
+      }
+    }
+  }, [flatIssues, focusedIndex, onSelectIssue]);
+
+  useEffect(() => {
+    setFocusedIndex(-1);
+  }, [issues]);
 
   // Get unique assignees from tasks
   const assignees = useMemo(() => {
@@ -236,7 +267,7 @@ export function IssueBoard({
         collisionDetection={closestCenter}
         onDragEnd={handleDragEnd}
       >
-        <div className="flex-1 overflow-x-auto no-scrollbar bg-surface/5">
+        <div className="flex-1 overflow-x-auto no-scrollbar bg-surface/5" onKeyDown={handleKeyDown} tabIndex={0}>
           <div className="flex h-full min-w-max p-6 gap-6">
             {boardPhases.map((phase) => {
               const phaseIssues = byPhase[phase.id];
@@ -308,6 +339,8 @@ export function IssueBoard({
                                 waitingCount={counts.waiting}
                                 onClick={() => onSelectIssue(issue.id)}
                                 onUpdateIssue={onUpdateIssue}
+                                onPinIssue={onPinIssue}
+                                onDuplicateIssue={onDuplicateIssue}
                               />
                             </div>
                           );

@@ -5,7 +5,7 @@ import { PHASE_CONFIG, type Phase } from "./phaseUtils";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { InlineEdit } from "@/components/ui/inline-edit";
-import { Link, Copy, Check, Pin, PinOff } from "lucide-react";
+import { Link, Copy, Check, Pin, PinOff, Copy as Duplicate } from "lucide-react";
 import { useState } from "react";
 
 function formatRelativeTime(dateStr: string | null): string {
@@ -34,6 +34,7 @@ interface IssueCardProps {
   onClick: () => void;
   onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
   onPinIssue?: (id: string, isPinned: boolean) => void;
+  onDuplicateIssue?: (id: string) => void;
 }
 
 export function IssueCard({
@@ -46,6 +47,7 @@ export function IssueCard({
   onClick,
   onUpdateIssue,
   onPinIssue,
+  onDuplicateIssue,
 }: IssueCardProps) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -70,6 +72,13 @@ export function IssueCard({
     e.stopPropagation();
     if (onPinIssue) {
       onPinIssue(issue.id, !issue.is_pinned);
+    }
+  };
+
+  const handleDuplicate = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onDuplicateIssue) {
+      onDuplicateIssue(issue.id);
     }
   };
 
@@ -99,6 +108,13 @@ export function IssueCard({
             disabled={!onUpdateIssue}
           />
           <div className="flex gap-1 shrink-0">
+            <button
+              onClick={handleDuplicate}
+              className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover:opacity-100"
+              title="Duplicate issue"
+            >
+              <Duplicate size={12} />
+            </button>
             <button
               onClick={handlePin}
               className={cn(

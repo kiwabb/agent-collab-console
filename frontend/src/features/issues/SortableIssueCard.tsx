@@ -16,6 +16,7 @@ interface SortableIssueCardProps {
   onClick: () => void;
   onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
   onPinIssue?: (id: string, isPinned: boolean) => void;
+  onDuplicateIssue?: (id: string) => void;
 }
 
 export function SortableIssueCard({
@@ -28,6 +29,7 @@ export function SortableIssueCard({
   onClick,
   onUpdateIssue,
   onPinIssue,
+  onDuplicateIssue,
 }: SortableIssueCardProps) {
   const {
     attributes,
@@ -65,6 +67,7 @@ export function SortableIssueCard({
           onClick={onClick}
           onUpdateIssue={onUpdateIssue}
           onPinIssue={onPinIssue}
+          onDuplicateIssue={onDuplicateIssue}
         />
       </div>
     </div>

@@ -1164,6 +1164,29 @@ async def update_codex_issue_pin(issue_id: str, request: UpdateIssuePinRequest):
     return issue
 
 
+@router.post("/codex/issues/{issue_id}/duplicate", response_model=CodexIssue, status_code=201)
+async def duplicate_codex_issue(issue_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    import uuid
+    new_issue = CodexIssue(
+        id=str(uuid.uuid4()),
+        session_id=issue.session_id,
+        title=f"{issue.title} (copy)",
+        description=issue.description,
+        current_phase="requirements",
+        status="open",
+        is_pinned=False,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await codex_store.save_codex_issue(new_issue)
+    return new_issue
+
+
 @router.post("/codex/issues/{issue_id}/transition-to-architecture")
 async def transition_codex_issue_to_architecture(issue_id: str):
     if codex_store is None:
