@@ -78,7 +78,5 @@ export function useTaskConversationDetail({
     }));
   }, [executionProcesses, taskId, taskMessages]);
 
-  void activeProcessId;
-
   return detail;
 }
