@@ -47,8 +47,8 @@ export function WorkspaceGrid({
   const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(getFavorites);
-
-  const displayedWorkspaces = [...workspaces].sort((a, b) => {
+  const [optimisticWorkspaces, setOptimisticWorkspaces] = useState<Workspace[] | null>(null);
+  const displayedWorkspaces = [...(optimisticWorkspaces ?? workspaces)].sort((a, b) => {
     const aFav = favorites.has(a.id) ? 0 : 1;
     const bFav = favorites.has(b.id) ? 0 : 1;
     if (aFav !== bFav) return aFav - bFav;
@@ -87,7 +87,7 @@ export function WorkspaceGrid({
     setIsDeleting(true);
     
     // Optimistically remove
-    setOptimisticWorkspaces((prev) => prev.filter((w) => w.id !== deleteTarget.id));
+    setOptimisticWorkspaces((prev) => (prev ?? workspaces).filter((w) => w.id !== deleteTarget.id));
     
     try {
       await onDelete(deleteTarget.id);
@@ -95,7 +95,7 @@ export function WorkspaceGrid({
       setDeleteTarget(null);
     } catch (err) {
       // Rollback - re-add to optimistic list
-      setOptimisticWorkspaces((prev) => [...prev, deleteTarget]);
+      setOptimisticWorkspaces((prev) => [...(prev ?? workspaces), deleteTarget]);
       addToast({
         type: "error",
         title: "Failed to delete workspace",

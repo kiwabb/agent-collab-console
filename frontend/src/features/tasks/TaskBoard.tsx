@@ -36,7 +36,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { getRuntimeCatalog } from "@/lib/api";
-import { useState } from "react";
 
 function formatRelativeTime(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -405,7 +404,7 @@ export function TaskBoard({
                             <SortableTaskCard
                               key={task.id}
                               task={task}
-                              process={process}
+                              process={process ?? undefined}
                               unlocked={unlocked}
                               onClick={() => onSelectTask(task.id)}
                             />
@@ -424,7 +423,7 @@ export function TaskBoard({
           {activeTask && (
             <TaskCard
               task={activeTask}
-              process={pickLatestExecutionProcessForTask(executionProcesses, activeTask.id)}
+              process={pickLatestExecutionProcessForTask(executionProcesses, activeTask.id) ?? undefined}
               unlocked={isDevelopmentTaskUnlocked(activeTask, tasks)}
               onClick={() => {}}
               isDragging

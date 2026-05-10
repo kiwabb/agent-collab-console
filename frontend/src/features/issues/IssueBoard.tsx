@@ -83,7 +83,10 @@ export function IssueBoard({
     })
   );
 
-  // Keyboard navigation
+  // Group issues by phase
+  const byPhase = useMemo(() => groupIssuesByPhase(issues), [issues]);
+
+  // Flatten for keyboard navigation
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const flatIssues = useMemo(() => {
     const all: CodexIssue[] = [];
@@ -131,8 +134,6 @@ export function IssueBoard({
 
   const expandAll = () => setExpandedPhases(new Set(["requirements", "architecture", "development", "testing"]));
   const collapseAll = () => setExpandedPhases(new Set());
-
-  const byPhase = useMemo(() => groupIssuesByPhase(issues), [issues]);
 
   const getTaskCounts = useMemo(() => (issueId: string) => {
     let issueTasks = tasks.filter((t) => t.issue_id === issueId);

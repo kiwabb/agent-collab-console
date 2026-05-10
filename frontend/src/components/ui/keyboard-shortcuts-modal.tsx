@@ -46,7 +46,7 @@ export function KeyboardShortcutsModal() {
     },
   ]);
 
-  const categories = shortcutsByCategory(t);
+  const categories = shortcutsByCategory(t as (key: string) => string);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
