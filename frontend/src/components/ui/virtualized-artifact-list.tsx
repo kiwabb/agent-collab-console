@@ -3,7 +3,7 @@
 import { useRef, useState, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Artifact } from "@/lib/types";
-import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, Copy, Check } from "lucide-react";
+import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, Copy, Check, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, WrapText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { motion, AnimatePresence } from "framer-motion";
@@ -61,7 +61,14 @@ function detectLanguage(content: string, filename?: string): string {
   return "markdown";
 }
 
-function HighlightedCode({ code, language }: { code: string; language: string }) {
+interface HighlightedCodeProps {
+  code: string;
+  language: string;
+  zoom?: number;
+  wordWrap?: boolean;
+}
+
+export function HighlightedCode({ code, language, zoom = 100, wordWrap = true }: HighlightedCodeProps) {
   const [copied, setCopied] = useState(false);
   const highlighted = useMemo(() => {
     try {
@@ -81,20 +88,40 @@ function HighlightedCode({ code, language }: { code: string; language: string })
     });
   };
 
+  const handleDownload = () => {
+    const blob = new Blob([code], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `artifact.${language === "json" ? "json" : "txt"}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="relative group/code">
-      <button
-        onClick={handleCopy}
-        className="absolute top-3 right-3 p-1.5 rounded-lg bg-surface-raised border border-border-subtle opacity-0 group-hover/code:opacity-100 hover:bg-surface-hover transition-all z-10"
-        aria-label="Copy code"
-      >
-        {copied ? <Check size={14} className="text-success" /> : <Copy size={14} className="text-text-muted" />}
-      </button>
+      <div className="absolute top-3 right-3 flex items-center gap-1 z-10 opacity-0 group-hover/code:opacity-100 transition-opacity">
+        <button
+          onClick={handleCopy}
+          className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all"
+          aria-label="Copy code"
+        >
+          {copied ? <Check size={14} className="text-success" /> : <Copy size={14} className="text-text-muted" />}
+        </button>
+        <button
+          onClick={handleDownload}
+          className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all"
+          aria-label="Download artifact"
+        >
+          <Download size={14} className="text-text-muted" />
+        </button>
+      </div>
       <code
         className={cn(
           "text-[12px] leading-relaxed [&_.hljs-keyword]:text-pink-400 [&_.hljs-string]:text-green-400 [&_.hljs-number]:text-orange-400 [&_.hljs-comment]:text-gray-500 [&_.hljs-attr]:text-cyan-400 [&_.hljs-title]:text-blue-400 [&_.hljs-built_in]:text-purple-400 [&_.hljs-literal]:text-orange-400 [&_.hljs-type]:text-cyan-300 [&_.hljs-params]:text-yellow-300 [&_.hljs-meta]:text-gray-400",
           "whitespace-pre-wrap font-mono bg-background/60 p-5 rounded-xl border border-border-subtle max-h-80 overflow-y-auto no-scrollbar selection:bg-brand/30 block"
         )}
+        style={{ fontSize: `${zoom}%`, whiteSpace: wordWrap ? "pre-wrap" : "pre" }}
         dangerouslySetInnerHTML={{ __html: highlighted }}
       />
     </div>
@@ -111,6 +138,9 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
   const { t } = useI18n();
   const parentRef = useRef<HTMLDivElement>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(100);
+  const [wordWrap, setWordWrap] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const productArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "product"), [artifacts]);
   const architectureArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "architecture"), [artifacts]);
@@ -177,14 +207,48 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className={cn("flex flex-col h-full overflow-hidden", isFullscreen && "fixed inset-0 z-50 bg-background")}>
       <div className="p-5 border-b border-border-subtle bg-surface/50 shrink-0">
-        <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-text-muted">
-          {t("artifacts.title")} ({artifacts.length})
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-text-muted">
+            {t("artifacts.title")} ({artifacts.length})
+          </h2>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setZoom(z => Math.max(50, z - 10))}
+              className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors"
+              aria-label="Zoom out"
+            >
+              <ZoomOut size={14} className="text-text-muted" />
+            </button>
+            <span className="text-[10px] font-mono text-text-muted w-10 text-center">{zoom}%</span>
+            <button
+              onClick={() => setZoom(z => Math.min(200, z + 10))}
+              className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors"
+              aria-label="Zoom in"
+            >
+              <ZoomIn size={14} className="text-text-muted" />
+            </button>
+            <div className="w-px h-4 bg-border-subtle mx-1" />
+            <button
+              onClick={() => setWordWrap(w => !w)}
+              className={cn("p-1.5 rounded-lg transition-colors", wordWrap ? "bg-surface-raised" : "hover:bg-surface-raised")}
+              aria-label="Toggle word wrap"
+            >
+              <WrapText size={14} className={cn("text-text-muted", wordWrap && "text-brand")} />
+            </button>
+            <button
+              onClick={() => setIsFullscreen(f => !f)}
+              className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors"
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            >
+              {isFullscreen ? <Minimize2 size={14} className="text-text-muted" /> : <Maximize2 size={14} className="text-text-muted" />}
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div ref={parentRef} className="flex-1 overflow-y-auto" style={{ maxHeight }}>
+      <div ref={parentRef} className="flex-1 overflow-y-auto" style={{ maxHeight: isFullscreen ? "calc(100vh - 60px)" : maxHeight }}>
         <div
           style={{ height: `${virtualizer.getTotalSize()}px`, width: "100%", position: "relative" }}
         >
@@ -237,6 +301,8 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
                 <ArtifactItem
                   artifact={artifact}
                   isExpanded={isExpanded}
+                  zoom={zoom}
+                  wordWrap={wordWrap}
                   onToggle={() => setExpandedId(isExpanded ? null : artifact.id)}
                 />
               </div>
@@ -252,10 +318,14 @@ function ArtifactItem({
   artifact,
   isExpanded,
   onToggle,
+  zoom = 100,
+  wordWrap = true,
 }: {
   artifact: Artifact;
   isExpanded: boolean;
   onToggle: () => void;
+  zoom?: number;
+  wordWrap?: boolean;
 }) {
   const label = artifact.name || artifact.kind;
   const language = detectLanguage(
@@ -309,9 +379,9 @@ function ArtifactItem({
           >
             <div className="px-5 pb-5 pt-0">
               {typeof artifact.content === "string" ? (
-                <HighlightedCode code={artifact.content} language={language} />
+                <HighlightedCode code={artifact.content} language={language} zoom={zoom} wordWrap={wordWrap} />
               ) : (
-                <HighlightedCode code={JSON.stringify(artifact.content, null, 2)} language="json" />
+                <HighlightedCode code={JSON.stringify(artifact.content, null, 2)} language="json" zoom={zoom} wordWrap={wordWrap} />
               )}
             </div>
           </motion.div>
