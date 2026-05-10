@@ -6,6 +6,8 @@ import { ThemeProvider } from "@/providers/ThemeProvider";
 import { I18nProvider } from "@/providers/I18nProvider";
 import { ToastProvider } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { OnboardingTourProvider } from "@/components/onboarding/OnboardingTooltip";
+import { OnboardingGuide } from "@/components/onboarding/OnboardingGuide";
 
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
@@ -37,7 +39,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body><ThemeProvider><I18nProvider><TooltipProvider delay={200}><ToastProvider>{children}</ToastProvider></TooltipProvider></I18nProvider></ThemeProvider></body>
+      <body><OnboardingTourProvider><ThemeProvider><I18nProvider><TooltipProvider delay={200}><ToastProvider>{children}<OnboardingGuide /></ToastProvider></TooltipProvider></I18nProvider></ThemeProvider></OnboardingTourProvider></body>
     </html>
   );
 }

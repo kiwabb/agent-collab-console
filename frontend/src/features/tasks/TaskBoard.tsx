@@ -164,7 +164,7 @@ export function TaskBoard({
                   </button>
                 </div>
 
-                <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20">
+                <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20" data-tour="artifacts">
                   {phaseTasks.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-16 px-4 border-2 border-dashed border-border-subtle rounded-2xl bg-surface/10">
                       <div className="size-10 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-3 opacity-40">

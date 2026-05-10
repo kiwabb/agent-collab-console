@@ -96,7 +96,7 @@ export function IssueBoard({
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">
       {/* Board Header */}
-      <div className="flex items-center justify-between p-6 border-b border-border-subtle bg-surface/50">
+      <div className="flex items-center justify-between p-6 border-b border-border-subtle bg-surface/50" data-tour="workspace">
         <div className="flex items-center gap-4">
           <div className="size-8 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center">
             <Layout size={18} className="text-brand" />
@@ -109,6 +109,7 @@ export function IssueBoard({
         <button
           onClick={() => setShowForm(!showForm)}
           className="flex items-center gap-2 px-5 py-2 rounded-xl bg-brand text-background hover:scale-[1.02] active:scale-[0.98] transition-all font-bold text-sm shadow-lg shadow-brand/20"
+          data-tour="issue-create"
         >
           <Plus size={16} />
           {t("issue.create")}
@@ -163,7 +164,7 @@ export function IssueBoard({
             {boardPhases.map((phase) => {
               const phaseIssues = byPhase[phase.id];
               return (
-                <div key={phase.id} className="flex flex-col w-[350px] shrink-0 group/column">
+                <div key={phase.id} className="flex flex-col w-[350px] shrink-0 group/column" data-tour="phases">
                   <div className="flex items-center justify-between mb-6 px-1">
                     <div className="flex items-center gap-3">
                       <div className={`size-2.5 rounded-full ${phase.color} shadow-sm`} />
