@@ -1,8 +1,9 @@
 "use client";
 
 import { Component, type ReactNode, type ReactElement } from "react";
-import { AlertCircle, RotateCcw } from "lucide-react";
+import { AlertCircle, RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useState } from "react";
 
 interface Props {
   children: ReactNode;
@@ -10,21 +11,23 @@ interface Props {
   onRetry?: () => void;
   title?: string;
   description?: string;
+  error?: Error | null;
 }
 
 interface State {
   hasError: boolean;
   error: Error | null;
+  showStack: boolean;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, showStack: false };
   }
 
   static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+    return { hasError: true, error, showStack: false };
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
@@ -32,12 +35,19 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   handleRetry = () => {
-    this.setState({ hasError: false, error: null });
+    this.setState({ hasError: false, error: null, showStack: false });
     this.props.onRetry?.();
   };
 
+  toggleStack = () => {
+    this.setState((prev) => ({ showStack: !prev.showStack }));
+  };
+
   render() {
-    if (this.state.hasError) {
+    const errorToShow = this.state.error || this.props.error;
+    const hasError = this.state.hasError || !!this.props.error;
+
+    if (hasError && errorToShow) {
       if (this.props.fallback) {
         return this.props.fallback;
       }
@@ -54,11 +64,25 @@ export class ErrorBoundary extends Component<Props, State> {
             {this.props.description && (
               <p className="text-xs text-text-muted">{this.props.description}</p>
             )}
-            {this.state.error && (
-              <p className="text-[10px] text-text-muted/60 font-mono mt-2 p-2 bg-surface-raised rounded-lg">
-                {this.state.error.message}
-              </p>
-            )}
+            <div className="mt-3 space-y-2">
+              <button
+                onClick={this.toggleStack}
+                className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-foreground transition-colors"
+              >
+                {this.state.showStack ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                Error Details
+              </button>
+              {this.state.showStack && (
+                <div className="text-left">
+                  <div className="font-mono text-[10px] text-error/80 bg-surface-raised rounded-lg p-3 overflow-x-auto border border-error/20">
+                    <div className="font-bold mb-1">{errorToShow.name}: {errorToShow.message}</div>
+                    {errorToShow.stack && (
+                      <pre className="whitespace-pre-wrap text-[9px] opacity-70 leading-relaxed max-h-48 overflow-y-auto">{errorToShow.stack}</pre>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
           {this.props.onRetry && (
             <button
@@ -84,6 +108,7 @@ interface AsyncBoundaryProps {
   children: ReactNode;
   isLoading?: boolean;
   error?: string | null;
+  errorDetail?: string | null;
   onRetry?: () => void;
   loadingComponent?: ReactElement;
   skeleton?: ReactElement;
@@ -93,10 +118,13 @@ export function AsyncBoundary({
   children,
   isLoading = false,
   error,
+  errorDetail,
   onRetry,
   loadingComponent,
   skeleton,
 }: AsyncBoundaryProps) {
+  const [showDetail, setShowDetail] = useState(false);
+
   if (isLoading) {
     if (loadingComponent) return loadingComponent;
     if (skeleton) return skeleton;
@@ -114,6 +142,22 @@ export function AsyncBoundary({
           <AlertCircle size={20} className="text-error" />
         </div>
         <p className="text-xs text-text-muted">{error}</p>
+        {errorDetail && (
+          <div className="space-y-2">
+            <button
+              onClick={() => setShowDetail(!showDetail)}
+              className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-foreground transition-colors"
+            >
+              {showDetail ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+              Technical Details
+            </button>
+            {showDetail && (
+              <pre className="text-[9px] font-mono text-text-muted/60 bg-surface-raised p-3 rounded-lg text-left max-w-md overflow-x-auto border border-border-subtle">
+                {errorDetail}
+              </pre>
+            )}
+          </div>
+        )}
         {onRetry && (
           <button
             onClick={onRetry}
