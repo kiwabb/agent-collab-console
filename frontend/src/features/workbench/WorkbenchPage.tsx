@@ -56,6 +56,8 @@ import { PHASE_CONFIG, type Phase } from "@/features/issues/phaseUtils";
 import { pickLatestExecutionProcessForTask } from "@/lib/task-selection";
 import { isTaskRuntimeActive } from "@/lib/task-selection";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { Kbd } from "@/components/ui/kbd";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useI18n } from "@/providers/I18nProvider";
 import { useToast } from "@/components/ui/toast";
@@ -653,30 +655,50 @@ function WorkbenchInner({
           </div>
 
           <nav className="flex items-center gap-2">
-            <button 
-              onClick={() => setView("home")}
-              className={cn(
-                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
-                view === "home" ? "bg-brand/10 text-brand" : "text-text-muted hover:bg-surface-hover"
-              )}
-            >
-              <Home size={14} />
-              {t("nav.home")}
-            </button>
-            
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setView("home")}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                    view === "home" ? "bg-brand/10 text-brand" : "text-text-muted hover:bg-surface-hover"
+                  )}
+                >
+                  <Home size={14} />
+                  {t("nav.home")}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <span className="flex items-center gap-1.5">
+                  {t("nav.home")}
+                  <Kbd>H</Kbd>
+                </span>
+              </TooltipContent>
+            </Tooltip>
+
             {currentWorkspaceId && (
               <>
                 <ChevronRight size={14} className="text-text-muted/40" />
-                <button 
-                  onClick={() => setView("workspace")}
-                  className={cn(
-                    "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all max-w-[150px] truncate",
-                    view === "workspace" ? "bg-brand/10 text-brand" : "text-text-muted hover:bg-surface-hover"
-                  )}
-                >
-                  <Layout size={14} />
-                  {currentWorkspace?.title || t("nav.workspace")}
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => setView("workspace")}
+                      className={cn(
+                        "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all max-w-[150px] truncate",
+                        view === "workspace" ? "bg-brand/10 text-brand" : "text-text-muted hover:bg-surface-hover"
+                      )}
+                    >
+                      <Layout size={14} />
+                      {currentWorkspace?.title || t("nav.workspace")}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <span className="flex items-center gap-1.5">
+                      {t("nav.workspace")}
+                      <Kbd>W</Kbd>
+                    </span>
+                  </TooltipContent>
+                </Tooltip>
               </>
             )}
           </nav>
@@ -684,15 +706,23 @@ function WorkbenchInner({
 
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-4 text-text-muted">
-            <Bell size={18} className="hover:text-foreground cursor-pointer transition-colors" />
-            <button 
-              onClick={() => router.push("/settings")}
-              className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors cursor-pointer outline-none" 
-              aria-label={t("settings.title")} 
-              title={t("settings.title")}
-            >
-              <Settings size={18} />
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => router.push("/settings")}
+                  className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors cursor-pointer outline-none"
+                  aria-label={t("settings.title")}
+                >
+                  <Settings size={18} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <span className="flex items-center gap-1.5">
+                  {t("settings.title")}
+                  <Kbd>S</Kbd>
+                </span>
+              </TooltipContent>
+            </Tooltip>
           </div>
 
           <div className="h-4 w-px bg-border-subtle" />

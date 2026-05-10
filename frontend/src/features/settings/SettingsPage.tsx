@@ -9,6 +9,10 @@ import { RuntimeCatalogEditor } from "@/components/runtime/RuntimeCatalogEditor"
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { Kbd } from "@/components/ui/kbd";
+import { AutoSaveIndicator } from "@/components/ui/auto-save-indicator";
+import type { SaveStatus } from "@/hooks/useAutoSave";
 import {
   ChevronLeft,
   Moon,
@@ -33,6 +37,8 @@ export function SettingsPage() {
   const [runtimeCatalog, setRuntimeCatalog] = useState<RuntimeCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     getRuntimeCatalog()
@@ -70,14 +76,24 @@ export function SettingsPage() {
           <div className="h-4 w-px bg-border-subtle" />
 
           <div className="flex items-center gap-6">
-            <button 
-              onClick={() => router.push("/")}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold text-text-muted hover:bg-surface-hover hover:text-foreground transition-all group"
-            >
-              <ChevronLeft size={16} className="group-hover:-translate-x-0.5 transition-transform" />
-              {t("nav.home")}
-            </button>
-            
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => router.push("/")}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold text-text-muted hover:bg-surface-hover hover:text-foreground transition-all group"
+                >
+                  <ChevronLeft size={16} className="group-hover:-translate-x-0.5 transition-transform" />
+                  {t("nav.home")}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <span className="flex items-center gap-1.5">
+                  {t("nav.home")}
+                  <Kbd>H</Kbd>
+                </span>
+              </TooltipContent>
+            </Tooltip>
+
             <div className="flex items-center gap-3">
               <div className="size-8 rounded-xl bg-brand/10 flex items-center justify-center shadow-inner">
                 <Settings size={18} className="text-brand animate-spin-slow" />
@@ -90,7 +106,7 @@ export function SettingsPage() {
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Placeholder for right-side items if needed */}
+          <AutoSaveIndicator status={saveStatus} error={saveError} />
         </div>
       </header>
 
@@ -268,9 +284,16 @@ export function SettingsPage() {
                       ) : runtimeCatalog && (
                         <RuntimeCatalogEditor
                           catalog={runtimeCatalog}
-                          onSave={async (cat) => {
-                            await updateRuntimeCatalog(cat);
-                            setRuntimeCatalog(cat);
+                          onChange={async (cat) => {
+                            setSaveStatus("saving");
+                            try {
+                              await updateRuntimeCatalog(cat);
+                              setRuntimeCatalog(cat);
+                              setSaveStatus("saved");
+                            } catch (err) {
+                              setSaveError(err instanceof Error ? err.message : "Save failed");
+                              setSaveStatus("error");
+                            }
                           }}
                           className="pb-8"
                         />

@@ -14,7 +14,8 @@ import type { TranslationKey } from "@/lib/i18n";
 
 interface RuntimeCatalogEditorProps {
   catalog: RuntimeCatalog;
-  onSave: (catalog: RuntimeCatalog) => Promise<void>;
+  onChange?: (catalog: RuntimeCatalog) => Promise<void>;
+  onSave?: (catalog: RuntimeCatalog) => Promise<void>;
   className?: string;
 }
 
@@ -32,13 +33,11 @@ function normalizeCatalog(catalog: RuntimeCatalog): RuntimeCatalog {
 
 export function RuntimeCatalogEditor({
   catalog,
-  onSave,
+  onChange,
   className,
 }: RuntimeCatalogEditorProps) {
   const { t } = useI18n();
   const [localCatalog, setLocalCatalog] = useState<RuntimeCatalog>(() => normalizeCatalog(catalog));
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [addingNew, setAddingNew] = useState(false);
   const [newExecutorLabel, setNewExecutorLabel] = useState("");
   const [newExecutorType, setNewExecutorType] = useState<"claude" | "codex">("claude");
@@ -50,32 +49,29 @@ export function RuntimeCatalogEditor({
     setLocalCatalog(normalizeCatalog(catalog));
   }, [catalog]);
 
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      await onSave(localCatalog);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save");
-    } finally {
-      setSaving(false);
+  const handleChange = async (updatedCatalog: RuntimeCatalog) => {
+    setLocalCatalog(updatedCatalog);
+    if (onChange) {
+      await onChange(updatedCatalog);
     }
   };
 
   const updateExecutor = (index: number, updates: Partial<RuntimeExecutorConfig>) => {
-    setLocalCatalog((prev) => ({
-      ...prev,
-      executors: prev.executors.map((executor, executorIndex) =>
+    const updatedCatalog = {
+      ...localCatalog,
+      executors: localCatalog.executors.map((executor, executorIndex) =>
         executorIndex === index ? { ...executor, ...updates } : executor
       ),
-    }));
+    };
+    handleChange(updatedCatalog);
   };
 
   const removeExecutor = (index: number) => {
-    setLocalCatalog((prev) => ({
-      ...prev,
-      executors: prev.executors.filter((_, executorIndex) => executorIndex !== index),
-    }));
+    const updatedCatalog = {
+      ...localCatalog,
+      executors: localCatalog.executors.filter((_, executorIndex) => executorIndex !== index),
+    };
+    handleChange(updatedCatalog);
   };
 
   const toggleExecutorEnabled = (index: number) => {
@@ -98,10 +94,11 @@ export function RuntimeCatalogEditor({
       default_provider_id: null,
     };
 
-    setLocalCatalog((prev) => ({
-      ...prev,
-      executors: [...prev.executors, newExecutor],
-    }));
+    const updatedCatalog = {
+      ...localCatalog,
+      executors: [...localCatalog.executors, newExecutor],
+    };
+    handleChange(updatedCatalog);
 
     // Reset form
     setNewExecutorLabel("");
@@ -130,14 +127,7 @@ export function RuntimeCatalogEditor({
             {t("runtime.configure.desc")}
           </p>
         </div>
-        <Button onClick={handleSave} disabled={saving}>
-          {saving ? t("runtime.configure.saving") : t("runtime.configure.save")}
-        </Button>
       </div>
-
-      {error && (
-        <div className="rounded-lg bg-destructive/10 text-destructive p-3 text-sm">{t("runtime.configure.error")}</div>
-      )}
 
       <div className="space-y-4">
         {localCatalog.executors.map((executor, executorIndex) => (
