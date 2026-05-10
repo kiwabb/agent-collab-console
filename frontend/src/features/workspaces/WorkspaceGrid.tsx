@@ -1,14 +1,29 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { Workspace } from "@/lib/types";
-import { Folder, ChevronRight, Clock, Plus, Trash2 } from "lucide-react";
+import { Folder, ChevronRight, Clock, Plus, Trash2, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+
+const FAVORITES_KEY = "agent-collab.favorites";
+
+function getFavorites(): Set<string> {
+  try {
+    const stored = localStorage.getItem(FAVORITES_KEY);
+    return new Set(stored ? JSON.parse(stored) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveFavorites(favorites: Set<string>) {
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify(Array.from(favorites)));
+}
 
 interface WorkspaceGridProps {
   workspaces: Workspace[];
@@ -31,9 +46,14 @@ export function WorkspaceGrid({
   const [newTitle, setNewTitle] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [optimisticWorkspaces, setOptimisticWorkspaces] = useState<Workspace[]>([]);
+  const [favorites, setFavorites] = useState<Set<string>>(getFavorites);
 
-  const displayedWorkspaces = workspaces;
+  const displayedWorkspaces = [...workspaces].sort((a, b) => {
+    const aFav = favorites.has(a.id) ? 0 : 1;
+    const bFav = favorites.has(b.id) ? 0 : 1;
+    if (aFav !== bFav) return aFav - bFav;
+    return (b.last_active_at || "").localeCompare(a.last_active_at || "");
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,6 +66,20 @@ export function WorkspaceGrid({
 
   const handleDeleteClick = useCallback((ws: Workspace) => {
     setDeleteTarget(ws);
+  }, []);
+
+  const toggleFavorite = useCallback((ws: Workspace, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(ws.id)) {
+        next.delete(ws.id);
+      } else {
+        next.add(ws.id);
+      }
+      saveFavorites(next);
+      return next;
+    });
   }, []);
 
   const handleDeleteConfirm = useCallback(async () => {
@@ -143,7 +177,16 @@ export function WorkspaceGrid({
             onClick={() => onSelect(ws.id)}
             className="group relative p-6 rounded-2xl bg-surface/40 border border-border-subtle hover:bg-surface-hover hover:border-border-strong hover:shadow-2xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden"
           >
-            <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute top-0 right-0 p-4 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={(e) => toggleFavorite(ws, e)}
+                className={cn(
+                  "p-2 rounded-lg hover:bg-surface-hover transition-all",
+                  favorites.has(ws.id) ? "text-warning" : "text-text-muted hover:text-warning"
+                )}
+              >
+                <Star size={14} className={favorites.has(ws.id) ? "fill-warning" : ""} />
+              </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -156,7 +199,11 @@ export function WorkspaceGrid({
             </div>
 
             <div className="size-12 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-6 shadow-sm group-hover:scale-110 group-hover:bg-brand/5 group-hover:border-brand/20 transition-all">
-              <Folder size={24} className="text-text-muted group-hover:text-brand" />
+              {favorites.has(ws.id) ? (
+                <Star size={24} className="text-warning fill-warning" />
+              ) : (
+                <Folder size={24} className="text-text-muted group-hover:text-brand" />
+              )}
             </div>
 
             <h3 className="text-[17px] font-black text-foreground mb-2 truncate group-hover:text-brand transition-colors">

@@ -1,8 +1,8 @@
 "use client";
 
 import type { CodexIssue, RuntimeCatalog } from "@/lib/types";
-import { ListTodo, Plus, ChevronRight, MessageSquare, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ListTodo, Plus, ChevronRight, MessageSquare, Trash2, Search, X, Clock } from "lucide-react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
@@ -19,6 +19,31 @@ import {
 } from "@/components/ui/dialog";
 import { getRuntimeCatalog } from "@/lib/api";
 
+const RECENT_SEARCHES_KEY = "agent-collab.recentSearches";
+const MAX_RECENT_SEARCHES = 5;
+
+function getRecentSearches(): string[] {
+  try {
+    const stored = localStorage.getItem(RECENT_SEARCHES_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentSearch(query: string) {
+  const current = getRecentSearches();
+  const filtered = current.filter((s) => s !== query);
+  const updated = [query, ...filtered].slice(0, MAX_RECENT_SEARCHES);
+  localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
+}
+
+function removeRecentSearch(query: string) {
+  const current = getRecentSearches();
+  const updated = current.filter((s) => s !== query);
+  localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
+}
+
 interface IssueGridProps {
   issues: CodexIssue[];
   onSelect: (id: string) => void;
@@ -33,6 +58,10 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoa
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [recentSearches, setRecentSearches] = useState<string[]>(getRecentSearches);
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const defaultExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
     catalog,
     "codex",
@@ -43,6 +72,16 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoa
   const [deleteTarget, setDeleteTarget] = useState<CodexIssue | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  const filteredIssues = useMemo(() => {
+    if (!searchQuery.trim()) return issues;
+    const query = searchQuery.toLowerCase();
+    return issues.filter(
+      (issue) =>
+        issue.title.toLowerCase().includes(query) ||
+        (issue.description && issue.description.toLowerCase().includes(query))
+    );
+  }, [issues, searchQuery]);
+
   useEffect(() => {
     setExecutionConfig(defaultExecutionConfig);
   }, [defaultExecutionConfig]);
@@ -50,6 +89,10 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoa
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (newTitle.trim()) {
+      if (searchQuery.trim()) {
+        saveRecentSearch(searchQuery.trim());
+        setRecentSearches(getRecentSearches());
+      }
       onCreate(newTitle.trim(), newDesc.trim(), executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
       setNewTitle("");
       setNewDesc("");
@@ -76,13 +119,66 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoa
           <h2 className="text-3xl font-black tracking-tight text-foreground mb-2">{t("issue.issues")}</h2>
           <p className="text-text-muted font-medium">{t("issue.gridSubtitle")}</p>
         </div>
-        <button
-          onClick={() => setIsCreating(true)}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
-        >
-          <Plus size={18} />
-          {t("issue.new")}
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => setShowSearchDropdown(true)}
+              onBlur={() => setTimeout(() => setShowSearchDropdown(false), 200)}
+              placeholder="Search issues..."
+              className="pl-9 pr-8 py-2 w-64 rounded-xl bg-surface-raised border border-border-subtle text-sm outline-none focus:border-brand"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-surface-hover rounded"
+              >
+                <X size={14} className="text-text-muted" />
+              </button>
+            )}
+            {showSearchDropdown && recentSearches.length > 0 && !searchQuery && (
+              <div className="absolute top-full left-0 right-0 mt-2 py-2 rounded-xl bg-surface-raised border border-border-subtle shadow-xl z-50">
+                <div className="px-3 py-1 text-[10px] font-black uppercase tracking-widest text-text-muted mb-1">
+                  Recent Searches
+                </div>
+                {recentSearches.map((search) => (
+                  <button
+                    key={search}
+                    onMouseDown={() => {
+                      setSearchQuery(search);
+                      setShowSearchDropdown(false);
+                    }}
+                    className="w-full px-3 py-2 flex items-center gap-2 hover:bg-surface-hover text-sm text-left"
+                  >
+                    <Clock size={12} className="text-text-muted" />
+                    <span className="truncate">{search}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeRecentSearch(search);
+                        setRecentSearches(getRecentSearches());
+                      }}
+                      className="ml-auto p-1 hover:bg-surface-hover rounded"
+                    >
+                      <X size={10} className="text-text-muted" />
+                    </button>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => setIsCreating(true)}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+          >
+            <Plus size={18} />
+            {t("issue.new")}
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -155,7 +251,7 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoa
           </form>
         )}
 
-        {issues.map((issue) => (
+        {filteredIssues.map((issue) => (
           <div
             key={issue.id}
             onClick={() => onSelect(issue.id)}
@@ -211,7 +307,22 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoa
           </div>
         ))}
 
-        {issues.length === 0 && !isCreating && (
+        {filteredIssues.length === 0 && !isCreating && searchQuery && (
+          <div className="col-span-full flex flex-col items-center justify-center py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20">
+            <div className="size-16 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-6 shadow-sm">
+              <Search size={32} className="text-text-muted/40" />
+            </div>
+            <p className="text-sm font-bold text-text-muted mb-6">No results for "{searchQuery}"</p>
+            <button
+              onClick={() => setSearchQuery("")}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:bg-brand/90 transition-all"
+            >
+              Clear Search
+            </button>
+          </div>
+        )}
+
+        {filteredIssues.length === 0 && !isCreating && !searchQuery && (
           <div className="col-span-full flex flex-col items-center justify-center py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20">
             <div className="size-16 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-6 shadow-sm">
               <ListTodo size={32} className="text-text-muted/40" />

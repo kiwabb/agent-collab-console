@@ -8,6 +8,7 @@ import { PHASES, type Phase, groupIssuesByPhase } from "./phaseUtils";
 import { Plus, Layout, ChevronDown, ChevronRight, ChevronsUpDown } from "lucide-react";
 import { useI18n } from "@/providers/I18nProvider";
 import type { TranslationKey } from "@/lib/i18n";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DndContext,
   closestCenter,
@@ -31,6 +32,7 @@ interface IssueBoardProps {
   onCreateIssue: (title: string, description: string) => void;
   onReorderIssues?: (activeId: string, overId: string) => void;
   onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
+  isLoading?: boolean;
 }
 
 function formatRelativeTime(dateStr: string | null): string {
@@ -57,6 +59,7 @@ export function IssueBoard({
   onCreateIssue,
   onReorderIssues,
   onUpdateIssue,
+  isLoading = false,
 }: IssueBoardProps) {
   const { t } = useI18n();
   const [newTitle, setNewTitle] = useState("");
@@ -273,7 +276,20 @@ export function IssueBoard({
                     strategy={verticalListSortingStrategy}
                   >
                     <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20">
-                      {phaseIssues.length === 0 ? (
+                      {isLoading ? (
+                        <>
+                          {[1, 2, 3].map((i) => (
+                            <div key={i} className="p-5 rounded-2xl bg-surface/40 border border-border-subtle">
+                              <Skeleton variant="text" className="w-3/4 mb-2" />
+                              <Skeleton variant="text" className="w-1/2 mb-4" />
+                              <div className="flex items-center gap-3">
+                                <Skeleton variant="default" className="w-16 h-5" />
+                                <Skeleton variant="default" className="w-8 h-5" />
+                              </div>
+                            </div>
+                          ))}
+                        </>
+                      ) : phaseIssues.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-20 opacity-[0.03] border-2 border-dashed border-foreground rounded-3xl">
                           <p className="text-[10px] uppercase tracking-widest font-black">{t("issue.ready")}</p>
                         </div>

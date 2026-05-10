@@ -5,6 +5,8 @@ import { PHASE_CONFIG, type Phase } from "./phaseUtils";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { InlineEdit } from "@/components/ui/inline-edit";
+import { Link, Copy, Check } from "lucide-react";
+import { useState } from "react";
 
 function formatRelativeTime(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -44,6 +46,7 @@ export function IssueCard({
   onUpdateIssue,
 }: IssueCardProps) {
   const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
   const phase = issue.current_phase as Phase;
   const config = PHASE_CONFIG[phase] ?? PHASE_CONFIG.requirements;
 
@@ -51,6 +54,14 @@ export function IssueCard({
     if (onUpdateIssue) {
       onUpdateIssue(issue.id, { title: newTitle });
     }
+  };
+
+  const handleCopyLink = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const url = `${window.location.origin}?workspace=${issue.session_id}&issue=${issue.id}`;
+    await navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -68,15 +79,24 @@ export function IssueCard({
       )}
       
       <div className="flex flex-col gap-3 relative z-10">
-        <InlineEdit
-          value={issue.title}
-          onSave={handleTitleSave}
-          textClassName={cn(
-            "text-[13.5px] font-bold tracking-tight line-clamp-2 leading-snug transition-colors",
-            isSelected ? "text-brand" : "text-foreground group-hover:text-foreground"
-          )}
-          disabled={!onUpdateIssue}
-        />
+        <div className="flex items-start justify-between gap-2">
+          <InlineEdit
+            value={issue.title}
+            onSave={handleTitleSave}
+            textClassName={cn(
+              "text-[13.5px] font-bold tracking-tight line-clamp-2 leading-snug transition-colors",
+              isSelected ? "text-brand" : "text-foreground group-hover:text-foreground"
+            )}
+            disabled={!onUpdateIssue}
+          />
+          <button
+            onClick={handleCopyLink}
+            className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover:opacity-100 shrink-0"
+            title="Copy link"
+          >
+            {copied ? <Check size={12} className="text-success" /> : <Link size={12} />}
+          </button>
+        </div>
         
         {issue.description && (
           <p className="text-[12px] leading-relaxed text-text-secondary line-clamp-2 opacity-70">

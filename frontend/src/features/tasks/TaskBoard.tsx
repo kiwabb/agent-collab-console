@@ -20,7 +20,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { CodexTask, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
-import { Plus, Layout, Activity, Clock, Terminal, Trash2, GripVertical } from "lucide-react";
+import { Plus, Layout, Activity, Clock, Terminal, Trash2, GripVertical, Link, Check } from "lucide-react";
 import { type Phase, PHASE_CONFIG } from "@/features/issues/phaseUtils";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
@@ -36,6 +36,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { getRuntimeCatalog } from "@/lib/api";
+import { useState } from "react";
 
 function formatRelativeTime(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -82,8 +83,17 @@ interface TaskCardProps {
 }
 
 function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProps) {
+  const [copied, setCopied] = useState(false);
   const rawStatus = task.status || process?.status || "pending";
   const status = rawStatus.toLowerCase();
+
+  const handleCopyLink = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const url = `${window.location.origin}?workspace=${task.session_id}&issue=${task.issue_id}&task=${task.id}`;
+    await navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div
@@ -110,6 +120,13 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleCopyLink}
+            className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover/card:opacity-100"
+            title="Copy link"
+          >
+            {copied ? <Check size={12} className="text-success" /> : <Link size={12} />}
+          </button>
           <div className="p-1 rounded bg-surface-raised opacity-0 group-hover/card:opacity-100 transition-opacity">
             <GripVertical size={12} className="text-text-muted cursor-grab" />
           </div>
