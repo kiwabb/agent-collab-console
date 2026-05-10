@@ -227,5 +227,6 @@ export function WorkspaceSidebar({
       isLoading={isDeleting}
       variant="destructive"
     />
+    </>
   );
 }
