@@ -4,7 +4,7 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
   --font-mono: "SF Mono", "SFMono-Regular", "Sarasa Mono SC", "JetBrains Mono", monospace;
 
-  /* Desktop-CC-GUI Theme Tokens */
+  /* Desktop-CC-GUI Theme Tokens - Dark Mode (Default) */
   --color-background: #0d0f14;
   --color-foreground: #e6e7ea;
   
@@ -27,6 +27,10 @@
   --color-success: #78ebbe;
   --color-warning: #ffaf55;
   --color-error: #ff6e6e;
+  
+  --color-success-bg: rgba(120, 235, 190, 0.1);
+  --color-warning-bg: rgba(255, 175, 85, 0.1);
+  --color-error-bg: rgba(255, 110, 110, 0.1);
   
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
@@ -178,4 +182,20 @@
   --color-success: #18794e;
   --color-warning: #a15c00;
   --color-error: #c43c3c;
+  --color-success-bg: rgba(24, 121, 78, 0.08);
+  --color-warning-bg: rgba(161, 92, 0, 0.08);
+  --color-error-bg: rgba(196, 60, 60, 0.08);
+}
+
+/* Dark mode uses the default :root variables */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+  }
 }

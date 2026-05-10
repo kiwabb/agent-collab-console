@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { Workspace } from "@/lib/types";
-import { RefreshCw, Plus, Trash2 } from "lucide-react";
+import { RefreshCw, Plus, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 
 interface WorkspaceSidebarProps {
   workspaces: Workspace[];
@@ -25,6 +25,7 @@ export function WorkspaceSidebar({
 }: WorkspaceSidebarProps) {
   const [title, setTitle] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -43,27 +44,41 @@ export function WorkspaceSidebar({
   return (
     <aside className="flex flex-col h-full w-64 shrink-0 cc-sidebar">
       <div className="flex items-center justify-between p-5 border-b border-border-subtle">
-        <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-text-muted">Workspaces</h2>
-        <div className="flex gap-2">
-          <button
-            onClick={onRefresh}
-            className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors"
-            aria-label="Refresh"
-          >
-            <RefreshCw size={14} />
-          </button>
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors"
-            aria-label="New Workspace"
-          >
-            <Plus size={14} />
-          </button>
-        </div>
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+        >
+          {isCollapsed ? (
+            <ChevronRight size={14} className="text-text-muted" />
+          ) : (
+            <ChevronDown size={14} className="text-text-muted" />
+          )}
+          <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-text-muted">Workspaces</h2>
+        </button>
+        {!isCollapsed && (
+          <div className="flex gap-2">
+            <button
+              onClick={onRefresh}
+              className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors"
+              aria-label="Refresh"
+            >
+              <RefreshCw size={14} />
+            </button>
+            <button
+              onClick={() => setShowForm(!showForm)}
+              className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors"
+              aria-label="New Workspace"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+        )}
       </div>
 
-      {showForm && (
-        <form onSubmit={handleSubmit} className="p-4 border-b border-border-subtle bg-surface/30">
+      {!isCollapsed && (
+        <>
+          {showForm && (
+            <form onSubmit={handleSubmit} className="p-4 border-b border-border-subtle bg-surface/30">
           <input
             type="text"
             value={title}
