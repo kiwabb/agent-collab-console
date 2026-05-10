@@ -5,6 +5,8 @@ import { Pencil, Check, X, Loader2, Eye, Edit3, Bold, Italic, Code, Link } from 
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github-dark.css";
 
 interface MarkdownEditorProps {
   value: string;
@@ -178,7 +180,7 @@ export function MarkdownEditor({
         )}
         {showPreview ? (
           <div className="p-4 rounded-lg bg-surface-input border border-brand/50 min-h-[100px] prose prose-sm dark:prose-invert max-w-none [&_pre]:bg-background [&_code]:bg-background [&_code]:px-1 [&_code]:rounded">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{editValue}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{editValue}</ReactMarkdown>
           </div>
         ) : (
           <textarea
@@ -232,7 +234,7 @@ export function MarkdownEditor({
           "text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none [&_pre]:bg-background [&_code]:bg-background/80 [&_code]:px-1 [&_code]:rounded",
           textClassName
         )}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{value}</ReactMarkdown>
         </div>
       ) : (
         <span className={cn("italic text-text-muted", textClassName)}>{placeholder}</span>
