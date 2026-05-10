@@ -72,12 +72,16 @@ import {
   Bell,
   Terminal,
   AlertCircle,
+  Search,
+  Keyboard,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { createIssueAndInitialTask } from "@/features/workbench/workbenchActions";
 import { KeyboardShortcutsModal } from "@/components/ui/keyboard-shortcuts-modal";
+import { CommandPalette } from "@/components/ui/command-palette";
+import { MacroRecorder, useMacros } from "@/components/ui/macro-recorder";
 import { PresenceIndicator } from "@/components/ui/presence-indicator";
 
 type NavigationState = "home" | "workspace" | "issue";
@@ -103,6 +107,8 @@ function WorkbenchInner({
   const [pendingApprovals, setPendingApprovals] = useState<Approval[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isTransitioningToArchitecture, setIsTransitioningToArchitecture] = useState(false);
+  const [macroRecorderOpen, setMacroRecorderOpen] = useState(false);
+  const { runMacro } = useMacros();
   const [isTransitioningToDevelopment, setIsTransitioningToDevelopment] = useState(false);
   const { addToast } = useToast();
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
@@ -120,7 +126,20 @@ function WorkbenchInner({
   const router = useRouter();
 
   // Keyboard shortcuts
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   useKeyboardShortcuts([
+    {
+      key: "k",
+      ctrlKey: true,
+      action: () => setCommandPaletteOpen(true),
+      description: "Open command palette",
+    },
+    {
+      key: "m",
+      ctrlKey: true,
+      action: () => setMacroRecorderOpen(true),
+      description: "Open macro recorder",
+    },
     {
       key: "Escape",
       action: () => {
@@ -711,6 +730,42 @@ function WorkbenchInner({
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
+                  onClick={() => setCommandPaletteOpen(true)}
+                  className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors cursor-pointer outline-none"
+                  aria-label="Command Palette"
+                >
+                  <Search size={18} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <span className="flex items-center gap-1.5">
+                  Command Palette
+                  <Kbd>Ctrl</Kbd><Kbd>K</Kbd>
+                </span>
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setMacroRecorderOpen(true)}
+                  className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors cursor-pointer outline-none"
+                  aria-label="Keyboard Macros"
+                >
+                  <Keyboard size={18} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <span className="flex items-center gap-1.5">
+                  Macros
+                  <Kbd>Ctrl</Kbd><Kbd>M</Kbd>
+                </span>
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
                   onClick={() => router.push("/settings")}
                   className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors cursor-pointer outline-none"
                   aria-label={t("settings.title")}
@@ -1013,6 +1068,16 @@ function WorkbenchInner({
           onClose={() => setPendingApprovals((prev) => prev.slice(1))}
         />
       )}
+
+      <CommandPalette
+        onCreateIssue={() => {}}
+        onCreateWorkspace={() => {}}
+      />
+
+      <MacroRecorder
+        open={macroRecorderOpen}
+        onOpenChange={setMacroRecorderOpen}
+      />
 
       <KeyboardShortcutsModal />
 
