@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from typing import Literal
 
 from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, workspace_manager, event_bus, MockCodexProcessManager, get_help_orchestrator
+from app.domain.models import CodexIssue
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
 from app.application.role_workflow_service import RoleWorkflowService
@@ -48,31 +49,7 @@ class RateLimitError(APIError):
         self.retry_after = retry_after
 
 
-# --- Exception Handlers ---
-
-@router.exception_handler(APIError)
-async def api_error_handler(request: Request, exc: APIError):
-    request_id = request.headers.get("X-Request-ID", "unknown")
-    logger.warning("API error [request_id=%s]: %s %s", request_id, exc.status_code, exc.message)
-    headers = {}
-    if isinstance(exc, RateLimitError):
-        headers["Retry-After"] = str(exc.retry_after)
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"error": exc.message, "detail": exc.detail},
-        headers=headers,
-    )
-
-
-@router.exception_handler(Exception)
-async def generic_error_handler(request: Request, exc: Exception):
-    request_id = request.headers.get("X-Request-ID", "unknown")
-    logger.error("Unhandled error [request_id=%s]: %s", request_id, exc, exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"error": "Internal server error", "detail": str(exc) if isinstance(exc, (TypeError, ValueError)) else "An unexpected error occurred"},
-    )
-
+# --- Exception Handlers (added in main.py, not on router) ---
 
 router = APIRouter(prefix="/api")
 
