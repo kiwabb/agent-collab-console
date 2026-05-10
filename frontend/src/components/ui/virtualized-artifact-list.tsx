@@ -1,9 +1,9 @@
 "use client";
 
-import { useRef, useState, useMemo } from "react";
+import { useRef, useState, useMemo, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Artifact } from "@/lib/types";
-import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, Copy, Check, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, WrapText } from "lucide-react";
+import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, Copy, Check, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, WrapText, Search, Hash, GitCompare, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { motion, AnimatePresence } from "framer-motion";
@@ -66,10 +66,18 @@ interface HighlightedCodeProps {
   language: string;
   zoom?: number;
   wordWrap?: boolean;
+  showLineNumbers?: boolean;
+  previousContent?: string;
 }
 
-export function HighlightedCode({ code, language, zoom = 100, wordWrap = true }: HighlightedCodeProps) {
+export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, showLineNumbers = false, previousContent }: HighlightedCodeProps) {
   const [copied, setCopied] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showDiff, setShowDiff] = useState(false);
+  const [jumpToLine, setJumpToLine] = useState("");
+  const [lineNumbersOn, setLineNumbersOn] = useState(showLineNumbers);
+
   const highlighted = useMemo(() => {
     try {
       if (hljs.getLanguage(language)) {
@@ -80,6 +88,42 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true }:
       return code;
     }
   }, [code, language]);
+
+  const lines = code.split("\n");
+
+  const searchMatches = useMemo(() => {
+    if (!searchQuery) return [];
+    const matches: number[] = [];
+    lines.forEach((line, idx) => {
+      if (line.toLowerCase().includes(searchQuery.toLowerCase())) matches.push(idx);
+    });
+    return matches;
+  }, [searchQuery, lines]);
+
+  useEffect(() => {
+    if (jumpToLine) {
+      const lineNum = parseInt(jumpToLine);
+      if (lineNum > 0 && lineNum <= lines.length) {
+        const el = document.querySelector(`[data-line="${lineNum}"]`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+  }, [jumpToLine, lines.length]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        e.preventDefault();
+        setShowSearch(true);
+      }
+      if (e.key === "Escape") {
+        setShowSearch(false);
+        setSearchQuery("");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code).then(() => {
@@ -98,32 +142,95 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true }:
     URL.revokeObjectURL(url);
   };
 
+  const renderDiff = () => {
+    if (!previousContent || !showDiff) return null;
+    const prevLines = previousContent.split("\n");
+    return (
+      <div className="flex gap-2 font-mono text-[12px] p-5">
+        <div className="flex-1">
+          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">Previous</div>
+          {prevLines.map((line, i) => (
+            <div key={i} className={cn("py-0.5 pr-4", line && "bg-red-500/10 text-red-400/70")}>
+              <span className="text-text-muted/30 mr-3 select-none">{i + 1}</span>
+              {line || " "}
+            </div>
+          ))}
+        </div>
+        <div className="flex-1">
+          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">Current</div>
+          {lines.map((line, i) => (
+            <div key={i} className={cn("py-0.5 pr-4", line && "bg-green-500/10 text-green-400/70")}>
+              <span className="text-text-muted/30 mr-3 select-none">{i + 1}</span>
+              {line || " "}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="relative group/code">
       <div className="absolute top-3 right-3 flex items-center gap-1 z-10 opacity-0 group-hover/code:opacity-100 transition-opacity">
-        <button
-          onClick={handleCopy}
-          className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all"
-          aria-label="Copy code"
-        >
+        <button onClick={() => setLineNumbersOn(l => !l)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Toggle line numbers">
+          <Hash size={14} className={cn("text-text-muted", lineNumbersOn && "text-brand")} />
+        </button>
+        <button onClick={() => setShowSearch(s => !s)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Search">
+          <Search size={14} className={cn("text-text-muted", showSearch && "text-brand")} />
+        </button>
+        {previousContent && (
+          <button onClick={() => setShowDiff(d => !d)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Toggle diff view">
+            <GitCompare size={14} className={cn("text-text-muted", showDiff && "text-brand")} />
+          </button>
+        )}
+        <button onClick={handleCopy} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Copy code">
           {copied ? <Check size={14} className="text-success" /> : <Copy size={14} className="text-text-muted" />}
         </button>
-        <button
-          onClick={handleDownload}
-          className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all"
-          aria-label="Download artifact"
-        >
+        <button onClick={handleDownload} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Download artifact">
           <Download size={14} className="text-text-muted" />
         </button>
       </div>
-      <code
-        className={cn(
-          "text-[12px] leading-relaxed [&_.hljs-keyword]:text-pink-400 [&_.hljs-string]:text-green-400 [&_.hljs-number]:text-orange-400 [&_.hljs-comment]:text-gray-500 [&_.hljs-attr]:text-cyan-400 [&_.hljs-title]:text-blue-400 [&_.hljs-built_in]:text-purple-400 [&_.hljs-literal]:text-orange-400 [&_.hljs-type]:text-cyan-300 [&_.hljs-params]:text-yellow-300 [&_.hljs-meta]:text-gray-400",
-          "whitespace-pre-wrap font-mono bg-background/60 p-5 rounded-xl border border-border-subtle max-h-80 overflow-y-auto no-scrollbar selection:bg-brand/30 block"
-        )}
-        style={{ fontSize: `${zoom}%`, whiteSpace: wordWrap ? "pre-wrap" : "pre" }}
-        dangerouslySetInnerHTML={{ __html: highlighted }}
-      />
+      {showSearch && (
+        <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-surface-raised border border-border-subtle rounded-lg p-2">
+          <Search size={12} className="text-text-muted" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search..."
+            className="bg-transparent text-[12px] w-40 outline-none text-text-primary placeholder:text-text-muted/50"
+            autoFocus
+          />
+          {searchQuery && <span className="text-[10px] text-text-muted">{searchMatches.length} matches</span>}
+          <button onClick={() => { setShowSearch(false); setSearchQuery(""); }} className="p-0.5 hover:bg-surface-hover rounded"><X size={12} className="text-text-muted" /></button>
+        </div>
+      )}
+      {lineNumbersOn && (
+        <div className="absolute top-3 left-3 z-10 flex items-center gap-1 bg-surface-raised border border-border-subtle rounded-lg p-1.5">
+          <span className="text-[10px] text-text-muted/50 mr-1">Line:</span>
+          <input
+            type="text"
+            value={jumpToLine}
+            onChange={(e) => setJumpToLine(e.target.value.replace(/\D/g, ""))}
+            placeholder="#"
+            className="bg-transparent text-[11px] w-10 outline-none text-text-primary font-mono"
+          />
+          {jumpToLine && (
+            <button onClick={() => setJumpToLine("")} className="p-0.5 hover:bg-surface-hover rounded"><X size={10} className="text-text-muted" /></button>
+          )}
+        </div>
+      )}
+      {showDiff ? renderDiff() : (
+        <code
+          className={cn(
+            "text-[12px] leading-relaxed [&_.hljs-keyword]:text-pink-400 [&_.hljs-string]:text-green-400 [&_.hljs-number]:text-orange-400 [&_.hljs-comment]:text-gray-500 [&_.hljs-attr]:text-cyan-400 [&_.hljs-title]:text-blue-400 [&_.hljs-built_in]:text-purple-400 [&_.hljs-literal]:text-orange-400 [&_.hljs-type]:text-cyan-300 [&_.hljs-params]:text-yellow-300 [&_.hljs-meta]:text-gray-400",
+            "whitespace-pre-wrap font-mono bg-background/60 p-5 rounded-xl border border-border-subtle max-h-80 overflow-y-auto no-scrollbar selection:bg-brand/30 block",
+            lineNumbersOn && "pl-12"
+          )}
+          style={{ fontSize: `${zoom}%`, whiteSpace: wordWrap ? "pre-wrap" : "pre" }}
+          dangerouslySetInnerHTML={{ __html: highlighted }}
+        />
+      )}
     </div>
   );
 }
