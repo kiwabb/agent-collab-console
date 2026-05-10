@@ -103,6 +103,8 @@ export function WorkspaceSidebar({
             </button>
           </div>
         </form>
+          )}
+        </>
       )}
 
       <nav className="flex-1 overflow-y-auto p-3 no-scrollbar space-y-1">
