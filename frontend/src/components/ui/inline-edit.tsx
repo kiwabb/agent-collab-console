@@ -1,17 +1,18 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { Pencil, Check, X } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Pencil, Check, X, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface InlineEditProps {
   value: string;
-  onSave: (value: string) => void;
+  onSave: (value: string) => Promise<void> | void;
   placeholder?: string;
   className?: string;
   textClassName?: string;
   multiline?: boolean;
   disabled?: boolean;
+  autoSave?: boolean;
 }
 
 export function InlineEdit({
@@ -22,10 +23,14 @@ export function InlineEdit({
   textClassName,
   multiline = false,
   disabled = false,
+  autoSave = true,
 }: InlineEditProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(value);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showSaved, setShowSaved] = useState(false);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setEditValue(value);
@@ -38,17 +43,49 @@ export function InlineEdit({
     }
   }, [isEditing]);
 
-  const handleSave = () => {
+  const handleSave = useCallback(async () => {
     const trimmed = editValue.trim();
-    if (trimmed !== value) {
-      onSave(trimmed);
+    if (trimmed === value) {
+      setIsEditing(false);
+      return;
     }
-    setIsEditing(false);
-  };
+    setIsSaving(true);
+    try {
+      await onSave(trimmed);
+      setIsEditing(false);
+      if (autoSave) {
+        setShowSaved(true);
+        setTimeout(() => setShowSaved(false), 1500);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }, [editValue, value, onSave, autoSave]);
+
+  const scheduleAutoSave = useCallback(() => {
+    if (!autoSave || !isEditing) return;
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      handleSave();
+    }, 1000);
+  }, [autoSave, isEditing, handleSave]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleCancel = () => {
     setEditValue(value);
     setIsEditing(false);
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -57,6 +94,8 @@ export function InlineEdit({
       handleSave();
     } else if (e.key === "Escape") {
       handleCancel();
+    } else if (autoSave) {
+      scheduleAutoSave();
     }
   };
 
@@ -84,15 +123,17 @@ export function InlineEdit({
         )}
         <button
           onClick={handleSave}
-          className="p-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors"
-          title="Save"
+          disabled={isSaving}
+          className="p-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50"
+          title="Save (Enter)"
         >
-          <Check size={14} />
+          {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
         </button>
         <button
           onClick={handleCancel}
-          className="p-1.5 rounded-lg bg-error/10 text-error hover:bg-error/20 transition-colors"
-          title="Cancel"
+          disabled={isSaving}
+          className="p-1.5 rounded-lg bg-error/10 text-error hover:bg-error/20 transition-colors disabled:opacity-50"
+          title="Cancel (Esc)"
         >
           <X size={14} />
         </button>
@@ -119,7 +160,10 @@ export function InlineEdit({
         {value || placeholder}
       </span>
       {!disabled && (
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+          {showSaved && (
+            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">Saved</span>
+          )}
           <Pencil size={12} className="text-text-muted" />
         </div>
       )}

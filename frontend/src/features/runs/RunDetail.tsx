@@ -4,6 +4,7 @@ import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCa
 import { RotateCcw, Trash2, Send, Terminal, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { normalizeLogs } from "@/lib/codexLogNormalizer";
@@ -243,21 +244,25 @@ export function RunDetail({
             {t("run.rerun")}
           </button>
           {onTerminate && (
-            <button
-              onClick={onTerminate}
-              className="p-2.5 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all active:scale-[0.9] border border-transparent hover:border-error/20"
-              title="Stop Task"
-            >
-              <Activity size={14} className="text-error animate-pulse" />
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                onClick={onTerminate}
+                className="p-2.5 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all active:scale-[0.9] border border-transparent hover:border-error/20"
+              >
+                <Activity size={14} className="text-error animate-pulse" />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Stop Task</TooltipContent>
+            </Tooltip>
           )}
-          <button
-            onClick={onDelete}
-            className="p-2.5 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all active:scale-[0.9] border border-transparent hover:border-error/20"
-            title="Delete Session"
-          >
-            <Trash2 size={14} />
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              onClick={onDelete}
+              className="p-2.5 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all active:scale-[0.9] border border-transparent hover:border-error/20"
+            >
+              <Trash2 size={14} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Delete Session</TooltipContent>
+          </Tooltip>
         </div>
         {errorEntry && (
           <div className="mt-4 flex gap-3 rounded-xl border border-error/25 bg-error/10 px-4 py-3 text-error">

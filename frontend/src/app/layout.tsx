@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { ThemeProvider } from "@/providers/ThemeProvider";
 import { I18nProvider } from "@/providers/I18nProvider";
 import { ToastProvider } from "@/components/ui/toast";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
@@ -36,7 +37,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body><ThemeProvider><I18nProvider><ToastProvider>{children}</ToastProvider></I18nProvider></ThemeProvider></body>
+      <body><ThemeProvider><I18nProvider><TooltipProvider delay={200}><ToastProvider>{children}</ToastProvider></TooltipProvider></I18nProvider></ThemeProvider></body>
     </html>
   );
 }
