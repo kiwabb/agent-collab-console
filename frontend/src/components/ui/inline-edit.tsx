@@ -126,6 +126,7 @@ export function InlineEdit({
           disabled={isSaving}
           className="p-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50"
           title="Save (Enter)"
+          aria-label="Save"
         >
           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
         </button>
@@ -134,6 +135,7 @@ export function InlineEdit({
           disabled={isSaving}
           className="p-1.5 rounded-lg bg-error/10 text-error hover:bg-error/20 transition-colors disabled:opacity-50"
           title="Cancel (Esc)"
+          aria-label="Cancel"
         >
           <X size={14} />
         </button>

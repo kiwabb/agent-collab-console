@@ -237,11 +237,13 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
   }, [workspaceId, retryNonce, scheduleReconnect]);
 
   const executionProcessesById = data.execution_processes || {};
-  const executionProcesses = Object.values(executionProcessesById).sort((a, b) => {
-    const aTime = Date.parse((a as ExecutionProcess).created_at || (a as ExecutionProcess).started_at || (a as ExecutionProcess).updated_at || "") || 0;
-    const bTime = Date.parse((b as ExecutionProcess).created_at || (b as ExecutionProcess).started_at || (b as ExecutionProcess).updated_at || "") || 0;
-    return bTime - aTime;
-  });
+  const executionProcesses = useMemo(() => {
+    return Object.values(executionProcessesById).sort((a, b) => {
+      const aTime = Date.parse((a as ExecutionProcess).created_at || (a as ExecutionProcess).started_at || (a as ExecutionProcess).updated_at || "") || 0;
+      const bTime = Date.parse((b as ExecutionProcess).created_at || (b as ExecutionProcess).started_at || (b as ExecutionProcess).updated_at || "") || 0;
+      return bTime - aTime;
+    });
+  }, [executionProcessesById]);
   const isAttemptRunning = executionProcesses.some((process) => {
     const status = String((process as ExecutionProcess).status || "").toLowerCase();
     return status === "running" || status === "responding";

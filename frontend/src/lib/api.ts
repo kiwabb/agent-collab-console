@@ -50,31 +50,19 @@ export async function checkBackendHealth(): Promise<HealthResponse> {
 }
 
 export async function getCodexStatus(): Promise<unknown> {
-  try {
-    const response = await fetch(`${API_BASE}/codex/status`);
-    if (!response.ok) {
-      console.error(`getCodexStatus failed: HTTP ${response.status}`);
-      return null;
-    }
-    return response.json();
-  } catch (err) {
-    console.error(`getCodexStatus failed:`, err);
-    return null;
+  const response = await fetch(`${API_BASE}/codex/status`);
+  if (!response.ok) {
+    throw new Error(`Failed to get Codex status: HTTP ${response.status}`);
   }
+  return response.json();
 }
 
 export async function getWorkspaces(): Promise<Workspace[]> {
-  try {
-    const response = await fetch(`${API_BASE}/codex/workspaces`);
-    if (!response.ok) {
-      console.error(`getWorkspaces failed: HTTP ${response.status}`);
-      return [];
-    }
-    return response.json();
-  } catch (err) {
-    console.error(`getWorkspaces failed:`, err);
-    return [];
+  const response = await fetch(`${API_BASE}/codex/workspaces`);
+  if (!response.ok) {
+    throw new Error(`Failed to load workspaces: HTTP ${response.status}`);
   }
+  return response.json();
 }
 
 export async function createWorkspace(title: string, cwd = ""): Promise<Workspace> {
