@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Pencil, Check, X, Loader2, Eye, Edit3, Bold, Italic, Code, Link } from "lucide-react";
+import { Pencil, Check, X, Loader2, Eye, Edit3, Bold, Italic, Code, Link, Smile } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
+import EmojiPicker from "emoji-picker-react";
 
 interface MarkdownEditorProps {
   value: string;
@@ -34,6 +35,8 @@ export function MarkdownEditor({
   const [isSaving, setIsSaving] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -46,6 +49,18 @@ export function MarkdownEditor({
       inputRef.current.focus();
     }
   }, [isEditing, showPreview]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
+        setShowEmojiPicker(false);
+      }
+    };
+    if (showEmojiPicker) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showEmojiPicker]);
 
   const handleSave = useCallback(async () => {
     const trimmed = editValue.trim();
@@ -130,6 +145,21 @@ export function MarkdownEditor({
     }, 0);
   };
 
+  const insertAtCursor = (text: string) => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const newText = editValue.substring(0, start) + text + editValue.substring(end);
+    setEditValue(newText);
+    setTimeout(() => {
+      textarea.focus();
+      const newPos = start + text.length;
+      textarea.setSelectionRange(newPos, newPos);
+    }, 0);
+  };
+  };
+
   if (isEditing) {
     return (
       <div className={cn("flex flex-col gap-2", className)}>
@@ -176,6 +206,27 @@ export function MarkdownEditor({
             >
               {showPreview ? <Edit3 size={14} className="text-brand" /> : <Eye size={14} className="text-text-muted" />}
             </button>
+            <div ref={emojiPickerRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setShowEmojiPicker(p => !p)}
+                className={cn("p-1.5 rounded hover:bg-surface-hover transition-colors", showEmojiPicker && "bg-surface-hover")}
+                title="Emoji"
+              >
+                <Smile size={14} className={cn("text-text-muted", showEmojiPicker && "text-brand")} />
+              </button>
+              {showEmojiPicker && (
+                <div className="absolute top-full right-0 mt-1 z-50">
+                  <EmojiPicker
+                    onEmojiClick={(emojiData) => {
+                      insertAtCursor(emojiData.emoji);
+                      setShowEmojiPicker(false);
+                    }}
+                    skinToneDisabled
+                  />
+                </div>
+              )}
+            </div>
           </div>
         )}
         {showPreview ? (
