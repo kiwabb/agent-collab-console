@@ -311,16 +311,15 @@ function ExecutorCard({
           />
         </div>
 
-        <details>
-          <summary
-            className="text-xs text-muted-foreground cursor-pointer hover:text-foreground"
-            onClick={(e) => {
-              e.preventDefault();
-              setShowAdvanced(!showAdvanced);
-            }}
+        <div className="border-t border-border-subtle/50 pt-4">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            {showAdvanced ? "▼" : "▶"} {t("runtime.executor.advanced")}
-          </summary>
+            <span className="text-brand">{showAdvanced ? "▼" : "▶"}</span>
+            {t("runtime.executor.advanced")}
+          </button>
           {showAdvanced && (
             <div className="mt-3 space-y-3 pl-2">
               <div className="min-w-0 space-y-1">
@@ -349,7 +348,7 @@ function ExecutorCard({
               </div>
             </div>
           )}
-        </details>
+        </div>
       </CardContent>
     </Card>
   );
