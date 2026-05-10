@@ -123,6 +123,7 @@ class CodexIssue(BaseModel):
     current_phase: str = "requirements"
     status: str = "open"
     is_pinned: bool = False
+    milestone: str | None = None  # Milestone grouping (e.g., "v1.0", "sprint-1")
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -179,6 +180,8 @@ class CodexTaskMessage(BaseModel):
     execution_process_id: str | None = None
     role: str  # "user" or "assistant"
     content: str
+    mentions: list[str] = Field(default_factory=list)  # @mentioned usernames
+    issue_refs: list[str] = Field(default_factory=list)  # #123 style issue references
     created_at: datetime | None = None
 
 
@@ -279,4 +282,16 @@ class RuntimeExecutorConfig(BaseModel):
 class RuntimeCatalog(BaseModel):
     """Global runtime catalog containing all executor/provider/model configurations."""
     executors: list[RuntimeExecutorConfig] = Field(default_factory=list)
+
+
+# --- Template Models ---
+
+class IssueTemplate(BaseModel):
+    """Template for creating recurring issues."""
+    id: str
+    workspace_id: str | None = None  # None = global template
+    title: str
+    description: str | None = None
+    phases: list[str] = Field(default_factory=list)  # Default phases to create
+    created_at: datetime | None = None
 

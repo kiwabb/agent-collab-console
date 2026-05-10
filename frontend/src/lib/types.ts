@@ -106,6 +106,7 @@ export interface CodexIssue {
   current_phase: string;
   status: string;
   is_pinned?: boolean;
+  milestone?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -155,6 +156,8 @@ export interface CodexTaskMessage {
   execution_process_id: string | null;
   role: string;
   content: string;
+  mentions?: string[];
+  issue_refs?: string[];
   created_at: string | null;
 }
 
@@ -332,4 +335,13 @@ export interface RuntimeCatalogRequest {
 export interface ValidateRuntimeCatalogResponse {
   valid: boolean;
   error?: string;
+}
+
+export interface IssueTemplate {
+  id: string;
+  workspace_id: string | null;
+  title: string;
+  description: string | null;
+  phases: string[];
+  created_at: string | null;
 }

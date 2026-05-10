@@ -10,6 +10,7 @@ import { useI18n } from "@/providers/I18nProvider";
 import { normalizeLogs } from "@/lib/codexLogNormalizer";
 import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
 import { EmptyState } from "@/components/ui/empty-state";
+import { renderMessageWithLinks } from "@/lib/utils";
 
 interface RunDetailProps {
   process: ExecutionProcess | null;
