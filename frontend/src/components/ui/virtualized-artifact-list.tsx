@@ -3,7 +3,7 @@
 import { useRef, useState, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Artifact } from "@/lib/types";
-import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package } from "lucide-react";
+import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { motion, AnimatePresence } from "framer-motion";
@@ -23,6 +23,22 @@ hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("markdown", markdown);
 hljs.registerLanguage("xml", xml);
 hljs.registerLanguage("css", css);
+
+function formatRelativeTime(dateStr: string | null): string {
+  if (!dateStr) return "";
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHour < 24) return `${diffHour}h ago`;
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return date.toLocaleDateString();
+}
 
 function detectLanguage(content: string, filename?: string): string {
   if (filename) {
@@ -46,6 +62,7 @@ function detectLanguage(content: string, filename?: string): string {
 }
 
 function HighlightedCode({ code, language }: { code: string; language: string }) {
+  const [copied, setCopied] = useState(false);
   const highlighted = useMemo(() => {
     try {
       if (hljs.getLanguage(language)) {
@@ -57,14 +74,30 @@ function HighlightedCode({ code, language }: { code: string; language: string })
     }
   }, [code, language]);
 
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
   return (
-    <code
-      className={cn(
-        "text-[12px] leading-relaxed [&_.hljs-keyword]:text-pink-400 [&_.hljs-string]:text-green-400 [&_.hljs-number]:text-orange-400 [&_.hljs-comment]:text-gray-500 [&_.hljs-attr]:text-cyan-400 [&_.hljs-title]:text-blue-400 [&_.hljs-built_in]:text-purple-400 [&_.hljs-literal]:text-orange-400 [&_.hljs-type]:text-cyan-300 [&_.hljs-params]:text-yellow-300 [&_.hljs-meta]:text-gray-400",
-        "whitespace-pre-wrap font-mono bg-background/60 p-5 rounded-xl border border-border-subtle max-h-80 overflow-y-auto no-scrollbar selection:bg-brand/30 block"
-      )}
-      dangerouslySetInnerHTML={{ __html: highlighted }}
-    />
+    <div className="relative group/code">
+      <button
+        onClick={handleCopy}
+        className="absolute top-3 right-3 p-1.5 rounded-lg bg-surface-raised border border-border-subtle opacity-0 group-hover/code:opacity-100 hover:bg-surface-hover transition-all z-10"
+        aria-label="Copy code"
+      >
+        {copied ? <Check size={14} className="text-success" /> : <Copy size={14} className="text-text-muted" />}
+      </button>
+      <code
+        className={cn(
+          "text-[12px] leading-relaxed [&_.hljs-keyword]:text-pink-400 [&_.hljs-string]:text-green-400 [&_.hljs-number]:text-orange-400 [&_.hljs-comment]:text-gray-500 [&_.hljs-attr]:text-cyan-400 [&_.hljs-title]:text-blue-400 [&_.hljs-built_in]:text-purple-400 [&_.hljs-literal]:text-orange-400 [&_.hljs-type]:text-cyan-300 [&_.hljs-params]:text-yellow-300 [&_.hljs-meta]:text-gray-400",
+          "whitespace-pre-wrap font-mono bg-background/60 p-5 rounded-xl border border-border-subtle max-h-80 overflow-y-auto no-scrollbar selection:bg-brand/30 block"
+        )}
+        dangerouslySetInnerHTML={{ __html: highlighted }}
+      />
+    </div>
   );
 }
 
@@ -253,6 +286,11 @@ function ArtifactItem({
           <span className="text-[9px] font-mono uppercase text-text-muted/50 bg-surface-raised px-1.5 py-0.5 rounded border border-border-subtle">
             {language}
           </span>
+          {artifact.created_at && (
+            <span className="text-[9px] text-text-muted/50 font-mono">
+              {formatRelativeTime(artifact.created_at)}
+            </span>
+          )}
         </div>
         {isExpanded ? (
           <ChevronDown size={16} className="text-brand" />

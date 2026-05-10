@@ -5,7 +5,7 @@ import type { CodexIssue, CodexTask } from "@/lib/types";
 import { IssueCard } from "./IssueCard";
 import { SortableIssueCard } from "./SortableIssueCard";
 import { PHASES, type Phase, groupIssuesByPhase } from "./phaseUtils";
-import { Plus, Layout } from "lucide-react";
+import { Plus, Layout, ChevronDown, ChevronRight, ChevronsUpDown } from "lucide-react";
 import { useI18n } from "@/providers/I18nProvider";
 import type { TranslationKey } from "@/lib/i18n";
 import {
@@ -33,6 +33,22 @@ interface IssueBoardProps {
   onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
 }
 
+function formatRelativeTime(dateStr: string | null): string {
+  if (!dateStr) return "";
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHour < 24) return `${diffHour}h ago`;
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return date.toLocaleDateString();
+}
+
 export function IssueBoard({
   issues,
   tasks,
@@ -46,6 +62,8 @@ export function IssueBoard({
   const [newTitle, setNewTitle] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [expandedPhases, setExpandedPhases] = useState<Set<Phase>>(new Set(["requirements", "architecture", "development", "testing"]));
+  const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -58,17 +76,41 @@ export function IssueBoard({
     })
   );
 
+  // Get unique assignees from tasks
+  const assignees = useMemo(() => {
+    const set = new Set<string>();
+    tasks.forEach(t => {
+      if (t.role) set.add(t.role);
+    });
+    return Array.from(set).sort();
+  }, [tasks]);
+
+  const togglePhase = (phase: Phase) => {
+    setExpandedPhases(prev => {
+      const next = new Set(prev);
+      if (next.has(phase)) next.delete(phase);
+      else next.add(phase);
+      return next;
+    });
+  };
+
+  const expandAll = () => setExpandedPhases(new Set(["requirements", "architecture", "development", "testing"]));
+  const collapseAll = () => setExpandedPhases(new Set());
+
   const byPhase = useMemo(() => groupIssuesByPhase(issues), [issues]);
 
   const getTaskCounts = useMemo(() => (issueId: string) => {
-    const issueTasks = tasks.filter((t) => t.issue_id === issueId);
+    let issueTasks = tasks.filter((t) => t.issue_id === issueId);
+    if (assigneeFilter !== "all") {
+      issueTasks = issueTasks.filter(t => t.role === assigneeFilter);
+    }
     return {
       total: issueTasks.length,
       running: issueTasks.filter((t) => t.status === "running" || t.status === "responding").length,
       failed: issueTasks.filter((t) => t.status === "failed").length,
       waiting: issueTasks.filter((t) => t.status === "waiting" || t.status === "blocked").length,
     };
-  }, [tasks]);
+  }, [tasks, assigneeFilter]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -106,14 +148,45 @@ export function IssueBoard({
             <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-text-muted">{t("issue.boardSubtitle")}</p>
           </div>
         </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 px-5 py-2 rounded-xl bg-brand text-background hover:scale-[1.02] active:scale-[0.98] transition-all font-bold text-sm shadow-lg shadow-brand/20"
-          data-tour="issue-create"
-        >
-          <Plus size={16} />
-          {t("issue.create")}
-        </button>
+        <div className="flex items-center gap-3">
+          {assignees.length > 0 && (
+            <select
+              value={assigneeFilter}
+              onChange={(e) => setAssigneeFilter(e.target.value)}
+              className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-raised border border-border-subtle text-text-secondary hover:bg-surface-hover transition-all cursor-pointer outline-none"
+            >
+              <option value="all">All Assignees</option>
+              {assignees.map(a => (
+                <option key={a} value={a}>{a.split('_').pop()?.toUpperCase()}</option>
+              ))}
+            </select>
+          )}
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-raised border border-border-subtle">
+            <button
+              onClick={expandAll}
+              className="text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-brand transition-colors px-2 py-0.5 rounded hover:bg-surface-hover"
+              title="Expand all"
+            >
+              Expand
+            </button>
+            <span className="text-text-muted/30">/</span>
+            <button
+              onClick={collapseAll}
+              className="text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-brand transition-colors px-2 py-0.5 rounded hover:bg-surface-hover"
+              title="Collapse all"
+            >
+              Collapse
+            </button>
+          </div>
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="flex items-center gap-2 px-5 py-2 rounded-xl bg-brand text-background hover:scale-[1.02] active:scale-[0.98] transition-all font-bold text-sm shadow-lg shadow-brand/20"
+            data-tour="issue-create"
+          >
+            <Plus size={16} />
+            {t("issue.create")}
+          </button>
+        </div>
       </div>
 
       {showForm && (
@@ -163,10 +236,17 @@ export function IssueBoard({
           <div className="flex h-full min-w-max p-6 gap-6">
             {boardPhases.map((phase) => {
               const phaseIssues = byPhase[phase.id];
+              const isExpanded = expandedPhases.has(phase.id);
               return (
                 <div key={phase.id} className="flex flex-col w-[350px] shrink-0 group/column" data-tour="phases">
                   <div className="flex items-center justify-between mb-6 px-1">
                     <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => togglePhase(phase.id)}
+                        className="p-0.5 rounded hover:bg-surface-hover transition-all"
+                      >
+                        {isExpanded ? <ChevronDown size={14} className="text-text-muted" /> : <ChevronRight size={14} className="text-text-muted" />}
+                      </button>
                       <div className={`size-2.5 rounded-full ${phase.color} shadow-sm`} />
                       <h3 className="text-[11px] font-black uppercase tracking-[0.25em] text-text-secondary group-hover/column:text-foreground transition-colors">
                         {t(phase.labelKey as TranslationKey)}
@@ -175,7 +255,7 @@ export function IssueBoard({
                         {phaseIssues.length}
                       </span>
                     </div>
-                    <button 
+                    <button
                       onClick={() => {
                         setNewTitle("");
                         setNewDesc("");
@@ -187,6 +267,7 @@ export function IssueBoard({
                     </button>
                   </div>
 
+                  {isExpanded && (
                   <SortableContext
                     items={phaseIssues.map(i => i.id)}
                     strategy={verticalListSortingStrategy}
@@ -217,6 +298,7 @@ export function IssueBoard({
                       )}
                     </div>
                   </SortableContext>
+                  )}
                 </div>
               );
             })}

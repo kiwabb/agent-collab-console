@@ -37,6 +37,22 @@ import {
 } from "@/components/ui/dialog";
 import { getRuntimeCatalog } from "@/lib/api";
 
+function formatRelativeTime(dateStr: string | null): string {
+  if (!dateStr) return "";
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHour < 24) return `${diffHour}h ago`;
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return date.toLocaleDateString();
+}
+
 function isDevelopmentTaskUnlocked(task: CodexTask, allTasks: CodexTask[]): boolean {
   if (task.phase !== "development" || task.sequence_index == null) return true;
   if (task.sequence_index === 0) return true;
@@ -124,7 +140,7 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
         </div>
         <div className="flex items-center gap-1.5 ml-auto">
           <Clock size={12} />
-          <span>{task.created_at ? new Date(task.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+          <span>{formatRelativeTime(task.created_at)}</span>
         </div>
       </div>
     </div>

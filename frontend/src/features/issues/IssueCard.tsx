@@ -6,6 +6,22 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { InlineEdit } from "@/components/ui/inline-edit";
 
+function formatRelativeTime(dateStr: string | null): string {
+  if (!dateStr) return "";
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHour < 24) return `${diffHour}h ago`;
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return date.toLocaleDateString();
+}
+
 interface IssueCardProps {
   issue: CodexIssue;
   isSelected: boolean;
@@ -74,7 +90,7 @@ export function IssueCard({
               <span className="text-[10px] font-black text-text-muted uppercase tracking-wider">{t("issue.tasks")}</span>
               <span className="text-[11px] font-bold text-text-secondary">{taskCount}</span>
             </div>
-            
+
             {runningCount > 0 && (
               <div className="flex items-center gap-1.5 bg-brand/10 px-2 py-0.5 rounded-md border border-brand/20">
                 <div className="size-1 rounded-full bg-brand animate-pulse shadow-[0_0_8px_rgba(122,157,204,0.5)]" />
@@ -92,6 +108,10 @@ export function IssueCard({
               <div className="size-1.5 rounded-full bg-warning" title={`${waitingCount} waiting`} />
             )}
           </div>
+        </div>
+
+        <div className="text-[9px] font-mono text-text-muted/50 mt-1">
+          {formatRelativeTime(issue.updated_at || issue.created_at)}
         </div>
       </div>
     </button>
