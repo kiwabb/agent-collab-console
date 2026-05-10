@@ -36,6 +36,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { getRuntimeCatalog } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 
 function formatRelativeTime(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -223,6 +224,7 @@ export function TaskBoard({
   onDeleteIssue,
 }: TaskBoardProps) {
   const { t } = useI18n();
+  const { addToast } = useToast();
   const [catalog, setCatalog] = useState<RuntimeCatalog | null>(null);
   const defaultExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
     catalog,
@@ -278,7 +280,14 @@ export function TaskBoard({
     setIsDeletingIssue(true);
     try {
       await onDeleteIssue();
+      addToast({ type: "success", title: "Issue deleted" });
       setDeleteIssueOpen(false);
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: "Failed to delete issue",
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setIsDeletingIssue(false);
     }

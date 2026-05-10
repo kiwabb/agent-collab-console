@@ -10,6 +10,8 @@ import { Plus, Layout, ChevronDown, ChevronRight, ChevronsUpDown, Download, Uplo
 import { useI18n } from "@/providers/I18nProvider";
 import type { TranslationKey } from "@/lib/i18n";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import {
   DndContext,
   closestCenter,
@@ -79,15 +81,19 @@ export function IssueBoard({
   isLoading = false,
 }: IssueBoardProps) {
   const { t } = useI18n();
+  const { addToast } = useToast();
   const [newTitle, setNewTitle] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [titleError, setTitleError] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [expandedPhases, setExpandedPhases] = useState<Set<Phase>>(new Set(["requirements", "architecture", "development", "testing"]));
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
   const [bulkEditMode, setBulkEditMode] = useState(false);
   const [selectedIssueIds, setSelectedIssueIds] = useState<Set<string>>(new Set());
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showColumnConfig, setShowColumnConfig] = useState(false);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -165,13 +171,29 @@ export function IssueBoard({
     };
   }, [tasks, assigneeFilter]);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!newTitle.trim()) return;
-    onCreateIssue(newTitle.trim(), newDesc.trim());
-    setNewTitle("");
-    setNewDesc("");
-    setShowForm(false);
+    if (!newTitle.trim()) {
+      setTitleError("Title is required");
+      return;
+    }
+    setTitleError("");
+    setIsCreating(true);
+    try {
+      await onCreateIssue(newTitle.trim(), newDesc.trim());
+      addToast({ type: "success", title: "Issue created" });
+      setNewTitle("");
+      setNewDesc("");
+      setShowForm(false);
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: "Failed to create issue",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsCreating(false);
+    }
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -288,6 +310,7 @@ export function IssueBoard({
                 onChange={(e) => {
                   if (e.target.value) {
                     onBulkUpdate(Array.from(selectedIssueIds), { current_phase: e.target.value });
+                    addToast({ type: "success", title: `${selectedIssueIds.size} issues moved` });
                     setSelectedIssueIds(new Set());
                     setBulkEditMode(false);
                   }
@@ -302,13 +325,7 @@ export function IssueBoard({
               </select>
               {onBulkDelete && (
                 <button
-                  onClick={() => {
-                    if (confirm(`Delete ${selectedIssueIds.size} issues?`)) {
-                      onBulkDelete(Array.from(selectedIssueIds));
-                      setSelectedIssueIds(new Set());
-                      setBulkEditMode(false);
-                    }
-                  }}
+                  onClick={() => setBulkDeleteConfirmOpen(true)}
                   className="px-3 py-1.5 text-xs font-bold rounded-lg bg-error/20 text-error hover:bg-error/30 transition-all"
                 >
                   Delete
@@ -354,14 +371,25 @@ export function IssueBoard({
       {showForm && (
         <form onSubmit={handleSubmit} className="p-8 border-b border-border-subtle bg-surface-raised/30 animate-in slide-in-from-top-4 duration-500">
           <div className="max-w-2xl">
-            <input
-              type="text"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              placeholder={t("issue.titlePlaceholder")}
-              autoFocus
-              className="w-full px-5 py-3 text-sm rounded-xl cc-input outline-none mb-4 font-bold shadow-inner"
-            />
+            <div className="mb-4">
+              <input
+                type="text"
+                value={newTitle}
+                onChange={(e) => {
+                  setNewTitle(e.target.value);
+                  if (titleError) setTitleError("");
+                }}
+                placeholder={t("issue.titlePlaceholder")}
+                autoFocus
+                className={cn(
+                  "w-full px-5 py-3 text-sm rounded-xl cc-input outline-none font-bold shadow-inner",
+                  titleError && "border-error mb-1"
+                )}
+              />
+              {titleError && (
+                <p className="text-xs text-error font-medium">{titleError}</p>
+              )}
+            </div>
             <textarea
               value={newDesc}
               onChange={(e) => setNewDesc(e.target.value)}
@@ -372,14 +400,28 @@ export function IssueBoard({
             <div className="flex gap-3">
               <button
                 type="submit"
-                className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md"
+                disabled={isCreating}
+                className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
+                {isCreating && (
+                  <div className="flex gap-1">
+                    <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.3s]" />
+                    <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.15s]" />
+                    <div className="size-1 bg-current rounded-full animate-bounce" />
+                  </div>
+                )}
                 {t("issue.confirm")}
               </button>
               <button
                 type="button"
-                onClick={() => setShowForm(false)}
-                className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg border border-border-subtle hover:bg-surface-hover transition-all"
+                onClick={() => {
+                  setShowForm(false);
+                  setTitleError("");
+                  setNewTitle("");
+                  setNewDesc("");
+                }}
+                disabled={isCreating}
+                className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg border border-border-subtle hover:bg-surface-hover transition-all disabled:opacity-50"
               >
                 {t("issue.cancel")}
               </button>
@@ -548,9 +590,22 @@ export function IssueBoard({
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={bulkDeleteConfirmOpen}
+        onOpenChange={setBulkDeleteConfirmOpen}
+        title="Delete Issues"
+        description={`Are you sure you want to delete ${selectedIssueIds.size} issues? This action cannot be undone.`}
+        confirmText="Delete"
+        onConfirm={() => {
+          if (!onBulkDelete) return;
+          onBulkDelete(Array.from(selectedIssueIds));
+          addToast({ type: "success", title: `${selectedIssueIds.size} issues deleted` });
+          setSelectedIssueIds(new Set());
+          setBulkEditMode(false);
+          setBulkDeleteConfirmOpen(false);
+        }}
+        variant="destructive"
+      />
     </div>
-
-
-
   );
 }

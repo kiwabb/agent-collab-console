@@ -55,11 +55,21 @@ export function WorkspaceGrid({
     return (b.last_active_at || "").localeCompare(a.last_active_at || "");
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newTitle.trim()) {
-      onCreate(newTitle.trim());
+    if (!newTitle.trim()) return;
+    setIsCreating(true);
+    try {
+      await onCreate(newTitle.trim());
+      addToast({ type: "success", title: "Workspace created" });
       setNewTitle("");
+      setIsCreating(false);
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: "Failed to create workspace",
+        message: err instanceof Error ? err.message : String(err),
+      });
       setIsCreating(false);
     }
   };
@@ -156,14 +166,23 @@ export function WorkspaceGrid({
             <div className="flex gap-2">
               <button
                 type="submit"
-                className="flex-1 bg-brand text-background text-xs font-bold py-2 rounded-lg"
+                disabled={isCreating}
+                className="flex-1 bg-brand text-background text-xs font-bold py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
+                {isCreating && (
+                  <div className="flex gap-1">
+                    <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.3s]" />
+                    <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.15s]" />
+                    <div className="size-1 bg-current rounded-full animate-bounce" />
+                  </div>
+                )}
                 {t("workspace.create")}
               </button>
               <button
                 type="button"
                 onClick={() => setIsCreating(false)}
-                className="flex-1 bg-surface-hover text-text-secondary text-xs font-bold py-2 rounded-lg border border-border-subtle"
+                disabled={isCreating}
+                className="flex-1 bg-surface-hover text-text-secondary text-xs font-bold py-2 rounded-lg border border-border-subtle disabled:opacity-50"
               >
                 {t("workspace.cancel")}
               </button>
