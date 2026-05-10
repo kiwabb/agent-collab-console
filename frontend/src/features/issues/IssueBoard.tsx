@@ -32,6 +32,7 @@ interface IssueBoardProps {
   onCreateIssue: (title: string, description: string) => void;
   onReorderIssues?: (activeId: string, overId: string) => void;
   onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
+  onPinIssue?: (id: string, isPinned: boolean) => void;
   isLoading?: boolean;
 }
 

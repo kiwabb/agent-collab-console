@@ -1090,6 +1090,10 @@ class UpdateIssuePhaseRequest(BaseModel):
     current_phase: str
 
 
+class UpdateIssuePinRequest(BaseModel):
+    is_pinned: bool
+
+
 @router.post("/codex/issues", status_code=201)
 async def create_codex_issue(request: CreateIssueRequest):
     if codex_store is None:
@@ -1142,6 +1146,19 @@ async def update_codex_issue_phase(issue_id: str, request: UpdateIssuePhaseReque
     if issue is None:
         raise HTTPException(status_code=404, detail="Issue not found")
     issue.current_phase = request.current_phase
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+    return issue
+
+
+@router.post("/codex/issues/{issue_id}/pin")
+async def update_codex_issue_pin(issue_id: str, request: UpdateIssuePinRequest):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    issue.is_pinned = request.is_pinned
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
     return issue

@@ -105,6 +105,7 @@ export interface CodexIssue {
   description: string | null;
   current_phase: string;
   status: string;
+  is_pinned?: boolean;
   created_at: string | null;
   updated_at: string | null;
 }

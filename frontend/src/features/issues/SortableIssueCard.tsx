@@ -15,6 +15,7 @@ interface SortableIssueCardProps {
   waitingCount: number;
   onClick: () => void;
   onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
+  onPinIssue?: (id: string, isPinned: boolean) => void;
 }
 
 export function SortableIssueCard({
@@ -26,6 +27,7 @@ export function SortableIssueCard({
   waitingCount,
   onClick,
   onUpdateIssue,
+  onPinIssue,
 }: SortableIssueCardProps) {
   const {
     attributes,
@@ -62,6 +64,7 @@ export function SortableIssueCard({
           waitingCount={waitingCount}
           onClick={onClick}
           onUpdateIssue={onUpdateIssue}
+          onPinIssue={onPinIssue}
         />
       </div>
     </div>

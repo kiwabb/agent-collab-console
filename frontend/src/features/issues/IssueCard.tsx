@@ -5,7 +5,7 @@ import { PHASE_CONFIG, type Phase } from "./phaseUtils";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { InlineEdit } from "@/components/ui/inline-edit";
-import { Link, Copy, Check } from "lucide-react";
+import { Link, Copy, Check, Pin, PinOff } from "lucide-react";
 import { useState } from "react";
 
 function formatRelativeTime(dateStr: string | null): string {
@@ -33,6 +33,7 @@ interface IssueCardProps {
   waitingCount: number;
   onClick: () => void;
   onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
+  onPinIssue?: (id: string, isPinned: boolean) => void;
 }
 
 export function IssueCard({
@@ -44,6 +45,7 @@ export function IssueCard({
   waitingCount,
   onClick,
   onUpdateIssue,
+  onPinIssue,
 }: IssueCardProps) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -62,6 +64,13 @@ export function IssueCard({
     await navigator.clipboard.writeText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handlePin = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onPinIssue) {
+      onPinIssue(issue.id, !issue.is_pinned);
+    }
   };
 
   return (
@@ -89,13 +98,25 @@ export function IssueCard({
             )}
             disabled={!onUpdateIssue}
           />
-          <button
-            onClick={handleCopyLink}
-            className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover:opacity-100 shrink-0"
-            title="Copy link"
-          >
-            {copied ? <Check size={12} className="text-success" /> : <Link size={12} />}
-          </button>
+          <div className="flex gap-1 shrink-0">
+            <button
+              onClick={handlePin}
+              className={cn(
+                "p-1.5 rounded-md hover:bg-surface-hover transition-all opacity-0 group-hover:opacity-100",
+                issue.is_pinned ? "text-warning" : "text-text-muted hover:text-warning"
+              )}
+              title={issue.is_pinned ? "Unpin" : "Pin to top"}
+            >
+              {issue.is_pinned ? <PinOff size={12} /> : <Pin size={12} />}
+            </button>
+            <button
+              onClick={handleCopyLink}
+              className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover:opacity-100"
+              title="Copy link"
+            >
+              {copied ? <Check size={12} className="text-success" /> : <Link size={12} />}
+            </button>
+          </div>
         </div>
         
         {issue.description && (

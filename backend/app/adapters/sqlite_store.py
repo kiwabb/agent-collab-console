@@ -110,6 +110,7 @@ class SQLiteStore:
                 description TEXT,
                 current_phase TEXT NOT NULL DEFAULT 'requirements',
                 status TEXT NOT NULL DEFAULT 'open',
+                is_pinned INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT,
                 updated_at TEXT,
                 FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
@@ -609,7 +610,7 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO codex_issues (id, session_id, title, description, current_phase, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO codex_issues (id, session_id, title, description, current_phase, status, is_pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 issue.id,
                 issue.session_id,
@@ -617,6 +618,7 @@ class SQLiteStore:
                 issue.description,
                 issue.current_phase,
                 issue.status,
+                1 if issue.is_pinned else 0,
                 self._format_datetime(issue.created_at),
                 self._format_datetime(issue.updated_at),
             ),
@@ -639,6 +641,7 @@ class SQLiteStore:
             description=row["description"],
             current_phase=row["current_phase"],
             status=row["status"],
+            is_pinned=bool(row["is_pinned"]),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -647,11 +650,11 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        select_sql = "SELECT id, session_id, title, description, current_phase, status, created_at, updated_at FROM codex_issues"
+        select_sql = "SELECT id, session_id, title, description, current_phase, status, is_pinned, created_at, updated_at FROM codex_issues"
         if session_id:
-            rows = conn.execute(f"{select_sql} WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC", (session_id,)).fetchall()
+            rows = conn.execute(f"{select_sql} WHERE session_id = ? ORDER BY is_pinned DESC, updated_at DESC, created_at DESC", (session_id,)).fetchall()
         else:
-            rows = conn.execute(f"{select_sql} ORDER BY updated_at DESC, created_at DESC").fetchall()
+            rows = conn.execute(f"{select_sql} ORDER BY is_pinned DESC, updated_at DESC, created_at DESC").fetchall()
         conn.close()
         return [dict(r) for r in rows]
 

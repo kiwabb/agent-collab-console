@@ -122,6 +122,7 @@ class CodexIssue(BaseModel):
     description: str | None = None
     current_phase: str = "requirements"
     status: str = "open"
+    is_pinned: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
