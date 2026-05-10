@@ -3,6 +3,8 @@
 import { useState } from "react";
 import type { Workspace } from "@/lib/types";
 import { RefreshCw, Plus, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 
 interface WorkspaceSidebarProps {
   workspaces: Workspace[];
@@ -23,25 +25,75 @@ export function WorkspaceSidebar({
   onDelete,
   onDeleteAll,
 }: WorkspaceSidebarProps) {
+  const { addToast } = useToast();
   const [title, setTitle] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
-    onCreate(title.trim());
-    setTitle("");
-    setShowForm(false);
+    setIsDeleting(true); // reuse for create
+    try {
+      await onCreate(title.trim());
+      addToast({ type: "success", title: "Workspace created" });
+      setTitle("");
+      setShowForm(false);
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: "Failed to create workspace",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsDeleting(false);
+    }
   }
 
   function handleDeleteAll(e: React.MouseEvent) {
     e.stopPropagation();
-    if (!window.confirm(`Delete all ${workspaces.length} workspaces? This cannot be undone.`)) return;
-    onDeleteAll();
+    setDeleteAllOpen(true);
+  }
+
+  async function handleDeleteConfirm() {
+    setIsDeleting(true);
+    try {
+      await onDelete(deleteTarget!.id);
+      addToast({ type: "success", title: "Workspace deleted" });
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: "Failed to delete workspace",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsDeleting(false);
+      setDeleteTarget(null);
+    }
+  }
+
+  async function handleDeleteAllConfirm() {
+    setIsDeleting(true);
+    try {
+      await onDeleteAll();
+      addToast({ type: "success", title: "All workspaces deleted" });
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: "Failed to delete workspaces",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsDeleting(false);
+      setDeleteAllOpen(false);
+    }
   }
 
   return (
+    <>
     <aside className="flex flex-col h-full w-64 shrink-0 cc-sidebar">
       <div className="flex items-center justify-between p-5 border-b border-border-subtle">
         <button
@@ -131,8 +183,7 @@ export function WorkspaceSidebar({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (!window.confirm("Delete this workspace and all its data?")) return;
-                  onDelete(ws.id);
+                  setDeleteTarget(ws);
                 }}
                 className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all active:scale-90"
                 aria-label="Delete workspace"
@@ -156,7 +207,25 @@ export function WorkspaceSidebar({
         </div>
       )}
     </aside>
-
-
+    <ConfirmDialog
+      open={!!deleteTarget}
+      onOpenChange={(open) => !open && setDeleteTarget(null)}
+      title="Delete Workspace"
+      description={deleteTarget ? `Are you sure you want to delete "${deleteTarget.title}"? This action cannot be undone.` : undefined}
+      confirmText="Delete"
+      onConfirm={handleDeleteConfirm}
+      isLoading={isDeleting}
+      variant="destructive"
+    />
+    <ConfirmDialog
+      open={deleteAllOpen}
+      onOpenChange={setDeleteAllOpen}
+      title="Delete All Workspaces"
+      description={`Are you sure you want to delete all ${workspaces.length} workspaces? This action cannot be undone.`}
+      confirmText="Delete All"
+      onConfirm={handleDeleteAllConfirm}
+      isLoading={isDeleting}
+      variant="destructive"
+    />
   );
 }

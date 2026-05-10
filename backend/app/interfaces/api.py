@@ -1,9 +1,11 @@
 from datetime import datetime
 from uuid import uuid4
 from pathlib import Path
+import logging
 import shutil
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 import json
 
 from pydantic import BaseModel
@@ -15,6 +17,61 @@ from app.application.product_manager_service import ProductManagerArtifactError,
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.process_runtime_common import is_agent_message_item_type
 from app.interfaces.execution_process_views import build_execution_process_view
+
+logger = logging.getLogger(__name__)
+
+# --- Custom Exception Classes ---
+
+class APIError(Exception):
+    """Base API error with status_code and message."""
+    def __init__(self, status_code: int, message: str, detail: str | None = None):
+        self.status_code = status_code
+        self.message = message
+        self.detail = detail or message
+
+class NotFoundError(APIError):
+    def __init__(self, resource: str, identifier: str):
+        super().__init__(404, f"{resource} '{identifier}' not found")
+
+class ValidationError(APIError):
+    def __init__(self, message: str, field: str | None = None):
+        detail = f"Validation error: {message}" if field else message
+        super().__init__(400, message, detail)
+
+class ConflictError(APIError):
+    def __init__(self, message: str):
+        super().__init__(409, message)
+
+class RateLimitError(APIError):
+    def __init__(self, message: str, retry_after: int = 60):
+        super().__init__(429, message)
+        self.retry_after = retry_after
+
+
+# --- Exception Handlers ---
+
+@router.exception_handler(APIError)
+async def api_error_handler(request: Request, exc: APIError):
+    request_id = request.headers.get("X-Request-ID", "unknown")
+    logger.warning("API error [request_id=%s]: %s %s", request_id, exc.status_code, exc.message)
+    headers = {}
+    if isinstance(exc, RateLimitError):
+        headers["Retry-After"] = str(exc.retry_after)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.message, "detail": exc.detail},
+        headers=headers,
+    )
+
+
+@router.exception_handler(Exception)
+async def generic_error_handler(request: Request, exc: Exception):
+    request_id = request.headers.get("X-Request-ID", "unknown")
+    logger.error("Unhandled error [request_id=%s]: %s", request_id, exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "detail": str(exc) if isinstance(exc, (TypeError, ValueError)) else "An unexpected error occurred"},
+    )
 
 
 router = APIRouter(prefix="/api")
@@ -547,7 +604,7 @@ async def get_session(session_id: str):
     try:
         return await session_service.get_session(session_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
 
 @router.get("/sessions/{session_id}/tasks")
@@ -556,7 +613,7 @@ async def get_session_tasks(session_id: str):
         session = await session_service.get_session(session_id)
         return session.tasks
     except KeyError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -564,7 +621,7 @@ async def get_session_messages(session_id: str):
     try:
         return (await session_service.get_session(session_id)).messages
     except KeyError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
 
 @router.get("/sessions/{session_id}/artifacts")
@@ -572,7 +629,7 @@ async def get_session_artifacts(session_id: str):
     try:
         return (await session_service.get_session(session_id)).artifacts
     except KeyError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
 
 @router.get("/sessions/{session_id}/runs")
@@ -580,7 +637,7 @@ async def get_session_runs(session_id: str):
     try:
         return (await session_service.get_session(session_id)).runs
     except KeyError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
 
 @router.get("/tasks/{task_id}")
@@ -597,11 +654,12 @@ async def create_task(session_id: str, request: CreateTaskRequest):
     try:
         session = await session_service.get_session(session_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
     try:
         task = await orchestration_service.plan_task(session_id, request.title, request.assignee)
     except Exception as e:
+        logger.error("Failed to create task in session %s: %s", session_id, e)
         raise HTTPException(status_code=500, detail=f"Failed to create task: {e}")
     return task
 
@@ -612,8 +670,9 @@ async def run_task(task_id: str):
         result = await orchestration_service.run_task(task_id)
         return result
     except KeyError:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     except Exception as e:
+        logger.error("Failed to run task %s: %s", task_id, e)
         raise HTTPException(status_code=500, detail=f"Failed to run task: {e}")
 
 
@@ -623,9 +682,12 @@ async def retry_task(task_id: str):
         result = await orchestration_service.retry_task(task_id)
         return result
     except KeyError:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to retry task %s: %s", task_id, e)
+        raise HTTPException(status_code=500, detail=f"Failed to retry task: {e}")
 
 
 @router.post("/tasks/{task_id}/approval")
@@ -637,9 +699,10 @@ async def request_approval(task_id: str):
                 try:
                     approval = await approval_service.request_submission(session.id, task_id)
                 except Exception as e:
+                    logger.error("Failed to request approval for task %s: %s", task_id, e)
                     raise HTTPException(status_code=500, detail=f"Failed to request approval: {e}")
                 return approval
-    raise HTTPException(status_code=404, detail="Task not found")
+    raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
 
 
 @router.get("/approvals/{approval_id}")
@@ -647,7 +710,7 @@ async def get_approval(approval_id: str):
     try:
         return approval_service.approvals[approval_id]
     except KeyError:
-        raise HTTPException(status_code=404, detail="Approval not found")
+        raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")
 
 
 @router.post("/approvals/{approval_id}/approve")
@@ -655,7 +718,10 @@ async def approve_approval(approval_id: str):
     try:
         return await approval_service.approve(approval_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Approval not found")
+        raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")
+    except Exception as e:
+        logger.error("Failed to approve approval %s: %s", approval_id, e)
+        raise HTTPException(status_code=500, detail=f"Failed to approve: {e}")
 
 
 @router.post("/approvals/{approval_id}/reject")
@@ -663,7 +729,10 @@ async def reject_approval(approval_id: str):
     try:
         return await approval_service.reject(approval_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Approval not found")
+        raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")
+    except Exception as e:
+        logger.error("Failed to reject approval %s: %s", approval_id, e)
+        raise HTTPException(status_code=500, detail=f"Failed to reject: {e}")
 
 
 # --- Codex CLI Session APIs ---
@@ -733,7 +802,7 @@ async def get_codex_workspace(workspace_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     workspace = await codex_store.load_codex_workspace(workspace_id)
     if workspace is None:
-        raise HTTPException(status_code=404, detail="Codex workspace not found")
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
     return workspace
 
 
@@ -748,7 +817,7 @@ async def get_workspace_execution_processes(workspace_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     workspace = await codex_store.load_codex_workspace(workspace_id)
     if workspace is None:
-        raise HTTPException(status_code=404, detail="Codex workspace not found")
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
 
     processes = await codex_store.list_execution_processes(session_id=workspace_id)
     return {
@@ -770,7 +839,7 @@ async def get_codex_workspace_logs(workspace_id: str, limit: int = 1000):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     workspace = await codex_store.load_codex_workspace(workspace_id)
     if workspace is None:
-        raise HTTPException(status_code=404, detail="Codex workspace not found")
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
     return await codex_store.load_log_events(workspace_id, limit=limit)
 
 
@@ -812,7 +881,7 @@ async def update_codex_task(task_id: str, request: UpdateCodexTaskRequest):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     task = await codex_store.load_codex_task(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
 
     if task.status == "running":
         raise HTTPException(status_code=409, detail="Cannot update a running task")
@@ -850,7 +919,7 @@ async def get_codex_task_messages(task_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     task = await codex_store.load_codex_task(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     return await codex_store.list_codex_task_messages(task_id)
 
 
@@ -861,7 +930,7 @@ async def request_codex_task_help(task_id: str, request: RequestTaskHelpRequest)
 
     task = await codex_store.load_codex_task(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     if task.task_kind == "help_child":
         raise HTTPException(status_code=409, detail="Help child tasks cannot request help")
     if task.status == "waiting_for_help":
@@ -894,7 +963,10 @@ async def request_codex_task_help(task_id: str, request: RequestTaskHelpRequest)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except KeyError:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    except Exception as e:
+        logger.error("Failed to request help for task %s: %s", task_id, e)
+        raise HTTPException(status_code=500, detail=f"Failed to request help: {e}")
 
     parent_task = await codex_store.load_codex_task(task.id)
     child_task = await codex_store.load_codex_task(help_request.child_task_id)
@@ -923,7 +995,7 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     workspace = await codex_store.load_codex_workspace(workspace_id)
     if workspace is None:
-        raise HTTPException(status_code=404, detail="Codex workspace not found")
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
 
     from datetime import datetime
     from app.domain.models import CodexTask
@@ -975,8 +1047,10 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
             "execution_process_id": exec_process.id,
         }
     except ValueError as e:
+        logger.warning("Conflict starting task for workspace %s: %s", workspace_id, e)
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
+        logger.error("Failed to start task for workspace %s: %s", workspace_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1035,7 +1109,7 @@ async def delete_codex_workspace(workspace_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     workspace = await codex_store.load_codex_workspace(workspace_id)
     if not workspace:
-        raise HTTPException(status_code=404, detail="Codex workspace not found")
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
     # Terminate if running first
     mgr = get_codex_process_manager()
     try:
@@ -1100,7 +1174,7 @@ async def create_codex_issue(request: CreateIssueRequest):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     workspace = await codex_store.load_codex_workspace(request.session_id)
     if workspace is None:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+        raise HTTPException(status_code=404, detail=f"Workspace '{request.session_id}' not found")
 
     from app.domain.models import CodexIssue
 
@@ -1132,7 +1206,7 @@ async def get_codex_issue(issue_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
     return issue
 
 
@@ -1144,7 +1218,7 @@ async def update_codex_issue_phase(issue_id: str, request: UpdateIssuePhaseReque
         raise HTTPException(status_code=400, detail=f"Invalid issue phase: {request.current_phase}")
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
     issue.current_phase = request.current_phase
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
@@ -1157,7 +1231,7 @@ async def update_codex_issue_pin(issue_id: str, request: UpdateIssuePinRequest):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
     issue.is_pinned = request.is_pinned
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
@@ -1170,7 +1244,7 @@ async def duplicate_codex_issue(issue_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
     import uuid
     new_issue = CodexIssue(
         id=str(uuid.uuid4()),
@@ -1194,13 +1268,13 @@ async def transition_codex_issue_to_architecture(issue_id: str):
 
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
     if issue.current_phase not in ["requirements", "architecture"]:
         raise HTTPException(status_code=409, detail="只有需求或架构阶段的 issue 才能流转到架构")
 
     session = await codex_store.load_codex_session(issue.session_id)
     if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=f"Session '{issue.session_id}' not found")
 
     tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
     if any(_is_task_running(task.get("status")) for task in tasks):
@@ -1330,13 +1404,13 @@ async def transition_codex_issue_to_development(issue_id: str):
 
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
     if issue.current_phase not in ["architecture", "development"]:
         raise HTTPException(status_code=409, detail="只有架构或开发阶段的 issue 才能流转到开发")
 
     session = await codex_store.load_codex_session(issue.session_id)
     if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=f"Session '{issue.session_id}' not found")
 
     tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
     if any(_is_task_running(task.get("status")) for task in tasks):
@@ -1402,7 +1476,7 @@ async def get_codex_issue_artifacts(issue_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
 
     workspace = await codex_store.load_codex_workspace(issue.session_id)
     if workspace is None:
@@ -1496,7 +1570,7 @@ async def delete_codex_issue(issue_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
 
     session = await codex_store.load_codex_workspace(issue.session_id)
     tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)

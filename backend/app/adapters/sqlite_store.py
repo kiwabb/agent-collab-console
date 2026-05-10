@@ -1,8 +1,10 @@
 import json
+import logging
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-import sqlite3
+logger = logging.getLogger(__name__)
 
 from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog
 
@@ -18,311 +20,346 @@ class SQLiteStore:
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
+    def _execute(self, conn: sqlite3.Connection, query: str, params: tuple = ()) -> sqlite3.Cursor:
+        """Execute a query with error handling and rollback on failure."""
+        try:
+            return conn.execute(query, params)
+        except sqlite3.Error as e:
+            logger.error("Database error: %s | query: %s | params: %s", e, query, params)
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+
+    def _execute_with_commit(self, conn: sqlite3.Connection, query: str, params: tuple = ()) -> sqlite3.Cursor:
+        """Execute a query with commit, rolling back on failure."""
+        try:
+            cur = conn.execute(query, params)
+            conn.commit()
+            return cur
+        except sqlite3.Error as e:
+            logger.error("Database error: %s | query: %s | params: %s", e, query, params)
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+
     def _init_db(self):
         conn = self._get_conn()
-        conn.executescript("""
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                state TEXT NOT NULL DEFAULT 'draft'
-            );
-            CREATE TABLE IF NOT EXISTS tasks (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                assignee TEXT,
-                status TEXT DEFAULT 'pending',
-                created_at TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            );
-            CREATE TABLE IF NOT EXISTS runs (
-                id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                status TEXT DEFAULT 'running',
-                summary TEXT,
-                payload TEXT,
-                created_at TEXT,
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            );
-            CREATE TABLE IF NOT EXISTS artifacts (
-                id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                content TEXT NOT NULL,
-                steps TEXT,
-                created_at TEXT,
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            );
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT,
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            );
-            CREATE TABLE IF NOT EXISTS approvals (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                status TEXT DEFAULT 'pending',
-                created_at TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            );
-            CREATE TABLE IF NOT EXISTS approval_events (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                approval_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                created_at TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            );
-            CREATE TABLE IF NOT EXISTS codex_sessions (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                cwd TEXT NOT NULL,
-                status TEXT DEFAULT 'idle',
-                created_at TEXT,
-                last_active_at TEXT,
-                log_path TEXT,
-                thread_id TEXT,
-                claude_thread_id TEXT
-            );
-            CREATE TABLE IF NOT EXISTS codex_messages (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT,
-                FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
-            );
-            CREATE TABLE IF NOT EXISTS codex_issues (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT,
-                current_phase TEXT NOT NULL DEFAULT 'requirements',
-                status TEXT NOT NULL DEFAULT 'open',
-                is_pinned INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT,
-                updated_at TEXT,
-                FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
-            );
-            CREATE TABLE IF NOT EXISTS codex_tasks (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                issue_id TEXT,
-                phase TEXT DEFAULT 'requirements',
-                title TEXT NOT NULL,
-                prompt TEXT NOT NULL,
-                role TEXT DEFAULT 'general',
-                executor TEXT DEFAULT 'codex',
-                provider TEXT,
-                model TEXT,
-                status TEXT DEFAULT 'pending',
-                result TEXT,
-                parent_task_id TEXT,
-                task_kind TEXT DEFAULT 'normal',
-                blocked_by_help_id TEXT,
-                workspace_path TEXT,
-                resume_session_id TEXT,
-                resume_message_id TEXT,
-                last_execution_process_id TEXT,
-                sequence_index INTEGER,
-                sequence_group TEXT,
-                review_comment TEXT,
-                created_at TEXT,
-                updated_at TEXT,
-                FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
-            );
-            CREATE TABLE IF NOT EXISTS codex_task_messages (
-                id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL,
-                execution_process_id TEXT,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT,
-                FOREIGN KEY (task_id) REFERENCES codex_tasks(id)
-            );
-            CREATE TABLE IF NOT EXISTS log_events (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                stream TEXT NOT NULL DEFAULT 'stdout',
-                content TEXT NOT NULL,
-                task_id TEXT,
-                execution_process_id TEXT,
-                created_at TEXT,
-                FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
-            );
-            CREATE TABLE IF NOT EXISTS execution_processes (
-                id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'Running',
-                exit_code INTEGER,
-                started_at TEXT,
-                completed_at TEXT,
-                created_at TEXT,
-                updated_at TEXT,
-                FOREIGN KEY (task_id) REFERENCES codex_tasks(id),
-                FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
-            );
-            CREATE TABLE IF NOT EXISTS help_requests (
-                id TEXT PRIMARY KEY,
-                workspace_id TEXT NOT NULL,
-                parent_task_id TEXT NOT NULL,
-                child_task_id TEXT NOT NULL,
-                source_executor TEXT NOT NULL,
-                target_executor TEXT NOT NULL,
-                title TEXT NOT NULL,
-                prompt TEXT NOT NULL,
-                context_summary TEXT,
-                status TEXT NOT NULL DEFAULT 'pending',
-                error_message TEXT,
-                continuation_payload TEXT,
-                created_at TEXT,
-                started_at TEXT,
-                completed_at TEXT,
-                timeout_at TEXT,
-                consumed_at TEXT
-            );
-        """)
-        # Add created_at column to existing tables if not present (backward compatibility)
-        for table in ["tasks", "runs", "artifacts", "messages", "approvals", "approval_events"]:
+        try:
+            conn.executescript("""
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'draft'
+                );
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    assignee TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
+                );
+                CREATE TABLE IF NOT EXISTS runs (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    status TEXT DEFAULT 'running',
+                    summary TEXT,
+                    payload TEXT,
+                    created_at TEXT,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id)
+                );
+                CREATE TABLE IF NOT EXISTS artifacts (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    steps TEXT,
+                    created_at TEXT,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id)
+                );
+                CREATE TABLE IF NOT EXISTS messages (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id)
+                );
+                CREATE TABLE IF NOT EXISTS approvals (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
+                );
+                CREATE TABLE IF NOT EXISTS approval_events (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    approval_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    created_at TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
+                );
+                CREATE TABLE IF NOT EXISTS codex_sessions (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    cwd TEXT NOT NULL,
+                    status TEXT DEFAULT 'idle',
+                    created_at TEXT,
+                    last_active_at TEXT,
+                    log_path TEXT,
+                    thread_id TEXT,
+                    claude_thread_id TEXT
+                );
+                CREATE TABLE IF NOT EXISTS codex_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT,
+                    FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
+                );
+                CREATE TABLE IF NOT EXISTS codex_issues (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    current_phase TEXT NOT NULL DEFAULT 'requirements',
+                    status TEXT NOT NULL DEFAULT 'open',
+                    is_pinned INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
+                );
+                CREATE TABLE IF NOT EXISTS codex_tasks (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    issue_id TEXT,
+                    phase TEXT DEFAULT 'requirements',
+                    title TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    role TEXT DEFAULT 'general',
+                    executor TEXT DEFAULT 'codex',
+                    provider TEXT,
+                    model TEXT,
+                    status TEXT DEFAULT 'pending',
+                    result TEXT,
+                    parent_task_id TEXT,
+                    task_kind TEXT DEFAULT 'normal',
+                    blocked_by_help_id TEXT,
+                    workspace_path TEXT,
+                    resume_session_id TEXT,
+                    resume_message_id TEXT,
+                    last_execution_process_id TEXT,
+                    sequence_index INTEGER,
+                    sequence_group TEXT,
+                    review_comment TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
+                );
+                CREATE TABLE IF NOT EXISTS codex_task_messages (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    execution_process_id TEXT,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT,
+                    FOREIGN KEY (task_id) REFERENCES codex_tasks(id)
+                );
+                CREATE TABLE IF NOT EXISTS log_events (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    stream TEXT NOT NULL DEFAULT 'stdout',
+                    content TEXT NOT NULL,
+                    task_id TEXT,
+                    execution_process_id TEXT,
+                    created_at TEXT,
+                    FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
+                );
+                CREATE TABLE IF NOT EXISTS execution_processes (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'Running',
+                    exit_code INTEGER,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    FOREIGN KEY (task_id) REFERENCES codex_tasks(id),
+                    FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
+                );
+                CREATE TABLE IF NOT EXISTS help_requests (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    parent_task_id TEXT NOT NULL,
+                    child_task_id TEXT NOT NULL,
+                    source_executor TEXT NOT NULL,
+                    target_executor TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    context_summary TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    error_message TEXT,
+                    continuation_payload TEXT,
+                    created_at TEXT,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    timeout_at TEXT,
+                    consumed_at TEXT
+                );
+            """)
+            # Add created_at column to existing tables if not present (backward compatibility)
+            for table in ["tasks", "runs", "artifacts", "messages", "approvals", "approval_events"]:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN created_at TEXT")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+            # Add thread_id column to codex_sessions for session resume support
             try:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN created_at TEXT")
+                conn.execute("ALTER TABLE codex_sessions ADD COLUMN thread_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-        # Add thread_id column to codex_sessions for session resume support
-        try:
-            conn.execute("ALTER TABLE codex_sessions ADD COLUMN thread_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_sessions ADD COLUMN claude_thread_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        # Add task_id column to log_events for task-scoped log attribution
-        try:
-            conn.execute("ALTER TABLE log_events ADD COLUMN task_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_task_messages ADD COLUMN execution_process_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE log_events ADD COLUMN execution_process_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        # Add executor column to codex_tasks for dual-executor support
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN phase TEXT DEFAULT 'requirements'")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN issue_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN role TEXT DEFAULT 'general'")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN executor TEXT DEFAULT 'codex'")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_session_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_message_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN workspace_path TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN last_execution_process_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN task_kind TEXT DEFAULT 'normal'")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN blocked_by_help_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        # Add provider and model columns to codex_tasks
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN provider TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN model TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        # Add executor/provider/model snapshot columns to execution_processes
-        try:
-            conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE execution_processes ADD COLUMN provider TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE execution_processes ADD COLUMN model TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_index INTEGER")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_group TEXT")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute("ALTER TABLE codex_tasks ADD COLUMN review_comment TEXT")
-        except sqlite3.OperationalError:
-            pass
-        # Create runtime_catalog_settings table if not exists
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS runtime_catalog_settings (
-                id TEXT PRIMARY KEY,
-                data TEXT NOT NULL
-            )
-        """)
-        # Create indexes for frequently queried columns
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_parent_task_id ON codex_tasks(parent_task_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_status ON codex_tasks(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_task_kind ON codex_tasks(task_kind)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_issues_session_id ON codex_issues(session_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_task_messages_task_id ON codex_task_messages(task_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_task_messages_execution_process_id ON codex_task_messages(execution_process_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_session_id ON log_events(session_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_task_id ON log_events(task_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_session_id ON execution_processes(session_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_task_id ON execution_processes(task_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)")
-        conn.commit()
-        conn.close()
+            try:
+                conn.execute("ALTER TABLE codex_sessions ADD COLUMN claude_thread_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            # Add task_id column to log_events for task-scoped log attribution
+            try:
+                conn.execute("ALTER TABLE log_events ADD COLUMN task_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_task_messages ADD COLUMN execution_process_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE log_events ADD COLUMN execution_process_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            # Add executor column to codex_tasks for dual-executor support
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN phase TEXT DEFAULT 'requirements'")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN issue_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN role TEXT DEFAULT 'general'")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN executor TEXT DEFAULT 'codex'")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_session_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_message_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN workspace_path TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN last_execution_process_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN task_kind TEXT DEFAULT 'normal'")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN blocked_by_help_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            # Add provider and model columns to codex_tasks
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN provider TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN model TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            # Add executor/provider/model snapshot columns to execution_processes
+            try:
+                conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE execution_processes ADD COLUMN provider TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE execution_processes ADD COLUMN model TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_index INTEGER")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_group TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN review_comment TEXT")
+            except sqlite3.OperationalError:
+                pass
+            # Create runtime_catalog_settings table if not exists
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS runtime_catalog_settings (
+                    id TEXT PRIMARY KEY,
+                    data TEXT NOT NULL
+                )
+            """)
+            # Create indexes for frequently queried columns
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_parent_task_id ON codex_tasks(parent_task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_status ON codex_tasks(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_task_kind ON codex_tasks(task_kind)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_issues_session_id ON codex_issues(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_task_messages_task_id ON codex_task_messages(task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_task_messages_execution_process_id ON codex_task_messages(execution_process_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_session_id ON log_events(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_task_id ON log_events(task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_session_id ON execution_processes(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_task_id ON execution_processes(task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)")
+            conn.commit()
+        except sqlite3.Error as e:
+            logger.error("Database initialization error: %s", e)
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def _ensure_db(self):
         """Re-run schema creation so callers never hit a missing-table error."""
@@ -338,142 +375,159 @@ class SQLiteStore:
 
     def save_session(self, session: Session):
         conn = self._get_conn()
-        conn.execute(
-            "INSERT OR REPLACE INTO sessions (id, title, state) VALUES (?, ?, ?)",
-            (session.id, session.title, session.state.value),
-        )
-        for task in session.tasks:
+        try:
             conn.execute(
-                "INSERT OR REPLACE INTO tasks (id, session_id, title, assignee, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (task.id, session.id, task.title, task.assignee, task.status, self._format_datetime(task.created_at)),
+                "INSERT OR REPLACE INTO sessions (id, title, state) VALUES (?, ?, ?)",
+                (session.id, session.title, session.state.value),
             )
-        for run in session.runs:
-            conn.execute(
-                "INSERT OR REPLACE INTO runs (id, task_id, agent_id, role, status, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (run.id, run.task_id, run.agent_id, run.role, run.status, run.summary, json.dumps(run.payload) if run.payload else None, self._format_datetime(run.created_at)),
-            )
-        for artifact in session.artifacts:
-            content = artifact.content
-            if hasattr(content, "model_dump"):
-                content = json.dumps(content.model_dump())
-            elif not isinstance(content, str):
-                content = json.dumps(content)
-            conn.execute(
-                "INSERT OR REPLACE INTO artifacts (id, task_id, kind, content, steps, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (artifact.id, artifact.task_id, artifact.kind, content, json.dumps(artifact.steps) if artifact.steps else None, self._format_datetime(artifact.created_at)),
-            )
-        for message in session.messages:
-            conn.execute(
-                "INSERT OR REPLACE INTO messages (id, task_id, agent_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (message.id, message.task_id, message.agent_id, message.role, message.content, self._format_datetime(message.created_at)),
-            )
-        for approval in session.approvals:
-            conn.execute(
-                "INSERT OR REPLACE INTO approvals (id, session_id, task_id, action, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (approval.id, approval.session_id, approval.task_id, approval.action, approval.status, self._format_datetime(approval.created_at)),
-            )
-        for event in session.approval_events:
-            conn.execute(
-                "INSERT OR REPLACE INTO approval_events (id, session_id, task_id, approval_id, event_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (event.id, event.session_id, event.task_id, event.approval_id, event.event_type, self._format_datetime(event.created_at)),
-            )
-        conn.commit()
-        conn.close()
+            for task in session.tasks:
+                conn.execute(
+                    "INSERT OR REPLACE INTO tasks (id, session_id, title, assignee, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (task.id, session.id, task.title, task.assignee, task.status, self._format_datetime(task.created_at)),
+                )
+            for run in session.runs:
+                conn.execute(
+                    "INSERT OR REPLACE INTO runs (id, task_id, agent_id, role, status, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (run.id, run.task_id, run.agent_id, run.role, run.status, run.summary, json.dumps(run.payload) if run.payload else None, self._format_datetime(run.created_at)),
+                )
+            for artifact in session.artifacts:
+                content = artifact.content
+                if hasattr(content, "model_dump"):
+                    content = json.dumps(content.model_dump())
+                elif not isinstance(content, str):
+                    content = json.dumps(content)
+                conn.execute(
+                    "INSERT OR REPLACE INTO artifacts (id, task_id, kind, content, steps, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (artifact.id, artifact.task_id, artifact.kind, content, json.dumps(artifact.steps) if artifact.steps else None, self._format_datetime(artifact.created_at)),
+                )
+            for message in session.messages:
+                conn.execute(
+                    "INSERT OR REPLACE INTO messages (id, task_id, agent_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (message.id, message.task_id, message.agent_id, message.role, message.content, self._format_datetime(message.created_at)),
+                )
+            for approval in session.approvals:
+                conn.execute(
+                    "INSERT OR REPLACE INTO approvals (id, session_id, task_id, action, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (approval.id, approval.session_id, approval.task_id, approval.action, approval.status, self._format_datetime(approval.created_at)),
+                )
+            for event in session.approval_events:
+                conn.execute(
+                    "INSERT OR REPLACE INTO approval_events (id, session_id, task_id, approval_id, event_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (event.id, event.session_id, event.task_id, event.approval_id, event.event_type, self._format_datetime(event.created_at)),
+                )
+            conn.commit()
+        except sqlite3.Error as e:
+            logger.error("Database error saving session %s: %s", session.id, e)
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def load_session(self, session_id: str) -> Session | None:
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        cur = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
-        row = cur.fetchone()
-        if not row:
+        try:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return None
+
+            session = Session(
+                id=row["id"],
+                title=row["title"],
+                state=row["state"],
+            )
+
+            # Load tasks
+            for t_row in conn.execute("SELECT * FROM tasks WHERE session_id = ?", (session_id,)):
+                session.tasks.append(Task(
+                    id=t_row["id"],
+                    session_id=t_row["session_id"],
+                    title=t_row["title"],
+                    assignee=t_row["assignee"],
+                    status=t_row["status"],
+                    created_at=self._parse_datetime(t_row["created_at"]),
+                ))
+
+            # Load runs
+            for r_row in conn.execute("SELECT * FROM runs WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
+                session.runs.append(AgentRun(
+                    id=r_row["id"],
+                    task_id=r_row["task_id"],
+                    agent_id=r_row["agent_id"],
+                    role=r_row["role"],
+                    status=r_row["status"],
+                    summary=r_row["summary"],
+                    payload=json.loads(r_row["payload"]) if r_row["payload"] else None,
+                    created_at=self._parse_datetime(r_row["created_at"]),
+                ))
+
+            # Load artifacts
+            for a_row in conn.execute("SELECT * FROM artifacts WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
+                content = a_row["content"]
+                try:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, dict):
+                        content = PlanDetails(**parsed)
+                    else:
+                        content = parsed
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                session.artifacts.append(Artifact(
+                    id=a_row["id"],
+                    task_id=a_row["task_id"],
+                    kind=a_row["kind"],
+                    content=content,
+                    steps=json.loads(a_row["steps"]) if a_row["steps"] else None,
+                    created_at=self._parse_datetime(a_row["created_at"]),
+                ))
+
+            # Load messages
+            for m_row in conn.execute("SELECT * FROM messages WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
+                session.messages.append(Message(
+                    id=m_row["id"],
+                    task_id=m_row["task_id"],
+                    agent_id=m_row["agent_id"],
+                    role=m_row["role"],
+                    content=m_row["content"],
+                    created_at=self._parse_datetime(m_row["created_at"]),
+                ))
+
+            # Load approvals
+            for ap_row in conn.execute("SELECT * FROM approvals WHERE session_id = ?", (session_id,)):
+                session.approvals.append(Approval(
+                    id=ap_row["id"],
+                    session_id=ap_row["session_id"],
+                    task_id=ap_row["task_id"],
+                    action=ap_row["action"],
+                    status=ap_row["status"],
+                    created_at=self._parse_datetime(ap_row["created_at"]),
+                ))
+
+            # Load approval events
+            for ev_row in conn.execute("SELECT * FROM approval_events WHERE session_id = ?", (session_id,)):
+                session.approval_events.append(ApprovalEvent(
+                    id=ev_row["id"],
+                    session_id=ev_row["session_id"],
+                    task_id=ev_row["task_id"],
+                    approval_id=ev_row["approval_id"],
+                    event_type=ev_row["event_type"],
+                    created_at=self._parse_datetime(ev_row["created_at"]),
+                ))
+
             conn.close()
-            return None
-
-        session = Session(
-            id=row["id"],
-            title=row["title"],
-            state=row["state"],
-        )
-
-        # Load tasks
-        for t_row in conn.execute("SELECT * FROM tasks WHERE session_id = ?", (session_id,)):
-            session.tasks.append(Task(
-                id=t_row["id"],
-                session_id=t_row["session_id"],
-                title=t_row["title"],
-                assignee=t_row["assignee"],
-                status=t_row["status"],
-                created_at=self._parse_datetime(t_row["created_at"]),
-            ))
-
-        # Load runs
-        for r_row in conn.execute("SELECT * FROM runs WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
-            session.runs.append(AgentRun(
-                id=r_row["id"],
-                task_id=r_row["task_id"],
-                agent_id=r_row["agent_id"],
-                role=r_row["role"],
-                status=r_row["status"],
-                summary=r_row["summary"],
-                payload=json.loads(r_row["payload"]) if r_row["payload"] else None,
-                created_at=self._parse_datetime(r_row["created_at"]),
-            ))
-
-        # Load artifacts
-        for a_row in conn.execute("SELECT * FROM artifacts WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
-            content = a_row["content"]
+            return session
+        except sqlite3.Error as e:
+            logger.error("Database error loading session %s: %s", session_id, e)
             try:
-                parsed = json.loads(content)
-                if isinstance(parsed, dict):
-                    content = PlanDetails(**parsed)
-                else:
-                    content = parsed
-            except (json.JSONDecodeError, TypeError):
+                conn.rollback()
+            except sqlite3.Error:
                 pass
-            session.artifacts.append(Artifact(
-                id=a_row["id"],
-                task_id=a_row["task_id"],
-                kind=a_row["kind"],
-                content=content,
-                steps=json.loads(a_row["steps"]) if a_row["steps"] else None,
-                created_at=self._parse_datetime(a_row["created_at"]),
-            ))
-
-        # Load messages
-        for m_row in conn.execute("SELECT * FROM messages WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
-            session.messages.append(Message(
-                id=m_row["id"],
-                task_id=m_row["task_id"],
-                agent_id=m_row["agent_id"],
-                role=m_row["role"],
-                content=m_row["content"],
-                created_at=self._parse_datetime(m_row["created_at"]),
-            ))
-
-        # Load approvals
-        for ap_row in conn.execute("SELECT * FROM approvals WHERE session_id = ?", (session_id,)):
-            session.approvals.append(Approval(
-                id=ap_row["id"],
-                session_id=ap_row["session_id"],
-                task_id=ap_row["task_id"],
-                action=ap_row["action"],
-                status=ap_row["status"],
-                created_at=self._parse_datetime(ap_row["created_at"]),
-            ))
-
-        # Load approval events
-        for ev_row in conn.execute("SELECT * FROM approval_events WHERE session_id = ?", (session_id,)):
-            session.approval_events.append(ApprovalEvent(
-                id=ev_row["id"],
-                session_id=ev_row["session_id"],
-                task_id=ev_row["task_id"],
-                approval_id=ev_row["approval_id"],
-                event_type=ev_row["event_type"],
-                created_at=self._parse_datetime(ev_row["created_at"]),
-            ))
-
-        conn.close()
-        return session
+            raise
 
     def list_sessions(self) -> list[dict]:
         """List all sessions with id, title, state."""
@@ -488,24 +542,33 @@ class SQLiteStore:
     def save_codex_session(self, session: CodexSession):
         self._ensure_db()
         conn = self._get_conn()
-        conn.execute(
-            "INSERT OR REPLACE INTO codex_sessions (id, title, cwd, status, created_at, last_active_at, log_path, thread_id, claude_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (session.id, session.title, session.cwd, session.status,
-             self._format_datetime(session.created_at),
-             self._format_datetime(session.last_active_at),
-             session.log_path,
-             session.thread_id,
-             session.claude_thread_id),
-        )
-        # Persist messages
-        conn.execute("DELETE FROM codex_messages WHERE session_id = ?", (session.id,))
-        for msg in session.messages:
+        try:
             conn.execute(
-                "INSERT INTO codex_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
-                (msg.id, msg.session_id, msg.role, msg.content, self._format_datetime(msg.created_at)),
+                "INSERT OR REPLACE INTO codex_sessions (id, title, cwd, status, created_at, last_active_at, log_path, thread_id, claude_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (session.id, session.title, session.cwd, session.status,
+                 self._format_datetime(session.created_at),
+                 self._format_datetime(session.last_active_at),
+                 session.log_path,
+                 session.thread_id,
+                 session.claude_thread_id),
             )
-        conn.commit()
-        conn.close()
+            # Persist messages
+            conn.execute("DELETE FROM codex_messages WHERE session_id = ?", (session.id,))
+            for msg in session.messages:
+                conn.execute(
+                    "INSERT INTO codex_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (msg.id, msg.session_id, msg.role, msg.content, self._format_datetime(msg.created_at)),
+                )
+            conn.commit()
+        except sqlite3.Error as e:
+            logger.error("Database error saving codex session %s: %s", session.id, e)
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def save_codex_workspace(self, workspace: CodexSession):
         self.save_codex_session(workspace)
