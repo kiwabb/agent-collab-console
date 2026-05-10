@@ -162,6 +162,54 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
+
+  /* Font size preferences */
+  [data-font-size="small"] {
+    --text-xs: 10px;
+    --text-sm: 12px;
+    --text-base: 14px;
+    --text-lg: 16px;
+    --text-xl: 18px;
+    --text-2xl: 20px;
+    --text-3xl: 24px;
+  }
+  [data-font-size="medium"] {
+    --text-xs: 11px;
+    --text-sm: 13px;
+    --text-base: 15px;
+    --text-lg: 17px;
+    --text-xl: 19px;
+    --text-2xl: 21px;
+    --text-3xl: 25px;
+  }
+  [data-font-size="large"] {
+    --text-xs: 12px;
+    --text-sm: 14px;
+    --text-base: 16px;
+    --text-lg: 18px;
+    --text-xl: 20px;
+    --text-2xl: 24px;
+    --text-3xl: 28px;
+  }
+
+  /* Compact mode */
+  [data-compact-mode="true"] .compact-shrink { gap: 0.25rem; padding: 0.25rem; }
+  [data-compact-mode="true"] .compact-text { font-size: 0.9em; }
+  [data-compact-mode="true"] .compact-card { padding: 0.75rem; }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+  [style*="--motion-reduced: reduce"] *, [style*="--motion-reduced:reduce"] * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 [data-theme="light"] {

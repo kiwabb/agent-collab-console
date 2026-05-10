@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme, type ThemePreference } from "@/providers/ThemeProvider";
+import { usePreferences, type FontSize } from "@/providers/PreferencesProvider";
 import { useI18n } from "@/providers/I18nProvider";
 import { getRuntimeCatalog, updateRuntimeCatalog } from "@/lib/api";
 import { RuntimeCatalogEditor } from "@/components/runtime/RuntimeCatalogEditor";
@@ -24,7 +25,10 @@ import {
   Palette,
   Check,
   Activity,
-  AlertCircle
+  AlertCircle,
+  Type,
+  Zap,
+  LayoutGrid,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Locale } from "@/lib/i18n";
@@ -33,6 +37,7 @@ import type { RuntimeCatalog } from "@/lib/types";
 export function SettingsPage() {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
+  const { fontSize, reducedMotion, compactMode, setFontSize, setReducedMotion, setCompactMode } = usePreferences();
   const { locale, setLocale, t } = useI18n();
   const [runtimeCatalog, setRuntimeCatalog] = useState<RuntimeCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,6 +61,12 @@ export function SettingsPage() {
   const localeOptions: { value: Locale; label: string }[] = [
     { value: "zh-CN", label: t("settings.language.zh") },
     { value: "en-US", label: t("settings.language.en") },
+  ];
+
+  const fontSizeOptions: { value: FontSize; label: string }[] = [
+    { value: "small", label: t("settings.fontSize.small") },
+    { value: "medium", label: t("settings.fontSize.medium") },
+    { value: "large", label: t("settings.fontSize.large") },
   ];
 
   return (
@@ -240,6 +251,117 @@ export function SettingsPage() {
                           </div>}
                         </button>
                       ))}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
+                    <CardHeader className="pb-4">
+                      <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
+                        {t("settings.fontSize")}
+                      </CardTitle>
+                      <CardDescription className="text-xs font-medium">
+                        {t("settings.fontSize")} / {t("settings.fontSize.medium")}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {fontSizeOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          onClick={() => setFontSize(option.value)}
+                          className={cn(
+                            "w-full flex items-center gap-4 p-3 rounded-xl border transition-all text-left group",
+                            fontSize === option.value
+                              ? "bg-brand/5 border-brand/30 text-brand ring-1 ring-brand/20"
+                              : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary"
+                          )}
+                        >
+                          <div className={cn(
+                            "size-10 rounded-lg flex items-center justify-center transition-all",
+                            fontSize === option.value ? "bg-brand/10 scale-110" : "bg-surface-raised group-hover:bg-surface-hover"
+                          )}>
+                            <Type size={18} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-bold">{option.label}</p>
+                            <p className="text-[10px] opacity-60">{t(`settings.fontSize.${option.value}`)}</p>
+                          </div>
+                          {fontSize === option.value && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
+                            <Check size={12} className="text-background" />
+                          </div>}
+                        </button>
+                      ))}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
+                    <CardHeader className="pb-4">
+                      <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
+                        {t("settings.reducedMotion")}
+                      </CardTitle>
+                      <CardDescription className="text-xs font-medium">
+                        {t("settings.reducedMotionDesc")}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <button
+                        onClick={() => setReducedMotion(!reducedMotion)}
+                        className={cn(
+                          "w-full flex items-center gap-4 p-3 rounded-xl border transition-all text-left group",
+                          reducedMotion
+                            ? "bg-brand/5 border-brand/30 text-brand ring-1 ring-brand/20"
+                            : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary"
+                        )}
+                      >
+                        <div className={cn(
+                          "size-10 rounded-lg flex items-center justify-center transition-all",
+                          reducedMotion ? "bg-brand/10 scale-110" : "bg-surface-raised group-hover:bg-surface-hover"
+                        )}>
+                          <Zap size={18} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold">{t("settings.reducedMotion")}</p>
+                          <p className="text-[10px] opacity-60">{reducedMotion ? "ON" : "OFF"}</p>
+                        </div>
+                        {reducedMotion && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
+                          <Check size={12} className="text-background" />
+                        </div>}
+                      </button>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
+                    <CardHeader className="pb-4">
+                      <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
+                        {t("settings.compactMode")}
+                      </CardTitle>
+                      <CardDescription className="text-xs font-medium">
+                        {t("settings.compactModeDesc")}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <button
+                        onClick={() => setCompactMode(!compactMode)}
+                        className={cn(
+                          "w-full flex items-center gap-4 p-3 rounded-xl border transition-all text-left group",
+                          compactMode
+                            ? "bg-brand/5 border-brand/30 text-brand ring-1 ring-brand/20"
+                            : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary"
+                        )}
+                      >
+                        <div className={cn(
+                          "size-10 rounded-lg flex items-center justify-center transition-all",
+                          compactMode ? "bg-brand/10 scale-110" : "bg-surface-raised group-hover:bg-surface-hover"
+                        )}>
+                          <LayoutGrid size={18} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold">{t("settings.compactMode")}</p>
+                          <p className="text-[10px] opacity-60">{compactMode ? "ON" : "OFF"}</p>
+                        </div>
+                        {compactMode && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
+                          <Check size={12} className="text-background" />
+                        </div>}
+                      </button>
                     </CardContent>
                   </Card>
                 </div>

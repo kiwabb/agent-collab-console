@@ -20,7 +20,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { CodexTask, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
-import { Plus, Layout, Activity, Clock, Terminal, Trash2, GripVertical, Link, Check } from "lucide-react";
+import { Plus, Layout, Activity, Clock, Terminal, Trash2, GripVertical, Link, Check, Table2, Kanban } from "lucide-react";
 import { type Phase, PHASE_CONFIG } from "@/features/issues/phaseUtils";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
@@ -51,6 +51,20 @@ function formatRelativeTime(dateStr: string | null): string {
   if (diffHour < 24) return `${diffHour}h ago`;
   if (diffDay < 7) return `${diffDay}d ago`;
   return date.toLocaleDateString();
+}
+
+function formatDuration(startStr: string | null, endStr: string | null): string {
+  if (!startStr) return "-";
+  const start = new Date(startStr).getTime();
+  const end = endStr ? new Date(endStr).getTime() : Date.now();
+  const diffMs = end - start;
+  if (diffMs < 0) return "-";
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour > 0) return `${diffHour}h ${diffMin % 60}m`;
+  if (diffMin > 0) return `${diffMin}m ${diffSec % 60}s`;
+  return `${diffSec}s`;
 }
 
 function isDevelopmentTaskUnlocked(task: CodexTask, allTasks: CodexTask[]): boolean {
@@ -220,6 +234,7 @@ export function TaskBoard({
   const [deleteIssueOpen, setDeleteIssueOpen] = useState(false);
   const [isDeletingIssue, setIsDeletingIssue] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"kanban" | "table">("kanban");
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -338,6 +353,28 @@ export function TaskBoard({
                 catalog={catalog}
                 className="w-full min-w-[36rem] lg:min-w-0"
               />
+            </div>
+            <div className="flex items-end gap-1">
+              <Button
+                type="button"
+                variant={viewMode === "kanban" ? "secondary" : "ghost"}
+                size="icon-sm"
+                onClick={() => setViewMode("kanban")}
+                title="Kanban view"
+                className={viewMode === "kanban" ? "bg-brand/10 text-brand" : "text-text-muted"}
+              >
+                <Kanban size={14} />
+              </Button>
+              <Button
+                type="button"
+                variant={viewMode === "table" ? "secondary" : "ghost"}
+                size="icon-sm"
+                onClick={() => setViewMode("table")}
+                title="Table view"
+                className={viewMode === "table" ? "bg-brand/10 text-brand" : "text-text-muted"}
+              >
+                <Table2 size={14} />
+              </Button>
             </div>
             {onDeleteIssue && (
               <Button
