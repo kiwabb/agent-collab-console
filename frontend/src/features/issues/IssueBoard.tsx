@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from "react";
 import type { CodexIssue, CodexTask } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { IssueCard } from "./IssueCard";
 import { SortableIssueCard } from "./SortableIssueCard";
 import { PHASES, type Phase, groupIssuesByPhase } from "./phaseUtils";

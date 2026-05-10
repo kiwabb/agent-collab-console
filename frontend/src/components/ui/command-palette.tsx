@@ -63,7 +63,7 @@ export function useBookmarks() {
     } catch {}
   }, []);
 
-  const addBookmark = useCallback((item: Omit<BookmarkItem, "addedAt" | "id">) => {
+  const addBookmark = useCallback((item: Omit<BookmarkItem, "addedAt">) => {
     setBookmarks((prev) => {
       const exists = prev.some((b) => b.id === item.id);
       if (exists) return prev;
@@ -98,7 +98,7 @@ export function useHistory() {
     } catch {}
   }, []);
 
-  const addHistory = useCallback((item: Omit<HistoryItem, "timestamp" | "id">) => {
+  const addHistory = useCallback((item: Omit<HistoryItem, "timestamp">) => {
     setHistory((prev) => {
       const existing = prev.findIndex((h) => h.id === item.id);
       let next: HistoryItem[];

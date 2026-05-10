@@ -158,7 +158,6 @@ export function MarkdownEditor({
       textarea.setSelectionRange(newPos, newPos);
     }, 0);
   };
-  };
 
   if (isEditing) {
     return (
@@ -222,7 +221,7 @@ export function MarkdownEditor({
                       insertAtCursor(emojiData.emoji);
                       setShowEmojiPicker(false);
                     }}
-                    skinToneDisabled
+                    skinTonesDisabled
                   />
                 </div>
               )}

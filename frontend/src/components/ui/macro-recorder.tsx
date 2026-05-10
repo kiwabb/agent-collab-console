@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   Keyboard,
-  Record,
+  Circle,
   Square,
   Play,
   Trash2,
@@ -207,7 +207,7 @@ export function MacroRecorder({ open, onOpenChange, onUseMacro }: MacroRecorderP
                 activeTab === t ? "bg-brand/10 text-brand" : "text-text-muted hover:text-foreground"
               )}
             >
-              {t === "record" ? <Record size={12} /> : <Keyboard size={12} />}
+              {t === "record" ? <Circle size={12} /> : <Keyboard size={12} />}
               {t}
             </button>
           ))}
@@ -223,7 +223,7 @@ export function MacroRecorder({ open, onOpenChange, onUseMacro }: MacroRecorderP
                   </Button>
                 ) : (
                   <Button size="sm" onClick={startRecording}>
-                    <Record size={14} className="mr-1" /> Start Recording
+                    <Circle size={14} className="mr-1" /> Start Recording
                   </Button>
                 )}
                 {recording && (

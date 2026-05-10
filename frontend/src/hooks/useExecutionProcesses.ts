@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { applyExecutionProcessPatch } from "@/lib/applyExecutionProcessPatch";
 import { getExecutionProcesses, getWorkspaceStreamUrl } from "@/lib/api";
 import type { ExecutionProcessesState, ExecutionProcess, LogEvent } from "@/lib/types";
