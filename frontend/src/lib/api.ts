@@ -475,6 +475,91 @@ export async function getPendingApprovals(): Promise<PendingApprovalsResponse> {
   return response.json();
 }
 
+export async function exportCodexIssues(sessionId: string | null = null, format: "csv" | "json" = "json"): Promise<string> {
+  const params = new URLSearchParams();
+  if (sessionId) params.set("session_id", sessionId);
+  const query = params.toString();
+  const url = query ? `${API_BASE}/codex/issues/export?${query}` : `${API_BASE}/codex/issues/export`;
+  const response = await fetch(`${url}&format=${format}`);
+  if (!response.ok) {
+    throw new Error(`Export failed: HTTP ${response.status}`);
+  }
+  if (format === "csv") {
+    return response.text();
+  }
+  const data = await response.json();
+  return JSON.stringify(data, null, 2);
+}
+
+export async function exportCodexTasks(sessionId: string | null = null, issueId: string | null = null, format: "csv" | "json" = "json"): Promise<string> {
+  const params = new URLSearchParams();
+  if (sessionId) params.set("session_id", sessionId);
+  if (issueId) params.set("issue_id", issueId);
+  const query = params.toString();
+  const url = query ? `${API_BASE}/codex/tasks/export?${query}` : `${API_BASE}/codex/tasks/export`;
+  const response = await fetch(`${url}&format=${format}`);
+  if (!response.ok) {
+    throw new Error(`Export failed: HTTP ${response.status}`);
+  }
+  if (format === "csv") {
+    return response.text();
+  }
+  const data = await response.json();
+  return JSON.stringify(data, null, 2);
+}
+
+export async function importCodexIssues(sessionId: string, data: string, format: "csv" | "json"): Promise<CodexIssue[]> {
+  const formData = new FormData();
+  formData.append("data", data);
+  formData.append("format", format);
+  const response = await fetch(`${API_BASE}/codex/issues/import?session_id=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    body: formData,
+  });
+  return handleResponse<CodexIssue[]>(response);
+}
+
+export async function importCodexTasks(sessionId: string, data: string, format: "csv" | "json"): Promise<CodexTask[]> {
+  const formData = new FormData();
+  formData.append("data", data);
+  formData.append("format", format);
+  const response = await fetch(`${API_BASE}/codex/tasks/import?session_id=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    body: formData,
+  });
+  return handleResponse<CodexTask[]>(response);
+}
+
+export function downloadFile(content: string, filename: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export async function bulkUpdateIssues(issueIds: string[], updates: { current_phase?: string; status?: string }): Promise<CodexIssue[]> {
+  const response = await fetch(`${API_BASE}/codex/issues/bulk-update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ issue_ids: issueIds, updates }),
+  });
+  return handleResponse<CodexIssue[]>(response);
+}
+
+export async function bulkDeleteIssues(issueIds: string[]): Promise<void> {
+  const response = await fetch(`${API_BASE}/codex/issues/bulk-delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ issue_ids: issueIds }),
+  });
+  return handleResponse(response);
+}
+
 // WebSocket URL builders
 export function getWorkspaceStreamUrl(workspaceId: string): string {
   return `${WS_BASE}/api/workspaces/${workspaceId}/execution_processes/ws`;
