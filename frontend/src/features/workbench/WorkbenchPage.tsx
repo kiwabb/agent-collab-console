@@ -77,6 +77,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { createIssueAndInitialTask } from "@/features/workbench/workbenchActions";
+import { KeyboardShortcutsModal } from "@/components/ui/keyboard-shortcuts-modal";
+import { PresenceIndicator } from "@/components/ui/presence-indicator";
 
 type NavigationState = "home" | "workspace" | "issue";
 
@@ -1011,6 +1013,8 @@ function WorkbenchInner({
           onClose={() => setPendingApprovals((prev) => prev.slice(1))}
         />
       )}
+
+      <KeyboardShortcutsModal />
 
     </div>
   );

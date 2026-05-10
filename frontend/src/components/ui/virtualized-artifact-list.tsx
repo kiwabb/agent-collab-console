@@ -3,10 +3,70 @@
 import { useRef, useState, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Artifact } from "@/lib/types";
-import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, Search } from "lucide-react";
+import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { motion, AnimatePresence } from "framer-motion";
+import hljs from "highlight.js/lib/core";
+import json from "highlight.js/lib/languages/json";
+import javascript from "highlight.js/lib/languages/javascript";
+import typescript from "highlight.js/lib/languages/typescript";
+import bash from "highlight.js/lib/languages/bash";
+import markdown from "highlight.js/lib/languages/markdown";
+import xml from "highlight.js/lib/languages/xml";
+import css from "highlight.js/lib/languages/css";
+
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("markdown", markdown);
+hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("css", css);
+
+function detectLanguage(content: string, filename?: string): string {
+  if (filename) {
+    if (filename.endsWith(".json")) return "json";
+    if (filename.endsWith(".ts") || filename.endsWith(".tsx")) return "typescript";
+    if (filename.endsWith(".js") || filename.endsWith(".jsx")) return "javascript";
+    if (filename.endsWith(".md")) return "markdown";
+    if (filename.endsWith(".sh") || filename.endsWith(".bash")) return "bash";
+    if (filename.endsWith(".css")) return "css";
+    if (filename.endsWith(".html") || filename.endsWith(".xml")) return "xml";
+  }
+  try {
+    JSON.parse(content);
+    return "json";
+  } catch {}
+  if (content.includes("function") || content.includes("const ") || content.includes("let ")) {
+    return "javascript";
+  }
+  if (content.includes("<") && content.includes("/>")) return "xml";
+  return "markdown";
+}
+
+function HighlightedCode({ code, language }: { code: string; language: string }) {
+  const highlighted = useMemo(() => {
+    try {
+      if (hljs.getLanguage(language)) {
+        return hljs.highlight(code, { language }).value;
+      }
+      return hljs.highlightAuto(code).value;
+    } catch {
+      return code;
+    }
+  }, [code, language]);
+
+  return (
+    <code
+      className={cn(
+        "text-[12px] leading-relaxed [&_.hljs-keyword]:text-pink-400 [&_.hljs-string]:text-green-400 [&_.hljs-number]:text-orange-400 [&_.hljs-comment]:text-gray-500 [&_.hljs-attr]:text-cyan-400 [&_.hljs-title]:text-blue-400 [&_.hljs-built_in]:text-purple-400 [&_.hljs-literal]:text-orange-400 [&_.hljs-type]:text-cyan-300 [&_.hljs-params]:text-yellow-300 [&_.hljs-meta]:text-gray-400",
+        "whitespace-pre-wrap font-mono bg-background/60 p-5 rounded-xl border border-border-subtle max-h-80 overflow-y-auto no-scrollbar selection:bg-brand/30 block"
+      )}
+      dangerouslySetInnerHTML={{ __html: highlighted }}
+    />
+  );
+}
 
 interface VirtualizedArtifactListProps {
   artifacts: Artifact[];
@@ -165,6 +225,10 @@ function ArtifactItem({
   onToggle: () => void;
 }) {
   const label = artifact.name || artifact.kind;
+  const language = detectLanguage(
+    typeof artifact.content === "string" ? artifact.content : JSON.stringify(artifact.content, null, 2),
+    artifact.name
+  );
 
   return (
     <motion.div
@@ -186,6 +250,9 @@ function ArtifactItem({
             isExpanded ? "bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)]" : "bg-surface-input border border-border-strong"
           )} />
           <span className="truncate tracking-tight">{label}</span>
+          <span className="text-[9px] font-mono uppercase text-text-muted/50 bg-surface-raised px-1.5 py-0.5 rounded border border-border-subtle">
+            {language}
+          </span>
         </div>
         {isExpanded ? (
           <ChevronDown size={16} className="text-brand" />
@@ -203,11 +270,11 @@ function ArtifactItem({
             className="overflow-hidden"
           >
             <div className="px-5 pb-5 pt-0">
-              <pre className="text-[12px] leading-relaxed text-text-secondary/80 whitespace-pre-wrap font-mono bg-background/60 p-5 rounded-xl border border-border-subtle max-h-80 overflow-y-auto no-scrollbar selection:bg-brand/30">
-                {typeof artifact.content === "string"
-                  ? artifact.content
-                  : JSON.stringify(artifact.content, null, 2)}
-              </pre>
+              {typeof artifact.content === "string" ? (
+                <HighlightedCode code={artifact.content} language={language} />
+              ) : (
+                <HighlightedCode code={JSON.stringify(artifact.content, null, 2)} language="json" />
+              )}
             </div>
           </motion.div>
         )}
