@@ -171,6 +171,10 @@ export interface LogEvent {
   created_at: string | null;
 }
 
+export type RunKind = "initial" | "rerun" | "refine" | "chat";
+
+export type RunMode = "chat" | "refine" | "rerun";
+
 export interface ExecutionProcess {
   id: string;
   task_id: string;
@@ -180,6 +184,8 @@ export interface ExecutionProcess {
   executor?: string | null;
   provider?: string | null;
   model?: string | null;
+  kind?: RunKind;
+  triggering_message_id?: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string | null;
@@ -282,6 +288,13 @@ export interface SendMessageRequest {
   content: string;
 }
 
+export interface SendMessageResult {
+  message: CodexTaskMessage;
+  assistant_message: CodexTaskMessage | null;
+  task: CodexTask;
+  execution_process: ExecutionProcess;
+}
+
 export interface ResolveApprovalRequest {
   item_id: string;
   decision: string;
@@ -334,6 +347,12 @@ export interface RuntimeCatalogRequest {
 
 export interface ValidateRuntimeCatalogResponse {
   valid: boolean;
+  error?: string;
+}
+
+export interface TestExecutorResponse {
+  success: boolean;
+  latency_ms?: number;
   error?: string;
 }
 

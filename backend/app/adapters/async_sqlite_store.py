@@ -172,6 +172,8 @@ class AsyncSQLiteStore:
                 completed_at TEXT,
                 created_at TEXT,
                 updated_at TEXT,
+                kind TEXT NOT NULL DEFAULT 'initial',
+                triggering_message_id TEXT,
                 FOREIGN KEY (task_id) REFERENCES codex_tasks(id),
                 FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
             );
@@ -280,6 +282,14 @@ class AsyncSQLiteStore:
             pass
         try:
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN model TEXT")
+        except aiosqlite.OperationalError:
+            pass
+        try:
+            await conn.execute("ALTER TABLE execution_processes ADD COLUMN kind TEXT NOT NULL DEFAULT 'initial'")
+        except aiosqlite.OperationalError:
+            pass
+        try:
+            await conn.execute("ALTER TABLE execution_processes ADD COLUMN triggering_message_id TEXT")
         except aiosqlite.OperationalError:
             pass
         try:
@@ -950,9 +960,10 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
-            "INSERT OR REPLACE INTO execution_processes (id, task_id, session_id, status, exit_code, executor, provider, model, started_at, completed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO execution_processes (id, task_id, session_id, status, exit_code, executor, provider, model, kind, triggering_message_id, started_at, completed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (process.id, process.task_id, process.session_id, process.status, process.exit_code,
              process.executor, process.provider, process.model,
+             process.kind, process.triggering_message_id,
              self._format_datetime(process.started_at),
              self._format_datetime(process.completed_at),
              self._format_datetime(process.created_at),
@@ -977,6 +988,8 @@ class AsyncSQLiteStore:
             executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
             provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
             model=row["model"] if "model" in row.keys() and row["model"] else None,
+            kind=row["kind"] if "kind" in row.keys() and row["kind"] else "initial",
+            triggering_message_id=row["triggering_message_id"] if "triggering_message_id" in row.keys() else None,
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
@@ -1018,6 +1031,8 @@ class AsyncSQLiteStore:
                 executor=r["executor"] if "executor" in r.keys() and r["executor"] else None,
                 provider=r["provider"] if "provider" in r.keys() and r["provider"] else None,
                 model=r["model"] if "model" in r.keys() and r["model"] else None,
+                kind=r["kind"] if "kind" in r.keys() and r["kind"] else "initial",
+                triggering_message_id=r["triggering_message_id"] if "triggering_message_id" in r.keys() else None,
                 started_at=self._parse_datetime(r["started_at"]),
                 completed_at=self._parse_datetime(r["completed_at"]),
                 created_at=self._parse_datetime(r["created_at"]),

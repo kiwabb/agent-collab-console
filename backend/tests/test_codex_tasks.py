@@ -1866,7 +1866,7 @@ class TestTaskExecutorUpdate:
         assert response.json()["executor"] == "codex"
 
     def test_update_task_executor_invalid_value(self, client, monkeypatch, tmp_path):
-        """Verify PATCH rejects invalid executor with 422."""
+        """Verify PATCH rejects unknown executor with 400 (catalog-level validation)."""
         now = datetime.now()
         session = CodexSession(
             id="ws-1",
@@ -1894,7 +1894,7 @@ class TestTaskExecutorUpdate:
 
         response = client.patch(f"/api/codex/tasks/{task.id}", json={"executor": "invalid"})
 
-        assert response.status_code == 422
+        assert response.status_code == 400
 
     def test_update_task_executor_not_found(self, client, monkeypatch, tmp_path):
         """Verify PATCH returns 404 for non-existent task."""

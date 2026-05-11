@@ -12,6 +12,7 @@ import type {
   HelpRequest,
   LogEvent,
   CodexTaskMessage,
+  RunMode,
 } from "@/lib/types";
 import {
   getWorkspaces,
@@ -24,15 +25,20 @@ import {
   updateCodexIssuePhase,
   transitionIssueToArchitecture,
   transitionIssueToDevelopment,
+  transitionIssueToTesting,
   createCodexIssue,
   deleteCodexIssue,
   createCodexTask,
   runCodexTask,
   deleteCodexTask,
   sendCodexTaskMessage,
+  chatCodexTask,
+  refineCodexTask,
+  rerunCodexTask,
   continueCodexTask,
   getExecutionProcessLogs,
   getExecutionProcessMessages,
+  getCodexTaskMessages,
   getPendingApprovals,
   resolveApproval,
   getTaskHelpRequests,
@@ -110,6 +116,7 @@ function WorkbenchInner({
   const [macroRecorderOpen, setMacroRecorderOpen] = useState(false);
   const { runMacro } = useMacros();
   const [isTransitioningToDevelopment, setIsTransitioningToDevelopment] = useState(false);
+  const [isTransitioningToTesting, setIsTransitioningToTesting] = useState(false);
   const { addToast } = useToast();
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
@@ -269,6 +276,26 @@ function WorkbenchInner({
   // Check if ProductManager task is done for requirements phase
   const pmTask = currentTasks.find((t) => t.role === "product_manager");
   const isPmTaskDone = pmTask?.status === "done";
+
+  // All engineer tasks for the issue must be 'done' before testing transition
+  const engineerTasks = currentTasks.filter((t) => t.role === "engineer");
+  const allEngineerTasksDone = engineerTasks.length > 0 && engineerTasks.every((t) => t.status === "done");
+
+  // Parse qa_plan.json (which actually stores the QAReportDocument) for status badge
+  const qaReportStatus = useMemo<"passed" | "failed" | "blocked" | "needs_follow_up" | null>(() => {
+    const qaPlan = artifacts.find((a) => a.name === "qa/qa_plan.json");
+    if (!qaPlan || typeof qaPlan.content !== "string") return null;
+    try {
+      const parsed = JSON.parse(qaPlan.content);
+      const status = parsed?.status;
+      if (status === "passed" || status === "failed" || status === "blocked" || status === "needs_follow_up") {
+        return status;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }, [artifacts]);
   
   const hasActiveIssueTask = currentTasks.some((task) => {
     return isTaskRuntimeActive(task, Object.values(executionProcessesAll) as ExecutionProcess[]);
@@ -388,10 +415,15 @@ function WorkbenchInner({
     setIsLoadingLogs(true);
     setIsLoadingMessages(true);
     setIsLoadingProcess(true);
-    Promise.all([
-      getExecutionProcessLogs(selectedProcessId),
-      getExecutionProcessMessages(selectedProcessId),
-    ])
+    // Logs are EP-scoped; messages are task-scoped so chat history persists
+    // across re-runs / follow-up runs that spawn new execution processes.
+    const selectedEp = (Object.values(executionProcessesAll) as ExecutionProcess[]).find(
+      (p) => p.id === selectedProcessId,
+    );
+    const messagesPromise = selectedEp?.task_id
+      ? getCodexTaskMessages(selectedEp.task_id)
+      : getExecutionProcessMessages(selectedProcessId);
+    Promise.all([getExecutionProcessLogs(selectedProcessId), messagesPromise])
       .then(([logs, msgs]) => {
         if (cancelled) return;
         setProcessLogs(logs);
@@ -601,6 +633,34 @@ function WorkbenchInner({
     }
   }, [currentIssue]);
 
+  const handleTransitionToTesting = useCallback(async () => {
+    if (!currentIssue) return;
+    setIsTransitioningToTesting(true);
+    try {
+      const result = await transitionIssueToTesting(currentIssue.id);
+      setIssues((prev) => prev.map((issue) => (issue.id === result.issue.id ? result.issue : issue)));
+      const qaTask = result.task;
+      if (qaTask) {
+        setTasks((prev) => {
+          const exists = prev.some((task) => task.id === qaTask.id);
+          if (exists) {
+            return prev.map((task) => (task.id === qaTask.id ? qaTask : task));
+          }
+          return [...prev, qaTask];
+        });
+      }
+      const freshArtifacts = await getCodexIssueArtifacts(currentIssue.id);
+      setArtifacts(freshArtifacts);
+      addToast({ type: "success", title: "已流转到测试阶段" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "流转到测试失败";
+      setError(msg);
+      addToast({ type: "error", title: "流转失败", message: msg });
+    } finally {
+      setIsTransitioningToTesting(false);
+    }
+  }, [currentIssue]);
+
   async function handleRunPhaseRole(
     phase: string,
     executor: "codex" | "claude",
@@ -648,16 +708,34 @@ function WorkbenchInner({
     }
   }
 
-  const handleSendMessage = useCallback(async (content: string) => {
+  const handleSendMessage = useCallback(async (content: string, mode: RunMode = "chat") => {
     if (!selectedProcess) return;
     try {
-      await sendCodexTaskMessage(selectedProcess.task_id, content);
-      const msgs = await getExecutionProcessMessages(selectedProcess.id);
+      let result;
+      if (mode === "rerun") {
+        result = await rerunCodexTask(selectedProcess.task_id);
+      } else if (mode === "refine") {
+        result = await refineCodexTask(selectedProcess.task_id, content);
+      } else {
+        result = await chatCodexTask(selectedProcess.task_id, content);
+      }
+      // Backend creates a new execution process for every run. Switch UI to it
+      // for log streaming, but fetch messages task-scoped so prior turns persist.
+      const newProcess = result?.execution_process;
+      if (newProcess?.id) {
+        setSelectedProcessId(newProcess.id);
+      }
+      const msgs = await getCodexTaskMessages(selectedProcess.task_id);
       setProcessMessages(msgs);
+      if (currentWorkspaceId) {
+        await loadWorkspaceData(currentWorkspaceId);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message");
+      const titleMap: Record<RunMode, string> = { chat: "对话失败", refine: "修订失败", rerun: "重跑失败" };
+      addToast({ type: "error", title: titleMap[mode], message: err instanceof Error ? err.message : undefined });
     }
-  }, [selectedProcess]);
+  }, [selectedProcess, currentWorkspaceId]);
 
 
   return (
@@ -1022,6 +1100,16 @@ function WorkbenchInner({
                         }
                         isTransitioningToDevelopment={isTransitioningToDevelopment}
                         onTransitionToDevelopment={handleTransitionToDevelopment}
+                        showTransitionToTesting={currentIssue?.current_phase === "development" || currentIssue?.current_phase === "testing"}
+                        canTransitionToTesting={
+                          (currentIssue?.current_phase === "development" || currentIssue?.current_phase === "testing") &&
+                          !hasActiveIssueTask &&
+                          allEngineerTasksDone &&
+                          !isTransitioningToTesting
+                        }
+                        isTransitioningToTesting={isTransitioningToTesting}
+                        onTransitionToTesting={handleTransitionToTesting}
+                        qaReportStatus={qaReportStatus}
                         onTerminate={async () => {
                           if (currentTaskId) {
                             try {

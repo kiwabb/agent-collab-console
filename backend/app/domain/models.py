@@ -214,6 +214,13 @@ class ExecutionProcess(BaseModel):
     executor: str | None = None  # Resolved executor at run time
     provider: str | None = None  # Resolved provider at run time
     model: str | None = None     # Resolved model at run time
+    # Run intent classification. Drives prompt building and post-run persistence:
+    #   initial / rerun → role workflow prompt + persist artifact
+    #   refine          → "current artifact + user changes" prompt + persist (merge)
+    #   chat            → minimal prompt + CLI session resume; no artifact persist
+    kind: Literal["initial", "rerun", "refine", "chat"] = "initial"
+    # For chat / refine: pointer back to the CodexTaskMessage that triggered this run.
+    triggering_message_id: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime | None = None

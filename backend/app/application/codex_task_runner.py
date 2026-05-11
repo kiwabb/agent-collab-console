@@ -21,7 +21,16 @@ class CodexTaskRunner:
         self._help_orchestrator_factory = help_orchestrator_factory
         self._role_workflow_service = role_workflow_service or RoleWorkflowService()
 
-    async def _create_execution_process(self, task, executor: str, provider: str | None, model: str | None):
+    async def _create_execution_process(
+        self,
+        task,
+        executor: str,
+        provider: str | None,
+        model: str | None,
+        *,
+        kind: str = "initial",
+        triggering_message_id: str | None = None,
+    ):
         now = datetime.now()
         process = ExecutionProcess(
             id=str(uuid4()),
@@ -32,6 +41,8 @@ class CodexTaskRunner:
             executor=executor,
             provider=provider,
             model=model,
+            kind=kind,
+            triggering_message_id=triggering_message_id,
             started_at=now,
             completed_at=None,
             created_at=now,
@@ -53,6 +64,8 @@ class CodexTaskRunner:
         run_executor=None,
         run_provider=None,
         run_model=None,
+        kind: str = "initial",
+        triggering_message_id: str | None = None,
     ):
         if task.status == "running":
             raise ValueError("Task already running")
@@ -69,7 +82,10 @@ class CodexTaskRunner:
         task.status = "running"
         task.updated_at = datetime.now()
         await self.codex_store.save_codex_task(task)
-        exec_process = await self._create_execution_process(task, executor, provider, model)
+        exec_process = await self._create_execution_process(
+            task, executor, provider, model,
+            kind=kind, triggering_message_id=triggering_message_id,
+        )
         await self.event_bus.append({
             "type": "task_status",
             "task_id": task.id,
@@ -90,6 +106,7 @@ class CodexTaskRunner:
         prompt_text = prompt_override if prompt_override is not None else task.prompt
         prompt_text = await self._build_prompt_text(
             task,
+            kind=kind,
             prompt_text=prompt_text,
             prompt_override=prompt_override,
             resume_session_id=resume_session_id,
@@ -181,7 +198,58 @@ class CodexTaskRunner:
 
         return exec_process
 
-    async def _build_prompt_text(self, task, *, prompt_text: str, prompt_override: str | None, resume_session_id: str | None, resume_message_id: str | None) -> str:
+    def _read_current_artifact(self, task) -> str | None:
+        """Read the role's canonical artifact for refine prompt building."""
+        from app.application.issue_artifact_documents import IssueArtifactDocuments
+
+        if not getattr(task, "workspace_path", None):
+            return None
+        docs = IssueArtifactDocuments()
+        issue_id = task.issue_id or task.id
+        role = getattr(task, "role", None)
+        if role == "product_manager":
+            p = docs.pm_prd_json_path(task.workspace_path, issue_id)
+        elif role == "architect":
+            p = docs.architect_system_design_json_path(task.workspace_path, issue_id)
+        elif role == "engineer":
+            p = docs.engineer_implementation_md_path(task.workspace_path, issue_id, task_id=task.id)
+        elif role == "qa":
+            p = docs.qa_plan_json_path(task.workspace_path, issue_id)
+        else:
+            return None
+        try:
+            return p.read_text(encoding="utf-8") if p.exists() else None
+        except OSError:
+            return None
+
+    async def _build_prompt_text(self, task, *, prompt_text: str, prompt_override: str | None, resume_session_id: str | None, resume_message_id: str | None, kind: str = "initial") -> str:
+        # Chat mode: minimal prompt; CLI session resume carries history.
+        # We intentionally do NOT call into role workflow's build_prompt here
+        # (that would re-emit the full schema instructions and the agent would
+        # produce JSON again, overwriting the artifact).
+        if kind == "chat":
+            return (
+                "This is a follow-up conversation about the task. "
+                "Reply in natural language. Do NOT output JSON. "
+                "Do NOT regenerate or modify the task's structured artifact unless the user explicitly asks to.\n\n"
+                f"{prompt_text}"
+            )
+        # Refine mode: embed the current canonical artifact and instruct agent to
+        # re-emit the full artifact incorporating user-requested changes.
+        if kind == "refine":
+            existing = self._read_current_artifact(task)
+            if existing is None:
+                raise ValueError(
+                    f"Refine requires a canonical artifact for task {task.id} (role={getattr(task, 'role', None)})"
+                )
+            return (
+                "You previously produced this artifact for the task:\n\n```\n"
+                + existing
+                + "\n```\n\nThe user requests these changes:\n"
+                + prompt_text
+                + "\n\nRe-emit the FULL artifact (in the same JSON or markdown format) incorporating the requested changes. "
+                + "Do not omit unchanged fields. Match the original schema exactly."
+            )
         # Check if this is a managed role (using role_workflow_service)
         if self._role_workflow_service.is_managed_role(task.role) and prompt_override is None and not (resume_session_id or resume_message_id):
             workspace = await self.codex_store.load_codex_workspace(task.session_id) if self.codex_store is not None else None

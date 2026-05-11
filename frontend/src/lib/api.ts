@@ -14,6 +14,7 @@ import type {
   UpdateIssuePhaseRequest,
   RequestHelpRequest,
   SendMessageRequest,
+  SendMessageResult,
   ResolveApprovalRequest,
   HelpRequest,
   IssuePhaseTransitionResult,
@@ -22,6 +23,7 @@ import type {
   RuntimeCatalog,
   RuntimeCatalogRequest,
   ValidateRuntimeCatalogResponse,
+  TestExecutorResponse,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
@@ -31,8 +33,24 @@ export { API_BASE, WS_BASE };
 
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error((err as { detail?: string }).detail || `HTTP ${response.status}`);
+    let errorMessage = `HTTP ${response.status}`;
+    try {
+      const err = await response.json();
+      errorMessage = (err as { detail?: string }).detail || errorMessage;
+    } catch {
+      // If JSON parsing fails, try reading as text
+      try {
+        const text = await response.text();
+        if (text.includes("<html>") || text.includes("<!DOCTYPE html>")) {
+          errorMessage = `Server Error (${response.status}): The request returned an invalid response. This often happens if the API endpoint is incorrect or the server is down.`;
+        } else if (text.length > 0 && text.length < 200) {
+          errorMessage = text;
+        }
+      } catch {
+        // Fallback to default errorMessage
+      }
+    }
+    throw new Error(errorMessage);
   }
   return response.json() as Promise<T>;
 }
@@ -191,6 +209,13 @@ export async function transitionIssueToDevelopment(issueId: string): Promise<Iss
   return handleResponse<IssuePhaseMultiTaskTransitionResult>(response);
 }
 
+export async function transitionIssueToTesting(issueId: string): Promise<IssuePhaseTransitionResult> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/transition-to-testing`, {
+    method: "POST",
+  });
+  return handleResponse<IssuePhaseTransitionResult>(response);
+}
+
 export async function deleteCodexIssue(issueId: string): Promise<unknown> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}`, {
     method: "DELETE",
@@ -303,14 +328,40 @@ export async function getTaskHelpRequests(taskId: string): Promise<HelpRequest[]
   return response.json();
 }
 
-export async function sendCodexTaskMessage(taskId: string, content: string): Promise<unknown> {
+export async function sendCodexTaskMessage(taskId: string, content: string): Promise<SendMessageResult> {
   const body: SendMessageRequest = { content };
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  return handleResponse(response);
+  return handleResponse<SendMessageResult>(response);
+}
+
+export async function chatCodexTask(taskId: string, content: string): Promise<SendMessageResult> {
+  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  return handleResponse<SendMessageResult>(response);
+}
+
+export async function refineCodexTask(taskId: string, content: string): Promise<SendMessageResult> {
+  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/refine`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  return handleResponse<SendMessageResult>(response);
+}
+
+export async function rerunCodexTask(taskId: string): Promise<SendMessageResult> {
+  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/rerun`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  return handleResponse<SendMessageResult>(response);
 }
 
 export async function updateCodexTaskExecutor(taskId: string, executor: "codex" | "claude"): Promise<CodexTask> {
@@ -371,6 +422,23 @@ export async function validateRuntimeCatalog(catalog: RuntimeCatalog): Promise<V
     body: JSON.stringify(body),
   });
   return handleResponse<ValidateRuntimeCatalogResponse>(response);
+}
+
+export interface TestExecutorRequest {
+  executor_id: string;
+  provider_id?: string | null;
+  model_id?: string | null;
+  api_endpoint?: string | null;
+  api_key?: string | null;
+}
+
+export async function testRuntimeExecutor(request: TestExecutorRequest): Promise<TestExecutorResponse> {
+  const response = await fetch(`${API_BASE}/runtime-catalog/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<TestExecutorResponse>(response);
 }
 
 export async function submitCodexTask(taskId: string): Promise<CodexTask> {

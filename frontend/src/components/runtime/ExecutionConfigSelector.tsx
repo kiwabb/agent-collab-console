@@ -56,7 +56,7 @@ export function normalizeExecutionConfig(
 
   return {
     executor: resolvedExecutor.id,
-    provider: resolvedExecutor.id, // provider now stores the executor id
+    provider: null,
     model: resolvedModel,
   };
 }
@@ -81,7 +81,7 @@ export function ExecutionConfigSelector({
     const executor = catalog?.executors.find((e) => e.id === executorId);
     const nextValue: ExecutionConfigValue = {
       executor: executorId,
-      provider: executorId,
+      provider: null,
       model: executor?.default_model || null,
     };
     if (
@@ -124,7 +124,12 @@ export function ExecutionConfigSelector({
         disabled={disabled || enabledExecutors.length === 0}
       >
         <SelectTrigger className="w-full min-w-0">
-          <SelectValue placeholder="Executor" />
+          <SelectValue placeholder="Executor">
+            {(value) => {
+              const match = enabledExecutors.find((e) => e.id === value);
+              return match ? match.label : "Executor";
+            }}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           <SelectGroup>

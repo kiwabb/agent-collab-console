@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createIssueAndInitialTask, runCodexTaskWithExecutor } from "../src/features/workbench/workbenchActions";
-import { transitionIssueToArchitecture, transitionIssueToDevelopment, updateCodexTaskExecutor } from "../src/lib/api";
+import { transitionIssueToArchitecture, transitionIssueToDevelopment, transitionIssueToTesting, updateCodexTaskExecutor, chatCodexTask, refineCodexTask, rerunCodexTask } from "../src/lib/api";
 import type { CodexTask } from "@/lib/types";
 
 test("createIssueAndInitialTask runs the initial task after creating it", async () => {
@@ -206,6 +206,120 @@ test("transitionIssueToDevelopment posts to the development transition endpoint"
     assert.equal(result.issue.current_phase, "development");
     assert.equal(String(calls[0].input), "/api/codex/issues/issue-1/transition-to-development");
     assert.equal(calls[0].init?.method, "POST");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("transitionIssueToTesting posts to the testing transition endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+
+  globalThis.fetch = async (input, init) => {
+    calls.push({ input, init });
+    return new Response(
+      JSON.stringify({
+        issue: {
+          id: "issue-1",
+          session_id: "ws-1",
+          title: "Add dashboard",
+          description: "Build dashboard",
+          current_phase: "testing",
+          status: "open",
+          created_at: null,
+          updated_at: null,
+        },
+        task: {
+          id: "task-qa-1",
+          session_id: "ws-1",
+          issue_id: "issue-1",
+          phase: "testing",
+          title: "测试 - Add dashboard",
+          prompt: "请基于当前开发产物对该需求进行 QA 验收。",
+          role: "qa",
+          executor: "codex",
+          status: "pending",
+          workspace_path: "/tmp/ws",
+          created_at: null,
+          updated_at: null,
+        },
+        created: true,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  try {
+    const result = await transitionIssueToTesting("issue-1");
+    assert.equal(result.issue.current_phase, "testing");
+    assert.equal(result.task?.role, "qa");
+    assert.equal(result.task?.phase, "testing");
+    assert.equal(result.created, true);
+    assert.equal(String(calls[0].input), "/api/codex/issues/issue-1/transition-to-testing");
+    assert.equal(calls[0].init?.method, "POST");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("chatCodexTask posts to /chat with content", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ input, init });
+    return new Response(
+      JSON.stringify({ message: { id: "m1" }, assistant_message: null, task: { id: "t1" }, execution_process: { id: "ep1", kind: "chat" } }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  try {
+    const result = await chatCodexTask("t1", "你好");
+    assert.equal(result.execution_process.kind, "chat");
+    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/chat");
+    assert.equal(calls[0].init?.method, "POST");
+    assert.equal(JSON.parse(String(calls[0].init?.body)).content, "你好");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("refineCodexTask posts to /refine with content", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ input, init });
+    return new Response(
+      JSON.stringify({ message: { id: "m1" }, assistant_message: null, task: { id: "t1" }, execution_process: { id: "ep1", kind: "refine" } }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  try {
+    const result = await refineCodexTask("t1", "加一条 X");
+    assert.equal(result.execution_process.kind, "refine");
+    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/refine");
+    assert.equal(calls[0].init?.method, "POST");
+    assert.equal(JSON.parse(String(calls[0].init?.body)).content, "加一条 X");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("rerunCodexTask posts to /rerun with no body", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ input, init });
+    return new Response(
+      JSON.stringify({ message: null, assistant_message: null, task: { id: "t1" }, execution_process: { id: "ep1", kind: "rerun" } }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  try {
+    const result = await rerunCodexTask("t1");
+    assert.equal(result.execution_process.kind, "rerun");
+    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/rerun");
+    assert.equal(calls[0].init?.method, "POST");
+    assert.equal(calls[0].init?.body, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }

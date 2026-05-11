@@ -1,6 +1,6 @@
 "use client";
 
-import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCatalog } from "@/lib/types";
+import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCatalog, RunMode } from "@/lib/types";
 import { RotateCcw, Trash2, Send, Terminal, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -23,7 +23,7 @@ interface RunDetailProps {
   onRunInitial?: (executor: "codex" | "claude", provider: string | null, model: string | null) => void;
   onRunAgain: (executor: "codex" | "claude", provider: string | null, model: string | null) => void;
   onDelete: () => void;
-  onSendMessage: (content: string) => void;
+  onSendMessage: (content: string, mode: RunMode) => void;
   allTasks?: CodexTask[];
   selectedExecutor?: "codex" | "claude";
   selectedProvider?: string | null;
@@ -37,6 +37,12 @@ interface RunDetailProps {
   canTransitionToDevelopment?: boolean;
   isTransitioningToDevelopment?: boolean;
   onTransitionToDevelopment?: () => Promise<void> | void;
+  showTransitionToTesting?: boolean;
+  canTransitionToTesting?: boolean;
+  isTransitioningToTesting?: boolean;
+  onTransitionToTesting?: () => Promise<void> | void;
+  qaReportStatus?: "passed" | "failed" | "blocked" | "needs_follow_up" | null;
+  onViewQaReport?: () => void;
   onSubmitForReview?: () => Promise<void> | void;
   onReview?: (decision: "approve" | "reject", comment: string) => Promise<void> | void;
   onTerminate?: () => Promise<void> | void;
@@ -88,6 +94,12 @@ export function RunDetail({
   canTransitionToDevelopment,
   isTransitioningToDevelopment,
   onTransitionToDevelopment,
+  showTransitionToTesting,
+  canTransitionToTesting,
+  isTransitioningToTesting,
+  onTransitionToTesting,
+  qaReportStatus,
+  onViewQaReport,
   onSubmitForReview,
   onReview,
   onTerminate,
@@ -95,6 +107,7 @@ export function RunDetail({
 }: RunDetailProps) {
   const { t } = useI18n();
   const [message, setMessage] = useState("");
+  const [runMode, setRunMode] = useState<RunMode>("chat");
   const [reviewComment, setReviewComment] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const baseExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
@@ -136,15 +149,26 @@ export function RunDetail({
 
   const handleSend = useCallback((e: React.FormEvent) => {
     e.preventDefault();
+    if (runMode === "rerun") {
+      if (!window.confirm("重跑会基于原始 prompt 重新生成并覆盖现有产物（如 prd.md / system_design.json）。确认继续？")) {
+        return;
+      }
+      try {
+        onSendMessage("", "rerun");
+      } catch (err) {
+        console.error("Failed to rerun:", err);
+      }
+      return;
+    }
     if (!message.trim()) return;
     const content = message.trim();
     try {
-      onSendMessage(content);
+      onSendMessage(content, runMode);
       setMessage("");
     } catch (err) {
       console.error("Failed to send message:", err);
     }
-  }, [message, onSendMessage]);
+  }, [message, onSendMessage, runMode]);
 
   if (isLoadingProcess) {
     return (
@@ -191,7 +215,12 @@ export function RunDetail({
       <div className="p-5 border-b border-border-subtle bg-surface/50">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-text-muted">{t("run.console")}</h2>
-          <StatusBadge status={process.status} />
+          <div className="flex items-center gap-2">
+            {taskMeta?.role === "qa" && taskMeta?.status === "done" && qaReportStatus && (
+              <QaReportBadge status={qaReportStatus} onView={onViewQaReport} />
+            )}
+            <StatusBadge status={process.status} />
+          </div>
         </div>
         <div className="mb-4">
           <ExecutionConfigSelector
@@ -220,6 +249,22 @@ export function RunDetail({
                 >
                   {isTransitioningToDevelopment ? t("issue.transition.loading") : t("issue.transition.toDevelopment")}
                 </button>
+              )}
+              {showTransitionToTesting && (taskMeta?.phase === "development" || taskMeta?.phase === "testing") && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={onTransitionToTesting}
+                      disabled={!canTransitionToTesting || isTransitioningToTesting}
+                      className="flex-2 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md active:scale-[0.98] disabled:opacity-50"
+                    >
+                      {isTransitioningToTesting ? "流转中..." : "提交测试"}
+                    </button>
+                  </TooltipTrigger>
+                  {!canTransitionToTesting && !isTransitioningToTesting && (
+                    <TooltipContent>请先完成所有开发任务</TooltipContent>
+                  )}
+                </Tooltip>
               )}
               {taskMeta?.phase === "development" && taskStatus === "done" && !taskMeta?.review_comment && onSubmitForReview && (
                 <button
@@ -434,31 +479,99 @@ export function RunDetail({
       </div>
 
       {/* Input Section */}
-      <div className="p-5 border-t border-border-subtle bg-surface/50">
+      <div className="p-5 border-t border-border-subtle bg-surface/50 space-y-3">
+        {/* Run mode chip — chat / refine / rerun */}
+        <div className="flex items-center gap-2">
+          {([
+            { id: "chat", label: "对话", hint: "自然语言追问，不修改产物" },
+            { id: "refine", label: "修订", hint: "基于现有产物按你的要求改写并保存" },
+            { id: "rerun", label: "重跑", hint: "用原始 prompt 重新生成并覆盖产物" },
+          ] as { id: RunMode; label: string; hint: string }[]).map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setRunMode(m.id)}
+              title={m.hint}
+              className={cn(
+                "px-3 py-1 text-[10px] font-black uppercase tracking-widest rounded-md border transition-all",
+                runMode === m.id
+                  ? "bg-brand text-background border-brand"
+                  : "bg-surface-raised text-text-muted border-border-subtle hover:border-border-strong",
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+          <span className="text-[10px] text-text-muted ml-2">
+            {runMode === "chat" && "对话模式：不会修改任务产物"}
+            {runMode === "refine" && "修订模式：会按指令更新产物文件"}
+            {runMode === "rerun" && "重跑模式：会覆盖现有产物"}
+          </span>
+        </div>
         <form onSubmit={handleSend} className="flex gap-4">
-          <div className="flex-1 relative group">
-            <input
-              type="text"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder={t("run.messagePlaceholder")}
-              className="w-full pl-5 pr-14 py-4 text-sm rounded-xl cc-input outline-none shadow-inner font-medium"
-            />
-            <div className="absolute right-5 top-1/2 -translate-y-1/2 opacity-0 group-focus-within:opacity-100 transition-all scale-90 group-focus-within:scale-100 pointer-events-none">
-              <div className="px-2 py-1 rounded-md border border-border-strong text-[9px] font-black text-text-muted uppercase tracking-widest bg-surface-raised">Enter</div>
+          {runMode !== "rerun" ? (
+            <div className="flex-1 relative group">
+              <input
+                type="text"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder={runMode === "refine" ? "描述你想要的修改…" : t("run.messagePlaceholder")}
+                className="w-full pl-5 pr-14 py-4 text-sm rounded-xl cc-input outline-none shadow-inner font-medium"
+              />
+              <div className="absolute right-5 top-1/2 -translate-y-1/2 opacity-0 group-focus-within:opacity-100 transition-all scale-90 group-focus-within:scale-100 pointer-events-none">
+                <div className="px-2 py-1 rounded-md border border-border-strong text-[9px] font-black text-text-muted uppercase tracking-widest bg-surface-raised">Enter</div>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex-1 px-5 py-4 text-xs text-text-muted bg-surface-raised border border-border-subtle rounded-xl">
+              点击右侧按钮以重新生成产物（会触发二次确认）
+            </div>
+          )}
           <button
             type="submit"
-            disabled={!message.trim()}
-            className="p-4 rounded-xl bg-brand text-background hover:bg-brand/90 transition-all shadow-lg shadow-brand/20 active:scale-95 border border-brand/20 group disabled:opacity-30 disabled:shadow-none"
-            title="Fire Sequence"
+            disabled={runMode !== "rerun" && !message.trim()}
+            className="px-5 py-4 rounded-xl bg-brand text-background hover:bg-brand/90 transition-all shadow-lg shadow-brand/20 active:scale-95 border border-brand/20 group disabled:opacity-30 disabled:shadow-none flex items-center gap-2"
+            title={runMode === "rerun" ? "重新生成" : "发送"}
           >
             <Send size={20} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+            <span className="text-xs font-bold uppercase tracking-widest">
+              {runMode === "rerun" ? "重跑" : runMode === "refine" ? "修订" : "对话"}
+            </span>
           </button>
         </form>
       </div>
     </div>
+  );
+}
+
+function QaReportBadge({
+  status,
+  onView,
+}: {
+  status: "passed" | "failed" | "blocked" | "needs_follow_up";
+  onView?: () => void;
+}) {
+  const styles: Record<string, { cls: string; label: string }> = {
+    passed: { cls: "bg-success/10 text-success border-success/30", label: "测试通过" },
+    failed: { cls: "bg-error/10 text-error border-error/30", label: "测试失败" },
+    blocked: { cls: "bg-warning/10 text-warning border-warning/30", label: "测试阻塞" },
+    needs_follow_up: { cls: "bg-warning/10 text-warning border-warning/30", label: "需要跟进" },
+  };
+  const entry = styles[status];
+  return (
+    <button
+      type="button"
+      onClick={onView}
+      className={cn(
+        "flex items-center gap-1.5 px-2.5 py-0.5 rounded-md border text-[9px] font-black uppercase tracking-wider transition-opacity",
+        entry.cls,
+        onView ? "hover:opacity-80 cursor-pointer" : "cursor-default",
+      )}
+      title={onView ? "查看测试报告" : undefined}
+      disabled={!onView}
+    >
+      {entry.label}
+    </button>
   );
 }
 

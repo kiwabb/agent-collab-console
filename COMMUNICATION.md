@@ -322,3 +322,168 @@
 - RuntimeCatalogEditor.tsx: 完整的 runtime catalog 编辑器
 
 #### 等待: review
+
+---
+
+# Development → Testing Transition Implementation
+- 计划: `docs/plans/2026-05-10-development-to-testing-transition.md`
+- 范围: 闭环 4 阶段流水线（需求→架构→开发→**测试**），不新增第 5 阶段；i18n 跳过，UI 文案硬编码 zh-CN
+
+## Task 1: Backend Contract Locked With RED Tests
+- Status: **DONE**
+- 新增 `backend/tests/test_issue_transition_to_testing.py`，10 个测试覆盖：成功路径、phase 拒绝（requirements/architecture）、运行中拒绝、未完成 engineer 拒绝、零 engineer 拒绝、缺产物拒绝、复用已存在 QA、testing 阶段幂等、未知 issue 404
+- RED 验证: 9 个 transition 相关测试因 endpoint 未实现失败（404/405），第 10 个 unknown-issue 测试因预期就是 404 vacuously pass
+- 现有 transition 测试无回归（15/15 pass）
+- 测试 fixture 用 `IssueArtifactDocuments.engineer_implementation_md_path` 真实写盘，确保产物前置检查不被 mock 绕过
+
+## Task 2: Implement `transition-to-testing` Endpoint (GREEN)
+- Status: **DONE**
+- `backend/app/interfaces/api.py`:
+  - 新增 helper `_has_engineer_artifacts(workspace_path, issue_id)` — 通过 `IssueArtifactDocuments.engineer_find_artifacts()` 检查是否存在 `implementation*.md`
+  - 新增 helper `_engineer_tasks_all_done(tasks, issue_id)` — 校验 engineer 任务非空且全部 status=done，错误消息列出未完成任务标题
+  - 新增 `POST /api/codex/issues/{id}/transition-to-testing` 端点
+- 守卫顺序（与测试一致）: issue 存在 → phase ∈ {development, testing} → session 存在 → 无运行中任务 → engineer 全 done → 产物存在
+- 单 QA 任务派生（mirror architect transition 模式）: 标题 `测试 - {issue.title}`、role=qa、phase=testing、创建前调用 `_resolve_runtime_config()` 取 executor/provider/model
+- 幂等: existing QA 任务存在则复用；testing 阶段重新触发不创建新任务
+- 创建后广播 `event_bus` `task_created` 事件
+- GREEN 验证: 10/10 新测试 pass；全量 backend 131/131 pass
+
+## Task 3: Frontend API Helper
+- Status: **DONE**
+- `frontend/src/lib/api.ts`: 新增 `transitionIssueToTesting(issueId)` → POST `/api/codex/issues/{id}/transition-to-testing`，复用 `IssuePhaseTransitionResult`（单任务返回 shape）
+- `frontend/tests/workbenchActions.test.ts`: 新增 `transitionIssueToTesting posts to the testing transition endpoint` 测试，断言 URL、method、response 解析
+- 验证: 隔离运行 workbenchActions.test.ts 9/9 pass；npm test 整体 34/36 pass，2 个失败为 task-selection.test.ts pre-existing on main（与改动无关）
+
+## Task 4: Frontend Button + Dialog Wiring
+- Status: **DONE**
+- `WorkbenchPage.tsx`:
+  - 新增 `isTransitioningToTesting` state
+  - 新增 `handleTransitionToTesting` 回调：调 API、合并 issue、合并/插入 QA 任务、刷新 artifacts、toast
+  - 新增 `engineerTasks`、`allEngineerTasksDone` 派生（>0 且全 done 才允许）
+  - 传 `showTransitionToTesting` / `canTransitionToTesting` / `isTransitioningToTesting` / `onTransitionToTesting` 给 `RunDetail`
+- `RunDetail.tsx`:
+  - 接口扩 4 个新 props
+  - 在 architect 转移按钮之后渲染"提交测试"按钮，仅当 `taskMeta.phase ∈ {development, testing}` 时显示
+  - 不可用时按钮 disabled 并通过 Tooltip 显示 `请先完成所有开发任务`
+- 验证: TS 严格检查无新错误；npm run build 通过
+
+## Task 5: QA Report Status Badge
+- Status: **DONE**
+- `WorkbenchPage.tsx`: 新增 `qaReportStatus` useMemo，从 `artifacts` 中找 `qa/qa_plan.json`（注意：实际是 QAReportDocument 序列化产物，名字是历史遗留）解析 JSON `.status`，类型受限为 `"passed" | "failed" | "blocked" | "needs_follow_up" | null`
+- `RunDetail.tsx`: 新增 `QaReportBadge` 组件 + `qaReportStatus` / `onViewQaReport` props；当 `taskMeta.role === "qa" && status === "done" && qaReportStatus` 时在 Header 渲染色板（绿/红/橙/黄）
+- 验证: TS 严格检查无新错误；npm run build 通过
+
+## Task 6: End-to-End Verification
+- Status: **DONE**
+- Backend: 131/131 pass
+- Frontend: 34/36 pass（同 Task 3，2 个 pre-existing 失败）
+- 改动文件清单:
+  - `backend/app/interfaces/api.py`
+  - `backend/tests/test_issue_transition_to_testing.py` (new)
+  - `frontend/src/lib/api.ts`
+  - `frontend/src/features/workbench/WorkbenchPage.tsx`
+  - `frontend/src/features/runs/RunDetail.tsx`
+  - `frontend/tests/workbenchActions.test.ts`
+  - `docs/plans/2026-05-10-development-to-testing-transition.md` (new)
+- 待办: 真实 codex/claude runtime 端到端跑一次（需要本机有 CLI），验证 QA 任务执行后 `qa_report.md`/`qa_plan.json` 实际写盘且徽标显示对应颜色
+- 等待: review
+
+---
+
+# Task Chat / Refine / Rerun — 运行意图分离重构 (2026-05-11)
+- 计划: `docs/plans/2026-05-11-task-chat-and-refine-redesign.md`
+- 范围: 把"运行意图"提升到 ExecutionProcess 一等公民（kind 字段），4 个 role 全部统一走分支
+- 完整改动跨越 6 个 task，全部 GREEN，无回归
+
+## Task 1: Foundation — ExecutionProcess.kind + migration
+- Status: **DONE**
+- `backend/app/domain/models.py`: ExecutionProcess 加 `kind: Literal["initial","rerun","refine","chat"]` 默认 "initial" + `triggering_message_id: str | None`
+- `backend/app/adapters/sqlite_store.py` 和 `async_sqlite_store.py`:
+  - CREATE TABLE 加新列
+  - idempotent ALTER TABLE migration（兼容旧 DB）
+  - INSERT / SELECT / list 包含新字段，缺列时回退到 `"initial"` / `None`
+- 新测试 `backend/tests/test_execution_process_kind.py` 9 个：默认值、4 kind 接受、Literal 拒绝非法值、同步/异步存储 round-trip、legacy DB（无新列）migration 后查到 "initial"
+- 验证: 9/9 GREEN，无回归
+
+## Task 2: Chat kind wiring + 端点
+- Status: **DONE**
+- `codex_task_runner.py`: `start_task_run` 接 `kind` + `triggering_message_id` 参数；`_create_execution_process` 写入；`_build_prompt_text` 加 chat 分支（极简 prompt + 显式禁止 JSON）
+- `process_runtime_common.py`: `_mark_task_done` 读 EP.kind；chat run **不**更新 task.result，**不**调 refresh_task_result；老 store stub 无 `load_execution_process` 时回退到 initial 行为
+- `api.py`:
+  - 抽 `_run_task_with_user_content(task_id, content, kind)` 公共逻辑
+  - 新 `POST /codex/tasks/{id}/chat` 端点
+  - 旧 `POST /messages` alias 到 chat（kind="chat"）
+  - 删 `_chat_followup_execution_processes` 内存集合 + `is_chat_followup_execution()` + `_refresh_task_result` 里相关 check
+- `product_manager_service.py`: 移除上次最小修复加的 "if prd exists skip" defensive 分支（refine 接管）
+- 新测试 `backend/tests/test_task_chat_endpoint.py` 6 个：端点 shape、kind=chat 传递、resume_session_id 续接、legacy /messages alias、`_mark_task_done` chat 不动 task.result、initial 走 refresh
+- 验证: 6/6 GREEN，无回归
+
+## Task 3: Refine kind + role-aware persist
+- Status: **DONE**
+- `codex_task_runner.py`:
+  - 新 `_read_current_artifact(task)` 方法，按 role 用 `IssueArtifactDocuments` 读取：PM→prd.json、Architect→system_design.json、Engineer→implementation-<task_id>.md、QA→qa_plan.json
+  - `_build_prompt_text` 加 refine 分支：拼"现有 artifact + 修改指令 + 重写要求"通用模板；artifact 不存在时 raise（防御性）
+- `api.py`:
+  - 新 `_has_canonical_artifact_for_task(task)` 助手（按 role 检查产物文件存在）
+  - 新 `POST /codex/tasks/{id}/refine`：404 / 409（artifact 缺失）/ 走 `_run_task_with_user_content(kind="refine")`
+- Persist 路径不动：refine 完成后正常走 `refresh_task_result` → `role_workflow_service.persist_result`；PM 的 `merge_with_existing_prd` 自动接管 requirement_update 路由，其他 role 用 replace 语义
+- 新测试 `backend/tests/test_task_refine_endpoint.py` 8 个：端点 shape、kind=refine、no artifact 拒绝、4 个 role 的 prompt 内容验证（包含现有 artifact）、unknown task 404
+- 验证: 8/8 GREEN，无回归
+
+## Task 4: Rerun endpoint
+- Status: **DONE**
+- `api.py`: 新 `POST /codex/tasks/{id}/rerun`：复用 `/run` 的 development sequencing 守卫（sequence_index>0 时检查上一个 task 是 done），调 `start_task_run(kind="rerun")`，无 prompt_override（用原 task.prompt + role workflow）
+- 新测试 `backend/tests/test_task_rerun_endpoint.py` 5 个：kind=rerun、不接收 user content、running 拒绝、sequencing block、unknown 404
+- 验证: 5/5 GREEN
+
+## Task 5: Frontend mode chip + routing
+- Status: **DONE**
+- `frontend/src/lib/types.ts`: 加 `RunKind`, `RunMode`，扩 `ExecutionProcess.kind` / `triggering_message_id`
+- `frontend/src/lib/api.ts`: 3 个新 helper `chatCodexTask`、`refineCodexTask`、`rerunCodexTask`，沿用 `SendMessageResult` 返回类型
+- `frontend/src/features/runs/RunDetail.tsx`:
+  - 新 `runMode` 本地 state（默认 chat）
+  - 输入框上方 `[对话] [修订] [重跑]` mode chip 切换 + 模式说明
+  - 重跑模式隐藏输入框，发送按钮变 "重跑" + 二次 confirm
+  - `onSendMessage` 签名扩 `(content, mode)`
+- `frontend/src/features/workbench/WorkbenchPage.tsx`:
+  - `handleSendMessage(content, mode)` 按 mode 路由到 chat / refine / rerun
+  - 错误 toast 按 mode 显示不同标题（对话失败 / 修订失败 / 重跑失败）
+- 新前端测试 3 个：chatCodexTask / refineCodexTask / rerunCodexTask URL + method + body
+- 验证: 前端 12/12 workbenchActions 测试 pass；`npm run build` 通过；`tsc --noEmit` 干净
+
+## Task 6: Cleanup + docs
+- Status: **DONE**
+- 删 `_chat_followup_execution_processes` set 和 `is_chat_followup_execution()`（已随 Task 2 移除）
+- 移除 PM persist 的 followup defensive 分支（已随 Task 2 移除）
+- `CLAUDE.md` 加 **Run kinds** 一节说明
+- 全量回归: backend 159/159 pass，frontend npm test + build 全过
+
+## 改动文件清单
+**后端**:
+- `backend/app/domain/models.py`
+- `backend/app/adapters/sqlite_store.py`
+- `backend/app/adapters/async_sqlite_store.py`
+- `backend/app/application/codex_task_runner.py`
+- `backend/app/application/process_runtime_common.py`
+- `backend/app/application/product_manager_service.py`
+- `backend/app/interfaces/api.py`
+- `backend/tests/test_execution_process_kind.py` (new)
+- `backend/tests/test_task_chat_endpoint.py` (new)
+- `backend/tests/test_task_refine_endpoint.py` (new)
+- `backend/tests/test_task_rerun_endpoint.py` (new)
+
+**前端**:
+- `frontend/src/lib/types.ts`
+- `frontend/src/lib/api.ts`
+- `frontend/src/features/runs/RunDetail.tsx`
+- `frontend/src/features/workbench/WorkbenchPage.tsx`
+- `frontend/tests/workbenchActions.test.ts`
+
+**文档**:
+- `docs/plans/2026-05-11-task-chat-and-refine-redesign.md` (new)
+- `CLAUDE.md` (run kinds 注记)
+
+## 待办（未做）
+- 真实 codex/claude CLI 端到端验证 chat/refine/rerun 三种模式的实际效果（需本机 CLI）
+- 4 role × 3 mode 矩阵的 e2e 实跑（mock-mode 测试已覆盖端点 shape 和 prompt 构造）
+- 等待: review

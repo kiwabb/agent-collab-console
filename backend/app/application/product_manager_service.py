@@ -247,19 +247,18 @@ class ProductManagerService:
             # LLM returned invalid JSON or content that doesn't match the PRD schema
             import logging
             logger = logging.getLogger(__name__)
-            
+
             self.documents.ensure_issue_root(task.workspace_path, canonical_issue_id)
             prd_md_path = self.documents.prd_md_path(task.workspace_path, canonical_issue_id)
-            
-            # Log the error for debugging
+
             error_msg = f"Failed to parse PRD JSON for task {task.id}: {type(exc).__name__}: {exc}"
             logger.error(error_msg)
             logger.debug(f"Raw task result that failed to parse:\n{task.result[:500] if task.result else '(empty)'}...")
-            
-            # Save raw output for debugging
+
+            # Save raw output for debugging (chat runs are guarded by EP.kind upstream
+            # so they never reach this persist_result, see codex_task_runner / _mark_task_done).
             prd_md_path.write_text(task.result or "(empty response)", encoding="utf-8")
-            
-            # Raise a clear error instead of silently creating a placeholder
+
             error_details = (
                 f"ProductManager 返回了无效的 PRD 格式\n\n"
                 f"错误类型: {type(exc).__name__}\n"
@@ -271,7 +270,7 @@ class ProductManagerService:
                 f"3. LLM 返回的 JSON 格式不正确或缺少必需字段\n"
                 f"4. Prompt 可能需要调整以确保返回正确的 JSON 格式"
             )
-            
+
             raise ProductManagerArtifactError(error_details) from exc
 
     def _validate_prd_content(self, prd: ProductRequirementDocument) -> None:

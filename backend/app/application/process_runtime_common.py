@@ -334,12 +334,24 @@ class BaseProcessRuntime:
         task = await self.codex_store.load_codex_task(task_id)
         if task:
             execution_process_id = task.last_execution_process_id
+
+            # Branch on EP kind: chat runs must NOT mutate task.result and must
+            # NOT trigger artifact persistence. The assistant reply is captured
+            # in the message log only.
+            is_chat = False
+            if execution_process_id and hasattr(self.codex_store, "load_execution_process"):
+                try:
+                    ep = await self.codex_store.load_execution_process(execution_process_id)
+                    is_chat = ep is not None and getattr(ep, "kind", "initial") == "chat"
+                except Exception:
+                    is_chat = False
+
             task.status = "done"
-            if entry.result_text:
+            if not is_chat and entry.result_text:
                 task.result = entry.result_text
             task.updated_at = datetime.now()
-            
-            if callable(self.refresh_task_result):
+
+            if not is_chat and callable(self.refresh_task_result):
                 try:
                     await self.refresh_task_result(task)
                 except Exception as exc:

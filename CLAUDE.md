@@ -21,6 +21,8 @@ cd frontend && npm run build && npm run lint
 
 **工作流阶段**: 需求→架构→开发→测试，每次跳转验证磁盘 JSON 产物文件存在。
 
+**Run kinds** (`ExecutionProcess.kind`): `initial` / `rerun` 用 role workflow prompt 并 persist 产物；`refine` 把现有产物 + 用户修改指令喂给 agent 再 persist；`chat` 用极简 prompt，CLI 自己续接历史，**不**改 `task.result`、**不** persist。端点：`POST /api/codex/tasks/{id}/chat|refine|rerun`，旧 `/messages` alias 到 chat。
+
 **Runtime Catalog** (`runtime_catalog_service.py`): executor→provider→model 配置，存 `runtime_catalog_settings` 表，task 级 > catalog 默认。
 
 **实时通信**: WebSocket `/api/codex/sessions/{id}/logs` 流式日志；SSE `/api/execution-processes` 状态事件。

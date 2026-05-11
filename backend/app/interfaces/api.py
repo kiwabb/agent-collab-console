@@ -365,6 +365,38 @@ def _has_architecture_artifacts(workspace_path: str | None, issue_id: str) -> tu
     return True, ""
 
 
+def _has_engineer_artifacts(workspace_path: str | None, issue_id: str) -> tuple[bool, str]:
+    """Returns (has_artifacts, error_detail). Engineer must have at least one implementation*.md."""
+    if not workspace_path:
+        return False, "开发产物路径无效"
+    from app.application.issue_artifact_documents import IssueArtifactDocuments
+
+    docs = IssueArtifactDocuments()
+    artifacts = docs.engineer_find_artifacts(workspace_path, issue_id)
+    if not artifacts:
+        return False, "请先完成开发产物（implementation*.md）后再流转到测试"
+    return True, ""
+
+
+def _engineer_tasks_all_done(tasks: list[dict], issue_id: str) -> tuple[bool, str]:
+    """Returns (ok, error_detail). All engineer tasks for this issue must be status='done', and at least one must exist."""
+    engineer_rows = [
+        t for t in tasks
+        if t.get("role") == "engineer" and t.get("issue_id") == issue_id
+    ]
+    if not engineer_rows:
+        return False, "请先创建并完成开发任务后再流转到测试"
+    unfinished = [
+        str(t.get("title") or t.get("id") or "")
+        for t in engineer_rows
+        if str(t.get("status") or "").lower() != "done"
+    ]
+    if unfinished:
+        joined = "、".join(unfinished)
+        return False, f"以下开发任务尚未完成：{joined}"
+    return True, ""
+
+
 def _load_implementation_tasks(workspace_path: str | None, issue_id: str) -> list[dict]:
     if not workspace_path:
         return []
@@ -839,14 +871,14 @@ class RequestTaskHelpRequest(BaseModel):
 
 
 class UpdateCodexTaskRequest(BaseModel):
-    executor: Literal["codex", "claude"] | None = None
+    executor: str | None = None
     provider: str | None = None
     model: str | None = None
 
 
 class RunTaskRequest(BaseModel):
     """Optional run-time overrides for task execution."""
-    executor: Literal["codex", "claude"] | None = None
+    executor: str | None = None
     provider: str | None = None
     model: str | None = None
 
@@ -1447,6 +1479,92 @@ async def transition_codex_issue_to_development(issue_id: str):
     }
 
 
+@router.post("/codex/issues/{issue_id}/transition-to-testing")
+async def transition_codex_issue_to_testing(issue_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
+    if issue.current_phase not in ["development", "testing"]:
+        raise HTTPException(status_code=409, detail="只有开发或测试阶段的 issue 才能流转到测试")
+
+    session = await codex_store.load_codex_session(issue.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{issue.session_id}' not found")
+
+    tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
+    if any(_is_task_running(task.get("status")) for task in tasks):
+        raise HTTPException(status_code=409, detail="当前有任务仍在运行，请等待完成后再流转")
+
+    ok, error_msg = _engineer_tasks_all_done(tasks, issue_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=error_msg)
+
+    workspace_path = next(
+        (task.get("workspace_path") for task in tasks if task.get("workspace_path")),
+        None,
+    ) or session.cwd
+
+    ok, error_msg = _has_engineer_artifacts(workspace_path, issue_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=error_msg)
+
+    existing_qa_row = next(
+        (task for task in tasks if task.get("role") == "qa" and task.get("issue_id") == issue_id),
+        None,
+    )
+
+    issue.current_phase = "testing"
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+
+    qa_task = None
+    created = False
+    if existing_qa_row is not None:
+        qa_task = await codex_store.load_codex_task(existing_qa_row["id"])
+    else:
+        from app.domain.models import CodexTask
+
+        now = datetime.now()
+        resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config()
+        qa_task = CodexTask(
+            id=str(uuid4()),
+            session_id=issue.session_id,
+            issue_id=issue.id,
+            phase="testing",
+            title=f"测试 - {issue.title}",
+            prompt="请基于当前开发产物对该需求进行 QA 验收。",
+            role="qa",
+            executor=resolved_executor,
+            provider=resolved_provider,
+            model=resolved_model,
+            status="pending",
+            result=None,
+            parent_task_id=None,
+            task_kind="normal",
+            blocked_by_help_id=None,
+            workspace_path=workspace_path,
+            resume_session_id=None,
+            resume_message_id=None,
+            created_at=now,
+            updated_at=now,
+        )
+        await codex_store.save_codex_task(qa_task)
+        created = True
+        await event_bus.append({
+            "type": "task_created",
+            "task": qa_task.model_dump(mode="json"),
+        })
+
+    return {
+        "issue": issue.model_dump(mode="json"),
+        "task": qa_task.model_dump(mode="json") if qa_task is not None else None,
+        "created": created,
+    }
+
+
 @router.get("/codex/issues/{issue_id}/artifacts")
 async def get_codex_issue_artifacts(issue_id: str):
     if codex_store is None:
@@ -1766,16 +1884,14 @@ async def terminate_codex_task(task_id: str):
     return {"status": "ok"}
 
 
-@router.post("/codex/tasks/{task_id}/messages", status_code=201)
-async def send_codex_task_message(task_id: str, request: SendTaskMessageRequest):
-    """Append a user message to a task's conversation history and trigger a follow-up run.
+async def _run_task_with_user_content(task_id: str, content: str, kind: str):
+    """Shared implementation for chat / refine endpoints (and the legacy /messages alias).
 
-    The message is stored in the task message table, and the task is re-run
-    in the same workspace with the new content, using the task's resume_session_id
-    for conversation continuity.
-
-    Non-blocking (vibe-kanban): marks the task running and returns immediately.
-    Completion and assistant reply are delivered via the live event stream.
+    Creates a user message, starts a run on the task with the given kind, and
+    returns {message, assistant_message, task, execution_process}. The assistant
+    reply is delivered async via the event stream in real-CLI mode; in mock
+    mode (tests) we finalize inline so callers see the assistant_message in the
+    response.
     """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
@@ -1792,15 +1908,17 @@ async def send_codex_task_message(task_id: str, request: SendTaskMessageRequest)
         task_id=task_id,
         execution_process_id=None,
         role="user",
-        content=request.content,
+        content=content,
         created_at=datetime.now(),
     )
     try:
         exec_process = await _get_task_runner().start_task_run(
             task,
-            prompt_override=request.content,
+            prompt_override=content,
             resume_session_id=task.resume_session_id,
             resume_message_id=task.resume_message_id,
+            kind=kind,
+            triggering_message_id=message_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -1826,7 +1944,10 @@ async def send_codex_task_message(task_id: str, request: SendTaskMessageRequest)
     async def _finalize_completed_task(current_task):
         current_task.status = "done"
         current_task.updated_at = datetime.now()
-        await _refresh_task_result(current_task)
+        # Chat must not mutate task.result or persist artifact. Refine / rerun
+        # follow normal task.result + persist semantics.
+        if kind != "chat":
+            await _refresh_task_result(current_task)
         await codex_store.save_codex_task(current_task)
         await codex_store.update_execution_process_status(exec_process.id, "Completed", exit_code=0, completed_at=datetime.now())
         await event_bus.append({
@@ -1837,10 +1958,16 @@ async def send_codex_task_message(task_id: str, request: SendTaskMessageRequest)
             "result": current_task.result,
             "execution_process_id": exec_process.id,
         })
+        # The assistant reply is whatever the run produced. For chat it lives only
+        # in the message log; for refine/rerun it's also the new task.result.
         assistant_content = current_task.result or "Task updated."
         existing = await _list_task_messages(task_id, execution_process_id=exec_process.id)
         last = existing[-1] if existing else None
-        if last and last.role == "assistant" and last.content == assistant_content:
+
+        def _msg_attr(m, name):
+            return m.get(name) if isinstance(m, dict) else getattr(m, name, None)
+
+        if last and _msg_attr(last, "role") == "assistant" and _msg_attr(last, "content") == assistant_content:
             return last
         assistant_message = CodexTaskMessage(
             id=str(uuid4()),
@@ -1876,6 +2003,118 @@ async def send_codex_task_message(task_id: str, request: SendTaskMessageRequest)
     if task.status == "done":
         assistant_message = await _finalize_completed_task(task)
     return {"message": message, "assistant_message": assistant_message, "task": task, "execution_process": exec_process}
+
+
+class ChatRequest(BaseModel):
+    content: str
+
+
+@router.post("/codex/tasks/{task_id}/chat", status_code=201)
+async def chat_codex_task(task_id: str, request: ChatRequest):
+    """Send a conversational follow-up to the task's agent.
+
+    Chat runs DO NOT mutate the task's canonical result or persist role
+    artifacts (e.g. pm/prd.md). The user's message and the agent's reply are
+    only appended to the task message log. CLI session continuity (resume_*)
+    is reused so the agent has prior conversation context.
+    """
+    return await _run_task_with_user_content(task_id, request.content, kind="chat")
+
+
+@router.post("/codex/tasks/{task_id}/messages", status_code=201)
+async def send_codex_task_message(task_id: str, request: SendTaskMessageRequest):
+    """Deprecated: alias for /chat. Kept for backward compatibility."""
+    return await _run_task_with_user_content(task_id, request.content, kind="chat")
+
+
+def _has_canonical_artifact_for_task(task) -> bool:
+    """Check whether the role's canonical artifact exists on disk."""
+    from app.application.issue_artifact_documents import IssueArtifactDocuments
+    if not getattr(task, "workspace_path", None):
+        return False
+    docs = IssueArtifactDocuments()
+    issue_id = task.issue_id or task.id
+    role = getattr(task, "role", None)
+    if role == "product_manager":
+        return docs.pm_prd_json_path(task.workspace_path, issue_id).exists()
+    if role == "architect":
+        return docs.architect_system_design_json_path(task.workspace_path, issue_id).exists()
+    if role == "engineer":
+        return docs.engineer_implementation_md_path(task.workspace_path, issue_id, task_id=task.id).exists()
+    if role == "qa":
+        return docs.qa_plan_json_path(task.workspace_path, issue_id).exists()
+    return False
+
+
+class RefineRequest(BaseModel):
+    content: str
+
+
+@router.post("/codex/tasks/{task_id}/refine", status_code=201)
+async def refine_codex_task(task_id: str, request: RefineRequest):
+    """Refine an existing artifact: agent re-emits the full artifact incorporating
+    user-requested changes, then normal persist_result writes it back.
+
+    Requires that an initial run has produced a canonical artifact.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    task = await codex_store.load_codex_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not _has_canonical_artifact_for_task(task):
+        raise HTTPException(
+            status_code=409,
+            detail="无法 refine：当前任务尚未生成产物，请先完成 initial 运行",
+        )
+    return await _run_task_with_user_content(task_id, request.content, kind="refine")
+
+
+@router.post("/codex/tasks/{task_id}/rerun", status_code=201)
+async def rerun_codex_task(task_id: str):
+    """Re-run the task from scratch using the original role workflow prompt.
+
+    The agent's new output overwrites the canonical artifact via persist_result.
+    Sequencing guards (development phase) still apply.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from datetime import datetime
+    from app.domain.models import CodexTaskMessage
+
+    task = await codex_store.load_codex_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Reuse the same sequencing guard as /run: development tasks with index>0
+    # must wait for previous task to be done.
+    if task.sequence_index is not None and task.phase == "development" and task.sequence_index > 0:
+        prev_index = task.sequence_index - 1
+        all_tasks = await codex_store.list_codex_tasks(session_id=task.session_id, issue_id=task.issue_id)
+        prev_task = next(
+            (t for t in all_tasks if t.get("sequence_index") == prev_index and t.get("sequence_group") == task.sequence_group),
+            None,
+        )
+        if prev_task is None or prev_task.get("status") != "done":
+            raise HTTPException(status_code=409, detail="需先完成上一个开发任务并通过评审")
+
+    try:
+        exec_process = await _get_task_runner().start_task_run(task, kind="rerun")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # In mock mode the run finalizes synchronously; refresh task state for the response.
+    if isinstance(get_codex_process_manager(), MockCodexProcessManager):
+        task = await codex_store.load_codex_task(task_id) or task
+
+    return {
+        "message": None,
+        "assistant_message": None,
+        "task": task,
+        "execution_process": exec_process,
+    }
 
 
 @router.get("/codex/tasks/{task_id}/logs")
@@ -2068,6 +2307,7 @@ async def get_execution_process_logs(process_id: str):
 # --- Runtime Catalog APIs ---
 
 from app.application.runtime_catalog_service import RuntimeCatalogService, RuntimeCatalogValidationError
+from app.domain.models import RuntimeCatalog
 
 
 def _get_runtime_catalog_service() -> RuntimeCatalogService:
@@ -2117,3 +2357,90 @@ async def validate_runtime_catalog(request: RuntimeCatalogRequest):
         return {"valid": True}
     except RuntimeCatalogValidationError as e:
         return {"valid": False, "error": str(e)}
+
+
+class TestExecutorRequest(BaseModel):
+    executor_id: str
+    provider_id: str | None = None
+    model_id: str | None = None
+    api_endpoint: str | None = None
+    api_key: str | None = None
+
+
+@router.post("/runtime-catalog/test")
+async def test_runtime_executor(request: TestExecutorRequest):
+    """Test an executor configuration by making a simple API call.
+
+    Returns {"success": true, "latency_ms": ...} or {"success": false, "error": "..."}
+    """
+    import time
+    import httpx
+
+    catalog = await _get_runtime_catalog_service().load_catalog()
+    executor = next((e for e in catalog.executors if e.id == request.executor_id), None)
+    if executor is None:
+        raise HTTPException(status_code=404, detail=f"Executor '{request.executor_id}' not found")
+
+    # Build effective config
+    provider_id = request.provider_id
+    if provider_id == "None" or provider_id == "":
+        provider_id = None
+    if provider_id is None:
+        provider_id = executor.default_provider_id
+    if provider_id == "None":
+        provider_id = None
+
+    provider = next((p for p in executor.providers if p.id == provider_id), None) if provider_id else None
+    if provider_id and provider is None:
+        raise HTTPException(status_code=400, detail=f"Provider '{provider_id}' not found in executor '{request.executor_id}'")
+
+    model_id = request.model_id
+    if model_id == "None" or model_id == "":
+        model_id = None
+    if model_id is None:
+        model_id = executor.default_model or (provider.default_model_id if provider else None)
+    if model_id == "None":
+        model_id = None
+        
+    if model_id is None:
+        raise HTTPException(status_code=400, detail=f"No model specified for executor '{request.executor_id}'")
+
+    if provider:
+        model = next((m for m in provider.models if m.id == model_id), None)
+        if model is None:
+            raise HTTPException(status_code=400, detail=f"Model '{model_id}' not found in provider '{provider_id}'")
+
+    # Determine endpoint and key (use request overrides or executor defaults)
+    endpoint = request.api_endpoint or executor.api_endpoint
+    api_key = request.api_key or executor.api_key
+
+    if not endpoint or not api_key:
+        raise HTTPException(status_code=400, detail="api_endpoint and api_key are required")
+
+    # Build the request
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{endpoint.rstrip('/')}/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": model_id,
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
+            )
+        latency_ms = (time.monotonic() - start) * 1000
+
+        if response.status_code == 200:
+            return {"success": True, "latency_ms": round(latency_ms, 1)}
+        else:
+            return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+    except httpx.TimeoutException:
+        return {"success": False, "error": "Request timed out after 10s"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
