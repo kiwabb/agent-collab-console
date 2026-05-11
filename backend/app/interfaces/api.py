@@ -505,23 +505,6 @@ def _is_task_running(status: str | None) -> bool:
     return str(status or "").lower() in {"running", "responding"}
 
 
-def _should_use_workspace_root_for_task(workspace: "CodexSession", request: "CreateTaskRequest") -> bool:
-    """Return True if task should use workspace root, False for a dedicated task workspace."""
-    if request.issue_id:
-        return True
-    if request.role in ("product_manager", "architect"):
-        return True
-    return False
-
-
-def _is_managed_task_workspace(task: "CodexTask", workspace: "CodexSession | None") -> bool:
-    if not task.workspace_path:
-        return False
-    if workspace is None:
-        return True
-    return task.workspace_path != workspace.cwd
-
-
 def _delete_issue_artifact_root(workspace_path: str | None, issue_id: str):
     if not workspace_path:
         return
@@ -847,10 +830,37 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, force: bool = False):
+    """Delete a project record.
+
+    Refuses if any session still references this project, unless `force=true`.
+    With force, cascade-deletes all sessions under the project (which in turn
+    cleans up issue + chat-task worktrees via _cleanup_session_worktrees).
+    """
     svc = _require_project_service()
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    try:
+        await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    related_sessions = await codex_store.list_codex_sessions(project_id=project_id)
+    if related_sessions and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"project has {len(related_sessions)} workspace(s) attached; "
+                "pass ?force=true to cascade-delete them"
+            ),
+        )
+    for ws in related_sessions:
+        try:
+            await _cleanup_session_worktrees(ws["id"], project_id)
+        except Exception:
+            pass
+        await codex_store.delete_codex_session(ws["id"])
     await svc.delete(project_id)
-    return {"deleted": project_id}
+    return {"deleted": project_id, "cascaded_sessions": len(related_sessions)}
 
 
 @router.get("/projects/{project_id}/branches")

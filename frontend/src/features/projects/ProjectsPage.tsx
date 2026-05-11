@@ -11,11 +11,68 @@ import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
-import { deleteProject, getProjectBranches, listProjects } from "@/lib/api";
+import { deleteProject, getProjectBranches, listProjects, updateProject } from "@/lib/api";
+import { Textarea } from "@/components/ui/textarea";
 import type { GitBranch, Project } from "@/lib/types";
 
 import { CreateProjectDialog } from "./CreateProjectDialog";
 import { BranchListView } from "./BranchListView";
+
+function SetupScriptCard({
+  project,
+  onUpdated,
+}: {
+  project: Project;
+  onUpdated: (next: Project) => void;
+}) {
+  const { t } = useI18n();
+  const { addToast } = useToast();
+  const [draft, setDraft] = useState(project.setup_script ?? "");
+  const [saving, setSaving] = useState(false);
+  // Reset the draft when the user switches between projects.
+  useEffect(() => {
+    setDraft(project.setup_script ?? "");
+  }, [project.id, project.setup_script]);
+  const dirty = draft !== (project.setup_script ?? "");
+
+  async function save() {
+    if (saving || !dirty) return;
+    setSaving(true);
+    try {
+      const next = await updateProject(project.id, { setup_script: draft });
+      onUpdated(next);
+      addToast({ type: "success", title: t("projects.setupSaved") });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save setup script";
+      addToast({ type: "error", title: msg });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{t("projects.setupScript")}</CardTitle>
+        <CardDescription>{t("projects.setupScriptHelp")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <Textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="npm install"
+          rows={4}
+          className="font-mono text-xs"
+        />
+        <div className="flex justify-end">
+          <Button size="sm" onClick={save} disabled={!dirty || saving}>
+            {saving ? t("projects.savingSetup") : t("projects.saveSetup")}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 const SELECTED_PROJECT_KEY = "selectedProjectId";
 
@@ -95,19 +152,29 @@ export function ProjectsPage() {
     };
   }, [activeId, addToast]);
 
-  const handleConfirmDelete = useCallback(async () => {
-    if (!pendingDelete) return;
-    try {
-      await deleteProject(pendingDelete.id);
-      addToast({ type: "success", title: t("projects.toastDeleted") });
-      if (selectedProjectId() === pendingDelete.id) setSelectedProjectId(null);
-      setPendingDelete(null);
-      await refresh();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to delete project";
-      addToast({ type: "error", title: msg });
-    }
-  }, [pendingDelete, addToast, refresh, t]);
+  const handleConfirmDelete = useCallback(
+    async (force = false) => {
+      if (!pendingDelete) return;
+      try {
+        await deleteProject(pendingDelete.id, force);
+        addToast({ type: "success", title: t("projects.toastDeleted") });
+        if (selectedProjectId() === pendingDelete.id) setSelectedProjectId(null);
+        setPendingDelete(null);
+        await refresh();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to delete project";
+        // 409 = "project has N workspace(s) attached; pass ?force=true to cascade-delete"
+        if (!force && /workspace\(s\) attached/.test(msg)) {
+          if (window.confirm(t("projects.confirmCascade").replace("{detail}", msg))) {
+            await handleConfirmDelete(true);
+            return;
+          }
+        }
+        addToast({ type: "error", title: msg });
+      }
+    },
+    [pendingDelete, addToast, refresh, t],
+  );
 
   const handleSelectAndEnter = useCallback(
     (project: Project) => {
@@ -202,6 +269,12 @@ export function ProjectsPage() {
                   </div>
                 </CardContent>
               </Card>
+              <SetupScriptCard
+                project={activeProject}
+                onUpdated={(next) => {
+                  setProjects((prev) => (prev ?? []).map((p) => (p.id === next.id ? next : p)));
+                }}
+              />
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-base">
@@ -245,7 +318,7 @@ export function ProjectsPage() {
         description={pendingDelete ? t("projects.confirmDeleteBody").replace("{name}", pendingDelete.name) : ""}
         confirmText={t("projects.delete")}
         cancelText={t("projects.cancel")}
-        onConfirm={handleConfirmDelete}
+        onConfirm={() => handleConfirmDelete(false)}
       />
     </div>
   );

@@ -132,10 +132,11 @@ export async function updateProject(
   return handleResponse<Project>(response);
 }
 
-export async function deleteProject(projectId: string): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}`, {
-    method: "DELETE",
-  });
+export async function deleteProject(projectId: string, force = false): Promise<unknown> {
+  const url = force
+    ? `${API_BASE}/projects/${projectId}?force=true`
+    : `${API_BASE}/projects/${projectId}`;
+  const response = await fetch(url, { method: "DELETE" });
   return handleResponse(response);
 }
 

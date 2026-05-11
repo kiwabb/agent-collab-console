@@ -155,6 +155,25 @@ export function IssueCard({
                 <span className="text-[11px] font-bold text-brand">{runningCount}</span>
               </div>
             )}
+
+            {issue.git_branch && (
+              <div
+                className={cn(
+                  "flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-black uppercase tracking-wider",
+                  issue.git_merge_status === "merged"
+                    ? "bg-success/10 border-success/20 text-success"
+                    : issue.git_merge_status === "abandoned"
+                      ? "bg-error/10 border-error/20 text-error"
+                      : "bg-surface-raised/50 border-border-subtle text-text-muted",
+                )}
+                title={issue.git_branch}
+              >
+                {t(`task.mergeStatus.${issue.git_merge_status}` as
+                  | "task.mergeStatus.open"
+                  | "task.mergeStatus.merged"
+                  | "task.mergeStatus.abandoned")}
+              </div>
+            )}
           </div>
 
           <div className="flex gap-1.5">

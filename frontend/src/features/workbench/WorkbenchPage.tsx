@@ -481,12 +481,24 @@ function WorkbenchInner({
 
   const [currentProject, setCurrentProject] = useState<import("@/lib/types").Project | null>(null);
 
+  // Resolve selected project from URL `?project=...` (shareable) first, then
+  // fall back to localStorage. Persist the resolution in both places so they
+  // stay in sync.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const pid = window.localStorage.getItem("selectedProjectId");
+    const url = new URL(window.location.href);
+    const fromUrl = url.searchParams.get("project");
+    const fromStorage = window.localStorage.getItem("selectedProjectId");
+    const pid = fromUrl || fromStorage;
     if (!pid) {
       router.push("/projects");
       return;
+    }
+    if (fromUrl && fromUrl !== fromStorage) {
+      window.localStorage.setItem("selectedProjectId", fromUrl);
+    } else if (!fromUrl && fromStorage) {
+      url.searchParams.set("project", fromStorage);
+      window.history.replaceState(null, "", url.toString());
     }
     import("@/lib/api").then(({ getProject }) =>
       getProject(pid).then(setCurrentProject).catch(() => {
@@ -494,6 +506,24 @@ function WorkbenchInner({
         router.push("/projects");
       })
     );
+  }, [router]);
+
+  // Cross-tab sync: react when selectedProjectId changes in another tab.
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (event.key !== "selectedProjectId") return;
+      const next = event.newValue;
+      if (!next) {
+        router.push("/projects");
+        return;
+      }
+      import("@/lib/api").then(({ getProject }) => getProject(next).then(setCurrentProject));
+      const url = new URL(window.location.href);
+      url.searchParams.set("project", next);
+      window.history.replaceState(null, "", url.toString());
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, [router]);
 
   async function handleCreateWorkspace(title: string) {
