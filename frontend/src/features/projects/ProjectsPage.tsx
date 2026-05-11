@@ -11,8 +11,8 @@ import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
-import { deleteProject, getProjectBranches, getProjectStats, listProjects, repairProject, updateProject } from "@/lib/api";
-import type { ProjectStats } from "@/lib/types";
+import { deleteProject, getProjectAudit, getProjectBranches, getProjectStats, listProjects, repairProject, updateProject } from "@/lib/api";
+import type { ProjectAuditEntry, ProjectStats } from "@/lib/types";
 import { Textarea } from "@/components/ui/textarea";
 import type { GitBranch, Project } from "@/lib/types";
 
@@ -77,6 +77,20 @@ function SetupScriptCard({
 
 const SELECTED_PROJECT_KEY = "selectedProjectId";
 
+function formatRelative(iso: string | null): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const diff = Date.now() - t;
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  return `${Math.floor(hr / 24)}d`;
+}
+
 export function selectedProjectId(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(SELECTED_PROJECT_KEY);
@@ -94,9 +108,11 @@ export function ProjectsPage() {
   const { addToast } = useToast();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [stats, setStats] = useState<ProjectStats | null>(null);
+  const [audit, setAudit] = useState<ProjectAuditEntry[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
 
@@ -104,6 +120,15 @@ export function ProjectsPage() {
     () => projects?.find((p) => p.id === activeId) ?? null,
     [projects, activeId],
   );
+
+  const visibleProjects = useMemo(() => {
+    if (!projects) return null;
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return projects;
+    return projects.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.repo_path.toLowerCase().includes(q),
+    );
+  }, [projects, searchQuery]);
 
   const refresh = useCallback(async () => {
     try {
@@ -136,11 +161,12 @@ export function ProjectsPage() {
     }
     let cancelled = false;
     setBranchesLoading(true);
-    Promise.all([getProjectBranches(activeId), getProjectStats(activeId)])
-      .then(([brs, st]) => {
+    Promise.all([getProjectBranches(activeId), getProjectStats(activeId), getProjectAudit(activeId, 10)])
+      .then(([brs, st, au]) => {
         if (cancelled) return;
         setBranches(brs);
         setStats(st);
+        setAudit(au);
       })
       .catch((err) => {
         if (!cancelled) {
@@ -148,6 +174,7 @@ export function ProjectsPage() {
           addToast({ type: "error", title: msg });
           setBranches([]);
           setStats(null);
+          setAudit([]);
         }
       })
       .finally(() => {
@@ -213,16 +240,25 @@ export function ProjectsPage() {
           <h2 className="text-xs uppercase tracking-wider text-muted-foreground px-2">
             {t("projects.listHeading")}
           </h2>
-          {projects === null ? (
+          {projects && projects.length > 3 && (
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t("projects.searchPlaceholder")}
+              className="w-full text-xs px-2 py-1.5 rounded border border-border-subtle bg-surface-input outline-none focus:border-brand"
+            />
+          )}
+          {visibleProjects === null ? (
             <div className="space-y-2">
               <Skeleton className="h-12 w-full" />
               <Skeleton className="h-12 w-full" />
             </div>
-          ) : projects.length === 0 ? (
+          ) : visibleProjects.length === 0 ? (
             <p className="text-sm text-muted-foreground px-2">{t("projects.empty")}</p>
           ) : (
             <ul className="space-y-1">
-              {projects.map((p) => (
+              {visibleProjects.map((p) => (
                 <li key={p.id}>
                   <button
                     type="button"
@@ -339,6 +375,42 @@ export function ProjectsPage() {
                   )}
                 </CardContent>
               </Card>
+              {audit.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">{t("projects.recentActivity")}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ul className="space-y-1 text-xs">
+                      {audit.map((entry) => (
+                        <li key={entry.id} className="flex items-center gap-2 font-mono">
+                          <span
+                            className={cn(
+                              "px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider",
+                              entry.event === "merged"
+                                ? "bg-success/10 text-success"
+                                : entry.event === "abandoned"
+                                  ? "bg-muted text-muted-foreground"
+                                  : "bg-brand/10 text-brand",
+                            )}
+                          >
+                            {entry.event}
+                          </span>
+                          <span className="text-muted-foreground truncate">
+                            {entry.issue_id ? entry.issue_id.slice(0, 8) : "—"}
+                          </span>
+                          {entry.sha && (
+                            <span className="text-muted-foreground/70">@{entry.sha.slice(0, 7)}</span>
+                          )}
+                          <span className="ml-auto text-muted-foreground/70">
+                            {formatRelative(entry.created_at)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           ) : (
             <Card>

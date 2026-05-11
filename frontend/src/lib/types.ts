@@ -332,6 +332,16 @@ export interface ProjectStats {
   issues_abandoned: number;
 }
 
+export interface ProjectAuditEntry {
+  id: number;
+  project_id: string | null;
+  issue_id: string | null;
+  event: string;
+  sha: string | null;
+  base_branch: string | null;
+  created_at: string;
+}
+
 export interface CreateTaskRequest {
   session_id: string;
   issue_id?: string | null;

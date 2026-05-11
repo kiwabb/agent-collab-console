@@ -953,9 +953,13 @@ async def repair_project(project_id: str):
     repaired = 0
     for issue_dict in issues:
         issue = await codex_store.load_codex_issue(issue_dict["id"])
-        if issue is None or not issue.git_worktree_path:
+        if issue is None:
             continue
-        if Path(issue.git_worktree_path).exists():
+        # Reset when EITHER the on-disk worktree is gone, OR the branch ref
+        # has been deleted from the repo (covers `git branch -D` mishaps).
+        worktree_missing = bool(issue.git_worktree_path) and not Path(issue.git_worktree_path).exists()
+        branch_missing = bool(issue.git_branch) and not await git_service.branch_exists(project.repo_path, issue.git_branch)
+        if not (worktree_missing or branch_missing):
             continue
         issue.git_branch = None
         issue.git_base_branch = None

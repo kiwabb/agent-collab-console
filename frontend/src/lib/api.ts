@@ -158,6 +158,14 @@ export async function getProjectStats(projectId: string): Promise<import("./type
   return handleResponse<import("./types").ProjectStats>(response);
 }
 
+export async function getProjectAudit(
+  projectId: string,
+  limit = 10,
+): Promise<import("./types").ProjectAuditEntry[]> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/audit?limit=${limit}`);
+  return handleResponse<import("./types").ProjectAuditEntry[]>(response);
+}
+
 export async function mergeCodexIssue(
   issueId: string,
   message: string | null = null,

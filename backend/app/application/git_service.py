@@ -291,6 +291,18 @@ class GitService:
         result = await self._run(["status", "--porcelain"], cwd=worktree_path)
         return result.stdout
 
+    async def branch_exists(self, repo_path: str | Path, branch: str) -> bool:
+        """Return True iff `branch` is currently a local ref on the repo."""
+        _validate_path(repo_path)
+        if not _BRANCH_RE.fullmatch(branch):
+            return False
+        result = await self._run(
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            cwd=repo_path,
+            check=False,
+        )
+        return result.returncode == 0
+
     async def commits_ahead(self, worktree_path: str | Path, base_branch: str) -> int:
         """Number of commits on the worktree's HEAD that aren't on `base_branch`."""
         _validate_path(worktree_path)

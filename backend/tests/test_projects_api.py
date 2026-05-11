@@ -275,6 +275,29 @@ def test_abandon_refuses_when_already_merged(client, tmp_path):
     assert resp.status_code == 409
 
 
+def test_repair_resets_issue_state_when_branch_was_deleted_externally(client, tmp_path):
+    project = _create_project(client, tmp_path, name="ghost-branch")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "ghost-branch"}
+    ).json()
+    # Tear down the worktree from the git side AND delete the branch ref by
+    # hand — simulates `git worktree remove && git branch -D` outside the app.
+    repo = Path(project["repo_path"])
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", issue["git_worktree_path"]],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(["git", "branch", "-D", issue["git_branch"]], cwd=repo, check=True, capture_output=True)
+    resp = client.post(f"/api/projects/{project['id']}/repair")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["issues_reset"] == 1
+    refreshed = client.get(f"/api/codex/issues/{issue['id']}").json()
+    assert refreshed["git_branch"] is None
+
+
 def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path):
     project = _create_project(client, tmp_path, name="repair-host")
     ws = client.post(
