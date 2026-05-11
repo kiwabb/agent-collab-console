@@ -13,7 +13,11 @@ import app.bootstrap as bootstrap_module
 # missing `project_id`. Tests will be ported to the new model in a follow-up;
 # meanwhile they get skipped en masse so the rest of the suite stays green.
 pytestmark = pytest.mark.skip(
-    reason="legacy: ephemeral-workspace flow replaced by project+worktree model (see #project-worktree)"
+    reason=(
+        "legacy: ephemeral-workspace flow replaced by project+worktree model. "
+        "Critical paths ported in tests/test_codex_tasks_ported.py; remaining tests "
+        "can be migrated using the `project_ctx` fixture there."
+    )
 )
 
 
