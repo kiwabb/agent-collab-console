@@ -177,6 +177,21 @@ class CodexTaskRunner:
             return exec_process
         await self.codex_store.save_codex_task(task)
 
+        # After a successful run, snapshot the worktree HEAD onto the owning
+        # issue so the FE can show "N commits ahead of base" / merge-readiness.
+        if task.status == "done" and task.issue_id and task.git_worktree_path:
+            try:
+                from app.application.git_service import git_service as _git
+                head = await _git.head_commit(task.git_worktree_path)
+                issue = await self.codex_store.load_codex_issue(task.issue_id)
+                if issue is not None and issue.git_last_commit_sha != head:
+                    issue.git_last_commit_sha = head
+                    issue.updated_at = datetime.now()
+                    await self.codex_store.save_codex_issue(issue)
+            except Exception:
+                # Don't fail the run on a bookkeeping update.
+                pass
+
         exec_final_status = "Completed" if task.status == "done" else "Running"
         await self.codex_store.update_execution_process_status(
             exec_process.id,

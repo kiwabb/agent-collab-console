@@ -51,7 +51,7 @@ import {
 } from "@/lib/api";
 import { getRuntimeCatalog } from "@/lib/api";
 import { ExecutionProcessesProvider } from "@/providers/ExecutionProcessesProvider";
-import { useExecutionProcessesContext, isBusTaskStatusEvent, isBusTaskCreatedEvent, isBusIssueMergedEvent } from "@/contexts/ExecutionProcessesContext";
+import { useExecutionProcessesContext, isBusTaskStatusEvent, isBusTaskCreatedEvent, isBusIssueMergedEvent, isBusIssueAbandonedEvent } from "@/contexts/ExecutionProcessesContext";
 import { WorkspaceGrid } from "@/features/workspaces/WorkspaceGrid";
 import { GitInfoCard } from "@/features/issues/components/GitInfoCard";
 import { IssueGrid } from "@/features/issues/IssueGrid";
@@ -434,6 +434,15 @@ function WorkbenchInner({
         prev.map((i) =>
           i.id === event.issue_id
             ? { ...i, git_merge_status: "merged", git_last_commit_sha: event.sha }
+            : i,
+        ),
+      );
+    } else if (isBusIssueAbandonedEvent(lastEvent)) {
+      const event = lastEvent;
+      setIssues((prev) =>
+        prev.map((i) =>
+          i.id === event.issue_id
+            ? { ...i, git_merge_status: "abandoned", git_worktree_path: null }
             : i,
         ),
       );

@@ -176,6 +176,21 @@ def test_issue_creation_with_base_branch_override_forks_from_feature(client, tmp
     assert (Path(issue["git_worktree_path"]) / "feat.txt").exists()
 
 
+def test_merge_refuses_dirty_worktree(client, tmp_path):
+    project = _create_project(client, tmp_path, name="dirty-merge")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "dirty"}
+    ).json()
+    # Drop an uncommitted file in the worktree.
+    (Path(issue["git_worktree_path"]) / "tmp.txt").write_text("staging")
+    resp = client.post(f"/api/codex/issues/{issue['id']}/merge", json={"message": None})
+    assert resp.status_code == 400
+    assert "uncommitted" in resp.json()["detail"].lower()
+
+
 def test_abandon_issue_clears_worktree_and_marks_status(client, tmp_path):
     project = _create_project(client, tmp_path, name="abandon-host")
     ws = client.post(

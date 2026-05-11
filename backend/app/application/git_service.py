@@ -285,6 +285,12 @@ class GitService:
         result = await self._run(["rev-parse", "HEAD"], cwd=worktree_path)
         return result.stdout.strip()
 
+    async def status_porcelain(self, worktree_path: str | Path) -> str:
+        """Return `git status --porcelain` output (empty string == clean tree)."""
+        _validate_path(worktree_path)
+        result = await self._run(["status", "--porcelain"], cwd=worktree_path)
+        return result.stdout
+
     async def prune_worktrees(self, repo_path: str | Path) -> None:
         _validate_path(repo_path)
         await self._run(["worktree", "prune"], cwd=repo_path, check=False)

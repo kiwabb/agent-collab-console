@@ -95,6 +95,14 @@ class WorktreeManager:
         if not issue.git_branch:
             raise WorktreeError("issue has no git branch to merge")
         base = issue.git_base_branch or project.default_branch
+        # Refuse if the worktree has uncommitted changes — otherwise the squash
+        # merge silently drops them. Surface a clear error to the user.
+        if issue.git_worktree_path:
+            status = await self.git.status_porcelain(issue.git_worktree_path)
+            if status.strip():
+                raise WorktreeError(
+                    "worktree has uncommitted changes; commit them on the branch before merging"
+                )
         commit_message = message or f"Squash merge issue {issue.id[:8]}: {issue.title}"
         sha = await self.git.squash_merge(
             repo_path=project.repo_path,
