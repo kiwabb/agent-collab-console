@@ -130,6 +130,12 @@ function WorkbenchInner({
   const [wasConnected, setWasConnected] = useState(false);
 
   const { isConnected, lastEvent, executionProcessesAll } = useExecutionProcessesContext();
+  // Optimistic placeholder for a freshly-created execution_process. Returned
+  // by the backend immediately on /chat /refine /rerun but takes a beat to
+  // arrive over the workspace WS. Without this fallback, selectedProcess
+  // briefly resolves to null → RunDetail's `!process` early-return unmounts
+  // the entire TabsContent → scroll position resets to top on re-mount.
+  const [optimisticProcess, setOptimisticProcess] = useState<ExecutionProcess | null>(null);
   const { t } = useI18n();
   const router = useRouter();
 
@@ -314,11 +320,21 @@ function WorkbenchInner({
       .sort()
       .join("|");
   }, [currentIssueTaskIds, executionProcessesAll]);
-  const selectedProcess = selectedProcessId
-    ? (Object.values(executionProcessesAll) as ExecutionProcess[]).find(
+  const selectedProcess: ExecutionProcess | null = selectedProcessId
+    ? ((Object.values(executionProcessesAll) as ExecutionProcess[]).find(
         (p) => p.id === selectedProcessId,
-      ) ?? null
+      ) ??
+      (optimisticProcess?.id === selectedProcessId ? optimisticProcess : null))
     : null;
+  // Once the WS workspace stream catches up and the real EP appears in
+  // executionProcessesAll, drop the placeholder so we don't hold a stale copy.
+  useEffect(() => {
+    if (!optimisticProcess) return;
+    const arrived = (Object.values(executionProcessesAll) as ExecutionProcess[]).some(
+      (p) => p.id === optimisticProcess.id,
+    );
+    if (arrived) setOptimisticProcess(null);
+  }, [optimisticProcess, executionProcessesAll]);
   const liveProcessLogs = selectedProcess?.logs ?? [];
   const liveProcessMessages = selectedProcess?.messages ? Object.values(selectedProcess.messages) : [];
   const displayedProcessLogs = useMemo(() => {
@@ -725,10 +741,13 @@ function WorkbenchInner({
         result = await sendCodexTask(selectedProcess.task_id, content);
         if (result?.resolved_mode) setLastResolvedMode(result.resolved_mode);
       }
-      // Backend creates a new execution process for every run. Switch UI to it
-      // for log streaming, but fetch messages task-scoped so prior turns persist.
+      // Backend creates a new execution process for every run. Seed an
+      // optimistic placeholder so selectedProcess resolves immediately (avoids
+      // an unmount/remount of RunDetail while we wait for the workspace WS to
+      // push the real EP).
       const newProcess = result?.execution_process;
       if (newProcess?.id) {
+        setOptimisticProcess(newProcess as ExecutionProcess);
         setSelectedProcessId(newProcess.id);
       }
       const msgs = await getCodexTaskMessages(selectedProcess.task_id);
@@ -1070,6 +1089,7 @@ function WorkbenchInner({
                             try {
                               const result = await rerunCodexTask(selectedProcess.task_id, { executor, provider, model });
                               if (result.execution_process?.id) {
+                                setOptimisticProcess(result.execution_process as ExecutionProcess);
                                 setSelectedProcessId(result.execution_process.id);
                               }
                               // WS workspace stream will sync task / EP status updates.
