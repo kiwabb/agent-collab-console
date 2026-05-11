@@ -294,6 +294,69 @@ def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path
     assert refreshed["git_branch"] is None
 
 
+def test_full_create_to_merge_round_trip(client, tmp_path):
+    """End-to-end: project → workspace → issue → edit → diff → merge → stats."""
+    # 1. Create project
+    project = _create_project(client, tmp_path, name="e2e")
+    repo = Path(project["repo_path"])
+
+    # 2. Create workspace bound to project
+    ws = client.post(
+        "/api/codex/workspaces",
+        json={"title": "E2E session", "project_id": project["id"]},
+    ).json()
+    assert ws["project_id"] == project["id"]
+    assert ws["cwd"] == project["repo_path"]
+
+    # 3. Create issue (auto-builds worktree)
+    issue = client.post(
+        "/api/codex/issues",
+        json={"session_id": ws["id"], "title": "wire up X"},
+    ).json()
+    assert issue["git_branch"] and issue["git_worktree_path"]
+    worktree = Path(issue["git_worktree_path"])
+
+    # 4. Make a change inside the worktree (simulate the agent doing work)
+    (worktree / "feature.txt").write_text("payload\n")
+    subprocess.run(["git", "add", "feature.txt"], cwd=worktree, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "feat: x"],
+        cwd=worktree, check=True, capture_output=True,
+    )
+
+    # 5. Diffstat surfaces the change
+    diff = client.get(f"/api/codex/issues/{issue['id']}/diff?stat_only=true").json()
+    assert diff["stat"] == {"files": 1, "insertions": 1, "deletions": 0}
+
+    # 6. Squash merge
+    merge = client.post(
+        f"/api/codex/issues/{issue['id']}/merge", json={"message": "ship it"}
+    )
+    assert merge.status_code == 200, merge.text
+    sha = merge.json()["sha"]
+
+    # 7. Squash commit lands on main with our message
+    log = subprocess.run(
+        ["git", "log", "--oneline", "main"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout
+    assert "ship it" in log
+
+    # 8. Issue reflects merged state with the new sha
+    refreshed = client.get(f"/api/codex/issues/{issue['id']}").json()
+    assert refreshed["git_merge_status"] == "merged"
+    assert refreshed["git_last_commit_sha"] == sha
+
+    # 9. Stats roll up: 1 workspace, 1 merged issue, no open/abandoned
+    stats = client.get(f"/api/projects/{project['id']}/stats").json()
+    assert stats == {
+        "workspaces": 1,
+        "issues_total": 1,
+        "issues_open": 0,
+        "issues_merged": 1,
+        "issues_abandoned": 0,
+    }
+
+
 def test_get_issue_diff_returns_empty_when_no_changes(client, tmp_path):
     project = _create_project(client, tmp_path, name="diff-empty")
     ws = client.post(

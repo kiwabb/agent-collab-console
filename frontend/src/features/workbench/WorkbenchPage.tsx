@@ -897,6 +897,13 @@ function WorkbenchInner({
                   <DropdownMenuItem
                     key={p.id}
                     onClick={() => {
+                      if (p.id === currentProject?.id) return;
+                      // Warn if anything is mid-flight: switching project resets the
+                      // visible workspace so a running task would lose its UI surface.
+                      const hasRunning = tasks.some((tk) => tk.status === "running" || tk.status === "responding");
+                      if (hasRunning && !window.confirm(t("workbench.switchWhileRunning"))) {
+                        return;
+                      }
                       if (typeof window !== "undefined") {
                         window.localStorage.setItem("selectedProjectId", p.id);
                         const url = new URL(window.location.href);
