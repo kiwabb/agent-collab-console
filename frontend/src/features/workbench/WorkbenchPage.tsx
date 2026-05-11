@@ -733,9 +733,11 @@ function WorkbenchInner({
       }
       const msgs = await getCodexTaskMessages(selectedProcess.task_id);
       setProcessMessages(msgs);
-      if (currentWorkspaceId) {
-        await loadWorkspaceData(currentWorkspaceId);
-      }
+      // No full workspace reload — the WebSocket workspace stream pushes task /
+      // execution-process status changes automatically. Calling loadWorkspaceData
+      // here would re-fetch all issues + tasks + help-requests for the workspace
+      // and toggle the `isLoadingIssues` flag, which made the whole workbench
+      // re-mount on every chat send (the user-visible "局部刷新").
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message");
       const titleMap: Record<RunMode, string> = { auto: "发送失败", chat: "对话失败", refine: "修订失败" };
@@ -1070,7 +1072,8 @@ function WorkbenchInner({
                               if (result.execution_process?.id) {
                                 setSelectedProcessId(result.execution_process.id);
                               }
-                              if (currentWorkspaceId) await loadWorkspaceData(currentWorkspaceId);
+                              // WS workspace stream will sync task / EP status updates.
+                              // No full reload, avoids re-mount flicker.
                             } catch (err) {
                               setError(err instanceof Error ? err.message : "Failed to rerun task");
                               addToast({ type: "error", title: "重跑失败", message: err instanceof Error ? err.message : undefined });
