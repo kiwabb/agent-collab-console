@@ -61,6 +61,34 @@ class AsyncProcessEntry:
         return self.session_id
 
 
+def _sanitize_chat_reply(text: str) -> str:
+    """If a chat-mode agent reply is actually structured JSON (weak instruction
+    following), replace it with a friendly hint instead of dumping the blob.
+
+    Heuristic: trimmed reply starts with `{` or `[` and at least the first 50
+    chars contain a JSON-looking shape.
+    """
+    if not text:
+        return text
+    stripped = text.strip()
+    if not stripped:
+        return text
+    if stripped[0] not in ("{", "["):
+        return text
+    # Confidence check: try to parse the first ~10kB as JSON. If it succeeds,
+    # this is definitely a JSON dump that doesn't belong in a chat thread.
+    import json as _json
+    sample = stripped[:10000]
+    try:
+        _json.loads(sample)
+    except Exception:
+        return text  # Probably starts with { but not actually JSON — keep as-is
+    return (
+        "（模型未按对话格式回复，输出了结构化 JSON。已忽略原文以免覆盖产物。"
+        "可重试或切换为更擅长对话的模型。）"
+    )
+
+
 class BaseProcessRuntime:
     def __init__(self, codex_store, log_store, data_dir=None, event_bus=None, processes=None, help_orchestrator=None, refresh_task_result=None):
         self.codex_store = codex_store
@@ -415,6 +443,12 @@ class BaseProcessRuntime:
             # role workflow rewrites into a human-readable summary on task.result;
             # surface that summary instead of dumping JSON to the chat thread.
             assistant_text = entry.result_text if is_chat else (task.result or entry.result_text)
+            # Chat-mode safety net: weak instruction-following models sometimes
+            # ignore our "do not output JSON" directive and reply with the full
+            # role artifact JSON anyway. Detect that and replace with a hint
+            # rather than dumping a JSON blob into the chat thread.
+            if is_chat and assistant_text:
+                assistant_text = _sanitize_chat_reply(assistant_text)
             await self._persist_assistant_message(task_id, execution_process_id, assistant_text)
 
             if self._event_bus is not None:

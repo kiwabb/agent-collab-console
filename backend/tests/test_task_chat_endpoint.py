@@ -411,6 +411,49 @@ async def test_mark_task_done_persists_assistant_summary_for_initial_run(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_mark_task_done_replaces_json_chat_reply_with_hint(tmp_path):
+    """Weak-instruction-following models sometimes output the role artifact JSON
+    even when asked to chat. The chat-mode persist path must detect this and
+    swap the raw JSON for a friendly hint instead of dumping a JSON blob into
+    the conversation thread."""
+    from app.application.process_runtime_common import BaseProcessRuntime
+    from app.adapters.async_sqlite_store import AsyncSQLiteStore
+
+    db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
+    now = datetime.now()
+    session = CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
+    await db.save_codex_session(session)
+    task = CodexTask(
+        id="task-1", session_id="ws-1", phase="requirements", title="t", prompt="p",
+        role="product_manager", executor="codex", status="running",
+        result="OLD_CANONICAL_SUMMARY", workspace_path=str(tmp_path),
+        last_execution_process_id="ep-chat-json", created_at=now, updated_at=now,
+    )
+    await db.save_codex_task(task)
+    ep = ExecutionProcess(
+        id="ep-chat-json", task_id="task-1", session_id="ws-1",
+        status="Running", kind="chat", created_at=now, updated_at=now,
+    )
+    await db.save_execution_process(ep)
+
+    runtime = BaseProcessRuntime(codex_store=db, log_store=db, data_dir=str(tmp_path),
+                                  event_bus=None, refresh_task_result=None)
+    entry = type("E", (), {
+        "result_text": '{"language":"zh","project_name":"x","product_goals":["g"],"user_stories":[]}',
+        "help_requested": False,
+    })()
+    await runtime._mark_task_done("task-1", entry)
+
+    msgs = await db.list_codex_task_messages("task-1")
+    assistants = [m for m in msgs if m.role == "assistant"]
+    assert len(assistants) == 1
+    content = assistants[0].content
+    assert "language" not in content  # raw JSON keys not present
+    assert "product_goals" not in content
+    assert ("结构化 JSON" in content) or ("模型未按对话格式" in content)
+
+
+@pytest.mark.asyncio
 async def test_mark_task_done_persists_assistant_raw_text_for_chat_run(tmp_path):
     """For chat runs the agent reply is plain natural language; pass it through verbatim."""
     from app.application.process_runtime_common import BaseProcessRuntime

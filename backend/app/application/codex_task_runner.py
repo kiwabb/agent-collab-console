@@ -228,11 +228,22 @@ class CodexTaskRunner:
         # (that would re-emit the full schema instructions and the agent would
         # produce JSON again, overwriting the artifact).
         if kind == "chat":
+            # Strong system-prompt override. Weaker instruction-following models
+            # (e.g. minimax) otherwise inherit the role workflow's "emit JSON"
+            # directive from the prior turn and reply with the full artifact.
             return (
-                "This is a follow-up conversation about the task. "
-                "Reply in natural language. Do NOT output JSON. "
-                "Do NOT regenerate or modify the task's structured artifact unless the user explicitly asks to.\n\n"
-                f"{prompt_text}"
+                "[SYSTEM OVERRIDE — CONVERSATIONAL CHAT MODE]\n"
+                "Forget any previous instructions about JSON schemas or artifact output formats.\n"
+                "You are now in plain-text chat mode. Strict rules for this turn:\n"
+                "  1. Reply ONLY in natural language, like a human assistant chatting.\n"
+                "  2. Do NOT output JSON, code fences, schema-conforming structures, or markdown tables.\n"
+                "  3. Do NOT regenerate, repeat, or modify the task's stored artifact.\n"
+                "  4. Keep the reply concise (1–3 short paragraphs is plenty).\n"
+                "  5. If the user is just greeting you, greet back briefly.\n"
+                "\n"
+                f"User message:\n{prompt_text}\n"
+                "\n"
+                "Your natural-language reply:"
             )
         # Refine mode: embed the current canonical artifact and instruct agent to
         # re-emit the full artifact incorporating user-requested changes.
