@@ -1,0 +1,224 @@
+"use client";
+
+import { useState } from "react";
+import { GitBranch, GitMerge, FileText, Loader2, Ban } from "lucide-react";
+
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/toast";
+import { useI18n } from "@/providers/I18nProvider";
+import { abandonCodexIssue, getCodexIssueDiff, mergeCodexIssue } from "@/lib/api";
+import type { CodexIssue, GitMergeStatus } from "@/lib/types";
+
+interface Props {
+  issue: CodexIssue;
+  onIssueUpdated: (issue: CodexIssue) => void;
+}
+
+function statusVariant(status: GitMergeStatus) {
+  if (status === "merged") return "secondary" as const;
+  if (status === "abandoned") return "destructive" as const;
+  return "default" as const;
+}
+
+export function GitInfoCard({ issue, onIssueUpdated }: Props) {
+  const { t } = useI18n();
+  const { addToast } = useToast();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [diff, setDiff] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [abandonOpen, setAbandonOpen] = useState(false);
+  const [abandoning, setAbandoning] = useState(false);
+
+  async function handleConfirmAbandon() {
+    setAbandoning(true);
+    try {
+      const next = await abandonCodexIssue(issue.id);
+      onIssueUpdated(next);
+      addToast({ type: "success", title: t("task.abandonSuccess") });
+      setAbandonOpen(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to abandon";
+      addToast({ type: "error", title: msg });
+    } finally {
+      setAbandoning(false);
+    }
+  }
+
+  async function handleViewDiff() {
+    setDiffOpen(true);
+    if (diff !== null) return;
+    setDiffLoading(true);
+    try {
+      const res = await getCodexIssueDiff(issue.id);
+      setDiff(res.diff);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to load diff";
+      addToast({ type: "error", title: msg });
+    } finally {
+      setDiffLoading(false);
+    }
+  }
+
+  async function handleConfirmMerge() {
+    setMerging(true);
+    try {
+      const res = await mergeCodexIssue(issue.id, null);
+      onIssueUpdated(res.issue);
+      addToast({ type: "success", title: t("task.mergeSuccess") });
+      setConfirmOpen(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to merge";
+      addToast({ type: "error", title: msg });
+    } finally {
+      setMerging(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <CardTitle className="flex items-center gap-2 text-sm font-medium">
+          <GitBranch size={14} />
+          Git
+          <Badge variant={statusVariant(issue.git_merge_status)}>
+            {t(`task.mergeStatus.${issue.git_merge_status}` as
+              | "task.mergeStatus.open"
+              | "task.mergeStatus.merged"
+              | "task.mergeStatus.abandoned")}
+          </Badge>
+        </CardTitle>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleViewDiff}
+            disabled={!issue.git_worktree_path}
+          >
+            <FileText size={14} className="mr-1" />
+            {t("task.viewDiff")}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setAbandonOpen(true)}
+            disabled={!issue.git_branch || issue.git_merge_status !== "open"}
+            title={t("task.abandonHelp")}
+          >
+            <Ban size={14} className="mr-1" />
+            {t("task.abandon")}
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => setConfirmOpen(true)}
+            disabled={!issue.git_branch || issue.git_merge_status !== "open"}
+          >
+            <GitMerge size={14} className="mr-1" />
+            {t("task.mergeBack")}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-2 text-xs">
+        <div>
+          <div className="text-muted-foreground">{t("task.branch")}</div>
+          <div className="font-mono truncate">{issue.git_branch ?? "—"}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">{t("task.base")}</div>
+          <div className="font-mono truncate">{issue.git_base_branch ?? "—"}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">{t("task.worktree")}</div>
+          <div className="font-mono truncate" title={issue.git_worktree_path ?? undefined}>
+            {issue.git_worktree_path ?? "—"}
+          </div>
+        </div>
+      </CardContent>
+
+      <ConfirmDialog
+        open={abandonOpen}
+        onOpenChange={(next) => (!next ? setAbandonOpen(false) : null)}
+        title={t("task.abandonConfirmTitle")}
+        description={t("task.abandonConfirmBody").replace("{branch}", issue.git_branch ?? "")}
+        confirmText={t("task.abandon")}
+        onConfirm={handleConfirmAbandon}
+        isLoading={abandoning}
+        variant="destructive"
+      />
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={(next) => (!next ? setConfirmOpen(false) : null)}
+        title={t("task.mergeConfirmTitle")}
+        description={t("task.mergeConfirmBody")
+          .replace("{branch}", issue.git_branch ?? "")
+          .replace("{base}", issue.git_base_branch ?? "")}
+        confirmText={t("task.mergeBack")}
+        onConfirm={handleConfirmMerge}
+        isLoading={merging}
+        variant="default"
+      />
+
+      <Dialog open={diffOpen} onOpenChange={setDiffOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{t("task.viewDiff")}</DialogTitle>
+          </DialogHeader>
+          <div className="text-xs bg-muted/40 rounded max-h-[60vh] overflow-auto">
+            {diffLoading ? (
+              <span className="inline-flex items-center gap-2 p-4">
+                <Loader2 className="animate-spin" size={14} /> Loading…
+              </span>
+            ) : diff && diff.trim().length > 0 ? (
+              <DiffView diff={diff} />
+            ) : (
+              <span className="block p-4">{t("task.diffEmpty")}</span>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
+/** Bare-bones unified-diff renderer.
+ *
+ * Colours additions/removals/hunk-headers/file-headers without bringing in a
+ * heavyweight diff lib. Good enough until someone needs side-by-side view.
+ */
+function DiffView({ diff }: { diff: string }) {
+  const lines = diff.split("\n");
+  return (
+    <pre className="font-mono leading-relaxed">
+      {lines.map((line, i) => {
+        let cls = "block px-3 whitespace-pre-wrap";
+        if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")) {
+          cls += " bg-muted/60 text-muted-foreground font-semibold";
+        } else if (line.startsWith("@@")) {
+          cls += " bg-brand/10 text-brand";
+        } else if (line.startsWith("+")) {
+          cls += " bg-success/10 text-success";
+        } else if (line.startsWith("-")) {
+          cls += " bg-error/10 text-error";
+        } else {
+          cls += " text-foreground/70";
+        }
+        return (
+          <span key={i} className={cls}>
+            {line || " "}
+          </span>
+        );
+      })}
+    </pre>
+  );
+}

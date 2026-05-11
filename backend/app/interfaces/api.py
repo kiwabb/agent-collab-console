@@ -1930,6 +1930,38 @@ class MergeIssueRequest(BaseModel):
     message: str | None = None
 
 
+@router.post("/codex/issues/{issue_id}/abandon")
+async def abandon_codex_issue(issue_id: str):
+    """Mark an issue's branch as abandoned and clean up its worktree.
+
+    The DB record stays; only the on-disk worktree + branch state is dropped so
+    the user can keep the issue around as history without it counting as open.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if issue.git_merge_status == "merged":
+        raise HTTPException(status_code=409, detail="cannot abandon a merged issue")
+    if issue.project_id:
+        project = await codex_store.load_project(issue.project_id)
+        if project is not None:
+            try:
+                await worktree_manager.cleanup_issue_worktree(project, issue)
+            except Exception:
+                pass
+    issue.git_merge_status = "abandoned"
+    issue.git_worktree_path = None
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+    await event_bus.append({
+        "type": "issue_abandoned",
+        "issue_id": issue.id,
+    })
+    return issue
+
+
 @router.post("/codex/issues/{issue_id}/merge")
 async def merge_codex_issue(issue_id: str, request: MergeIssueRequest):
     if codex_store is None:

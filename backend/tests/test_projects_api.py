@@ -176,6 +176,48 @@ def test_issue_creation_with_base_branch_override_forks_from_feature(client, tmp
     assert (Path(issue["git_worktree_path"]) / "feat.txt").exists()
 
 
+def test_abandon_issue_clears_worktree_and_marks_status(client, tmp_path):
+    project = _create_project(client, tmp_path, name="abandon-host")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "throwaway"}
+    ).json()
+    worktree = Path(issue["git_worktree_path"])
+    assert worktree.exists()
+    resp = client.post(f"/api/codex/issues/{issue['id']}/abandon")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["git_merge_status"] == "abandoned"
+    assert body["git_worktree_path"] is None
+    assert not worktree.exists()
+    # Issue record still exists.
+    listed = client.get(f"/api/codex/issues/{issue['id']}").json()
+    assert listed["git_merge_status"] == "abandoned"
+
+
+def test_abandon_refuses_when_already_merged(client, tmp_path):
+    project = _create_project(client, tmp_path, name="abandon-block")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "block"}
+    ).json()
+    # Materialise a real change so the squash merge has something to commit.
+    worktree = Path(issue["git_worktree_path"])
+    (worktree / "x.txt").write_text("hi")
+    subprocess.run(["git", "add", "x.txt"], cwd=worktree, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "x"],
+        cwd=worktree, check=True, capture_output=True,
+    )
+    client.post(f"/api/codex/issues/{issue['id']}/merge", json={"message": None})
+    resp = client.post(f"/api/codex/issues/{issue['id']}/abandon")
+    assert resp.status_code == 409
+
+
 def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path):
     project = _create_project(client, tmp_path, name="repair-host")
     ws = client.post(

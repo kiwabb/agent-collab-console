@@ -160,11 +160,22 @@ class WorktreeManager:
             shutil.rmtree(path, ignore_errors=True)
 
     async def _run_setup(self, script: str, cwd: Path) -> None:
+        import os
+        # Inherit a curated slice of the parent process env so commands like
+        # `npm install` (needs PATH, HOME, possibly NPM_TOKEN, etc.) can find
+        # their tools. The intentional drop list keeps Python/codex internals
+        # from leaking into the user's setup shell.
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"CODEX_LAUNCH_ENABLED", "CODEX_WORKSPACE_ROOT", "SQLITE_DB_PATH"}
+        }
         proc = await asyncio.create_subprocess_shell(
             script,
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600.0)

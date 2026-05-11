@@ -64,6 +64,13 @@ import { PHASE_CONFIG, type Phase } from "@/features/issues/phaseUtils";
 import { pickLatestExecutionProcessForTask } from "@/lib/task-selection";
 import { isTaskRuntimeActive } from "@/lib/task-selection";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/kbd";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -130,6 +137,7 @@ function WorkbenchInner({
   const [connectionWarning, setConnectionWarning] = useState<string | null>(null);
   const [wasConnected, setWasConnected] = useState(false);
   const [currentProject, setCurrentProject] = useState<import("@/lib/types").Project | null>(null);
+  const [allProjects, setAllProjects] = useState<import("@/lib/types").Project[]>([]);
 
   const { isConnected, lastEvent, executionProcessesAll } = useExecutionProcessesContext();
   // Optimistic placeholder for a freshly-created execution_process. Returned
@@ -509,12 +517,13 @@ function WorkbenchInner({
       url.searchParams.set("project", fromStorage);
       window.history.replaceState(null, "", url.toString());
     }
-    import("@/lib/api").then(({ getProject }) =>
+    import("@/lib/api").then(({ getProject, listProjects }) => {
       getProject(pid).then(setCurrentProject).catch(() => {
         window.localStorage.removeItem("selectedProjectId");
         router.push("/projects");
-      })
-    );
+      });
+      listProjects().then(setAllProjects).catch(() => setAllProjects([]));
+    });
   }, [router]);
 
   // Cross-tab sync: react when selectedProjectId changes in another tab.
@@ -860,19 +869,49 @@ function WorkbenchInner({
           </div>
 
           <nav className="flex items-center gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => router.push("/projects")}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold text-text-muted hover:bg-surface-hover transition-all max-w-[200px] truncate"
-                  aria-label={t("workbench.changeProject")}
-                >
-                  <span className="opacity-60">{t("workbench.projectSwitcher")}:</span>
-                  <span className="truncate text-foreground">{currentProject?.name ?? "—"}</span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{t("workbench.changeProject")}</TooltipContent>
-            </Tooltip>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold text-text-muted hover:bg-surface-hover transition-all max-w-[220px] truncate"
+                    aria-label={t("workbench.changeProject")}
+                  />
+                }
+              >
+                <span className="opacity-60">{t("workbench.projectSwitcher")}:</span>
+                <span className="truncate text-foreground">{currentProject?.name ?? "—"}</span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-[220px]">
+                {allProjects.map((p) => (
+                  <DropdownMenuItem
+                    key={p.id}
+                    onClick={() => {
+                      if (typeof window !== "undefined") {
+                        window.localStorage.setItem("selectedProjectId", p.id);
+                        const url = new URL(window.location.href);
+                        url.searchParams.set("project", p.id);
+                        window.history.replaceState(null, "", url.toString());
+                      }
+                      setCurrentProject(p);
+                      // Reset workbench navigation so we don't keep a stale workspace selected.
+                      onWorkspaceChange(null);
+                      setView("home");
+                    }}
+                  >
+                    <span className="truncate font-medium">{p.name}</span>
+                    {currentProject?.id === p.id && (
+                      <span className="ml-auto text-[10px] uppercase tracking-wider text-brand">
+                        {t("projects.branchCurrent")}
+                      </span>
+                    )}
+                  </DropdownMenuItem>
+                ))}
+                {allProjects.length > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuItem onClick={() => router.push("/projects")}>
+                  {t("workbench.manageProjects")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <ChevronRight size={14} className="text-text-muted/40" />
             <Tooltip>
               <TooltipTrigger asChild>

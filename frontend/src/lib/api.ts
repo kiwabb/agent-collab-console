@@ -170,6 +170,11 @@ export async function getCodexIssueDiff(issueId: string): Promise<import("./type
   return handleResponse<import("./types").IssueDiffResult>(response);
 }
 
+export async function abandonCodexIssue(issueId: string): Promise<CodexIssue> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/abandon`, { method: "POST" });
+  return handleResponse<CodexIssue>(response);
+}
+
 export async function getWorkspace(workspaceId: string): Promise<Workspace> {
   const response = await fetch(`${API_BASE}/codex/workspaces/${workspaceId}`);
   return handleResponse<Workspace>(response);
