@@ -605,7 +605,8 @@ function WorkbenchInner({
     description: string,
     executor: "codex" | "claude",
     provider: string | null,
-    model: string | null
+    model: string | null,
+    baseBranch?: string | null,
   ) {
     if (!currentWorkspaceId) return;
     try {
@@ -620,6 +621,7 @@ function WorkbenchInner({
         runCodexTask,
         provider,
         model,
+        baseBranch,
       });
       setIssues((prev) => [...prev, issue]);
       setTasks((prev) => [...prev, initialTask]);
@@ -1110,6 +1112,8 @@ function WorkbenchInner({
               onCreate={handleCreateIssue}
               onDelete={handleDeleteIssue}
               catalog={runtimeCatalog}
+              projectId={currentProject?.id ?? null}
+              projectDefaultBranch={currentProject?.default_branch ?? null}
               isLoading={isLoadingIssues}
             />
           </div>

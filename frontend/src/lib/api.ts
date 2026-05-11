@@ -153,6 +153,11 @@ export async function repairProject(projectId: string): Promise<{ pruned: boolea
   return handleResponse(response);
 }
 
+export async function getProjectStats(projectId: string): Promise<import("./types").ProjectStats> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/stats`);
+  return handleResponse<import("./types").ProjectStats>(response);
+}
+
 export async function mergeCodexIssue(
   issueId: string,
   message: string | null = null,
@@ -165,8 +170,14 @@ export async function mergeCodexIssue(
   return handleResponse<import("./types").MergeIssueResult>(response);
 }
 
-export async function getCodexIssueDiff(issueId: string): Promise<import("./types").IssueDiffResult> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/diff`);
+export async function getCodexIssueDiff(
+  issueId: string,
+  statOnly = false,
+): Promise<import("./types").IssueDiffResult> {
+  const url = statOnly
+    ? `${API_BASE}/codex/issues/${issueId}/diff?stat_only=true`
+    : `${API_BASE}/codex/issues/${issueId}/diff`;
+  const response = await fetch(url);
   return handleResponse<import("./types").IssueDiffResult>(response);
 }
 

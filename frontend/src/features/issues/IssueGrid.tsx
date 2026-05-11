@@ -1,6 +1,7 @@
 "use client";
 
-import type { CodexIssue, RuntimeCatalog } from "@/lib/types";
+import type { CodexIssue, GitBranch, RuntimeCatalog } from "@/lib/types";
+import { getProjectBranches } from "@/lib/api";
 import { ListTodo, Plus, ChevronRight, MessageSquare, Trash2, Search, X, Clock } from "lucide-react";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { cn } from "@/lib/utils";
@@ -47,13 +48,22 @@ function removeRecentSearch(query: string) {
 interface IssueGridProps {
   issues: CodexIssue[];
   onSelect: (id: string) => void;
-  onCreate: (title: string, desc: string, executor: "codex" | "claude", provider: string | null, model: string | null) => void;
+  onCreate: (
+    title: string,
+    desc: string,
+    executor: "codex" | "claude",
+    provider: string | null,
+    model: string | null,
+    baseBranch?: string | null,
+  ) => void;
   onDelete: (id: string) => Promise<void> | void;
   catalog: RuntimeCatalog | null;
+  projectId?: string | null;
+  projectDefaultBranch?: string | null;
   isLoading?: boolean;
 }
 
-export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoading = false }: IssueGridProps) {
+export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, projectId, projectDefaultBranch, isLoading = false }: IssueGridProps) {
   const { t } = useI18n();
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -71,6 +81,21 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoa
   const [executionConfig, setExecutionConfig] = useState<ExecutionConfigValue>(defaultExecutionConfig);
   const [deleteTarget, setDeleteTarget] = useState<CodexIssue | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [branches, setBranches] = useState<GitBranch[]>([]);
+  const [baseBranch, setBaseBranch] = useState<string>(projectDefaultBranch || "");
+
+  // Refresh branch list when the user opens the create form (covers branches
+  // created externally since the page loaded).
+  useEffect(() => {
+    if (!isCreating || !projectId) return;
+    getProjectBranches(projectId)
+      .then((list) => setBranches(list.filter((b) => !b.is_remote)))
+      .catch(() => setBranches([]));
+  }, [isCreating, projectId]);
+
+  useEffect(() => {
+    if (!baseBranch && projectDefaultBranch) setBaseBranch(projectDefaultBranch);
+  }, [projectDefaultBranch, baseBranch]);
 
   const filteredIssues = useMemo(() => {
     if (!searchQuery.trim()) return issues;
@@ -93,7 +118,15 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoa
         saveRecentSearch(searchQuery.trim());
         setRecentSearches(getRecentSearches());
       }
-      onCreate(newTitle.trim(), newDesc.trim(), executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
+      const chosenBase = baseBranch || projectDefaultBranch || null;
+      onCreate(
+        newTitle.trim(),
+        newDesc.trim(),
+        executionConfig.executor as "codex" | "claude",
+        executionConfig.provider,
+        executionConfig.model,
+        chosenBase,
+      );
       setNewTitle("");
       setNewDesc("");
       setExecutionConfig(defaultExecutionConfig);
@@ -233,6 +266,28 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, isLoa
                 catalog={catalog}
               />
             </div>
+            {projectId && (
+              <div className="mb-5">
+                <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-text-muted mb-2">
+                  {t("issue.baseBranch")}
+                </label>
+                <select
+                  value={baseBranch}
+                  onChange={(e) => setBaseBranch(e.target.value)}
+                  className="w-full bg-surface-input border border-border-subtle rounded-lg px-3 py-2 text-sm outline-none focus:border-brand font-mono"
+                >
+                  {branches.length === 0 && projectDefaultBranch && (
+                    <option value={projectDefaultBranch}>{projectDefaultBranch}</option>
+                  )}
+                  {branches.map((b) => (
+                    <option key={b.name} value={b.name}>
+                      {b.name}
+                      {b.name === projectDefaultBranch ? " (default)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="flex gap-2">
               <button
                 type="submit"

@@ -11,7 +11,8 @@ import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
-import { deleteProject, getProjectBranches, listProjects, repairProject, updateProject } from "@/lib/api";
+import { deleteProject, getProjectBranches, getProjectStats, listProjects, repairProject, updateProject } from "@/lib/api";
+import type { ProjectStats } from "@/lib/types";
 import { Textarea } from "@/components/ui/textarea";
 import type { GitBranch, Project } from "@/lib/types";
 
@@ -95,6 +96,7 @@ export function ProjectsPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
+  const [stats, setStats] = useState<ProjectStats | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
 
@@ -129,19 +131,23 @@ export function ProjectsPage() {
   useEffect(() => {
     if (!activeId) {
       setBranches([]);
+      setStats(null);
       return;
     }
     let cancelled = false;
     setBranchesLoading(true);
-    getProjectBranches(activeId)
-      .then((list) => {
-        if (!cancelled) setBranches(list);
+    Promise.all([getProjectBranches(activeId), getProjectStats(activeId)])
+      .then(([brs, st]) => {
+        if (cancelled) return;
+        setBranches(brs);
+        setStats(st);
       })
       .catch((err) => {
         if (!cancelled) {
-          const msg = err instanceof Error ? err.message : "Failed to load branches";
+          const msg = err instanceof Error ? err.message : "Failed to load project detail";
           addToast({ type: "error", title: msg });
           setBranches([]);
+          setStats(null);
         }
       })
       .finally(() => {
@@ -279,15 +285,37 @@ export function ProjectsPage() {
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                  <div>
-                    <div className="text-muted-foreground text-xs">{t("projects.defaultBranch")}</div>
-                    <div className="font-mono">{activeProject.default_branch}</div>
+                <CardContent className="space-y-3 text-sm">
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                    <div>
+                      <div className="text-muted-foreground text-xs">{t("projects.defaultBranch")}</div>
+                      <div className="font-mono">{activeProject.default_branch}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-xs">{t("projects.origin")}</div>
+                      <div className="font-mono truncate">{activeProject.origin_url ?? "—"}</div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-muted-foreground text-xs">{t("projects.origin")}</div>
-                    <div className="font-mono truncate">{activeProject.origin_url ?? "—"}</div>
-                  </div>
+                  {stats && (
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs pt-2 border-t border-border-subtle">
+                      <span>
+                        <span className="text-muted-foreground">{t("projects.statsWorkspaces")}:</span>{" "}
+                        <span className="font-semibold">{stats.workspaces}</span>
+                      </span>
+                      <span>
+                        <span className="text-muted-foreground">{t("projects.statsOpen")}:</span>{" "}
+                        <span className="font-semibold">{stats.issues_open}</span>
+                      </span>
+                      <span>
+                        <span className="text-muted-foreground">{t("projects.statsMerged")}:</span>{" "}
+                        <span className="font-semibold text-success">{stats.issues_merged}</span>
+                      </span>
+                      <span>
+                        <span className="text-muted-foreground">{t("projects.statsAbandoned")}:</span>{" "}
+                        <span className="font-semibold text-muted-foreground">{stats.issues_abandoned}</span>
+                      </span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
               <SetupScriptCard

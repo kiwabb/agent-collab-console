@@ -251,6 +251,10 @@ export const dictionaries = {
     "projects.repair": "修复",
     "projects.repairHelp": "清理 .git/worktrees 残留元数据，并重置 worktree 目录已消失的 issue。",
     "projects.repairToast": "修复完成 — 重置了 {n} 个 issue",
+    "projects.statsWorkspaces": "工作区",
+    "projects.statsOpen": "open",
+    "projects.statsMerged": "merged",
+    "projects.statsAbandoned": "abandoned",
     "projects.fromLocal": "本地路径",
     "projects.fromClone": "Clone URL",
     "projects.fromLocalHelp": "已存在的 git 仓库的绝对路径。",
@@ -285,6 +289,7 @@ export const dictionaries = {
     "task.abandonConfirmTitle": "放弃这个 issue？",
     "task.abandonConfirmBody": "将分支 {branch} 标为 abandoned 并删除其 worktree。issue 记录会保留。",
     "task.abandonSuccess": "已放弃",
+    "issue.baseBranch": "基线分支",
   },
   "en-US": {
     "nav.home": "Home",
@@ -534,6 +539,10 @@ export const dictionaries = {
     "projects.repair": "Repair",
     "projects.repairHelp": "Prune stale .git/worktrees metadata and reset issues whose worktree dir vanished.",
     "projects.repairToast": "Repair done — {n} issue(s) reset",
+    "projects.statsWorkspaces": "Workspaces",
+    "projects.statsOpen": "open",
+    "projects.statsMerged": "merged",
+    "projects.statsAbandoned": "abandoned",
     "projects.fromLocal": "Local path",
     "projects.fromClone": "Clone URL",
     "projects.fromLocalHelp": "Absolute path to an existing git repository.",
@@ -568,6 +577,7 @@ export const dictionaries = {
     "task.abandonConfirmTitle": "Abandon this issue?",
     "task.abandonConfirmBody": "Mark {branch} as abandoned and remove its worktree. The issue record stays.",
     "task.abandonSuccess": "Abandoned",
+    "issue.baseBranch": "Base branch",
   },
 } as const;
 

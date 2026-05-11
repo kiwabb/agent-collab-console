@@ -291,6 +291,35 @@ class GitService:
         result = await self._run(["status", "--porcelain"], cwd=worktree_path)
         return result.stdout
 
+    async def diff_shortstat(self, worktree_path: str | Path, base_branch: str) -> dict:
+        """Return a compact summary `{files, insertions, deletions}` vs base.
+
+        Uses `git diff --shortstat <base>...HEAD` then parses the standard line:
+        "N files changed, K insertions(+), M deletions(-)" — any of the three
+        clauses may be missing.
+        """
+        _validate_path(worktree_path)
+        _validate_branch(base_branch)
+        result = await self._run(
+            ["diff", "--shortstat", f"{base_branch}...HEAD"],
+            cwd=worktree_path,
+            check=False,
+        )
+        out = {"files": 0, "insertions": 0, "deletions": 0}
+        text = result.stdout.strip()
+        if not text:
+            return out
+        import re as _re
+        for clause, key in (
+            (r"(\d+) files? changed", "files"),
+            (r"(\d+) insertions?", "insertions"),
+            (r"(\d+) deletions?", "deletions"),
+        ):
+            m = _re.search(clause, text)
+            if m:
+                out[key] = int(m.group(1))
+        return out
+
     async def prune_worktrees(self, repo_path: str | Path) -> None:
         _validate_path(repo_path)
         await self._run(["worktree", "prune"], cwd=repo_path, check=False)

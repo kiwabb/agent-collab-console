@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GitBranch, GitMerge, FileText, Loader2, Ban } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +16,7 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { abandonCodexIssue, getCodexIssueDiff, mergeCodexIssue } from "@/lib/api";
-import type { CodexIssue, GitMergeStatus } from "@/lib/types";
+import type { CodexIssue, DiffStat, GitMergeStatus } from "@/lib/types";
 
 interface Props {
   issue: CodexIssue;
@@ -39,6 +39,27 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   const [diffLoading, setDiffLoading] = useState(false);
   const [abandonOpen, setAbandonOpen] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
+  const [stat, setStat] = useState<DiffStat | null>(null);
+
+  // Pull a compact diffstat whenever this issue or its head sha changes; gives
+  // the user a "+N −M / K files" surface without opening the diff modal.
+  useEffect(() => {
+    if (!issue.git_worktree_path || issue.git_merge_status !== "open") {
+      setStat(null);
+      return;
+    }
+    let cancelled = false;
+    getCodexIssueDiff(issue.id, true)
+      .then((res) => {
+        if (!cancelled) setStat(res.stat ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setStat(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [issue.id, issue.git_worktree_path, issue.git_merge_status, issue.git_last_commit_sha]);
 
   async function handleConfirmAbandon() {
     setAbandoning(true);
@@ -88,7 +109,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-        <CardTitle className="flex items-center gap-2 text-sm font-medium">
+        <CardTitle className="flex items-center gap-2 text-sm font-medium flex-wrap">
           <GitBranch size={14} />
           Git
           <Badge variant={statusVariant(issue.git_merge_status)}>
@@ -97,6 +118,13 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
               | "task.mergeStatus.merged"
               | "task.mergeStatus.abandoned")}
           </Badge>
+          {stat && stat.files > 0 && (
+            <span className="text-xs font-normal font-mono text-muted-foreground">
+              <span className="text-success">+{stat.insertions}</span>{" "}
+              <span className="text-error">−{stat.deletions}</span>{" "}
+              <span>/ {stat.files} {stat.files === 1 ? "file" : "files"}</span>
+            </span>
+          )}
         </CardTitle>
         <div className="flex gap-2">
           <Button

@@ -310,10 +310,25 @@ export interface MergeIssueResult {
   issue: CodexIssue;
 }
 
+export interface DiffStat {
+  files: number;
+  insertions: number;
+  deletions: number;
+}
+
 export interface IssueDiffResult {
   diff: string;
   base_branch: string | null;
   branch: string | null;
+  stat?: DiffStat | null;
+}
+
+export interface ProjectStats {
+  workspaces: number;
+  issues_total: number;
+  issues_open: number;
+  issues_merged: number;
+  issues_abandoned: number;
 }
 
 export interface CreateTaskRequest {

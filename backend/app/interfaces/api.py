@@ -883,6 +883,40 @@ async def get_project_branches(project_id: str):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/projects/{project_id}/stats")
+async def get_project_stats(project_id: str):
+    """Aggregate counts for the project detail view.
+
+    Returns workspaces total + issues bucketed by git merge state. The FE uses
+    this to render the "12 workspaces • 3 open / 7 merged / 2 abandoned" summary
+    without doing two extra list calls.
+    """
+    svc = _require_project_service()
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    try:
+        await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    workspaces = await codex_store.list_codex_sessions(project_id=project_id)
+    issues = await codex_store.list_codex_issues(project_id=project_id)
+    counts = {"open": 0, "merged": 0, "abandoned": 0}
+    for issue in issues:
+        # Load full issue to get git_merge_status (list query strips it).
+        full = await codex_store.load_codex_issue(issue["id"])
+        if full is None:
+            continue
+        status = full.git_merge_status if full.git_merge_status in counts else "open"
+        counts[status] += 1
+    return {
+        "workspaces": len(workspaces),
+        "issues_total": len(issues),
+        "issues_open": counts["open"],
+        "issues_merged": counts["merged"],
+        "issues_abandoned": counts["abandoned"],
+    }
+
+
 @router.post("/projects/{project_id}/repair")
 async def repair_project(project_id: str):
     """Reconcile DB worktree paths with what git + disk actually have.
@@ -1908,22 +1942,29 @@ async def delete_codex_issue(issue_id: str):
 
 
 @router.get("/codex/issues/{issue_id}/diff")
-async def get_codex_issue_diff(issue_id: str):
+async def get_codex_issue_diff(issue_id: str, stat_only: bool = False):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail="Issue not found")
     if not issue.project_id or not issue.git_worktree_path:
-        return {"diff": "", "base_branch": None, "branch": None}
+        return {"diff": "", "base_branch": None, "branch": None, "stat": None}
     project = await codex_store.load_project(issue.project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    base = issue.git_base_branch or project.default_branch
     try:
-        diff = await worktree_manager.issue_diff(project, issue)
+        stat = await git_service.diff_shortstat(issue.git_worktree_path, base)
+        diff = "" if stat_only else await worktree_manager.issue_diff(project, issue)
     except GitError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    return {"diff": diff, "base_branch": issue.git_base_branch, "branch": issue.git_branch}
+    return {
+        "diff": diff,
+        "base_branch": issue.git_base_branch,
+        "branch": issue.git_branch,
+        "stat": stat,
+    }
 
 
 class MergeIssueRequest(BaseModel):

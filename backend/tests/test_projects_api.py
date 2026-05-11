@@ -176,6 +176,48 @@ def test_issue_creation_with_base_branch_override_forks_from_feature(client, tmp
     assert (Path(issue["git_worktree_path"]) / "feat.txt").exists()
 
 
+def test_project_stats_counts_workspaces_and_issue_buckets(client, tmp_path):
+    project = _create_project(client, tmp_path, name="stats-host")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    # Three issues: leave one open, merge one, abandon one.
+    open_issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "open"}
+    ).json()
+    merged_issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "merged"}
+    ).json()
+    abandoned_issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "abandoned"}
+    ).json()
+
+    # Materialise a real change so the squash merge has something to commit.
+    worktree = Path(merged_issue["git_worktree_path"])
+    (worktree / "x.txt").write_text("hi")
+    subprocess.run(["git", "add", "x.txt"], cwd=worktree, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "x"],
+        cwd=worktree, check=True, capture_output=True,
+    )
+    client.post(f"/api/codex/issues/{merged_issue['id']}/merge", json={"message": None})
+    client.post(f"/api/codex/issues/{abandoned_issue['id']}/abandon")
+
+    resp = client.get(f"/api/projects/{project['id']}/stats")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {
+        "workspaces": 1,
+        "issues_total": 3,
+        "issues_open": 1,
+        "issues_merged": 1,
+        "issues_abandoned": 1,
+    }
+    # Sanity: open_issue still listed as open.
+    full = client.get(f"/api/codex/issues/{open_issue['id']}").json()
+    assert full["git_merge_status"] == "open"
+
+
 def test_merge_refuses_dirty_worktree(client, tmp_path):
     project = _create_project(client, tmp_path, name="dirty-merge")
     ws = client.post(
