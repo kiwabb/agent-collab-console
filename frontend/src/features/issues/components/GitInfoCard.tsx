@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { GitBranch, GitMerge, FileText, Loader2, Ban } from "lucide-react";
+import { GitBranch, GitMerge, FileText, Loader2, Ban, Copy, Check } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,21 +40,40 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   const [abandonOpen, setAbandonOpen] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
   const [stat, setStat] = useState<DiffStat | null>(null);
+  const [commitsAhead, setCommitsAhead] = useState<number>(0);
+  const [copiedPath, setCopiedPath] = useState(false);
+
+  async function copyWorktreePath() {
+    if (!issue.git_worktree_path) return;
+    try {
+      await navigator.clipboard.writeText(issue.git_worktree_path);
+      setCopiedPath(true);
+      setTimeout(() => setCopiedPath(false), 1500);
+    } catch {
+      addToast({ type: "error", title: "Clipboard unavailable" });
+    }
+  }
 
   // Pull a compact diffstat whenever this issue or its head sha changes; gives
   // the user a "+N −M / K files" surface without opening the diff modal.
   useEffect(() => {
     if (!issue.git_worktree_path || issue.git_merge_status !== "open") {
       setStat(null);
+      setCommitsAhead(0);
       return;
     }
     let cancelled = false;
     getCodexIssueDiff(issue.id, true)
       .then((res) => {
-        if (!cancelled) setStat(res.stat ?? null);
+        if (cancelled) return;
+        setStat(res.stat ?? null);
+        setCommitsAhead(res.commits_ahead ?? 0);
       })
       .catch(() => {
-        if (!cancelled) setStat(null);
+        if (!cancelled) {
+          setStat(null);
+          setCommitsAhead(0);
+        }
       });
     return () => {
       cancelled = true;
@@ -125,6 +144,11 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
               <span>/ {stat.files} {stat.files === 1 ? "file" : "files"}</span>
             </span>
           )}
+          {commitsAhead > 0 && (
+            <Badge variant="outline" className="font-mono">
+              ↑{commitsAhead}
+            </Badge>
+          )}
         </CardTitle>
         <div className="flex gap-2">
           <Button
@@ -167,8 +191,21 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
         </div>
         <div>
           <div className="text-muted-foreground">{t("task.worktree")}</div>
-          <div className="font-mono truncate" title={issue.git_worktree_path ?? undefined}>
-            {issue.git_worktree_path ?? "—"}
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="font-mono truncate" title={issue.git_worktree_path ?? undefined}>
+              {issue.git_worktree_path ?? "—"}
+            </div>
+            {issue.git_worktree_path && (
+              <button
+                type="button"
+                onClick={copyWorktreePath}
+                className="shrink-0 p-0.5 text-muted-foreground hover:text-foreground"
+                aria-label={t("task.copyPath")}
+                title={t("task.copyPath")}
+              >
+                {copiedPath ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+              </button>
+            )}
           </div>
         </div>
       </CardContent>

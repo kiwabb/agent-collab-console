@@ -917,6 +917,19 @@ async def get_project_stats(project_id: str):
     }
 
 
+@router.get("/projects/{project_id}/audit")
+async def get_project_audit(project_id: str, limit: int = 50):
+    """Recent merge/abandon events for the project (most recent first)."""
+    svc = _require_project_service()
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    try:
+        await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return await codex_store.list_project_audit(project_id, limit=max(1, min(limit, 200)))
+
+
 @router.post("/projects/{project_id}/repair")
 async def repair_project(project_id: str):
     """Reconcile DB worktree paths with what git + disk actually have.
@@ -1956,6 +1969,7 @@ async def get_codex_issue_diff(issue_id: str, stat_only: bool = False):
     base = issue.git_base_branch or project.default_branch
     try:
         stat = await git_service.diff_shortstat(issue.git_worktree_path, base)
+        ahead = await git_service.commits_ahead(issue.git_worktree_path, base)
         diff = "" if stat_only else await worktree_manager.issue_diff(project, issue)
     except GitError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -1964,6 +1978,7 @@ async def get_codex_issue_diff(issue_id: str, stat_only: bool = False):
         "base_branch": issue.git_base_branch,
         "branch": issue.git_branch,
         "stat": stat,
+        "commits_ahead": ahead,
     }
 
 
@@ -1996,6 +2011,12 @@ async def abandon_codex_issue(issue_id: str):
     issue.git_worktree_path = None
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
+    await codex_store.append_project_audit(
+        project_id=issue.project_id,
+        issue_id=issue.id,
+        event="abandoned",
+        base_branch=issue.git_base_branch,
+    )
     await event_bus.append({
         "type": "issue_abandoned",
         "issue_id": issue.id,
@@ -2022,6 +2043,13 @@ async def merge_codex_issue(issue_id: str, request: MergeIssueRequest):
     except (GitError, WorktreeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     await codex_store.save_codex_issue(issue)
+    await codex_store.append_project_audit(
+        project_id=project.id,
+        issue_id=issue.id,
+        event="merged",
+        sha=result["sha"],
+        base_branch=result["base_branch"],
+    )
     await event_bus.append({
         "type": "issue_merged",
         "issue_id": issue.id,

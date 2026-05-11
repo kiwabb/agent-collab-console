@@ -291,6 +291,7 @@ export const dictionaries = {
     "task.abandonConfirmBody": "将分支 {branch} 标为 abandoned 并删除其 worktree。issue 记录会保留。",
     "task.abandonSuccess": "已放弃",
     "issue.baseBranch": "基线分支",
+    "task.copyPath": "复制路径",
   },
   "en-US": {
     "nav.home": "Home",
@@ -580,6 +581,7 @@ export const dictionaries = {
     "task.abandonConfirmBody": "Mark {branch} as abandoned and remove its worktree. The issue record stays.",
     "task.abandonSuccess": "Abandoned",
     "issue.baseBranch": "Base branch",
+    "task.copyPath": "Copy path",
   },
 } as const;
 

@@ -321,6 +321,7 @@ export interface IssueDiffResult {
   base_branch: string | null;
   branch: string | null;
   stat?: DiffStat | null;
+  commits_ahead?: number;
 }
 
 export interface ProjectStats {

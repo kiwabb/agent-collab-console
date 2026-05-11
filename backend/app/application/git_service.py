@@ -291,6 +291,20 @@ class GitService:
         result = await self._run(["status", "--porcelain"], cwd=worktree_path)
         return result.stdout
 
+    async def commits_ahead(self, worktree_path: str | Path, base_branch: str) -> int:
+        """Number of commits on the worktree's HEAD that aren't on `base_branch`."""
+        _validate_path(worktree_path)
+        _validate_branch(base_branch)
+        result = await self._run(
+            ["rev-list", "--count", f"{base_branch}..HEAD"],
+            cwd=worktree_path,
+            check=False,
+        )
+        try:
+            return int(result.stdout.strip() or "0")
+        except ValueError:
+            return 0
+
     async def diff_shortstat(self, worktree_path: str | Path, base_branch: str) -> dict:
         """Return a compact summary `{files, insertions, deletions}` vs base.
 

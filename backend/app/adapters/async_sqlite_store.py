@@ -324,6 +324,23 @@ class AsyncSQLiteStore:
                 version INTEGER NOT NULL
             )
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS project_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT,
+                issue_id TEXT,
+                event TEXT NOT NULL,
+                sha TEXT,
+                base_branch TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_project_audit_project_id ON project_audit(project_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_project_audit_issue_id ON project_audit(issue_id)"
+        )
         for stmt in (
             "ALTER TABLE codex_tasks ADD COLUMN project_id TEXT",
             "ALTER TABLE codex_tasks ADD COLUMN git_branch TEXT",
@@ -909,6 +926,34 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         await conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         await conn.commit()
+
+    async def append_project_audit(
+        self,
+        *,
+        project_id: str | None,
+        issue_id: str | None,
+        event: str,
+        sha: str | None = None,
+        base_branch: str | None = None,
+    ) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            "INSERT INTO project_audit (project_id, issue_id, event, sha, base_branch, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (project_id, issue_id, event, sha, base_branch, datetime.now().isoformat()),
+        )
+        await conn.commit()
+
+    async def list_project_audit(self, project_id: str, *, limit: int = 50) -> list[dict]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT id, project_id, issue_id, event, sha, base_branch, created_at FROM project_audit WHERE project_id = ? ORDER BY id DESC LIMIT ?",
+            (project_id, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
     async def save_help_request(self, help_request: HelpRequest):
         await self._ensure_db()

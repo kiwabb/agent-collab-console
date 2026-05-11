@@ -294,6 +294,36 @@ def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path
     assert refreshed["git_branch"] is None
 
 
+def test_audit_log_records_merge_and_abandon(client, tmp_path):
+    project = _create_project(client, tmp_path, name="audit-host")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    # Merge one issue
+    merged = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "m"}
+    ).json()
+    wt = Path(merged["git_worktree_path"])
+    (wt / "f.txt").write_text("x")
+    subprocess.run(["git", "add", "f.txt"], cwd=wt, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "x"],
+        cwd=wt, check=True, capture_output=True,
+    )
+    client.post(f"/api/codex/issues/{merged['id']}/merge", json={"message": None})
+    # Abandon another
+    abandoned = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "a"}
+    ).json()
+    client.post(f"/api/codex/issues/{abandoned['id']}/abandon")
+
+    audit = client.get(f"/api/projects/{project['id']}/audit").json()
+    events = [(row["issue_id"], row["event"]) for row in audit]
+    # Most recent first
+    assert events[0] == (abandoned["id"], "abandoned")
+    assert (merged["id"], "merged") in events
+
+
 def test_full_create_to_merge_round_trip(client, tmp_path):
     """End-to-end: project → workspace → issue → edit → diff → merge → stats."""
     # 1. Create project
