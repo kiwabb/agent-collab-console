@@ -2,7 +2,7 @@
 
 import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCatalog, RunMode } from "@/lib/types";
 import { RotateCcw, Trash2, Send, Terminal, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
 import { useExecutionProcessLogStream } from "@/hooks/useExecutionProcessLogStream";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -112,6 +112,9 @@ export function RunDetail({
   const { t } = useI18n();
   const [message, setMessage] = useState("");
   const [runMode, setRunMode] = useState<RunMode>("auto");
+  // Auto-scroll the messages / logs panes to the bottom when new content arrives.
+  const messagesBottomRef = useRef<HTMLDivElement | null>(null);
+  const logsBottomRef = useRef<HTMLDivElement | null>(null);
   const [reviewComment, setReviewComment] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const baseExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
@@ -144,6 +147,17 @@ export function RunDetail({
     return Array.from(byId.values());
   }, [task, liveStream.messages]);
   const normalizedLogs = useMemo(() => normalizeLogs(mergedLogs), [mergedLogs]);
+
+  // Scroll to bottom when:
+  // - new full messages arrive (chat send, agent reply finalized)
+  // - the typewriter delta extends (token streaming)
+  useEffect(() => {
+    messagesBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [mergedMessages.length, liveStream.pendingAssistant?.text]);
+
+  useEffect(() => {
+    logsBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [normalizedLogs.length]);
   const errorEntry = useMemo(
     () => [...normalizedLogs].reverse().find((entry) => entry.type === "error"),
     [normalizedLogs],
@@ -377,7 +391,7 @@ export function RunDetail({
           </div>
 
           <div className="flex-1 min-h-0 relative">
-            <TabsContent value="messages" className="absolute inset-0 m-0 overflow-y-auto p-6 space-y-6 no-scrollbar animate-in fade-in duration-300">
+            <TabsContent value="messages" className="absolute inset-0 m-0 overflow-y-auto p-6 space-y-6 animate-in fade-in duration-300">
               {isLoadingMessages ? (
                 <div className="py-20 flex flex-col items-center justify-center gap-4 text-[10px] uppercase font-black tracking-widest text-text-muted opacity-40">
                   <Activity size={24} className="animate-spin text-brand" />
@@ -440,11 +454,12 @@ export function RunDetail({
                       </div>
                     </div>
                   )}
+                  <div ref={messagesBottomRef} />
                 </div>
               )}
             </TabsContent>
 
-            <TabsContent value="logs" className="absolute inset-0 m-0 overflow-y-auto p-6 no-scrollbar animate-in fade-in duration-300 bg-background/40">
+            <TabsContent value="logs" className="absolute inset-0 m-0 overflow-y-auto p-6 animate-in fade-in duration-300 bg-background/40">
               {isLoadingLogs ? (
                 <div className="py-20 flex flex-col items-center justify-center gap-4 text-[10px] uppercase font-black tracking-widest text-text-muted opacity-40">
                   <Terminal size={24} className="animate-pulse text-brand" />
@@ -498,6 +513,7 @@ export function RunDetail({
                       </div>
                     </div>
                   ))}
+                  <div ref={logsBottomRef} />
                 </div>
               )}
             </TabsContent>
