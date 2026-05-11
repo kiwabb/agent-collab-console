@@ -950,6 +950,7 @@ async def repair_project(project_id: str):
     except GitError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     issues = await codex_store.list_codex_issues(project_id=project_id)
+    live_issue_ids = {i["id"] for i in issues}
     repaired = 0
     for issue_dict in issues:
         issue = await codex_store.load_codex_issue(issue_dict["id"])
@@ -967,7 +968,29 @@ async def repair_project(project_id: str):
         issue.git_last_commit_sha = None
         await codex_store.save_codex_issue(issue)
         repaired += 1
-    return {"pruned": True, "issues_reset": repaired}
+    # Orphan-dir GC: any `issue-<id>` dir under `<name>-worktrees/` that no
+    # longer corresponds to a live issue is leftover from a crashed delete.
+    orphans_removed = 0
+    worktree_parent = Path(project.repo_path).parent / f"{project.name}-worktrees"
+    if worktree_parent.exists():
+        for entry in worktree_parent.iterdir():
+            if not entry.is_dir():
+                continue
+            if not entry.name.startswith("issue-"):
+                continue
+            issue_id = entry.name[len("issue-") :]
+            if issue_id in live_issue_ids:
+                continue
+            try:
+                await git_service.remove_worktree(project.repo_path, entry)
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(entry, ignore_errors=True)
+                orphans_removed += 1
+            except OSError:
+                pass
+    return {"pruned": True, "issues_reset": repaired, "orphan_dirs_removed": orphans_removed}
 
 
 # --- Codex CLI Session APIs ---
@@ -1444,6 +1467,12 @@ async def create_codex_issue(request: CreateIssueRequest):
     issue.git_worktree_path = worktree_path
     issue.git_base_branch = base
     await codex_store.save_codex_issue(issue)
+    await codex_store.append_project_audit(
+        project_id=project.id,
+        issue_id=issue.id,
+        event="created",
+        base_branch=base,
+    )
     return issue
 
 
@@ -1950,6 +1979,12 @@ async def delete_codex_issue(issue_id: str):
                 pass
 
     await codex_store.delete_codex_issue(issue_id)
+    if issue.project_id:
+        await codex_store.append_project_audit(
+            project_id=issue.project_id,
+            issue_id=issue.id,
+            event="deleted",
+        )
     await event_bus.append({
         "type": "issue_deleted",
         "issue_id": issue_id,

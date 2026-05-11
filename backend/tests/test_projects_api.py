@@ -298,6 +298,30 @@ def test_repair_resets_issue_state_when_branch_was_deleted_externally(client, tm
     assert refreshed["git_branch"] is None
 
 
+def test_repair_removes_orphan_worktree_dirs(client, tmp_path):
+    project = _create_project(client, tmp_path, name="orphan-gc")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    # Create one live issue (=> one legit worktree).
+    live = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "live"}
+    ).json()
+    worktree_parent = Path(live["git_worktree_path"]).parent
+    # Drop a stray issue-* dir simulating a crashed delete.
+    orphan = worktree_parent / "issue-ghost1234"
+    orphan.mkdir(parents=True)
+    (orphan / "stale.txt").write_text("leftover")
+
+    resp = client.post(f"/api/projects/{project['id']}/repair")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["orphan_dirs_removed"] == 1
+    assert not orphan.exists()
+    # The live worktree must remain.
+    assert Path(live["git_worktree_path"]).exists()
+
+
 def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path):
     project = _create_project(client, tmp_path, name="repair-host")
     ws = client.post(

@@ -113,6 +113,14 @@ export function ProjectsPage() {
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [stats, setStats] = useState<ProjectStats | null>(null);
   const [audit, setAudit] = useState<ProjectAuditEntry[]>([]);
+  // Tick state: bumps every 60s so the "5m ago" labels stay reasonably fresh
+  // without re-fetching the audit log. Used implicitly by formatRelative since
+  // each render recomputes against Date.now().
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
 
