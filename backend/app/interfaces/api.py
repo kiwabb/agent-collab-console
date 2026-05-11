@@ -11,12 +11,15 @@ import json
 from pydantic import BaseModel
 from typing import Literal
 
-from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, workspace_manager, event_bus, MockCodexProcessManager, get_help_orchestrator
-from app.domain.models import CodexIssue
+from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service
+from app.domain.models import CodexIssue, Project
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.process_runtime_common import is_agent_message_item_type
+from app.application.project_service import ProjectError
+from app.application.worktree_manager import WorktreeError
+from app.application.git_service import GitError
 from app.interfaces.execution_process_views import build_execution_process_view
 
 logger = logging.getLogger(__name__)
@@ -531,18 +534,50 @@ def _delete_issue_artifact_root(workspace_path: str | None, issue_id: str):
         pass
 
 
+async def _cleanup_session_worktrees(session_id: str, project_id: str | None) -> None:
+    """Remove all worktrees owned by issues/chat tasks under a workspace."""
+    if codex_store is None or not project_id:
+        return
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        return
+    issues = await codex_store.list_codex_issues(session_id=session_id)
+    for issue_dict in issues:
+        issue = await codex_store.load_codex_issue(issue_dict["id"])
+        if issue is None:
+            continue
+        try:
+            await worktree_manager.cleanup_issue_worktree(project, issue)
+        except Exception:
+            pass
+    chat_tasks = await codex_store.list_codex_tasks(session_id=session_id)
+    for task_dict in chat_tasks:
+        if task_dict.get("issue_id") or not task_dict.get("git_worktree_path"):
+            continue
+        task = await codex_store.load_codex_task(task_dict["id"])
+        if task is None:
+            continue
+        try:
+            await worktree_manager.cleanup_chat_task_worktree(project, task)
+        except Exception:
+            pass
+
+
 async def _delete_task_cascade(task_id: str, *, delete_workspace: bool = True):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     task = await codex_store.load_codex_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    workspace = await codex_store.load_codex_workspace(task.session_id)
-    if delete_workspace and _is_managed_task_workspace(task, workspace):
-        try:
-            workspace_manager.delete_workspace(task.workspace_path)
-        except Exception:
-            pass
+    # Chat tasks (no issue_id) own their own worktree; clean it up.
+    # Issue-scoped task worktrees are owned by the issue and cleaned on issue delete.
+    if delete_workspace and task.issue_id is None and task.git_worktree_path and task.project_id:
+        project = await codex_store.load_project(task.project_id)
+        if project is not None:
+            try:
+                await worktree_manager.cleanup_chat_task_worktree(project, task)
+            except Exception:
+                pass
     await codex_store.delete_codex_task(task_id)
     await event_bus.append({
         "type": "task_deleted",
@@ -744,11 +779,97 @@ async def reject_approval(approval_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to reject: {e}")
 
 
+# --- Projects ---
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+    source: Literal["local", "clone"]
+    repo_path: str | None = None  # source=local
+    origin_url: str | None = None  # source=clone
+    dest_parent: str | None = None  # source=clone
+
+
+class UpdateProjectRequest(BaseModel):
+    name: str | None = None
+    default_branch: str | None = None
+    setup_script: str | None = None
+
+
+def _require_project_service():
+    if project_service is None:
+        raise HTTPException(status_code=503, detail="Project service unavailable (no async store)")
+    return project_service
+
+
+@router.get("/projects")
+async def list_projects():
+    svc = _require_project_service()
+    return await svc.list()
+
+
+@router.post("/projects", status_code=201)
+async def create_project(request: CreateProjectRequest):
+    svc = _require_project_service()
+    try:
+        if request.source == "local":
+            if not request.repo_path:
+                raise HTTPException(status_code=400, detail="repo_path is required for source=local")
+            return await svc.create_from_local(request.name, request.repo_path)
+        if not request.origin_url or not request.dest_parent:
+            raise HTTPException(status_code=400, detail="origin_url and dest_parent are required for source=clone")
+        return await svc.create_from_clone(request.name, request.origin_url, request.dest_parent)
+    except ProjectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/projects/{project_id}")
+async def get_project(project_id: str):
+    svc = _require_project_service()
+    try:
+        return await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.patch("/projects/{project_id}")
+async def update_project(project_id: str, request: UpdateProjectRequest):
+    svc = _require_project_service()
+    try:
+        return await svc.update(
+            project_id,
+            name=request.name,
+            default_branch=request.default_branch,
+            setup_script=request.setup_script,
+        )
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/projects/{project_id}")
+async def delete_project(project_id: str):
+    svc = _require_project_service()
+    await svc.delete(project_id)
+    return {"deleted": project_id}
+
+
+@router.get("/projects/{project_id}/branches")
+async def get_project_branches(project_id: str):
+    svc = _require_project_service()
+    try:
+        return await svc.list_branches(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except GitError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # --- Codex CLI Session APIs ---
 
 
 class CreateCodexSessionRequest(BaseModel):
     title: str
+    project_id: str
     cwd: str = ""
 
 
@@ -777,14 +898,18 @@ async def create_codex_workspace(request: CreateCodexSessionRequest):
     """Create a new Codex workspace. No process is launched — sending input triggers per-turn execution."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(request.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{request.project_id}' not found")
     from datetime import datetime
     from app.domain.models import CodexWorkspace
     workspace_id = str(uuid4())
-    resolved_cwd = request.cwd or str(workspace_manager.source_root)
+    resolved_cwd = request.cwd or project.repo_path
     workspace = CodexWorkspace(
         id=workspace_id,
         title=request.title,
         cwd=resolved_cwd,
+        project_id=project.id,
         status="idle",
         created_at=datetime.now(),
         last_active_at=datetime.now(),
@@ -795,7 +920,7 @@ async def create_codex_workspace(request: CreateCodexSessionRequest):
     # Broadcast new workspace
     await event_bus.append({
         "type": "session_created",
-        "session": {"id": workspace.id, "title": workspace.title, "status": workspace.status}
+        "session": {"id": workspace.id, "title": workspace.title, "project_id": workspace.project_id, "status": workspace.status}
     })
     return workspace
 
@@ -994,11 +1119,10 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
     Creates a workspace-scoped task and runs it immediately, so the message
     appears in the task list with live logs — matching vibe-kanban UX.
 
-    Note: Each input creates a new task workspace via workspace_manager.create_workspace().
-    This is intentional for per-turn tracking - each message becomes an isolated task
-    with its own logs and result. Workspaces are cleaned up when tasks are deleted.
-    If batching is needed (e.g., for related multi-turn conversations), consider adding
-    a separate batched-message endpoint that creates a single workspace for multiple inputs.
+    Each input creates a new task with its own git worktree (branch chat/<task_id>-<slug>
+    forked from the project's default branch). The worktree is removed when the task
+    is deleted. Per-turn tracking: each message becomes an isolated task with its own
+    logs and result.
     """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
@@ -1018,10 +1142,15 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
     task_title = title_preview if title_preview else "Chat message"
 
     task_id = str(uuid4())
-    workspace_path = workspace_manager.create_workspace(task_id)
+    if not workspace.project_id:
+        raise HTTPException(status_code=409, detail="Workspace has no associated project")
+    project = await codex_store.load_project(workspace.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{workspace.project_id}' not found")
     task = CodexTask(
         id=task_id,
         session_id=workspace_id,
+        project_id=project.id,
         title=task_title,
         prompt=request.input,
         executor=resolved_executor,
@@ -1030,12 +1159,19 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
         status="pending",
         result=None,
         parent_task_id=None,
-        workspace_path=workspace_path,
         resume_session_id=resume_session_id,
         resume_message_id=None,
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
+    try:
+        branch, worktree_path, base = await worktree_manager.prepare_chat_task_worktree(project, task)
+    except (GitError, WorktreeError) as exc:
+        raise HTTPException(status_code=500, detail=f"failed to create chat worktree: {exc}")
+    task.git_branch = branch
+    task.git_worktree_path = worktree_path
+    task.git_base_branch = base
+    task.workspace_path = worktree_path  # Engineer artifacts / executor cwd resolve to this.
     await codex_store.save_codex_task(task)
     # Broadcast new task with complete data structure
     await event_bus.append({
@@ -1096,13 +1232,7 @@ async def delete_all_codex_workspaces():
             mgr.terminate(workspace["id"])
         except KeyError:
             pass
-        tasks = await codex_store.list_codex_tasks(session_id=workspace["id"])
-        for task in tasks:
-            if task.get("workspace_path") and task.get("workspace_path") != workspace.get("cwd"):
-                try:
-                    workspace_manager.delete_workspace(task["workspace_path"])
-                except Exception:
-                    pass
+        await _cleanup_session_worktrees(workspace["id"], workspace.get("project_id"))
         await codex_store.delete_codex_workspace(workspace["id"])
     return {"deleted": len(workspaces)}
 
@@ -1125,14 +1255,7 @@ async def delete_codex_workspace(workspace_id: str):
         mgr.terminate(workspace_id)
     except KeyError:
         pass  # Workspace not running, ok to proceed
-    # Delete workspaces for all tasks in this workspace before deleting DB records
-    tasks = await codex_store.list_codex_tasks(session_id=workspace_id)
-    for task in tasks:
-        if task.get("workspace_path") and task.get("workspace_path") != workspace.cwd:
-            try:
-                workspace_manager.delete_workspace(task["workspace_path"])
-            except Exception:
-                pass
+    await _cleanup_session_worktrees(workspace_id, workspace.project_id)
     await codex_store.delete_codex_workspace(workspace_id)
     # Broadcast workspace deletion
     await event_bus.append({
@@ -1184,6 +1307,11 @@ async def create_codex_issue(request: CreateIssueRequest):
     workspace = await codex_store.load_codex_workspace(request.session_id)
     if workspace is None:
         raise HTTPException(status_code=404, detail=f"Workspace '{request.session_id}' not found")
+    if not workspace.project_id:
+        raise HTTPException(status_code=409, detail="Workspace has no associated project")
+    project = await codex_store.load_project(workspace.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{workspace.project_id}' not found")
 
     from app.domain.models import CodexIssue
 
@@ -1191,6 +1319,7 @@ async def create_codex_issue(request: CreateIssueRequest):
     issue = CodexIssue(
         id=str(uuid4()),
         session_id=request.session_id,
+        project_id=project.id,
         title=request.title,
         description=request.description,
         current_phase="requirements",
@@ -1198,6 +1327,13 @@ async def create_codex_issue(request: CreateIssueRequest):
         created_at=now,
         updated_at=now,
     )
+    try:
+        branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+    except (GitError, WorktreeError) as exc:
+        raise HTTPException(status_code=500, detail=f"failed to create issue worktree: {exc}")
+    issue.git_branch = branch
+    issue.git_worktree_path = worktree_path
+    issue.git_base_branch = base
     await codex_store.save_codex_issue(issue)
     return issue
 
@@ -1258,6 +1394,7 @@ async def duplicate_codex_issue(issue_id: str):
     new_issue = CodexIssue(
         id=str(uuid.uuid4()),
         session_id=issue.session_id,
+        project_id=issue.project_id,
         title=f"{issue.title} (copy)",
         description=issue.description,
         current_phase="requirements",
@@ -1266,6 +1403,16 @@ async def duplicate_codex_issue(issue_id: str):
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
+    if new_issue.project_id:
+        project = await codex_store.load_project(new_issue.project_id)
+        if project is not None:
+            try:
+                branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(project, new_issue)
+                new_issue.git_branch = branch
+                new_issue.git_worktree_path = worktree_path
+                new_issue.git_base_branch = base
+            except (GitError, WorktreeError) as exc:
+                raise HTTPException(status_code=500, detail=f"failed to create issue worktree: {exc}")
     await codex_store.save_codex_issue(new_issue)
     return new_issue
 
@@ -1683,7 +1830,15 @@ async def delete_codex_issue(issue_id: str):
         _delete_issue_artifact_root(workspace_path, issue_id)
 
     for task in tasks:
-        await _delete_task_cascade(task["id"])
+        await _delete_task_cascade(task["id"], delete_workspace=False)
+
+    if issue.project_id:
+        project = await codex_store.load_project(issue.project_id)
+        if project is not None:
+            try:
+                await worktree_manager.cleanup_issue_worktree(project, issue)
+            except Exception:
+                pass
 
     await codex_store.delete_codex_issue(issue_id)
     await event_bus.append({
@@ -1692,6 +1847,57 @@ async def delete_codex_issue(issue_id: str):
         "session_id": issue.session_id,
     })
     return {"deleted": issue_id}
+
+
+@router.get("/codex/issues/{issue_id}/diff")
+async def get_codex_issue_diff(issue_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if not issue.project_id or not issue.git_worktree_path:
+        return {"diff": "", "base_branch": None, "branch": None}
+    project = await codex_store.load_project(issue.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        diff = await worktree_manager.issue_diff(project, issue)
+    except GitError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"diff": diff, "base_branch": issue.git_base_branch, "branch": issue.git_branch}
+
+
+class MergeIssueRequest(BaseModel):
+    message: str | None = None
+
+
+@router.post("/codex/issues/{issue_id}/merge")
+async def merge_codex_issue(issue_id: str, request: MergeIssueRequest):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if not issue.project_id or not issue.git_branch:
+        raise HTTPException(status_code=409, detail="Issue has no git branch to merge")
+    if issue.git_merge_status == "merged":
+        raise HTTPException(status_code=409, detail="Issue already merged")
+    project = await codex_store.load_project(issue.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        result = await worktree_manager.merge_issue(project, issue, message=request.message)
+    except (GitError, WorktreeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await codex_store.save_codex_issue(issue)
+    await event_bus.append({
+        "type": "issue_merged",
+        "issue_id": issue.id,
+        "sha": result["sha"],
+        "base_branch": result["base_branch"],
+    })
+    return {**result, "issue": issue}
 
 
 @router.post("/codex/tasks", status_code=201)
@@ -1729,23 +1935,69 @@ async def create_codex_task(request: CreateTaskRequest):
     )
 
     parent_task = None
-    parent_workspace_path = None
     if request.parent_task_id:
         parent_task = await codex_store.load_codex_task(request.parent_task_id)
         if parent_task is None and request.task_kind != "help_child":
             raise HTTPException(status_code=404, detail="Parent task not found")
-        if parent_task is not None:
-            parent_workspace_path = parent_task.workspace_path
+
+    project = None
+    if session.project_id:
+        project = await codex_store.load_project(session.project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail=f"Project '{session.project_id}' not found")
+
     from datetime import datetime
     from app.domain.models import CodexTask
     task_id = str(uuid4())
-    if _should_use_workspace_root_for_task(session, request):
-        workspace_path = session.cwd or str(workspace_manager.source_root)
+
+    # Resolve worktree + branch for this task:
+    # - issue task → inherit from issue's worktree (shared across roles)
+    # - chat task with project → fresh per-task worktree
+    # - chat task without project → fall back to session.cwd (legacy)
+    git_branch = None
+    git_base_branch = None
+    git_worktree_path = None
+    workspace_path: str | None = None
+    if issue is not None and project is not None:
+        if not issue.git_worktree_path:
+            try:
+                branch, wt_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+            except (GitError, WorktreeError) as exc:
+                raise HTTPException(status_code=500, detail=f"failed to prepare issue worktree: {exc}")
+            issue.git_branch = branch
+            issue.git_worktree_path = wt_path
+            issue.git_base_branch = base
+            await codex_store.save_codex_issue(issue)
+        git_branch = issue.git_branch
+        git_base_branch = issue.git_base_branch
+        git_worktree_path = issue.git_worktree_path
+        workspace_path = issue.git_worktree_path
+    elif project is not None:
+        scratch_task = CodexTask(
+            id=task_id,
+            session_id=request.session_id,
+            project_id=project.id,
+            title=request.title,
+            prompt=request.prompt,
+            role=request.role,
+            executor=resolved_executor,
+            status="pending",
+        )
+        try:
+            branch, wt_path, base = await worktree_manager.prepare_chat_task_worktree(project, scratch_task)
+        except (GitError, WorktreeError) as exc:
+            raise HTTPException(status_code=500, detail=f"failed to prepare chat worktree: {exc}")
+        git_branch = branch
+        git_base_branch = base
+        git_worktree_path = wt_path
+        workspace_path = wt_path
     else:
-        workspace_path = workspace_manager.create_workspace(task_id, parent_workspace_path=parent_workspace_path)
+        workspace_path = session.cwd
+
     task = CodexTask(
         id=task_id,
         session_id=request.session_id,
+        project_id=project.id if project else None,
         issue_id=request.issue_id,
         phase=resolved_phase,
         title=request.title,
@@ -1760,6 +2012,9 @@ async def create_codex_task(request: CreateTaskRequest):
         task_kind=request.task_kind,
         blocked_by_help_id=request.blocked_by_help_id,
         workspace_path=workspace_path,
+        git_branch=git_branch,
+        git_base_branch=git_base_branch,
+        git_worktree_path=git_worktree_path,
         resume_session_id=None,
         resume_message_id=None,
         created_at=datetime.now(),

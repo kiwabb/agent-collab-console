@@ -13,10 +13,12 @@ from app.adapters.claude_cli_adapter import ClaudeCliAdapter
 from app.adapters.codex_cli_adapter import CodexCliAdapter
 from app.adapters.sqlite_store import SQLiteStore
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
-from app.application.workspace_manager import WorkspaceManager
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.help_orchestrator import HelpOrchestrator
 from app.application.role_workflow_service import RoleWorkflowService
+from app.application.git_service import GitService
+from app.application.project_service import ProjectService
+from app.application.worktree_manager import WorktreeManager
 
 
 # Determine store path - default to backend/console.db
@@ -75,16 +77,11 @@ approval_service = ApprovalService(session_service=session_service)
 
 # Codex session store (shared SQLite store handles all session types)
 codex_store = effective_store  # Use async_store if available
-workspace_root = Path(os.getenv("CODEX_WORKSPACE_ROOT", str(Path(__file__).parent.parent.parent / ".task-workspaces")))
-source_root = Path(os.getenv("CODEX_SOURCE_ROOT", str(Path(__file__).parent.parent.parent)))
-bundled_skill_paths = [
-    source_root / "docs" / "skills" / "agent-collaboration-help",
-]
-workspace_manager = WorkspaceManager(
-    source_root=source_root,
-    workspace_root=workspace_root,
-    bundled_skill_paths=bundled_skill_paths,
-)
+
+# Git project + worktree services.
+git_service = GitService()
+project_service = ProjectService(store=async_store, git=git_service) if async_store is not None else None
+worktree_manager = WorktreeManager(git=git_service)
 
 # Codex process manager - lazy imported to avoid pty dependency on import
 codex_process_manager = None

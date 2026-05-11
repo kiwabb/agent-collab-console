@@ -90,6 +90,32 @@ class CodexMessage(BaseModel):
     created_at: datetime | None = None
 
 
+class Project(BaseModel):
+    """A git-backed project that groups sessions / issues / tasks.
+
+    Each project binds to exactly one local git repository (MVP: single-repo).
+    Tasks created under a project run inside per-task git worktrees branched
+    off `default_branch`.
+    """
+    id: str
+    name: str
+    repo_path: str
+    default_branch: str = "main"
+    origin_url: str | None = None  # Set when project was created via `git clone`
+    setup_script: str | None = None  # Optional shell snippet run after worktree creation (e.g. `npm install`)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class GitBranch(BaseModel):
+    """A branch listing entry surfaced by the branches API."""
+    name: str
+    is_current: bool = False
+    is_remote: bool = False
+    last_commit_date: datetime | None = None
+    last_commit_sha: str | None = None
+
+
 class CodexSession(BaseModel):
     """Represents a local Codex CLI session managed by this console.
 
@@ -100,6 +126,7 @@ class CodexSession(BaseModel):
     id: str
     title: str
     cwd: str
+    project_id: str | None = None  # Required for new sessions; nullable for back-compat with legacy rows
     # Status is request-oriented (not process-oriented):
     # "idle" = ready for input, "responding" = turn in progress,
     # "done" = turn completed, "failed" = turn errored
@@ -118,12 +145,19 @@ CodexWorkspace = CodexSession
 class CodexIssue(BaseModel):
     id: str
     session_id: str
+    project_id: str | None = None
     title: str
     description: str | None = None
     current_phase: str = "requirements"
     status: str = "open"
     is_pinned: bool = False
     milestone: str | None = None  # Milestone grouping (e.g., "v1.0", "sprint-1")
+    # Git state — primary location. Tasks under this issue share the worktree below.
+    git_branch: str | None = None
+    git_base_branch: str | None = None
+    git_worktree_path: str | None = None
+    git_merge_status: str = "open"  # "open" | "merged" | "abandoned"
+    git_last_commit_sha: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -141,6 +175,7 @@ class CodexTask(BaseModel):
     """
     id: str
     session_id: str  # The workspace this task belongs to
+    project_id: str | None = None  # Git project this task runs against (None only for legacy rows)
     issue_id: str | None = None
     phase: str = "requirements"
     title: str
@@ -154,7 +189,12 @@ class CodexTask(BaseModel):
     parent_task_id: str | None = None  # Task this was continued from, if any
     task_kind: str = "normal"
     blocked_by_help_id: str | None = None
-    workspace_path: str | None = None  # Dedicated workspace directory for this task
+    workspace_path: str | None = None  # Dedicated workspace directory for this task (legacy ephemeral path)
+    git_branch: str | None = None  # Per-task branch name (e.g. task/abc12345-add-foo)
+    git_base_branch: str | None = None  # Branch this task was forked from
+    git_worktree_path: str | None = None  # Absolute path to this task's git worktree (executor cwd)
+    git_merge_status: str = "open"  # "open" | "merged" | "abandoned"
+    git_last_commit_sha: str | None = None  # HEAD sha at the worktree, recorded on merge
     resume_session_id: str | None = None  # Agent-native conversation/thread id for follow-up (passed to agent)
     resume_message_id: str | None = None  # Optional last assistant message id for targeted resume
     last_execution_process_id: str | None = None  # FK → ExecutionProcess.id of most recent run

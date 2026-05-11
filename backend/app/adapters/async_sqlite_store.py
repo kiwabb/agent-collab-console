@@ -5,7 +5,7 @@ from pathlib import Path
 
 import aiosqlite
 
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog
+from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, Project
 
 
 class AsyncSQLiteStore:
@@ -304,6 +304,65 @@ class AsyncSQLiteStore:
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN review_comment TEXT")
         except aiosqlite.OperationalError:
             pass
+        # --- Project / git worktree feature additions ---
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                repo_path TEXT NOT NULL,
+                default_branch TEXT NOT NULL DEFAULT 'main',
+                origin_url TEXT,
+                setup_script TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        """)
+        await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_repo_path ON projects(repo_path)")
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                version INTEGER NOT NULL
+            )
+        """)
+        for stmt in (
+            "ALTER TABLE codex_tasks ADD COLUMN project_id TEXT",
+            "ALTER TABLE codex_tasks ADD COLUMN git_branch TEXT",
+            "ALTER TABLE codex_tasks ADD COLUMN git_base_branch TEXT",
+            "ALTER TABLE codex_tasks ADD COLUMN git_worktree_path TEXT",
+            "ALTER TABLE codex_tasks ADD COLUMN git_merge_status TEXT DEFAULT 'open'",
+            "ALTER TABLE codex_tasks ADD COLUMN git_last_commit_sha TEXT",
+            "ALTER TABLE codex_sessions ADD COLUMN project_id TEXT",
+            "ALTER TABLE codex_issues ADD COLUMN project_id TEXT",
+            "ALTER TABLE codex_issues ADD COLUMN git_branch TEXT",
+            "ALTER TABLE codex_issues ADD COLUMN git_base_branch TEXT",
+            "ALTER TABLE codex_issues ADD COLUMN git_worktree_path TEXT",
+            "ALTER TABLE codex_issues ADD COLUMN git_merge_status TEXT DEFAULT 'open'",
+            "ALTER TABLE codex_issues ADD COLUMN git_last_commit_sha TEXT",
+        ):
+            try:
+                await conn.execute(stmt)
+            except aiosqlite.OperationalError:
+                pass
+        # One-time wipe of legacy codex data so all rows have project_id.
+        # The decision to clear was made explicitly (dev-stage data).
+        version_row = await (await conn.execute("SELECT version FROM schema_version WHERE id = 1")).fetchone()
+        current_version = version_row[0] if version_row else 0
+        if current_version < 2:
+            await conn.executescript(
+                """
+                DELETE FROM codex_task_messages;
+                DELETE FROM execution_processes;
+                DELETE FROM codex_tasks;
+                DELETE FROM codex_issues;
+                DELETE FROM codex_sessions;
+                DELETE FROM log_events;
+                DELETE FROM help_requests;
+                """
+            )
+            await conn.execute(
+                "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+                (2,),
+            )
         # Create runtime_catalog_settings table if not exists
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS runtime_catalog_settings (
@@ -313,6 +372,9 @@ class AsyncSQLiteStore:
         """)
         # Create indexes for frequently queried columns
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_project_id ON codex_tasks(project_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_sessions_project_id ON codex_sessions(project_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_issues_project_id ON codex_issues(project_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_parent_task_id ON codex_tasks(parent_task_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_status ON codex_tasks(status)")
@@ -498,8 +560,8 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
-            "INSERT OR REPLACE INTO codex_sessions (id, title, cwd, status, created_at, last_active_at, log_path, thread_id, claude_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (session.id, session.title, session.cwd, session.status,
+            "INSERT OR REPLACE INTO codex_sessions (id, title, cwd, project_id, status, created_at, last_active_at, log_path, thread_id, claude_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (session.id, session.title, session.cwd, session.project_id, session.status,
              self._format_datetime(session.created_at),
              self._format_datetime(session.last_active_at),
              session.log_path,
@@ -544,6 +606,7 @@ class AsyncSQLiteStore:
             id=row["id"],
             title=row["title"],
             cwd=row["cwd"],
+            project_id=row["project_id"] if "project_id" in row.keys() else None,
             status=row["status"],
             created_at=self._parse_datetime(row["created_at"]),
             last_active_at=self._parse_datetime(row["last_active_at"]),
@@ -556,13 +619,18 @@ class AsyncSQLiteStore:
     async def load_codex_workspace(self, workspace_id: str) -> CodexSession | None:
         return await self.load_codex_session(workspace_id)
 
-    async def list_codex_sessions(self) -> list[dict]:
+    async def list_codex_sessions(self, project_id: str | None = None) -> list[dict]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT id, title, status, created_at, last_active_at FROM codex_sessions ORDER BY last_active_at DESC") as cur:
-            rows = await cur.fetchall()
-        return [{"id": r["id"], "title": r["title"], "status": r["status"],
+        base = "SELECT id, title, project_id, status, created_at, last_active_at FROM codex_sessions"
+        if project_id:
+            async with conn.execute(f"{base} WHERE project_id = ? ORDER BY last_active_at DESC", (project_id,)) as cur:
+                rows = await cur.fetchall()
+        else:
+            async with conn.execute(f"{base} ORDER BY last_active_at DESC") as cur:
+                rows = await cur.fetchall()
+        return [{"id": r["id"], "title": r["title"], "project_id": r["project_id"], "status": r["status"],
                  "created_at": r["created_at"], "last_active_at": r["last_active_at"]} for r in rows]
 
     async def list_codex_workspaces(self) -> list[dict]:
@@ -595,14 +663,24 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
-            "INSERT OR REPLACE INTO codex_issues (id, session_id, title, description, current_phase, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            """INSERT OR REPLACE INTO codex_issues (
+                id, session_id, project_id, title, description, current_phase, status,
+                git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 issue.id,
                 issue.session_id,
+                issue.project_id,
                 issue.title,
                 issue.description,
                 issue.current_phase,
                 issue.status,
+                issue.git_branch,
+                issue.git_base_branch,
+                issue.git_worktree_path,
+                issue.git_merge_status,
+                issue.git_last_commit_sha,
                 self._format_datetime(issue.created_at),
                 self._format_datetime(issue.updated_at),
             ),
@@ -617,38 +695,58 @@ class AsyncSQLiteStore:
             row = await cur.fetchone()
         if not row:
             return None
+        keys = row.keys()
         return CodexIssue(
             id=row["id"],
             session_id=row["session_id"],
+            project_id=row["project_id"] if "project_id" in keys else None,
             title=row["title"],
             description=row["description"],
             current_phase=row["current_phase"],
             status=row["status"],
+            git_branch=row["git_branch"] if "git_branch" in keys and row["git_branch"] else None,
+            git_base_branch=row["git_base_branch"] if "git_base_branch" in keys and row["git_base_branch"] else None,
+            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in keys and row["git_worktree_path"] else None,
+            git_merge_status=row["git_merge_status"] if "git_merge_status" in keys and row["git_merge_status"] else "open",
+            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in keys and row["git_last_commit_sha"] else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def list_codex_issues(self, session_id: str | None = None) -> list[dict]:
+    async def list_codex_issues(self, session_id: str | None = None, project_id: str | None = None) -> list[dict]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        select_sql = "SELECT id, session_id, title, description, current_phase, status, created_at, updated_at FROM codex_issues"
+        select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, created_at, updated_at FROM codex_issues"
+        clauses, params = [], []
         if session_id:
-            async with conn.execute(f"{select_sql} WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC", (session_id,)) as cur:
-                rows = await cur.fetchall()
-        else:
-            async with conn.execute(f"{select_sql} ORDER BY updated_at DESC, created_at DESC") as cur:
-                rows = await cur.fetchall()
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if project_id:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        order = " ORDER BY updated_at DESC, created_at DESC"
+        async with conn.execute(f"{select_sql}{where}{order}", tuple(params)) as cur:
+            rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
     async def save_codex_task(self, task: CodexTask):
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
-            "INSERT OR REPLACE INTO codex_tasks (id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, sequence_index, sequence_group, review_comment, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (task.id, task.session_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
+            """INSERT OR REPLACE INTO codex_tasks (
+                id, session_id, project_id, issue_id, phase, title, prompt, role, executor, provider, model,
+                status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path,
+                git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha,
+                resume_session_id, resume_message_id, last_execution_process_id,
+                sequence_index, sequence_group, review_comment, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (task.id, task.session_id, task.project_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
              task.provider, task.model, task.status, task.result, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
-             task.workspace_path, task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
+             task.workspace_path,
+             task.git_branch, task.git_base_branch, task.git_worktree_path, task.git_merge_status, task.git_last_commit_sha,
+             task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
              task.sequence_index, task.sequence_group, task.review_comment,
              self._format_datetime(task.created_at),
              self._format_datetime(task.updated_at)),
@@ -663,60 +761,154 @@ class AsyncSQLiteStore:
             row = await cur.fetchone()
         if not row:
             return None
+        keys = row.keys()
         return CodexTask(
             id=row["id"],
             session_id=row["session_id"],
-            issue_id=row["issue_id"] if "issue_id" in row.keys() and row["issue_id"] else None,
-            phase=row["phase"] if "phase" in row.keys() and row["phase"] else "requirements",
+            project_id=row["project_id"] if "project_id" in keys and row["project_id"] else None,
+            issue_id=row["issue_id"] if "issue_id" in keys and row["issue_id"] else None,
+            phase=row["phase"] if "phase" in keys and row["phase"] else "requirements",
             title=row["title"],
             prompt=row["prompt"],
-            role=row["role"] if "role" in row.keys() and row["role"] else "general",
+            role=row["role"] if "role" in keys and row["role"] else "general",
             executor=row["executor"] if row["executor"] else "codex",
-            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
-            model=row["model"] if "model" in row.keys() and row["model"] else None,
+            provider=row["provider"] if "provider" in keys and row["provider"] else None,
+            model=row["model"] if "model" in keys and row["model"] else None,
             status=row["status"],
             result=row["result"],
             parent_task_id=row["parent_task_id"] if row["parent_task_id"] else None,
-            task_kind=row["task_kind"] if "task_kind" in row.keys() and row["task_kind"] else "normal",
-            blocked_by_help_id=row["blocked_by_help_id"] if "blocked_by_help_id" in row.keys() and row["blocked_by_help_id"] else None,
-            workspace_path=row["workspace_path"] if "workspace_path" in row.keys() and row["workspace_path"] else None,
-            resume_session_id=row["resume_session_id"] if "resume_session_id" in row.keys() and row["resume_session_id"] else None,
-            resume_message_id=row["resume_message_id"] if "resume_message_id" in row.keys() and row["resume_message_id"] else None,
-            last_execution_process_id=row["last_execution_process_id"] if "last_execution_process_id" in row.keys() and row["last_execution_process_id"] else None,
-            sequence_index=row["sequence_index"] if "sequence_index" in row.keys() else None,
-            sequence_group=row["sequence_group"] if "sequence_group" in row.keys() else None,
-            review_comment=row["review_comment"] if "review_comment" in row.keys() else None,
+            task_kind=row["task_kind"] if "task_kind" in keys and row["task_kind"] else "normal",
+            blocked_by_help_id=row["blocked_by_help_id"] if "blocked_by_help_id" in keys and row["blocked_by_help_id"] else None,
+            workspace_path=row["workspace_path"] if "workspace_path" in keys and row["workspace_path"] else None,
+            git_branch=row["git_branch"] if "git_branch" in keys and row["git_branch"] else None,
+            git_base_branch=row["git_base_branch"] if "git_base_branch" in keys and row["git_base_branch"] else None,
+            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in keys and row["git_worktree_path"] else None,
+            git_merge_status=row["git_merge_status"] if "git_merge_status" in keys and row["git_merge_status"] else "open",
+            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in keys and row["git_last_commit_sha"] else None,
+            resume_session_id=row["resume_session_id"] if "resume_session_id" in keys and row["resume_session_id"] else None,
+            resume_message_id=row["resume_message_id"] if "resume_message_id" in keys and row["resume_message_id"] else None,
+            last_execution_process_id=row["last_execution_process_id"] if "last_execution_process_id" in keys and row["last_execution_process_id"] else None,
+            sequence_index=row["sequence_index"] if "sequence_index" in keys else None,
+            sequence_group=row["sequence_group"] if "sequence_group" in keys else None,
+            review_comment=row["review_comment"] if "review_comment" in keys else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def list_codex_tasks(self, session_id: str | None = None, issue_id: str | None = None) -> list[dict]:
+    async def list_codex_tasks(
+        self,
+        session_id: str | None = None,
+        issue_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[dict]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        select_sql = "SELECT id, session_id, issue_id, phase, title, prompt, role, executor, status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, sequence_index, sequence_group, review_comment, created_at, updated_at FROM codex_tasks"
-        if session_id and issue_id:
-            async with conn.execute(
-                f"{select_sql} WHERE session_id = ? AND issue_id = ? ORDER BY created_at ASC",
-                (session_id, issue_id),
-            ) as cur:
-                rows = await cur.fetchall()
-        elif session_id:
-            async with conn.execute(
-                f"{select_sql} WHERE session_id = ? ORDER BY created_at ASC",
-                (session_id,),
-            ) as cur:
-                rows = await cur.fetchall()
-        elif issue_id:
-            async with conn.execute(
-                f"{select_sql} WHERE issue_id = ? ORDER BY created_at ASC",
-                (issue_id,),
-            ) as cur:
-                rows = await cur.fetchall()
-        else:
-            async with conn.execute(f"{select_sql} ORDER BY created_at ASC") as cur:
-                rows = await cur.fetchall()
+        select_sql = (
+            "SELECT id, session_id, project_id, issue_id, phase, title, prompt, role, executor, status, result, "
+            "parent_task_id, task_kind, blocked_by_help_id, workspace_path, "
+            "git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, "
+            "resume_session_id, resume_message_id, last_execution_process_id, "
+            "sequence_index, sequence_group, review_comment, created_at, updated_at FROM codex_tasks"
+        )
+        clauses, params = [], []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if issue_id:
+            clauses.append("issue_id = ?")
+            params.append(issue_id)
+        if project_id:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        async with conn.execute(f"{select_sql}{where} ORDER BY created_at ASC", tuple(params)) as cur:
+            rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    # --- Project CRUD ---
+
+    async def save_project(self, project: Project):
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            "INSERT OR REPLACE INTO projects (id, name, repo_path, default_branch, origin_url, setup_script, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                project.id,
+                project.name,
+                project.repo_path,
+                project.default_branch,
+                project.origin_url,
+                project.setup_script,
+                self._format_datetime(project.created_at),
+                self._format_datetime(project.updated_at),
+            ),
+        )
+        await conn.commit()
+
+    async def load_project(self, project_id: str) -> Project | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return Project(
+            id=row["id"],
+            name=row["name"],
+            repo_path=row["repo_path"],
+            default_branch=row["default_branch"] or "main",
+            origin_url=row["origin_url"],
+            setup_script=row["setup_script"],
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    async def load_project_by_repo_path(self, repo_path: str) -> Project | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM projects WHERE repo_path = ?", (repo_path,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return Project(
+            id=row["id"],
+            name=row["name"],
+            repo_path=row["repo_path"],
+            default_branch=row["default_branch"] or "main",
+            origin_url=row["origin_url"],
+            setup_script=row["setup_script"],
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    async def list_projects(self) -> list[Project]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM projects ORDER BY created_at ASC") as cur:
+            rows = await cur.fetchall()
+        return [
+            Project(
+                id=r["id"],
+                name=r["name"],
+                repo_path=r["repo_path"],
+                default_branch=r["default_branch"] or "main",
+                origin_url=r["origin_url"],
+                setup_script=r["setup_script"],
+                created_at=self._parse_datetime(r["created_at"]),
+                updated_at=self._parse_datetime(r["updated_at"]),
+            )
+            for r in rows
+        ]
+
+    async def delete_project(self, project_id: str):
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        await conn.commit()
 
     async def save_help_request(self, help_request: HelpRequest):
         await self._ensure_db()

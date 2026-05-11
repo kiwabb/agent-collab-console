@@ -53,6 +53,7 @@ import { getRuntimeCatalog } from "@/lib/api";
 import { ExecutionProcessesProvider } from "@/providers/ExecutionProcessesProvider";
 import { useExecutionProcessesContext, isBusTaskStatusEvent, isBusTaskCreatedEvent } from "@/contexts/ExecutionProcessesContext";
 import { WorkspaceGrid } from "@/features/workspaces/WorkspaceGrid";
+import { GitInfoCard } from "@/features/issues/components/GitInfoCard";
 import { IssueGrid } from "@/features/issues/IssueGrid";
 import { TaskBoard } from "@/features/tasks/TaskBoard";
 import { AgentCoordinationPanel } from "@/features/agents/AgentCoordinationPanel";
@@ -478,9 +479,32 @@ function WorkbenchInner({
       .catch(() => setPendingApprovals([]));
   }, []);
 
+  const [currentProject, setCurrentProject] = useState<import("@/lib/types").Project | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const pid = window.localStorage.getItem("selectedProjectId");
+    if (!pid) {
+      router.push("/projects");
+      return;
+    }
+    import("@/lib/api").then(({ getProject }) =>
+      getProject(pid).then(setCurrentProject).catch(() => {
+        window.localStorage.removeItem("selectedProjectId");
+        router.push("/projects");
+      })
+    );
+  }, [router]);
+
   async function handleCreateWorkspace(title: string) {
+    const projectId = typeof window !== "undefined" ? window.localStorage.getItem("selectedProjectId") : null;
+    if (!projectId) {
+      addToast({ type: "warning", title: t("projects.selectProjectFirst") });
+      router.push("/projects");
+      return;
+    }
     try {
-      const ws = await createWorkspace(title);
+      const ws = await createWorkspace(title, projectId);
       setWorkspaces((prev) => [...prev, ws]);
       handleSelectWorkspace(ws.id);
     } catch (err) {
@@ -800,6 +824,20 @@ function WorkbenchInner({
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
+                  onClick={() => router.push("/projects")}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold text-text-muted hover:bg-surface-hover transition-all max-w-[200px] truncate"
+                  aria-label={t("workbench.changeProject")}
+                >
+                  <span className="opacity-60">{t("workbench.projectSwitcher")}:</span>
+                  <span className="truncate text-foreground">{currentProject?.name ?? "—"}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{t("workbench.changeProject")}</TooltipContent>
+            </Tooltip>
+            <ChevronRight size={14} className="text-text-muted/40" />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
                   onClick={() => setView("home")}
                   className={cn(
                     "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
@@ -991,7 +1029,17 @@ function WorkbenchInner({
         )}
 
         {view === "issue" && currentIssueId && (
-          <div className="h-full overflow-hidden">
+          <div className="h-full overflow-y-auto">
+            {currentIssue && (
+              <div className="px-8 pt-4">
+                <GitInfoCard
+                  issue={currentIssue}
+                  onIssueUpdated={(next) =>
+                    setIssues((prev) => prev.map((i) => (i.id === next.id ? next : i)))
+                  }
+                />
+              </div>
+            )}
             <TaskBoard
               tasks={currentTasks}
               executionProcesses={Object.values(executionProcessesAll) as ExecutionProcess[]}

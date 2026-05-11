@@ -24,6 +24,8 @@ import type {
   RuntimeCatalogRequest,
   ValidateRuntimeCatalogResponse,
   TestExecutorResponse,
+  Project,
+  GitBranch,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
@@ -83,14 +85,80 @@ export async function getWorkspaces(): Promise<Workspace[]> {
   return response.json();
 }
 
-export async function createWorkspace(title: string, cwd = ""): Promise<Workspace> {
-  const body: CreateWorkspaceRequest = { title, cwd };
+export async function createWorkspace(
+  title: string,
+  projectId: string,
+  cwd = "",
+): Promise<Workspace> {
+  const body: CreateWorkspaceRequest = { title, project_id: projectId, cwd };
   const response = await fetch(`${API_BASE}/codex/workspaces`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   return handleResponse<Workspace>(response);
+}
+
+// --- Project APIs ---
+
+export async function listProjects(): Promise<Project[]> {
+  const response = await fetch(`${API_BASE}/projects`);
+  return handleResponse<Project[]>(response);
+}
+
+export async function getProject(projectId: string): Promise<Project> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}`);
+  return handleResponse<Project>(response);
+}
+
+export async function createProject(body: import("./types").CreateProjectRequest): Promise<Project> {
+  const response = await fetch(`${API_BASE}/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<Project>(response);
+}
+
+export async function updateProject(
+  projectId: string,
+  updates: import("./types").UpdateProjectRequest,
+): Promise<Project> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  return handleResponse<Project>(response);
+}
+
+export async function deleteProject(projectId: string): Promise<unknown> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}`, {
+    method: "DELETE",
+  });
+  return handleResponse(response);
+}
+
+export async function getProjectBranches(projectId: string): Promise<GitBranch[]> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/branches`);
+  return handleResponse<GitBranch[]>(response);
+}
+
+export async function mergeCodexIssue(
+  issueId: string,
+  message: string | null = null,
+): Promise<import("./types").MergeIssueResult> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/merge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  return handleResponse<import("./types").MergeIssueResult>(response);
+}
+
+export async function getCodexIssueDiff(issueId: string): Promise<import("./types").IssueDiffResult> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/diff`);
+  return handleResponse<import("./types").IssueDiffResult>(response);
 }
 
 export async function getWorkspace(workspaceId: string): Promise<Workspace> {

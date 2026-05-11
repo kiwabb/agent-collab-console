@@ -87,6 +87,7 @@ export interface CodexSession {
   id: string;
   title: string;
   cwd: string;
+  project_id: string | null;
   status: string;
   created_at: string | null;
   last_active_at: string | null;
@@ -98,15 +99,42 @@ export interface CodexSession {
 
 export type Workspace = CodexSession;
 
+export interface Project {
+  id: string;
+  name: string;
+  repo_path: string;
+  default_branch: string;
+  origin_url: string | null;
+  setup_script: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface GitBranch {
+  name: string;
+  is_current: boolean;
+  is_remote: boolean;
+  last_commit_date: string | null;
+  last_commit_sha: string | null;
+}
+
+export type GitMergeStatus = "open" | "merged" | "abandoned";
+
 export interface CodexIssue {
   id: string;
   session_id: string;
+  project_id: string | null;
   title: string;
   description: string | null;
   current_phase: string;
   status: string;
   is_pinned?: boolean;
   milestone?: string | null;
+  git_branch: string | null;
+  git_base_branch: string | null;
+  git_worktree_path: string | null;
+  git_merge_status: GitMergeStatus;
+  git_last_commit_sha: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -126,6 +154,7 @@ export interface IssuePhaseMultiTaskTransitionResult {
 export interface CodexTask {
   id: string;
   session_id: string;
+  project_id: string | null;
   issue_id: string | null;
   phase: string;
   title: string;
@@ -140,6 +169,11 @@ export interface CodexTask {
   task_kind: string;
   blocked_by_help_id: string | null;
   workspace_path: string | null;
+  git_branch: string | null;
+  git_base_branch: string | null;
+  git_worktree_path: string | null;
+  git_merge_status: GitMergeStatus;
+  git_last_commit_sha: string | null;
   resume_session_id: string | null;
   resume_message_id: string | null;
   last_execution_process_id: string | null;
@@ -251,7 +285,35 @@ export interface PendingApprovalsResponse {
 
 export interface CreateWorkspaceRequest {
   title: string;
+  project_id: string;
   cwd?: string;
+}
+
+export interface CreateProjectRequest {
+  name: string;
+  source: "local" | "clone";
+  repo_path?: string;
+  origin_url?: string;
+  dest_parent?: string;
+}
+
+export interface UpdateProjectRequest {
+  name?: string;
+  default_branch?: string;
+  setup_script?: string;
+}
+
+export interface MergeIssueResult {
+  sha: string;
+  base_branch: string;
+  message: string;
+  issue: CodexIssue;
+}
+
+export interface IssueDiffResult {
+  diff: string;
+  base_branch: string | null;
+  branch: string | null;
 }
 
 export interface CreateTaskRequest {
