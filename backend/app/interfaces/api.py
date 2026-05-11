@@ -918,8 +918,11 @@ async def get_project_stats(project_id: str):
 
 
 @router.get("/projects/{project_id}/audit")
-async def get_project_audit(project_id: str, limit: int = 50):
-    """Recent merge/abandon events for the project (most recent first)."""
+async def get_project_audit(project_id: str, limit: int = 50, since: str | None = None):
+    """Recent project events (most recent first).
+
+    `since` is an ISO-8601 timestamp; entries strictly older than it are skipped.
+    """
     svc = _require_project_service()
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
@@ -927,7 +930,9 @@ async def get_project_audit(project_id: str, limit: int = 50):
         await svc.get(project_id)
     except ProjectError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return await codex_store.list_project_audit(project_id, limit=max(1, min(limit, 200)))
+    return await codex_store.list_project_audit(
+        project_id, limit=max(1, min(limit, 200)), since=since,
+    )
 
 
 @router.post("/projects/{project_id}/repair")

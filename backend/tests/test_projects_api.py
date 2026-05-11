@@ -341,6 +341,29 @@ def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path
     assert refreshed["git_branch"] is None
 
 
+def test_audit_log_supports_since_filter(client, tmp_path):
+    project = _create_project(client, tmp_path, name="audit-since")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    issue_a = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "early"}
+    ).json()
+    # All entries to this point.
+    earlier = client.get(f"/api/projects/{project['id']}/audit").json()
+    assert len(earlier) >= 1
+    cutoff = earlier[0]["created_at"]
+    # Trigger one more event AFTER the cutoff.
+    client.post(f"/api/codex/issues/{issue_a['id']}/abandon")
+    filtered = client.get(
+        f"/api/projects/{project['id']}/audit?since={cutoff}"
+    ).json()
+    events = {row["event"] for row in filtered}
+    assert "abandoned" in events
+    # The earlier creation entry shouldn't be returned again — strictly newer.
+    assert all(row["created_at"] >= cutoff for row in filtered)
+
+
 def test_audit_log_records_merge_and_abandon(client, tmp_path):
     project = _create_project(client, tmp_path, name="audit-host")
     ws = client.post(

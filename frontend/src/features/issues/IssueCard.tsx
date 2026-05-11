@@ -1,6 +1,12 @@
 "use client";
 
-import type { CodexIssue } from "@/lib/types";
+import type { CodexIssue, GitMergeStatus } from "@/lib/types";
+
+const MERGE_STATUS_KEY = {
+  open: "task.mergeStatus.open",
+  merged: "task.mergeStatus.merged",
+  abandoned: "task.mergeStatus.abandoned",
+} as const satisfies Record<GitMergeStatus, "task.mergeStatus.open" | "task.mergeStatus.merged" | "task.mergeStatus.abandoned">;
 import { PHASE_CONFIG, type Phase } from "./phaseUtils";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
@@ -168,10 +174,7 @@ export function IssueCard({
                 )}
                 title={issue.git_branch}
               >
-                {t(`task.mergeStatus.${issue.git_merge_status}` as
-                  | "task.mergeStatus.open"
-                  | "task.mergeStatus.merged"
-                  | "task.mergeStatus.abandoned")}
+                {t(MERGE_STATUS_KEY[issue.git_merge_status])}
               </div>
             )}
           </div>

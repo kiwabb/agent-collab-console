@@ -944,14 +944,30 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def list_project_audit(self, project_id: str, *, limit: int = 50) -> list[dict]:
+    async def list_project_audit(
+        self,
+        project_id: str,
+        *,
+        limit: int = 50,
+        since: str | None = None,
+    ) -> list[dict]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-            "SELECT id, project_id, issue_id, event, sha, base_branch, created_at FROM project_audit WHERE project_id = ? ORDER BY id DESC LIMIT ?",
-            (project_id, limit),
-        ) as cur:
+        if since:
+            query = (
+                "SELECT id, project_id, issue_id, event, sha, base_branch, created_at "
+                "FROM project_audit WHERE project_id = ? AND created_at >= ? "
+                "ORDER BY id DESC LIMIT ?"
+            )
+            params = (project_id, since, limit)
+        else:
+            query = (
+                "SELECT id, project_id, issue_id, event, sha, base_branch, created_at "
+                "FROM project_audit WHERE project_id = ? ORDER BY id DESC LIMIT ?"
+            )
+            params = (project_id, limit)
+        async with conn.execute(query, params) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 

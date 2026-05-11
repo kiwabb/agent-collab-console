@@ -29,6 +29,12 @@ function statusVariant(status: GitMergeStatus) {
   return "default" as const;
 }
 
+const MERGE_STATUS_KEY = {
+  open: "task.mergeStatus.open",
+  merged: "task.mergeStatus.merged",
+  abandoned: "task.mergeStatus.abandoned",
+} as const satisfies Record<GitMergeStatus, "task.mergeStatus.open" | "task.mergeStatus.merged" | "task.mergeStatus.abandoned">;
+
 export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   const { t } = useI18n();
   const { addToast } = useToast();
@@ -132,10 +138,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
           <GitBranch size={14} />
           Git
           <Badge variant={statusVariant(issue.git_merge_status)}>
-            {t(`task.mergeStatus.${issue.git_merge_status}` as
-              | "task.mergeStatus.open"
-              | "task.mergeStatus.merged"
-              | "task.mergeStatus.abandoned")}
+            {t(MERGE_STATUS_KEY[issue.git_merge_status])}
           </Badge>
           {stat && stat.files > 0 && (
             <span className="text-xs font-normal font-mono text-muted-foreground">

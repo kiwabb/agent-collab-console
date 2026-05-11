@@ -399,7 +399,11 @@ export function ProjectsPage() {
                                 ? "bg-success/10 text-success"
                                 : entry.event === "abandoned"
                                   ? "bg-muted text-muted-foreground"
-                                  : "bg-brand/10 text-brand",
+                                  : entry.event === "deleted"
+                                    ? "bg-error/10 text-error"
+                                    : entry.event === "created"
+                                      ? "bg-brand/10 text-brand"
+                                      : "bg-foreground/10 text-foreground",
                             )}
                           >
                             {entry.event}
