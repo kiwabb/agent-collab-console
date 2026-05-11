@@ -121,13 +121,13 @@ export function RunDetail({
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const logsContainerRef = useRef<HTMLDivElement | null>(null);
 
-  const scrollToBottom = useCallback((el: HTMLElement | null) => {
+  const scrollToBottom = useCallback((el: HTMLElement | null, smooth = true) => {
     if (!el) return;
     requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
-      // One more frame to defeat any layout shifts (e.g. fade-in animations).
+      el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+      // One more frame to defeat layout shifts from fade-in animations.
       requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight;
+        el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
       });
     });
   }, []);
@@ -164,21 +164,28 @@ export function RunDetail({
   }, [task, liveStream.messages]);
   const normalizedLogs = useMemo(() => normalizeLogs(mergedLogs), [mergedLogs]);
 
-  // Scroll to bottom when content changes (send, agent reply, token stream, logs)
+  // Smoothly scroll when full messages arrive (user send, agent reply commit).
   useEffect(() => {
-    scrollToBottom(messagesContainerRef.current);
-  }, [mergedMessages.length, liveStream.pendingAssistant?.text, scrollToBottom]);
+    scrollToBottom(messagesContainerRef.current, true);
+  }, [mergedMessages.length, scrollToBottom]);
 
+  // Token-streaming deltas: tight loop, use instant scroll (smooth would
+  // queue + cancel itself dozens of times per second and look jittery).
   useEffect(() => {
-    scrollToBottom(logsContainerRef.current);
+    scrollToBottom(messagesContainerRef.current, false);
+  }, [liveStream.pendingAssistant?.text, scrollToBottom]);
+
+  // Logs stream: line-buffered, smooth is fine.
+  useEffect(() => {
+    scrollToBottom(logsContainerRef.current, true);
   }, [normalizedLogs.length, scrollToBottom]);
 
-  // Also re-scroll when the selected execution process flips (sending a chat
-  // creates a new EP and switches to it; without this the new tab content
-  // remounts at scrollTop=0).
+  // EP switch (sending creates a new execution_process; the tab itself does
+  // not remount thanks to optimisticProcess, but we still want to land at
+  // the bottom). Use instant — no smooth animation across an EP transition.
   useEffect(() => {
-    scrollToBottom(messagesContainerRef.current);
-    scrollToBottom(logsContainerRef.current);
+    scrollToBottom(messagesContainerRef.current, false);
+    scrollToBottom(logsContainerRef.current, false);
   }, [process?.id, scrollToBottom]);
   const errorEntry = useMemo(
     () => [...normalizedLogs].reverse().find((entry) => entry.type === "error"),
