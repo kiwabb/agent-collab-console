@@ -420,6 +420,12 @@ function WorkbenchInner({
     }
   }, [lastEvent]);
 
+  // task_id is what messages are scoped by. Resolve it through selectedProcess
+  // which already falls back to optimisticProcess when the WS hasn't synced the
+  // freshly-created EP yet — otherwise on chat send we'd briefly miss the
+  // task_id, fall back to the EP-scoped messages endpoint (returns empty for a
+  // brand-new EP), wipe processMessages, and flash a loading spinner.
+  const selectedTaskId = selectedProcess?.task_id ?? null;
   useEffect(() => {
     if (!selectedProcessId) {
       setIsLoadingLogs(false);
@@ -429,16 +435,15 @@ function WorkbenchInner({
       return;
     }
     let cancelled = false;
-    setIsLoadingLogs(true);
-    setIsLoadingMessages(true);
+    // Only flip loading state when we don't already have content to show —
+    // avoids the visual "flash to empty state" on every chat send.
+    if (processLogs.length === 0) setIsLoadingLogs(true);
+    if (processMessages.length === 0) setIsLoadingMessages(true);
     setIsLoadingProcess(true);
     // Logs are EP-scoped; messages are task-scoped so chat history persists
     // across re-runs / follow-up runs that spawn new execution processes.
-    const selectedEp = (Object.values(executionProcessesAll) as ExecutionProcess[]).find(
-      (p) => p.id === selectedProcessId,
-    );
-    const messagesPromise = selectedEp?.task_id
-      ? getCodexTaskMessages(selectedEp.task_id)
+    const messagesPromise = selectedTaskId
+      ? getCodexTaskMessages(selectedTaskId)
       : getExecutionProcessMessages(selectedProcessId);
     Promise.all([getExecutionProcessLogs(selectedProcessId), messagesPromise])
       .then(([logs, msgs]) => {
@@ -460,7 +465,12 @@ function WorkbenchInner({
     return () => {
       cancelled = true;
     };
-  }, [selectedProcessId]);
+    // selectedTaskId is intentionally a dep: when EP id changes we want fetch;
+    // when task_id later becomes available (optimistic → real), fetch again
+    // task-scoped (correct content) so the temporary EP-scoped result is replaced.
+    // processLogs / processMessages are intentionally NOT deps to avoid loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProcessId, selectedTaskId]);
 
   useEffect(() => {
     getPendingApprovals()
@@ -741,22 +751,28 @@ function WorkbenchInner({
         result = await sendCodexTask(selectedProcess.task_id, content);
         if (result?.resolved_mode) setLastResolvedMode(result.resolved_mode);
       }
-      // Backend creates a new execution process for every run. Seed an
-      // optimistic placeholder so selectedProcess resolves immediately (avoids
-      // an unmount/remount of RunDetail while we wait for the workspace WS to
-      // push the real EP).
+      // Optimistically append the just-sent user message (and assistant reply
+      // if the backend already finalized in mock mode) so the chat thread
+      // updates without a second round trip. The task-scoped GET in the
+      // selectedProcessId effect below will deduplicate by id.
+      setProcessMessages((prev) => {
+        const byId = new Map(prev.map((m) => [m.id, m] as const));
+        if (result?.message?.id) byId.set(result.message.id, result.message as CodexTaskMessage);
+        if (result?.assistant_message?.id) {
+          byId.set(result.assistant_message.id, result.assistant_message as CodexTaskMessage);
+        }
+        return Array.from(byId.values());
+      });
+      // Seed an optimistic placeholder for the new execution_process so
+      // selectedProcess resolves immediately (avoids RunDetail unmounting
+      // while the workspace WS catches up).
       const newProcess = result?.execution_process;
       if (newProcess?.id) {
         setOptimisticProcess(newProcess as ExecutionProcess);
         setSelectedProcessId(newProcess.id);
       }
-      const msgs = await getCodexTaskMessages(selectedProcess.task_id);
-      setProcessMessages(msgs);
-      // No full workspace reload — the WebSocket workspace stream pushes task /
-      // execution-process status changes automatically. Calling loadWorkspaceData
-      // here would re-fetch all issues + tasks + help-requests for the workspace
-      // and toggle the `isLoadingIssues` flag, which made the whole workbench
-      // re-mount on every chat send (the user-visible "局部刷新").
+      // No further fetch here — the selectedProcessId effect will pull
+      // task-scoped messages + EP-scoped logs once.
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message");
       const titleMap: Record<RunMode, string> = { auto: "发送失败", chat: "对话失败", refine: "修订失败" };
