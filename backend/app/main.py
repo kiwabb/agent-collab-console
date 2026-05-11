@@ -23,7 +23,32 @@ async def lifespan(app: FastAPI):
         pass
 
 
+import logging
+import traceback as _traceback
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Agent Collaboration Console", lifespan=lifespan)
+
+
+# FastAPI / Starlette already provide good defaults for HTTPException and
+# RequestValidationError (they produce structured {"detail": ...} JSON).
+# We only override the catch-all so a 500 includes the real error type and
+# message — otherwise frontend toasts show "Internal Server Error" which
+# makes user-reported bugs impossible to diagnose remotely.
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    logger.error("Unhandled exception on %s %s", request.method, request.url.path, exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"{type(exc).__name__}: {exc}",
+            "traceback": _traceback.format_exception_only(type(exc), exc),
+        },
+    )
+
+
 app.include_router(api_router)
 app.include_router(codex_ws_router, prefix="/api")  # Add prefix here
 app.include_router(sse_router)

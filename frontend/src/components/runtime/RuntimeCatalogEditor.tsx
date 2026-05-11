@@ -11,6 +11,8 @@ import type {
   RuntimeExecutorConfig,
 } from "@/lib/types";
 import type { TranslationKey } from "@/lib/i18n";
+import { testRuntimeExecutor } from "@/lib/api";
+import { Loader2, CheckCircle, XCircle } from "lucide-react";
 
 interface RuntimeCatalogEditorProps {
   catalog: RuntimeCatalog;
@@ -138,6 +140,14 @@ export function RuntimeCatalogEditor({
             onUpdate={(updates) => updateExecutor(executorIndex, updates)}
             onRemove={() => removeExecutor(executorIndex)}
             onToggleEnabled={() => toggleExecutorEnabled(executorIndex)}
+            onTest={async (exec) => {
+              const result = await testRuntimeExecutor({
+                executor_id: exec.id,
+                api_endpoint: exec.api_endpoint,
+                api_key: exec.api_key,
+              });
+              return result;
+            }}
             t={t}
           />
         ))}
@@ -239,6 +249,7 @@ interface ExecutorCardProps {
   onUpdate: (updates: Partial<RuntimeExecutorConfig>) => void;
   onRemove: () => void;
   onToggleEnabled: () => void;
+  onTest: (executor: RuntimeExecutorConfig) => Promise<{ success: boolean; latency_ms?: number; error?: string }>;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }
 
@@ -247,9 +258,25 @@ function ExecutorCard({
   onUpdate,
   onRemove,
   onToggleEnabled,
+  onTest,
   t,
 }: ExecutorCardProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; latency_ms?: number; error?: string } | null>(null);
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await onTest(executor);
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ success: false, error: String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   return (
     <Card>
@@ -270,6 +297,31 @@ function ExecutorCard({
             >
               {executor.enabled ? t("runtime.executor.enabled") : t("runtime.executor.disabled")}
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleTest}
+              disabled={testing}
+            >
+              {testing ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : testResult ? (
+                testResult.success ? (
+                  <CheckCircle className="h-3 w-3 text-green-500" />
+                ) : (
+                  <XCircle className="h-3 w-3 text-destructive" />
+                )
+              ) : (
+                "Test"
+              )}
+            </Button>
+            {testResult && (
+              <span className={cn("text-xs", testResult.success ? "text-green-500" : "text-destructive")}>
+                {testResult.success
+                  ? `${testResult.latency_ms}ms`
+                  : testResult.error?.slice(0, 50)}
+              </span>
+            )}
             <Button
               variant="ghost"
               size="sm"

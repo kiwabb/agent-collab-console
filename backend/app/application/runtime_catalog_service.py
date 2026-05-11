@@ -91,7 +91,7 @@ class RuntimeCatalogService:
                         )
 
             # Validate default_provider_id references an existing provider
-            if executor.default_provider_id:
+            if executor.default_provider_id and executor.default_provider_id != "None":
                 if executor.default_provider_id not in provider_ids:
                     raise RuntimeCatalogValidationError(
                         f"Executor '{executor.id}' has invalid default_provider_id '{executor.default_provider_id}'"
@@ -99,13 +99,13 @@ class RuntimeCatalogService:
 
         # Validate defaults point to enabled items
         for executor in catalog.executors:
-            if executor.default_provider_id:
+            if executor.default_provider_id and executor.default_provider_id != "None":
                 provider = self._find_provider(catalog, executor.id, executor.default_provider_id)
                 if provider and not provider.enabled:
                     raise RuntimeCatalogValidationError(
                         f"Executor '{executor.id}' defaults to disabled provider '{executor.default_provider_id}'"
                     )
-                if provider and provider.default_model_id:
+                if provider and provider.default_model_id and provider.default_model_id != "None":
                     model = self._find_model(catalog, executor.id, executor.default_provider_id, provider.default_model_id)
                     if model and not model.enabled:
                         raise RuntimeCatalogValidationError(
@@ -138,37 +138,45 @@ class RuntimeCatalogService:
             raise RuntimeCatalogValidationError(f"Executor '{executor}' is disabled")
 
         # Resolve provider
-        if provider is None or provider == "":
-            provider = executor_config.default_provider_id
-        if provider is None:
-            raise RuntimeCatalogValidationError(f"No provider specified and no default for executor '{executor}'")
+        if provider == "None" or provider == "":
+            provider = None
 
-        provider_config = self._find_provider(catalog, executor, provider)
-        if provider_config is None:
-            raise RuntimeCatalogValidationError(
-                f"Provider '{provider}' not found in executor '{executor}'"
-            )
-        if not provider_config.enabled:
-            raise RuntimeCatalogValidationError(f"Provider '{provider}' is disabled")
+        if provider is None:
+            provider = executor_config.default_provider_id
+
+        provider_config = None
+        if provider is not None:
+            provider_config = self._find_provider(catalog, executor, provider)
+            if provider_config is None:
+                raise RuntimeCatalogValidationError(
+                    f"Provider '{provider}' not found in executor '{executor}'"
+                )
+            if not provider_config.enabled:
+                raise RuntimeCatalogValidationError(f"Provider '{provider}' is disabled")
 
         # Resolve model
-        if model is None or model == "":
-            model = executor_config.default_model or provider_config.default_model_id
-        if model is None:
-            raise RuntimeCatalogValidationError(f"No model specified and no default for provider '{provider}'")
+        if model == "None" or model == "":
+            model = None
 
-        model_config = self._find_model(catalog, executor, provider, model)
-        if model_config is None:
-            raise RuntimeCatalogValidationError(
-                f"Model '{model}' not found in provider '{provider}'"
-            )
-        if not model_config.enabled:
-            raise RuntimeCatalogValidationError(f"Model '{model}' is disabled")
+        if model is None:
+            model = executor_config.default_model or (provider_config.default_model_id if provider_config else None)
+            
+        if model is None:
+            raise RuntimeCatalogValidationError(f"No model specified and no default for executor '{executor}'")
+
+        if provider_config is not None:
+            model_config = self._find_model(catalog, executor, provider, model)
+            if model_config is None:
+                raise RuntimeCatalogValidationError(
+                    f"Model '{model}' not found in provider '{provider}'"
+                )
+            if not model_config.enabled:
+                raise RuntimeCatalogValidationError(f"Model '{model}' is disabled")
 
         # Get env overrides from executor config
         env_overrides = self._get_executor_env_overrides(executor_config)
 
-        return (executor, provider, model, env_overrides, executor_config.executor_type)
+        return (executor, provider or "", model or "", env_overrides, executor_config.executor_type)
 
     def render_template(self, template: str, context: dict[str, str]) -> str:
         """Render a template string with restricted placeholders.
