@@ -45,6 +45,25 @@ function removeRecentSearch(query: string) {
   localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
 }
 
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const diff = Date.now() - t;
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  const mon = Math.floor(day / 30);
+  if (mon < 12) return `${mon}mo ago`;
+  return `${Math.floor(mon / 12)}y ago`;
+}
+
+
 interface IssueGridProps {
   issues: CodexIssue[];
   onSelect: (id: string) => void;
@@ -279,12 +298,16 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
                   {branches.length === 0 && projectDefaultBranch && (
                     <option value={projectDefaultBranch}>{projectDefaultBranch}</option>
                   )}
-                  {branches.map((b) => (
-                    <option key={b.name} value={b.name}>
-                      {b.name}
-                      {b.name === projectDefaultBranch ? " (default)" : ""}
-                    </option>
-                  ))}
+                  {branches.map((b) => {
+                    const ago = formatRelativeTime(b.last_commit_date);
+                    return (
+                      <option key={b.name} value={b.name}>
+                        {b.name}
+                        {b.name === projectDefaultBranch ? " (default)" : ""}
+                        {ago ? `  · ${ago}` : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             )}

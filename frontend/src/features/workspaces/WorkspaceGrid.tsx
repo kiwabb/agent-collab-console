@@ -228,7 +228,11 @@ export function WorkspaceGrid({
             <h3 className="text-[17px] font-black text-foreground mb-2 truncate group-hover:text-brand transition-colors">
               {ws.title}
             </h3>
-            
+            {ws.cwd && (
+              <div className="text-[10px] font-mono text-text-muted/60 mb-3 truncate" title={ws.cwd}>
+                {ws.cwd}
+              </div>
+            )}
             <div className="flex items-center gap-3 text-text-muted">
               <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest">
                 <Clock size={12} />

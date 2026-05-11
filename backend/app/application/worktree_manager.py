@@ -48,6 +48,19 @@ def _worktree_path(project: Project, kind: str, item_id: str) -> Path:
 class WorktreeManager:
     def __init__(self, git: GitService):
         self.git = git
+        # Per-issue + per-chat-task locks. Two concurrent creates of the same
+        # issue worktree would race `git worktree add` and clobber each other;
+        # the lock serialises all mutating ops keyed by the entity id.
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks_guard = asyncio.Lock()
+
+    async def _lock_for(self, key: str) -> asyncio.Lock:
+        async with self._locks_guard:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[key] = lock
+            return lock
 
     # ---- Issue-level ----
 
@@ -62,29 +75,33 @@ class WorktreeManager:
         `base_branch` overrides the fork point (defaults to project default).
         Returns (branch, worktree_path, base_branch). Safe to call repeatedly.
         """
-        if issue.git_worktree_path and issue.git_branch:
-            return issue.git_branch, issue.git_worktree_path, issue.git_base_branch or project.default_branch
-        branch = _issue_branch_name(issue)
-        base = base_branch or project.default_branch
-        worktree = _worktree_path(project, "issue", issue.id)
-        if worktree.exists() and await self.git.is_git_repo(worktree):
+        lock = await self._lock_for(f"issue:{issue.id}")
+        async with lock:
+            if issue.git_worktree_path and issue.git_branch:
+                return issue.git_branch, issue.git_worktree_path, issue.git_base_branch or project.default_branch
+            branch = _issue_branch_name(issue)
+            base = base_branch or project.default_branch
+            worktree = _worktree_path(project, "issue", issue.id)
+            if worktree.exists() and await self.git.is_git_repo(worktree):
+                return branch, str(worktree), base
+            if worktree.exists():
+                raise WorktreeError(f"worktree path exists but is not a git repo: {worktree}")
+            await self.git.create_worktree(
+                repo_path=project.repo_path,
+                branch=branch,
+                worktree_path=worktree,
+                base_branch=base,
+            )
+            if project.setup_script:
+                await self._run_setup(project.setup_script, worktree)
             return branch, str(worktree), base
-        if worktree.exists():
-            raise WorktreeError(f"worktree path exists but is not a git repo: {worktree}")
-        await self.git.create_worktree(
-            repo_path=project.repo_path,
-            branch=branch,
-            worktree_path=worktree,
-            base_branch=base,
-        )
-        if project.setup_script:
-            await self._run_setup(project.setup_script, worktree)
-        return branch, str(worktree), base
 
     async def cleanup_issue_worktree(self, project: Project, issue: CodexIssue) -> None:
         if not issue.git_worktree_path:
             return
-        await self._cleanup_path(project.repo_path, issue.git_worktree_path)
+        lock = await self._lock_for(f"issue:{issue.id}")
+        async with lock:
+            await self._cleanup_path(project.repo_path, issue.git_worktree_path)
 
     async def merge_issue(
         self,
@@ -94,22 +111,24 @@ class WorktreeManager:
     ) -> dict:
         if not issue.git_branch:
             raise WorktreeError("issue has no git branch to merge")
-        base = issue.git_base_branch or project.default_branch
-        # Refuse if the worktree has uncommitted changes — otherwise the squash
-        # merge silently drops them. Surface a clear error to the user.
-        if issue.git_worktree_path:
-            status = await self.git.status_porcelain(issue.git_worktree_path)
-            if status.strip():
-                raise WorktreeError(
-                    "worktree has uncommitted changes; commit them on the branch before merging"
-                )
-        commit_message = message or f"Squash merge issue {issue.id[:8]}: {issue.title}"
-        sha = await self.git.squash_merge(
-            repo_path=project.repo_path,
-            source_branch=issue.git_branch,
-            base_branch=base,
-            message=commit_message,
-        )
+        lock = await self._lock_for(f"issue:{issue.id}")
+        async with lock:
+            base = issue.git_base_branch or project.default_branch
+            # Refuse if the worktree has uncommitted changes — otherwise the squash
+            # merge silently drops them. Surface a clear error to the user.
+            if issue.git_worktree_path:
+                status = await self.git.status_porcelain(issue.git_worktree_path)
+                if status.strip():
+                    raise WorktreeError(
+                        "worktree has uncommitted changes; commit them on the branch before merging"
+                    )
+            commit_message = message or f"Squash merge issue {issue.id[:8]}: {issue.title}"
+            sha = await self.git.squash_merge(
+                repo_path=project.repo_path,
+                source_branch=issue.git_branch,
+                base_branch=base,
+                message=commit_message,
+            )
         issue.git_merge_status = "merged"
         issue.git_last_commit_sha = sha
         issue.updated_at = datetime.now()
@@ -128,29 +147,33 @@ class WorktreeManager:
         project: Project,
         task: CodexTask,
     ) -> tuple[str, str, str]:
-        if task.git_worktree_path and task.git_branch:
-            return task.git_branch, task.git_worktree_path, task.git_base_branch or project.default_branch
-        branch = _chat_branch_name(task)
-        base = project.default_branch
-        worktree = _worktree_path(project, "chat", task.id)
-        if worktree.exists() and await self.git.is_git_repo(worktree):
+        lock = await self._lock_for(f"chat:{task.id}")
+        async with lock:
+            if task.git_worktree_path and task.git_branch:
+                return task.git_branch, task.git_worktree_path, task.git_base_branch or project.default_branch
+            branch = _chat_branch_name(task)
+            base = project.default_branch
+            worktree = _worktree_path(project, "chat", task.id)
+            if worktree.exists() and await self.git.is_git_repo(worktree):
+                return branch, str(worktree), base
+            if worktree.exists():
+                raise WorktreeError(f"worktree path exists but is not a git repo: {worktree}")
+            await self.git.create_worktree(
+                repo_path=project.repo_path,
+                branch=branch,
+                worktree_path=worktree,
+                base_branch=base,
+            )
+            if project.setup_script:
+                await self._run_setup(project.setup_script, worktree)
             return branch, str(worktree), base
-        if worktree.exists():
-            raise WorktreeError(f"worktree path exists but is not a git repo: {worktree}")
-        await self.git.create_worktree(
-            repo_path=project.repo_path,
-            branch=branch,
-            worktree_path=worktree,
-            base_branch=base,
-        )
-        if project.setup_script:
-            await self._run_setup(project.setup_script, worktree)
-        return branch, str(worktree), base
 
     async def cleanup_chat_task_worktree(self, project: Project, task: CodexTask) -> None:
         if not task.git_worktree_path:
             return
-        await self._cleanup_path(project.repo_path, task.git_worktree_path)
+        lock = await self._lock_for(f"chat:{task.id}")
+        async with lock:
+            await self._cleanup_path(project.repo_path, task.git_worktree_path)
 
     async def prune(self, project: Project) -> None:
         """Run `git worktree prune` on the primary repo to drop stale metadata."""
@@ -192,7 +215,10 @@ class WorktreeManager:
             await proc.wait()
             raise WorktreeError("setup_script timed out after 600s") from exc
         if proc.returncode != 0:
+            # Show the tail of stderr (then stdout) so the toast has the actual
+            # error rather than the first lines of an autoreloader banner.
+            combined = stderr.decode("utf-8", errors="replace").strip() or stdout.decode("utf-8", errors="replace").strip()
+            tail = "\n".join(combined.splitlines()[-30:])
             raise WorktreeError(
-                f"setup_script failed (rc={proc.returncode}): "
-                f"{stderr.decode('utf-8', errors='replace').strip() or stdout.decode('utf-8', errors='replace').strip()}"
+                f"setup_script failed (rc={proc.returncode}):\n{tail}"
             )
