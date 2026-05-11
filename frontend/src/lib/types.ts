@@ -333,6 +333,7 @@ export interface CreateIssueRequest {
   session_id: string;
   title: string;
   description?: string;
+  base_branch?: string | null;
 }
 
 export interface UpdateIssuePhaseRequest {

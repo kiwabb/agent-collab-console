@@ -4,7 +4,18 @@ import { createContext, useContext } from "react";
 import type { ExecutionProcess, LogEvent } from "@/lib/types";
 
 // Event types that come through the event bus stream
-export type BusEventType = "task_status" | "task_created" | "message_created" | "log" | "approval_required" | "approval_resolved" | "session_status" | "session_created" | "session_deleted" | "issue_deleted" | "task_deleted";
+export type BusEventType = "task_status" | "task_created" | "message_created" | "log" | "approval_required" | "approval_resolved" | "session_status" | "session_created" | "session_deleted" | "issue_deleted" | "task_deleted" | "issue_merged";
+
+export interface BusIssueMergedEvent {
+  type: "issue_merged";
+  issue_id: string;
+  sha: string;
+  base_branch: string;
+}
+
+export function isBusIssueMergedEvent(event: BusEvent): event is BusIssueMergedEvent {
+  return event.type === "issue_merged";
+}
 
 export interface BusTaskStatusEvent {
   type: "task_status";
@@ -35,7 +46,7 @@ export function isBusTaskCreatedEvent(event: BusEvent): event is BusTaskCreatedE
   return event.type === "task_created";
 }
 
-export type BusEvent = BusTaskStatusEvent | BusTaskCreatedEvent | (LogEvent & { type?: BusEventType });
+export type BusEvent = BusTaskStatusEvent | BusTaskCreatedEvent | BusIssueMergedEvent | (LogEvent & { type?: BusEventType });
 
 export interface ExecutionProcessesContextValue {
   executionProcessesAll: ExecutionProcess[];

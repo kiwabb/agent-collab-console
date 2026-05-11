@@ -55,15 +55,17 @@ class WorktreeManager:
         self,
         project: Project,
         issue: CodexIssue,
+        base_branch: str | None = None,
     ) -> tuple[str, str, str]:
         """Create a worktree for an issue if it doesn't already have one.
 
+        `base_branch` overrides the fork point (defaults to project default).
         Returns (branch, worktree_path, base_branch). Safe to call repeatedly.
         """
         if issue.git_worktree_path and issue.git_branch:
             return issue.git_branch, issue.git_worktree_path, issue.git_base_branch or project.default_branch
         branch = _issue_branch_name(issue)
-        base = project.default_branch
+        base = base_branch or project.default_branch
         worktree = _worktree_path(project, "issue", issue.id)
         if worktree.exists() and await self.git.is_git_repo(worktree):
             return branch, str(worktree), base
@@ -141,6 +143,10 @@ class WorktreeManager:
         if not task.git_worktree_path:
             return
         await self._cleanup_path(project.repo_path, task.git_worktree_path)
+
+    async def prune(self, project: Project) -> None:
+        """Run `git worktree prune` on the primary repo to drop stale metadata."""
+        await self.git.prune_worktrees(project.repo_path)
 
     # ---- Shared helpers ----
 

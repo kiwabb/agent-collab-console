@@ -141,6 +141,52 @@ def test_delete_project_force_cascades_sessions(client, tmp_path):
     assert all(p["id"] != project["id"] for p in listing)
 
 
+def test_issue_creation_with_base_branch_override_forks_from_feature(client, tmp_path):
+    project = _create_project(client, tmp_path, name="basefork")
+    # Create a feature branch on the repo so we can fork from it.
+    repo = Path(project["repo_path"])
+    subprocess.run(["git", "checkout", "-b", "feature/seed"], cwd=repo, check=True, capture_output=True)
+    (repo / "feat.txt").write_text("seed")
+    subprocess.run(["git", "add", "feat.txt"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "seed"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True, capture_output=True)
+
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    resp = client.post(
+        "/api/codex/issues",
+        json={"session_id": ws["id"], "title": "from feature", "base_branch": "feature/seed"},
+    )
+    assert resp.status_code == 201, resp.text
+    issue = resp.json()
+    assert issue["git_base_branch"] == "feature/seed"
+    # The seeded file from the feature branch must be present in the worktree.
+    assert (Path(issue["git_worktree_path"]) / "feat.txt").exists()
+
+
+def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path):
+    project = _create_project(client, tmp_path, name="repair-host")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "ghost"}
+    ).json()
+    # Simulate disk drift: nuke the worktree directory behind git's back.
+    shutil.rmtree(issue["git_worktree_path"])
+    resp = client.post(f"/api/projects/{project['id']}/repair")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["issues_reset"] == 1
+    refreshed = client.get(f"/api/codex/issues/{issue['id']}").json()
+    assert refreshed["git_worktree_path"] is None
+    assert refreshed["git_branch"] is None
+
+
 def test_get_issue_diff_returns_empty_when_no_changes(client, tmp_path):
     project = _create_project(client, tmp_path, name="diff-empty")
     ws = client.post(

@@ -145,6 +145,11 @@ export async function getProjectBranches(projectId: string): Promise<GitBranch[]
   return handleResponse<GitBranch[]>(response);
 }
 
+export async function repairProject(projectId: string): Promise<{ pruned: boolean; issues_reset: number }> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/repair`, { method: "POST" });
+  return handleResponse(response);
+}
+
 export async function mergeCodexIssue(
   issueId: string,
   message: string | null = null,
@@ -222,9 +227,11 @@ export async function createCodexTask(
 export async function createCodexIssue(
   sessionId: string,
   title: string,
-  description = ""
+  description = "",
+  baseBranch: string | null = null,
 ): Promise<CodexIssue> {
   const body: CreateIssueRequest = { session_id: sessionId, title, description };
+  if (baseBranch) body.base_branch = baseBranch;
   const response = await fetch(`${API_BASE}/codex/issues`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -233,10 +240,15 @@ export async function createCodexIssue(
   return handleResponse<CodexIssue>(response);
 }
 
-export async function getCodexIssues(sessionId: string | null = null): Promise<CodexIssue[]> {
-  const url = sessionId
-    ? `${API_BASE}/codex/issues?session_id=${encodeURIComponent(sessionId)}`
-    : `${API_BASE}/codex/issues`;
+export async function getCodexIssues(
+  sessionId: string | null = null,
+  projectId: string | null = null,
+): Promise<CodexIssue[]> {
+  const params = new URLSearchParams();
+  if (sessionId) params.set("session_id", sessionId);
+  if (projectId) params.set("project_id", projectId);
+  const query = params.toString();
+  const url = query ? `${API_BASE}/codex/issues?${query}` : `${API_BASE}/codex/issues`;
   const response = await fetch(url);
   if (!response.ok) {
     console.error(`getCodexIssues failed: HTTP ${response.status}`);

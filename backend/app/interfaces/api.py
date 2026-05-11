@@ -874,6 +874,42 @@ async def get_project_branches(project_id: str):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post("/projects/{project_id}/repair")
+async def repair_project(project_id: str):
+    """Reconcile DB worktree paths with what git + disk actually have.
+
+    - Prunes stale `.git/worktrees/*` metadata.
+    - For every issue under the project: if its `git_worktree_path` no longer
+      exists on disk, clear the DB fields so the next task creation rebuilds it.
+    """
+    svc = _require_project_service()
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    try:
+        project = await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    try:
+        await worktree_manager.prune(project)
+    except GitError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    issues = await codex_store.list_codex_issues(project_id=project_id)
+    repaired = 0
+    for issue_dict in issues:
+        issue = await codex_store.load_codex_issue(issue_dict["id"])
+        if issue is None or not issue.git_worktree_path:
+            continue
+        if Path(issue.git_worktree_path).exists():
+            continue
+        issue.git_branch = None
+        issue.git_base_branch = None
+        issue.git_worktree_path = None
+        issue.git_last_commit_sha = None
+        await codex_store.save_codex_issue(issue)
+        repaired += 1
+    return {"pruned": True, "issues_reset": repaired}
+
+
 # --- Codex CLI Session APIs ---
 
 
@@ -1300,6 +1336,7 @@ class CreateIssueRequest(BaseModel):
     session_id: str
     title: str
     description: str | None = None
+    base_branch: str | None = None  # Override fork point (defaults to project.default_branch)
 
 
 class UpdateIssuePhaseRequest(BaseModel):
@@ -1338,7 +1375,9 @@ async def create_codex_issue(request: CreateIssueRequest):
         updated_at=now,
     )
     try:
-        branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+        branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(
+            project, issue, base_branch=request.base_branch
+        )
     except (GitError, WorktreeError) as exc:
         raise HTTPException(status_code=500, detail=f"failed to create issue worktree: {exc}")
     issue.git_branch = branch
@@ -1349,10 +1388,10 @@ async def create_codex_issue(request: CreateIssueRequest):
 
 
 @router.get("/codex/issues")
-async def list_codex_issues(session_id: str | None = None):
+async def list_codex_issues(session_id: str | None = None, project_id: str | None = None):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    return await codex_store.list_codex_issues(session_id=session_id)
+    return await codex_store.list_codex_issues(session_id=session_id, project_id=project_id)
 
 
 @router.get("/codex/issues/{issue_id}")

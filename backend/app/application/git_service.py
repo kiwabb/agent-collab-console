@@ -285,5 +285,18 @@ class GitService:
         result = await self._run(["rev-parse", "HEAD"], cwd=worktree_path)
         return result.stdout.strip()
 
+    async def prune_worktrees(self, repo_path: str | Path) -> None:
+        _validate_path(repo_path)
+        await self._run(["worktree", "prune"], cwd=repo_path, check=False)
+
+    async def list_worktree_paths(self, repo_path: str | Path) -> list[str]:
+        _validate_path(repo_path)
+        result = await self._run(["worktree", "list", "--porcelain"], cwd=repo_path, check=False)
+        out: list[str] = []
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                out.append(line[len("worktree "):].strip())
+        return out
+
 
 git_service = GitService()
