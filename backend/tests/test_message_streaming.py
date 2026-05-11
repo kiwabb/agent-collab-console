@@ -151,6 +151,93 @@ async def test_message_delta_event_includes_execution_process_id_from_task(tmp_p
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Codex app-server: item.delta / item/delta / item.updated notifications →
+# message_delta events (same protocol as the Claude path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_codex_item_delta_emits_message_delta_events(tmp_path):
+    """When the Codex notification callback receives item.delta / item.updated for
+    an agent_message item, it must compute the text increment and broadcast
+    message_delta events (same as the Claude path)."""
+    db = await _seed_db(tmp_path, ep_id="ep-codex-1")
+    bus = _EventBusSpy()
+
+    from app.application.codex_app_server_runtime import CodexAppServerRuntime
+    # CodexAppServerRuntime requires several dependencies; we build a minimal
+    # instance by constructing manually and only exercising the notification path.
+    runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
+    runtime.codex_store = db
+    runtime._log_store = db
+    runtime._event_bus = bus
+    runtime._processes = {}
+    runtime.help_orchestrator = None
+    runtime._mock_manager_cls = None
+    runtime._data_dir = str(tmp_path)
+    runtime.refresh_task_result = None
+
+    entry = AsyncProcessEntry(
+        proc=None,  # type: ignore[arg-type]
+        output_task=None,
+        alive=True,
+        session_id="ws-1",
+        task_id="task-1",
+        executor="codex",
+        cwd=str(tmp_path),
+        resume_session_id=None,
+    )
+    runtime._processes["task-1"] = entry
+
+    callback = runtime._make_app_server_notification_callback("ws-1", "task-1")
+
+    # Three progressive item.delta notifications carrying growing assistant text
+    await callback("item.delta", {"item": {"type": "agent_message", "text": "Hello"}})
+    await callback("item/delta", {"item": {"type": "agent_message", "text": "Hello, world"}})
+    await callback("item.updated", {"item": {"type": "agent_message", "text": "Hello, world!"}})
+
+    deltas = [e for e in bus.events if e.get("type") == "message_delta"]
+    assert len(deltas) == 3
+    assert deltas[0]["delta_text"] == "Hello"
+    assert deltas[1]["delta_text"] == ", world"
+    assert deltas[2]["delta_text"] == "!"
+    seqs = [d["seq"] for d in deltas]
+    assert seqs == sorted(seqs) and len(set(seqs)) == 3
+    for d in deltas:
+        assert d["execution_process_id"] == "ep-codex-1"
+        assert d["task_id"] == "task-1"
+
+
+@pytest.mark.asyncio
+async def test_codex_item_delta_ignored_for_non_agent_message_item(tmp_path):
+    """tool_call, command_execution, etc. should not produce message_delta events."""
+    db = await _seed_db(tmp_path, ep_id="ep-codex-2")
+    bus = _EventBusSpy()
+    from app.application.codex_app_server_runtime import CodexAppServerRuntime
+    runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
+    runtime.codex_store = db
+    runtime._log_store = db
+    runtime._event_bus = bus
+    runtime._processes = {}
+    runtime.help_orchestrator = None
+    runtime._data_dir = str(tmp_path)
+    runtime.refresh_task_result = None
+
+    entry = AsyncProcessEntry(
+        proc=None, output_task=None, alive=True, session_id="ws-1",  # type: ignore[arg-type]
+        task_id="task-1", executor="codex", cwd=str(tmp_path), resume_session_id=None,
+    )
+    runtime._processes["task-1"] = entry
+
+    callback = runtime._make_app_server_notification_callback("ws-1", "task-1")
+    await callback("item.delta", {"item": {"type": "tool_use", "text": "ignored"}})
+    await callback("item.delta", {"item": {"type": "command_execution", "text": "ignored"}})
+
+    deltas = [e for e in bus.events if e.get("type") == "message_delta"]
+    assert deltas == []
+
+
 @pytest.mark.asyncio
 async def test_event_bus_routes_message_delta_to_message_stream_manager(monkeypatch):
     """When event_bus._broadcast_to_ws sees a message_delta event, it must call

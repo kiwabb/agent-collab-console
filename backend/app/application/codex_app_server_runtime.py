@@ -376,6 +376,27 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                     if task_id:
                         await self._persist_assistant_message(task_id, execution_process_id, text)
                 return False
-            
+
+            # Token-level streaming: codex emits incremental item.delta / item.updated
+            # notifications while the agent is generating its final answer. Mirror the
+            # Claude path: compute delta vs. last broadcast and emit message_delta.
+            if method in ("item/delta", "item.delta", "item/updated", "item.updated"):
+                item = params.get("item", {})
+                if not is_agent_message_item_type(item.get("type")):
+                    return False
+                new_text = (item.get("text") or "").strip()
+                if not new_text:
+                    return False
+                entry = self._processes.get(task_id or workspace_id)
+                if entry is None or new_text == entry.last_emitted_assistant_text:
+                    return False
+                last = entry.last_emitted_assistant_text
+                delta = new_text[len(last):] if new_text.startswith(last) else new_text
+                if delta:
+                    entry.delta_seq += 1
+                    entry.last_emitted_assistant_text = new_text
+                    await self._emit_message_delta(workspace_id, task_id, entry.delta_seq, delta)
+                return False
+
             return False
         return callback
