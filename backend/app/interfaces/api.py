@@ -853,12 +853,21 @@ async def delete_project(project_id: str, force: bool = False):
                 "pass ?force=true to cascade-delete them"
             ),
         )
+    project = await svc.get(project_id)
     for ws in related_sessions:
         try:
             await _cleanup_session_worktrees(ws["id"], project_id)
         except Exception:
             pass
         await codex_store.delete_codex_session(ws["id"])
+    # Best-effort: remove the now-empty `<name>-worktrees/` parent so the user's
+    # filesystem doesn't accumulate empty bookkeeping dirs.
+    worktree_parent = Path(project.repo_path).parent / f"{project.name}-worktrees"
+    if worktree_parent.exists() and not any(worktree_parent.iterdir()):
+        try:
+            worktree_parent.rmdir()
+        except OSError:
+            pass
     await svc.delete(project_id)
     return {"deleted": project_id, "cascaded_sessions": len(related_sessions)}
 
@@ -928,11 +937,11 @@ async def codex_status():
 
 @router.get("/codex/workspaces")
 @router.get("/codex/sessions")
-async def list_codex_workspaces():
-    """List all console-managed Codex workspaces."""
+async def list_codex_workspaces(project_id: str | None = None):
+    """List all console-managed Codex workspaces, optionally filtered by project."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    return await codex_store.list_codex_workspaces()
+    return await codex_store.list_codex_workspaces(project_id=project_id)
 
 
 list_codex_sessions = list_codex_workspaces

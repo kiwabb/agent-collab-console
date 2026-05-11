@@ -130,15 +130,23 @@ def test_delete_project_refuses_without_force_when_session_attached(client, tmp_
 
 def test_delete_project_force_cascades_sessions(client, tmp_path):
     project = _create_project(client, tmp_path, name="bulk")
-    client.post(
+    ws = client.post(
         "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
-    )
+    ).json()
+    # Spawn an issue so a real worktree dir exists.
+    issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "I"}
+    ).json()
+    worktree_parent = Path(issue["git_worktree_path"]).parent
+    assert worktree_parent.exists()
     resp = client.delete(f"/api/projects/{project['id']}?force=true")
     assert resp.status_code == 200
     assert resp.json()["cascaded_sessions"] >= 1
     # Project should no longer be in the listing.
     listing = client.get("/api/projects").json()
     assert all(p["id"] != project["id"] for p in listing)
+    # Worktree parent should be cleaned up.
+    assert not worktree_parent.exists()
 
 
 def test_issue_creation_with_base_branch_override_forks_from_feature(client, tmp_path):

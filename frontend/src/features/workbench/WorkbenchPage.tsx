@@ -129,6 +129,7 @@ function WorkbenchInner({
   const [runtimeCatalog, setRuntimeCatalog] = useState<import("@/lib/types").RuntimeCatalog | null>(null);
   const [connectionWarning, setConnectionWarning] = useState<string | null>(null);
   const [wasConnected, setWasConnected] = useState(false);
+  const [currentProject, setCurrentProject] = useState<import("@/lib/types").Project | null>(null);
 
   const { isConnected, lastEvent, executionProcessesAll } = useExecutionProcessesContext();
   // Optimistic placeholder for a freshly-created execution_process. Returned
@@ -362,12 +363,13 @@ function WorkbenchInner({
   }, [processMessages, liveProcessMessages]);
 
   useEffect(() => {
+    if (!currentProject) return;
     setIsLoadingWorkspaces(true);
-    getWorkspaces()
+    getWorkspaces(currentProject.id)
       .then(setWorkspaces)
       .catch((err) => setError(err.message))
       .finally(() => setIsLoadingWorkspaces(false));
-  }, []);
+  }, [currentProject]);
 
   useEffect(() => {
     if (!currentWorkspaceId) {
@@ -487,8 +489,6 @@ function WorkbenchInner({
       .then((res) => setPendingApprovals(res.pending))
       .catch(() => setPendingApprovals([]));
   }, []);
-
-  const [currentProject, setCurrentProject] = useState<import("@/lib/types").Project | null>(null);
 
   // Resolve selected project from URL `?project=...` (shareable) first, then
   // fall back to localStorage. Persist the resolution in both places so they

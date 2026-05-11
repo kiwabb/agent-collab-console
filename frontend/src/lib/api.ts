@@ -77,8 +77,11 @@ export async function getCodexStatus(): Promise<unknown> {
   return response.json();
 }
 
-export async function getWorkspaces(): Promise<Workspace[]> {
-  const response = await fetch(`${API_BASE}/codex/workspaces`);
+export async function getWorkspaces(projectId: string | null = null): Promise<Workspace[]> {
+  const url = projectId
+    ? `${API_BASE}/codex/workspaces?project_id=${encodeURIComponent(projectId)}`
+    : `${API_BASE}/codex/workspaces`;
+  const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to load workspaces: HTTP ${response.status}`);
   }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, GitBranch as GitBranchIcon, Plus, Trash2 } from "lucide-react";
+import { ChevronLeft, GitBranch as GitBranchIcon, Plus, Trash2, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,7 @@ import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
-import { deleteProject, getProjectBranches, listProjects, updateProject } from "@/lib/api";
+import { deleteProject, getProjectBranches, listProjects, repairProject, updateProject } from "@/lib/api";
 import { Textarea } from "@/components/ui/textarea";
 import type { GitBranch, Project } from "@/lib/types";
 
@@ -247,6 +247,27 @@ export function ProjectsPage() {
                   <div className="flex gap-2">
                     <Button size="sm" onClick={() => handleSelectAndEnter(activeProject)}>
                       {t("projects.enter")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          const res = await repairProject(activeProject.id);
+                          addToast({
+                            type: "success",
+                            title: t("projects.repairToast").replace("{n}", String(res.issues_reset)),
+                          });
+                        } catch (err) {
+                          const msg = err instanceof Error ? err.message : "Failed to repair";
+                          addToast({ type: "error", title: msg });
+                        }
+                      }}
+                      aria-label={t("projects.repair")}
+                      title={t("projects.repairHelp")}
+                    >
+                      <Wrench size={14} className="mr-1" />
+                      {t("projects.repair")}
                     </Button>
                     <Button
                       size="sm"

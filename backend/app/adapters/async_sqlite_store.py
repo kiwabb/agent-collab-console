@@ -633,8 +633,8 @@ class AsyncSQLiteStore:
         return [{"id": r["id"], "title": r["title"], "project_id": r["project_id"], "status": r["status"],
                  "created_at": r["created_at"], "last_active_at": r["last_active_at"]} for r in rows]
 
-    async def list_codex_workspaces(self) -> list[dict]:
-        return await self.list_codex_sessions()
+    async def list_codex_workspaces(self, project_id: str | None = None) -> list[dict]:
+        return await self.list_codex_sessions(project_id=project_id)
 
     async def delete_codex_session(self, session_id: str):
         await self._ensure_db()

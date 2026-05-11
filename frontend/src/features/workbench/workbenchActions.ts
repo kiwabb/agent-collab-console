@@ -1,6 +1,11 @@
 import type { CodexIssue, CodexTask, ExecutionProcess } from "@/lib/types";
 
-type CreateCodexIssueFn = (workspaceId: string, title: string, description: string) => Promise<CodexIssue>;
+type CreateCodexIssueFn = (
+  workspaceId: string,
+  title: string,
+  description: string,
+  baseBranch?: string | null,
+) => Promise<CodexIssue>;
 type CreateCodexTaskFn = (
   sessionId: string,
   title: string,
@@ -27,6 +32,7 @@ export async function createIssueAndInitialTask({
   runCodexTask,
   provider,
   model,
+  baseBranch,
 }: {
   workspaceId: string;
   title: string;
@@ -38,8 +44,9 @@ export async function createIssueAndInitialTask({
   runCodexTask: RunCodexTaskFn;
   provider?: string | null;
   model?: string | null;
+  baseBranch?: string | null;
 }): Promise<{ issue: CodexIssue; initialTask: CodexTask; executionProcess: ExecutionProcess }> {
-  const issue = await createCodexIssue(workspaceId, title, description);
+  const issue = await createCodexIssue(workspaceId, title, description, baseBranch ?? null);
   const createdTask = await createCodexTask(
     workspaceId,
     issueTitle,
