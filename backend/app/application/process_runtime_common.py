@@ -369,7 +369,12 @@ class BaseProcessRuntime:
                     completed_at=datetime.now(),
                 )
             await self.codex_store.save_codex_task(task)
-            await self._persist_assistant_message(task_id, execution_process_id, entry.result_text)
+            # For chat runs the agent reply is plain natural language — show it as-is.
+            # For initial/rerun/refine the agent returns raw schema JSON which the
+            # role workflow rewrites into a human-readable summary on task.result;
+            # surface that summary instead of dumping JSON to the chat thread.
+            assistant_text = entry.result_text if is_chat else (task.result or entry.result_text)
+            await self._persist_assistant_message(task_id, execution_process_id, assistant_text)
 
             if self._event_bus is not None:
                 await self._event_bus.append({

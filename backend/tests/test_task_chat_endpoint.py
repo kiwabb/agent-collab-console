@@ -351,6 +351,108 @@ async def test_mark_task_done_runs_refresh_for_initial_ep(tmp_path):
     assert refresh_calls == ["task-1"]
 
 
+@pytest.mark.asyncio
+async def test_mark_task_done_persists_assistant_summary_for_initial_run(tmp_path):
+    """For initial runs the role workflow rewrites task.result to a human summary.
+    The assistant message saved to the chat thread must use that summary, NOT
+    the raw JSON the agent emitted (which lives in entry.result_text)."""
+    from app.application.process_runtime_common import BaseProcessRuntime
+    from app.adapters.async_sqlite_store import AsyncSQLiteStore
+
+    db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
+    now = datetime.now()
+    session = CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
+    await db.save_codex_session(session)
+
+    task = CodexTask(
+        id="task-1",
+        session_id="ws-1",
+        phase="requirements",
+        title="t",
+        prompt="p",
+        role="product_manager",
+        executor="codex",
+        status="running",
+        result=None,
+        workspace_path=str(tmp_path),
+        last_execution_process_id="ep-init-y",
+        created_at=now,
+        updated_at=now,
+    )
+    await db.save_codex_task(task)
+
+    ep = ExecutionProcess(
+        id="ep-init-y", task_id="task-1", session_id="ws-1",
+        status="Running", kind="initial", created_at=now, updated_at=now,
+    )
+    await db.save_execution_process(ep)
+
+    async def _refresh_rewrites_to_summary(t):
+        # Simulate role workflow's persist_result rewriting task.result.
+        t.result = "PRD generated. Files: prd.json, prd.md."
+
+    runtime = BaseProcessRuntime(
+        codex_store=db, log_store=db, data_dir=str(tmp_path),
+        event_bus=None, refresh_task_result=_refresh_rewrites_to_summary,
+    )
+    entry = type("E", (), {
+        "result_text": '{"language":"zh","project_name":"x","product_goals":["g"]}',
+        "help_requested": False,
+    })()
+
+    await runtime._mark_task_done("task-1", entry)
+
+    msgs = await db.list_codex_task_messages("task-1")
+    assistants = [m for m in msgs if m.role == "assistant"]
+    assert len(assistants) == 1
+    # Chat thread must show the human summary, not the raw JSON
+    assert assistants[0].content == "PRD generated. Files: prd.json, prd.md."
+    assert "product_goals" not in assistants[0].content
+
+
+@pytest.mark.asyncio
+async def test_mark_task_done_persists_assistant_raw_text_for_chat_run(tmp_path):
+    """For chat runs the agent reply is plain natural language; pass it through verbatim."""
+    from app.application.process_runtime_common import BaseProcessRuntime
+    from app.adapters.async_sqlite_store import AsyncSQLiteStore
+
+    db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
+    now = datetime.now()
+    session = CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
+    await db.save_codex_session(session)
+
+    task = CodexTask(
+        id="task-1", session_id="ws-1", phase="requirements", title="t", prompt="p",
+        role="product_manager", executor="codex", status="running",
+        result="OLD_CANONICAL_SUMMARY", workspace_path=str(tmp_path),
+        last_execution_process_id="ep-chat-y", created_at=now, updated_at=now,
+    )
+    await db.save_codex_task(task)
+
+    ep = ExecutionProcess(
+        id="ep-chat-y", task_id="task-1", session_id="ws-1",
+        status="Running", kind="chat", created_at=now, updated_at=now,
+    )
+    await db.save_execution_process(ep)
+
+    runtime = BaseProcessRuntime(
+        codex_store=db, log_store=db, data_dir=str(tmp_path),
+        event_bus=None, refresh_task_result=None,
+    )
+    entry = type("E", (), {
+        "result_text": "你好！需要我帮你做什么？",
+        "help_requested": False,
+    })()
+
+    await runtime._mark_task_done("task-1", entry)
+
+    msgs = await db.list_codex_task_messages("task-1")
+    assistants = [m for m in msgs if m.role == "assistant"]
+    assert len(assistants) == 1
+    # Chat should show the agent's natural-language reply, NOT the prior task.result.
+    assert assistants[0].content == "你好！需要我帮你做什么？"
+
+
 # ---------------------------------------------------------------------------
 # Prompt building branch
 # ---------------------------------------------------------------------------
