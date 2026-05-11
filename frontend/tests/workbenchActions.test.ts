@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createIssueAndInitialTask, runCodexTaskWithExecutor } from "../src/features/workbench/workbenchActions";
-import { transitionIssueToArchitecture, transitionIssueToDevelopment, transitionIssueToTesting, updateCodexTaskExecutor, chatCodexTask, refineCodexTask, rerunCodexTask } from "../src/lib/api";
+import { transitionIssueToArchitecture, transitionIssueToDevelopment, transitionIssueToTesting, updateCodexTaskExecutor, chatCodexTask, refineCodexTask, rerunCodexTask, sendCodexTask } from "../src/lib/api";
 import type { CodexTask } from "@/lib/types";
 
 test("createIssueAndInitialTask runs the initial task after creating it", async () => {
@@ -299,6 +299,78 @@ test("refineCodexTask posts to /refine with content", async () => {
     assert.equal(String(calls[0].input), "/api/codex/tasks/t1/refine");
     assert.equal(calls[0].init?.method, "POST");
     assert.equal(JSON.parse(String(calls[0].init?.body)).content, "加一条 X");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("sendCodexTask posts to /send with content (auto mode)", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ input, init });
+    return new Response(
+      JSON.stringify({
+        message: { id: "m1" }, assistant_message: null, task: { id: "t1" },
+        execution_process: { id: "ep1", kind: "chat" },
+        resolved_mode: "chat",
+      }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  try {
+    const result = await sendCodexTask("t1", "你好");
+    assert.equal(result.resolved_mode, "chat");
+    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/send");
+    const body = JSON.parse(String(calls[0].init?.body));
+    assert.equal(body.content, "你好");
+    assert.equal(body.force_mode, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("sendCodexTask passes force_mode in body when provided", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ input, init });
+    return new Response(
+      JSON.stringify({
+        message: { id: "m1" }, assistant_message: null, task: { id: "t1" },
+        execution_process: { id: "ep1", kind: "refine" },
+        resolved_mode: "refine",
+      }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  try {
+    await sendCodexTask("t1", "改一下", "refine");
+    const body = JSON.parse(String(calls[0].init?.body));
+    assert.equal(body.force_mode, "refine");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("rerunCodexTask posts to /rerun with executor overrides in body", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ input, init });
+    return new Response(
+      JSON.stringify({ message: null, assistant_message: null, task: { id: "t1" }, execution_process: { id: "ep1", kind: "rerun" } }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  try {
+    await rerunCodexTask("t1", { executor: "claude", provider: "anthropic", model: "claude-opus-4-7" });
+    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/rerun");
+    assert.equal(calls[0].init?.method, "POST");
+    const body = JSON.parse(String(calls[0].init?.body));
+    assert.equal(body.executor, "claude");
+    assert.equal(body.provider, "anthropic");
+    assert.equal(body.model, "claude-opus-4-7");
   } finally {
     globalThis.fetch = originalFetch;
   }

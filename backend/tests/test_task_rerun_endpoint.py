@@ -94,8 +94,11 @@ def _install_runner_stub(monkeypatch, store):
 
     class _RunnerStub:
         async def start_task_run(self, task, *, kind="initial", triggering_message_id=None,
-                                  prompt_override=None, **_):
-            captured.update({"kind": kind, "prompt_override": prompt_override, "task_prompt": task.prompt})
+                                  prompt_override=None, run_executor=None, run_provider=None, run_model=None, **_):
+            captured.update({
+                "kind": kind, "prompt_override": prompt_override, "task_prompt": task.prompt,
+                "run_executor": run_executor, "run_provider": run_provider, "run_model": run_model,
+            })
             ep = ExecutionProcess(
                 id=f"ep-rerun-{len(store.execution_processes) + 1}",
                 task_id=task.id,
@@ -171,6 +174,40 @@ def test_rerun_blocked_by_development_sequencing(isolated_client, monkeypatch, t
     response = isolated_client.post("/api/codex/tasks/task-1/rerun")
     assert response.status_code == 409
     assert "上一个" in response.json()["detail"] or "previous" in response.json()["detail"].lower()
+
+
+def test_rerun_passes_executor_overrides_to_runner(isolated_client, monkeypatch, tmp_path):
+    """Body of /rerun may contain executor/provider/model; runner receives them as run_* overrides."""
+    session = _make_session(tmp_path)
+    task = _make_task(tmp_path=tmp_path)
+    store = RerunStoreStub(session=session, tasks=[task])
+    monkeypatch.setattr(api_module, "codex_store", store)
+    captured = _install_runner_stub(monkeypatch, store)
+
+    response = isolated_client.post(
+        "/api/codex/tasks/task-1/rerun",
+        json={"executor": "claude", "provider": "anthropic", "model": "claude-opus-4-7"},
+    )
+    assert response.status_code == 201, response.text
+    assert captured["kind"] == "rerun"
+    assert captured["run_executor"] == "claude"
+    assert captured["run_provider"] == "anthropic"
+    assert captured["run_model"] == "claude-opus-4-7"
+
+
+def test_rerun_without_overrides_passes_none(isolated_client, monkeypatch, tmp_path):
+    """No body / empty body → runner gets None overrides and uses task defaults."""
+    session = _make_session(tmp_path)
+    task = _make_task(tmp_path=tmp_path)
+    store = RerunStoreStub(session=session, tasks=[task])
+    monkeypatch.setattr(api_module, "codex_store", store)
+    captured = _install_runner_stub(monkeypatch, store)
+
+    response = isolated_client.post("/api/codex/tasks/task-1/rerun")
+    assert response.status_code == 201
+    assert captured["run_executor"] is None
+    assert captured["run_provider"] is None
+    assert captured["run_model"] is None
 
 
 def test_rerun_unknown_task_404(isolated_client, monkeypatch, tmp_path):

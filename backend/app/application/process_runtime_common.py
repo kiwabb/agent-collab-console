@@ -50,6 +50,11 @@ class AsyncProcessEntry:
     result_text: str | None = None
     had_error: bool = False
     help_requested: bool = False
+    # Token-streaming state: text we last broadcasted to clients via message_delta.
+    # On each new assistant partial, emit (new_text - last_emitted_assistant_text)
+    # as a delta event. `delta_seq` is monotonically increasing per-entry.
+    last_emitted_assistant_text: str = ""
+    delta_seq: int = 0
 
     @property
     def workspace_id(self) -> str:
@@ -153,6 +158,28 @@ class BaseProcessRuntime:
 
     def _get_log_path(self, workspace_id: str) -> str:
         return f"{self._data_dir}/codex_session_{workspace_id}.log"
+
+    async def _emit_message_delta(self, workspace_id: str, task_id: str | None, seq: int, delta_text: str):
+        """Resolve the task's current execution_process_id and broadcast a message_delta event.
+
+        Skips silently if no event_bus or no resolvable execution_process_id."""
+        if self._event_bus is None or not task_id:
+            return
+        try:
+            task = await self.codex_store.load_codex_task(task_id)
+        except Exception:
+            task = None
+        execution_process_id = getattr(task, "last_execution_process_id", None) if task else None
+        if not execution_process_id:
+            return
+        await self._event_bus.append({
+            "type": "message_delta",
+            "execution_process_id": execution_process_id,
+            "task_id": task_id,
+            "session_id": workspace_id,
+            "seq": seq,
+            "delta_text": delta_text,
+        })
 
     async def _append_log(self, workspace_id: str, stream: str, content: str, task_id: str | None):
         execution_process_id = None
@@ -294,7 +321,21 @@ class BaseProcessRuntime:
                             if thinking:
                                 parts.append(f"[Thinking: {thinking[:100]}...]" if len(thinking) > 100 else f"[Thinking: {thinking}]")
                 if parts:
-                    entry.result_text = "".join(parts).strip()
+                    new_text = "".join(parts).strip()
+                    # Compute token-level increment vs last broadcast and emit
+                    # a message_delta event so the frontend can render typewriter.
+                    if new_text and new_text != entry.last_emitted_assistant_text:
+                        last = entry.last_emitted_assistant_text
+                        if new_text.startswith(last):
+                            delta = new_text[len(last):]
+                        else:
+                            # Non-prefix change (rare revision) — emit full new text as delta.
+                            delta = new_text
+                        if delta:
+                            entry.delta_seq += 1
+                            entry.last_emitted_assistant_text = new_text
+                            await self._emit_message_delta(workspace_id, task_id, entry.delta_seq, delta)
+                    entry.result_text = new_text
             return
 
         if msg_type == "tool_use":

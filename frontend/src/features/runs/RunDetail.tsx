@@ -3,6 +3,8 @@
 import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCatalog, RunMode } from "@/lib/types";
 import { RotateCcw, Trash2, Send, Terminal, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
+import { useExecutionProcessLogStream } from "@/hooks/useExecutionProcessLogStream";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -43,6 +45,7 @@ interface RunDetailProps {
   onTransitionToTesting?: () => Promise<void> | void;
   qaReportStatus?: "passed" | "failed" | "blocked" | "needs_follow_up" | null;
   onViewQaReport?: () => void;
+  lastResolvedMode?: "chat" | "refine" | null;
   onSubmitForReview?: () => Promise<void> | void;
   onReview?: (decision: "approve" | "reject", comment: string) => Promise<void> | void;
   onTerminate?: () => Promise<void> | void;
@@ -100,6 +103,7 @@ export function RunDetail({
   onTransitionToTesting,
   qaReportStatus,
   onViewQaReport,
+  lastResolvedMode,
   onSubmitForReview,
   onReview,
   onTerminate,
@@ -107,7 +111,7 @@ export function RunDetail({
 }: RunDetailProps) {
   const { t } = useI18n();
   const [message, setMessage] = useState("");
-  const [runMode, setRunMode] = useState<RunMode>("chat");
+  const [runMode, setRunMode] = useState<RunMode>("auto");
   const [reviewComment, setReviewComment] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const baseExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
@@ -122,7 +126,24 @@ export function RunDetail({
     setExecutionConfig(baseExecutionConfig);
   }, [baseExecutionConfig]);
 
-  const normalizedLogs = useMemo(() => normalizeLogs(logs), [logs]);
+  // Token-level streaming: subscribe to live message + log WS.
+  // Initial snapshot still comes via REST (props `logs` / `task`); stream events
+  // are merged in to give a live typewriter UX without a refresh.
+  const liveStream = useExecutionProcessMessageStream(process?.id ?? null);
+  const liveLogStream = useExecutionProcessLogStream(process?.id ?? null);
+  const mergedLogs = useMemo(() => {
+    const byId = new Map<string, typeof logs[number]>();
+    for (const l of logs) if (l?.id) byId.set(l.id, l);
+    for (const l of liveLogStream.logs) if (l?.id) byId.set(l.id, l);
+    return Array.from(byId.values());
+  }, [logs, liveLogStream.logs]);
+  const mergedMessages = useMemo(() => {
+    const byId = new Map<string, typeof task[number]>();
+    for (const m of task) if (m?.id) byId.set(m.id, m);
+    for (const m of liveStream.messages) if (m?.id) byId.set(m.id, m);
+    return Array.from(byId.values());
+  }, [task, liveStream.messages]);
+  const normalizedLogs = useMemo(() => normalizeLogs(mergedLogs), [mergedLogs]);
   const errorEntry = useMemo(
     () => [...normalizedLogs].reverse().find((entry) => entry.type === "error"),
     [normalizedLogs],
@@ -142,24 +163,15 @@ export function RunDetail({
   }, [onRunInitial, executionConfig.executor, executionConfig.provider, executionConfig.model]);
 
   const handleRunAgain = useCallback(() => {
-    if (onRunAgain) {
-      onRunAgain(executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
+    if (!onRunAgain) return;
+    if (!window.confirm("重跑会基于原始 prompt 重新生成并覆盖现有产物（如 prd.md / system_design.json）。确认继续？")) {
+      return;
     }
+    onRunAgain(executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
   }, [onRunAgain, executionConfig.executor, executionConfig.provider, executionConfig.model]);
 
   const handleSend = useCallback((e: React.FormEvent) => {
     e.preventDefault();
-    if (runMode === "rerun") {
-      if (!window.confirm("重跑会基于原始 prompt 重新生成并覆盖现有产物（如 prd.md / system_design.json）。确认继续？")) {
-        return;
-      }
-      try {
-        onSendMessage("", "rerun");
-      } catch (err) {
-        console.error("Failed to rerun:", err);
-      }
-      return;
-    }
     if (!message.trim()) return;
     const content = message.trim();
     try {
@@ -371,7 +383,7 @@ export function RunDetail({
                   <Activity size={24} className="animate-spin text-brand" />
                   <span>{t("run.loadingMessages")}</span>
                 </div>
-              ) : task.length === 0 ? (
+              ) : mergedMessages.length === 0 && !liveStream.pendingAssistant ? (
                 <EmptyState
                   icon="message"
                   title={t("run.noMessages")}
@@ -394,7 +406,7 @@ export function RunDetail({
 
                   {/* Feedback moved to top */}
 
-                  {task.map((msg) => (
+                  {mergedMessages.map((msg) => (
                     <div key={msg.id} className="flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
                       <div className="flex items-center gap-2.5 px-1">
                         <div className={cn(
@@ -405,14 +417,29 @@ export function RunDetail({
                       </div>
                       <div className={cn(
                         "p-5 rounded-2xl text-[13.5px] leading-relaxed border whitespace-pre-wrap font-medium",
-                        msg.role === "assistant" 
-                          ? "bg-brand/5 border-brand/20 text-foreground/90 shadow-sm" 
+                        msg.role === "assistant"
+                          ? "bg-brand/5 border-brand/20 text-foreground/90 shadow-sm"
                           : "bg-surface-raised/40 border-border-subtle text-text-secondary"
                       )}>
                         {msg.content}
                       </div>
                     </div>
                   ))}
+                  {/* In-flight typewriter bubble — visible while the agent is streaming
+                      tokens. Disappears the moment the final message_created event arrives
+                      (handled inside the stream hook). */}
+                  {liveStream.pendingAssistant && (
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center gap-2.5 px-1">
+                        <div className="size-1.5 rounded-full bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)] animate-pulse" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">assistant · 输出中</span>
+                      </div>
+                      <div className="p-5 rounded-2xl text-[13.5px] leading-relaxed border whitespace-pre-wrap font-medium bg-brand/5 border-brand/20 text-foreground/90 shadow-sm">
+                        {liveStream.pendingAssistant.text}
+                        <span className="inline-block ml-0.5 -mb-0.5 w-1.5 h-4 bg-brand animate-pulse">&nbsp;</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </TabsContent>
@@ -483,9 +510,9 @@ export function RunDetail({
         {/* Run mode chip — chat / refine / rerun */}
         <div className="flex items-center gap-2">
           {([
+            { id: "auto", label: "自动", hint: "根据内容自动判别为对话或修订" },
             { id: "chat", label: "对话", hint: "自然语言追问，不修改产物" },
             { id: "refine", label: "修订", hint: "基于现有产物按你的要求改写并保存" },
-            { id: "rerun", label: "重跑", hint: "用原始 prompt 重新生成并覆盖产物" },
           ] as { id: RunMode; label: string; hint: string }[]).map((m) => (
             <button
               key={m.id}
@@ -503,39 +530,46 @@ export function RunDetail({
             </button>
           ))}
           <span className="text-[10px] text-text-muted ml-2">
+            {runMode === "auto" && "自动模式：按内容判别对话/修订"}
             {runMode === "chat" && "对话模式：不会修改任务产物"}
             {runMode === "refine" && "修订模式：会按指令更新产物文件"}
-            {runMode === "rerun" && "重跑模式：会覆盖现有产物"}
           </span>
+          {runMode === "auto" && lastResolvedMode && (
+            <span
+              className={cn(
+                "ml-auto px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-widest border",
+                lastResolvedMode === "refine"
+                  ? "bg-warning/10 text-warning border-warning/30"
+                  : "bg-brand/10 text-brand border-brand/30",
+              )}
+              title="自动判别结果"
+            >
+              {lastResolvedMode === "refine" ? "上次：修订" : "上次：对话"}
+            </span>
+          )}
         </div>
         <form onSubmit={handleSend} className="flex gap-4">
-          {runMode !== "rerun" ? (
-            <div className="flex-1 relative group">
-              <input
-                type="text"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder={runMode === "refine" ? "描述你想要的修改…" : t("run.messagePlaceholder")}
-                className="w-full pl-5 pr-14 py-4 text-sm rounded-xl cc-input outline-none shadow-inner font-medium"
-              />
-              <div className="absolute right-5 top-1/2 -translate-y-1/2 opacity-0 group-focus-within:opacity-100 transition-all scale-90 group-focus-within:scale-100 pointer-events-none">
-                <div className="px-2 py-1 rounded-md border border-border-strong text-[9px] font-black text-text-muted uppercase tracking-widest bg-surface-raised">Enter</div>
-              </div>
+          <div className="flex-1 relative group">
+            <input
+              type="text"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder={runMode === "refine" ? "描述你想要的修改…" : t("run.messagePlaceholder")}
+              className="w-full pl-5 pr-14 py-4 text-sm rounded-xl cc-input outline-none shadow-inner font-medium"
+            />
+            <div className="absolute right-5 top-1/2 -translate-y-1/2 opacity-0 group-focus-within:opacity-100 transition-all scale-90 group-focus-within:scale-100 pointer-events-none">
+              <div className="px-2 py-1 rounded-md border border-border-strong text-[9px] font-black text-text-muted uppercase tracking-widest bg-surface-raised">Enter</div>
             </div>
-          ) : (
-            <div className="flex-1 px-5 py-4 text-xs text-text-muted bg-surface-raised border border-border-subtle rounded-xl">
-              点击右侧按钮以重新生成产物（会触发二次确认）
-            </div>
-          )}
+          </div>
           <button
             type="submit"
-            disabled={runMode !== "rerun" && !message.trim()}
+            disabled={!message.trim()}
             className="px-5 py-4 rounded-xl bg-brand text-background hover:bg-brand/90 transition-all shadow-lg shadow-brand/20 active:scale-95 border border-brand/20 group disabled:opacity-30 disabled:shadow-none flex items-center gap-2"
-            title={runMode === "rerun" ? "重新生成" : "发送"}
+            title="发送"
           >
             <Send size={20} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
             <span className="text-xs font-bold uppercase tracking-widest">
-              {runMode === "rerun" ? "重跑" : runMode === "refine" ? "修订" : "对话"}
+              {runMode === "refine" ? "修订" : "对话"}
             </span>
           </button>
         </form>

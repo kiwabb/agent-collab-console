@@ -35,6 +35,7 @@ import {
   chatCodexTask,
   refineCodexTask,
   rerunCodexTask,
+  sendCodexTask,
   continueCodexTask,
   getExecutionProcessLogs,
   getExecutionProcessMessages,
@@ -708,16 +709,21 @@ function WorkbenchInner({
     }
   }
 
-  const handleSendMessage = useCallback(async (content: string, mode: RunMode = "chat") => {
+  const [lastResolvedMode, setLastResolvedMode] = useState<"chat" | "refine" | null>(null);
+
+  const handleSendMessage = useCallback(async (content: string, mode: RunMode = "auto") => {
     if (!selectedProcess) return;
     try {
       let result;
-      if (mode === "rerun") {
-        result = await rerunCodexTask(selectedProcess.task_id);
-      } else if (mode === "refine") {
+      if (mode === "refine") {
         result = await refineCodexTask(selectedProcess.task_id, content);
-      } else {
+        setLastResolvedMode(null);
+      } else if (mode === "chat") {
         result = await chatCodexTask(selectedProcess.task_id, content);
+        setLastResolvedMode(null);
+      } else {
+        result = await sendCodexTask(selectedProcess.task_id, content);
+        if (result?.resolved_mode) setLastResolvedMode(result.resolved_mode);
       }
       // Backend creates a new execution process for every run. Switch UI to it
       // for log streaming, but fetch messages task-scoped so prior turns persist.
@@ -732,7 +738,7 @@ function WorkbenchInner({
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message");
-      const titleMap: Record<RunMode, string> = { chat: "对话失败", refine: "修订失败", rerun: "重跑失败" };
+      const titleMap: Record<RunMode, string> = { auto: "发送失败", chat: "对话失败", refine: "修订失败" };
       addToast({ type: "error", title: titleMap[mode], message: err instanceof Error ? err.message : undefined });
     }
   }, [selectedProcess, currentWorkspaceId]);
@@ -1060,11 +1066,14 @@ function WorkbenchInner({
                         onRunAgain={async (executor, provider, model) => {
                           if (selectedProcess) {
                             try {
-                              await updateCodexTask(selectedProcess.task_id, executor, provider, model);
-                              const newProcess = await runCodexTask(selectedProcess.task_id, { executor, provider, model });
-                              setSelectedProcessId(newProcess.id);
+                              const result = await rerunCodexTask(selectedProcess.task_id, { executor, provider, model });
+                              if (result.execution_process?.id) {
+                                setSelectedProcessId(result.execution_process.id);
+                              }
+                              if (currentWorkspaceId) await loadWorkspaceData(currentWorkspaceId);
                             } catch (err) {
                               setError(err instanceof Error ? err.message : "Failed to rerun task");
+                              addToast({ type: "error", title: "重跑失败", message: err instanceof Error ? err.message : undefined });
                             }
                           }
                         }}
@@ -1110,6 +1119,7 @@ function WorkbenchInner({
                         isTransitioningToTesting={isTransitioningToTesting}
                         onTransitionToTesting={handleTransitionToTesting}
                         qaReportStatus={qaReportStatus}
+                        lastResolvedMode={lastResolvedMode}
                         onTerminate={async () => {
                           if (currentTaskId) {
                             try {

@@ -99,10 +99,10 @@ class EventBus:
                 task_id = message.get("task_id")
                 execution_process_id = event.get("execution_process_id")
                 workspace_id = event.get("session_id") or event.get("workspace_id")
-                
+
                 if execution_process_id:
                     await message_stream_manager.publish_message(execution_process_id, message)
-                
+
                 if workspace_id and task_id:
                     await stream_manager.add_message(
                         workspace_id,
@@ -110,6 +110,15 @@ class EventBus:
                         message,
                         execution_process_id=execution_process_id,
                     )
+
+            elif event_type == "message_delta":
+                # Token-level streaming: broadcast partial assistant text to the
+                # per-process message WS subscribers. Frontend reconstructs the
+                # in-flight assistant bubble from `seq` + `delta_text`. The final
+                # full message arrives later as message_created when the run completes.
+                execution_process_id = event.get("execution_process_id")
+                if execution_process_id:
+                    await message_stream_manager.publish_delta(execution_process_id, event)
             
             elif event_type == "log":
                 task_id = event.get("task_id")

@@ -2070,10 +2070,61 @@ async def refine_codex_task(task_id: str, request: RefineRequest):
     return await _run_task_with_user_content(task_id, request.content, kind="refine")
 
 
+class SendRequest(BaseModel):
+    content: str
+    force_mode: Literal["chat", "refine"] | None = None
+
+
+@router.post("/codex/tasks/{task_id}/send", status_code=201)
+async def send_codex_task(task_id: str, request: SendRequest):
+    """Auto-route a user follow-up: keyword-classify chat vs refine, then run.
+
+    - force_mode given → use it as-is (refine still requires existing artifact → 409)
+    - force_mode absent → classify via intent_classifier
+    - Auto-classified refine without canonical artifact → degrade to chat
+      (do NOT 409: auto mode should not block the user; show resolved_mode in response)
+    """
+    from app.application.intent_classifier import classify_intent
+
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    task = await codex_store.load_codex_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if request.force_mode is not None:
+        resolved_mode = request.force_mode
+        if resolved_mode == "refine" and not _has_canonical_artifact_for_task(task):
+            raise HTTPException(
+                status_code=409,
+                detail="无法 refine：当前任务尚未生成产物，请先完成 initial 运行",
+            )
+    else:
+        proposed = classify_intent(request.content)
+        if proposed == "refine" and not _has_canonical_artifact_for_task(task):
+            # Auto-detected refine but no artifact yet → safer to chat instead of block
+            resolved_mode = "chat"
+        else:
+            resolved_mode = proposed
+
+    result = await _run_task_with_user_content(task_id, request.content, kind=resolved_mode)
+    if isinstance(result, dict):
+        result["resolved_mode"] = resolved_mode
+    return result
+
+
+class RerunRequest(BaseModel):
+    executor: str | None = None
+    provider: str | None = None
+    model: str | None = None
+
+
 @router.post("/codex/tasks/{task_id}/rerun", status_code=201)
-async def rerun_codex_task(task_id: str):
+async def rerun_codex_task(task_id: str, request: RerunRequest | None = None):
     """Re-run the task from scratch using the original role workflow prompt.
 
+    Optional executor/provider/model overrides are passed through to the runner
+    (same precedence as /run: run override > task default > catalog default).
     The agent's new output overwrites the canonical artifact via persist_result.
     Sequencing guards (development phase) still apply.
     """
@@ -2099,7 +2150,13 @@ async def rerun_codex_task(task_id: str):
             raise HTTPException(status_code=409, detail="需先完成上一个开发任务并通过评审")
 
     try:
-        exec_process = await _get_task_runner().start_task_run(task, kind="rerun")
+        exec_process = await _get_task_runner().start_task_run(
+            task,
+            kind="rerun",
+            run_executor=request.executor if request else None,
+            run_provider=request.provider if request else None,
+            run_model=request.model if request else None,
+        )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:

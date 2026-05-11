@@ -12,13 +12,20 @@ function sortMessages<T extends { created_at?: string | null }>(messages: T[]): 
   });
 }
 
+interface PendingAssistant {
+  text: string;
+  lastSeq: number;
+}
+
 interface UseExecutionProcessMessageStreamResult {
   messages: CodexTaskMessage[];
+  pendingAssistant: PendingAssistant | null;
   error: string | null;
 }
 
 export function useExecutionProcessMessageStream(processId: string | null): UseExecutionProcessMessageStreamResult {
   const [messages, setMessages] = useState<CodexTaskMessage[]>([]);
+  const [pendingAssistant, setPendingAssistant] = useState<PendingAssistant | null>(null);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,6 +48,19 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
     if (!message?.id || messageIdsRef.current.has(message.id)) return;
     messageIdsRef.current.add(message.id);
     setMessages((prev) => sortMessages([...prev, message]));
+    // A completed assistant message arrived — drop the typewriter buffer.
+    if (message.role === "assistant") {
+      setPendingAssistant(null);
+    }
+  }
+
+  function applyDelta(seq: number, deltaText: string) {
+    setPendingAssistant((prev) => {
+      if (prev && seq <= prev.lastSeq) {
+        return prev;  // ignore duplicate / out-of-order
+      }
+      return { text: (prev?.text ?? "") + deltaText, lastSeq: seq };
+    });
   }
 
   function connect() {
@@ -58,13 +78,21 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data as string) as { finished?: boolean } & CodexTaskMessage;
-          if (data?.finished) {
+          const data = JSON.parse(event.data as string) as
+            | { finished?: boolean }
+            | { type: "message_delta"; seq: number; delta_text: string }
+            | CodexTaskMessage;
+          if ((data as { finished?: boolean })?.finished) {
             finishedRef.current = true;
             ws.close(1000, "finished");
             return;
           }
-          addMessage(data);
+          if ((data as { type?: string }).type === "message_delta") {
+            const d = data as { type: "message_delta"; seq: number; delta_text: string };
+            applyDelta(d.seq, d.delta_text);
+            return;
+          }
+          addMessage(data as CodexTaskMessage);
         } catch {
           setError("Failed to process message stream update");
         }
@@ -115,6 +143,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
       finishedRef.current = false;
       messageIdsRef.current = new Set();
       setMessages([]);
+      setPendingAssistant(null);
       setError(null);
       return;
     }
@@ -123,6 +152,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
     finishedRef.current = false;
     messageIdsRef.current = new Set();
     setMessages([]);
+    setPendingAssistant(null);
     setError(null);
 
     connectTimerRef.current = setTimeout(() => {
@@ -154,5 +184,5 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
     };
   }, [processId, scheduleReconnect]);
 
-  return { messages, error };
+  return { messages, pendingAssistant, error };
 }

@@ -347,6 +347,21 @@ export async function chatCodexTask(taskId: string, content: string): Promise<Se
   return handleResponse<SendMessageResult>(response);
 }
 
+export async function sendCodexTask(
+  taskId: string,
+  content: string,
+  forceMode?: "chat" | "refine",
+): Promise<SendMessageResult> {
+  const body: { content: string; force_mode?: "chat" | "refine" } = { content };
+  if (forceMode) body.force_mode = forceMode;
+  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<SendMessageResult>(response);
+}
+
 export async function refineCodexTask(taskId: string, content: string): Promise<SendMessageResult> {
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/refine`, {
     method: "POST",
@@ -356,11 +371,19 @@ export async function refineCodexTask(taskId: string, content: string): Promise<
   return handleResponse<SendMessageResult>(response);
 }
 
-export async function rerunCodexTask(taskId: string): Promise<SendMessageResult> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/rerun`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
+export async function rerunCodexTask(
+  taskId: string,
+  overrides?: { executor?: string | null; provider?: string | null; model?: string | null },
+): Promise<SendMessageResult> {
+  const hasOverrides = !!(overrides && (overrides.executor || overrides.provider || overrides.model));
+  const init: RequestInit = { method: "POST" };
+  if (hasOverrides) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(overrides);
+  } else {
+    init.headers = { "Content-Type": "application/json" };
+  }
+  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/rerun`, init);
   return handleResponse<SendMessageResult>(response);
 }
 

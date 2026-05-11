@@ -383,6 +383,24 @@ class ExecutionProcessMessageStreamManager:
         for ws in dead:
             subs.discard(ws)
 
+    async def publish_delta(self, process_id: str, delta_payload: dict):
+        """Broadcast a token-level partial update to subscribers.
+
+        Subscribers receive {"type": "message_delta", seq, delta_text, ...}.
+        They distinguish from full messages by the "type" field."""
+        subs = self._subscribers.get(process_id, set())
+        if not subs:
+            return
+        frame = {**delta_payload, "type": "message_delta"}
+        dead = set()
+        for ws in list(subs):
+            try:
+                await ws.send_json(frame)
+            except Exception:
+                dead.add(ws)
+        for ws in dead:
+            subs.discard(ws)
+
     async def publish_finished(self, process_id: str):
         subs = self._subscribers.get(process_id, set())
         if not subs:

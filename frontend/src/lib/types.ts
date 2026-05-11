@@ -173,7 +173,7 @@ export interface LogEvent {
 
 export type RunKind = "initial" | "rerun" | "refine" | "chat";
 
-export type RunMode = "chat" | "refine" | "rerun";
+export type RunMode = "auto" | "chat" | "refine";
 
 export interface ExecutionProcess {
   id: string;
@@ -289,10 +289,11 @@ export interface SendMessageRequest {
 }
 
 export interface SendMessageResult {
-  message: CodexTaskMessage;
+  message: CodexTaskMessage | null;
   assistant_message: CodexTaskMessage | null;
   task: CodexTask;
   execution_process: ExecutionProcess;
+  resolved_mode?: "chat" | "refine";
 }
 
 export interface ResolveApprovalRequest {
