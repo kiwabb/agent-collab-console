@@ -317,6 +317,20 @@ class GitService:
         except ValueError:
             return 0
 
+    async def commits_behind(self, worktree_path: str | Path, base_branch: str) -> int:
+        """How many commits the base branch has gained that the worktree HEAD lacks."""
+        _validate_path(worktree_path)
+        _validate_branch(base_branch)
+        result = await self._run(
+            ["rev-list", "--count", f"HEAD..{base_branch}"],
+            cwd=worktree_path,
+            check=False,
+        )
+        try:
+            return int(result.stdout.strip() or "0")
+        except ValueError:
+            return 0
+
     async def diff_shortstat(self, worktree_path: str | Path, base_branch: str) -> dict:
         """Return a compact summary `{files, insertions, deletions}` vs base.
 

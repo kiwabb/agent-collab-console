@@ -218,6 +218,45 @@ def test_project_stats_counts_workspaces_and_issue_buckets(client, tmp_path):
     assert full["git_merge_status"] == "open"
 
 
+def test_merge_refuses_when_base_diverged(client, tmp_path):
+    project = _create_project(client, tmp_path, name="diverged-base")
+    repo = Path(project["repo_path"])
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "behind"}
+    ).json()
+    # Move main forward _after_ the worktree was branched, so base has a
+    # commit the worktree lacks.
+    (repo / "main-progress.txt").write_text("ahead")
+    subprocess.run(["git", "add", "main-progress.txt"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "main progress"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    # And add a real commit on the worktree side so the squash has something to land.
+    wt = Path(issue["git_worktree_path"])
+    (wt / "feat.txt").write_text("work")
+    subprocess.run(["git", "add", "feat.txt"], cwd=wt, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "feat"],
+        cwd=wt, check=True, capture_output=True,
+    )
+
+    # Default merge is refused with 409.
+    refused = client.post(f"/api/codex/issues/{issue['id']}/merge", json={"message": None})
+    assert refused.status_code == 409
+    assert "diverged" in refused.json()["detail"].lower() or "ahead" in refused.json()["detail"].lower()
+
+    # Override gets through.
+    allowed = client.post(
+        f"/api/codex/issues/{issue['id']}/merge",
+        json={"message": None, "allow_diverged_base": True},
+    )
+    assert allowed.status_code == 200
+
+
 def test_merge_refuses_dirty_worktree(client, tmp_path):
     project = _create_project(client, tmp_path, name="dirty-merge")
     ws = client.post(

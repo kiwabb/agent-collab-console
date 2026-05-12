@@ -2028,6 +2028,7 @@ async def get_codex_issue_diff(issue_id: str, stat_only: bool = False):
 
 class MergeIssueRequest(BaseModel):
     message: str | None = None
+    allow_diverged_base: bool = False
 
 
 @router.post("/codex/issues/{issue_id}/abandon")
@@ -2082,6 +2083,24 @@ async def merge_codex_issue(issue_id: str, request: MergeIssueRequest):
     project = await codex_store.load_project(issue.project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    # Diverged-base guard: if the base branch has moved past the worktree's
+    # last commit and the caller hasn't opted in, refuse so they can rebase
+    # first. Squash-merging a behind-base branch is technically fine but the
+    # resulting main can have hidden conflicts.
+    if issue.git_worktree_path and not request.allow_diverged_base:
+        base = issue.git_base_branch or project.default_branch
+        try:
+            behind = await git_service.commits_behind(issue.git_worktree_path, base)
+        except GitError:
+            behind = 0
+        if behind > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"base branch '{base}' is {behind} commit(s) ahead of this issue; "
+                    "rebase the worktree onto base or retry with allow_diverged_base=true"
+                ),
+            )
     try:
         result = await worktree_manager.merge_issue(project, issue, message=request.message)
     except (GitError, WorktreeError) as exc:

@@ -139,6 +139,20 @@ function WorkbenchInner({
   const [currentProject, setCurrentProject] = useState<import("@/lib/types").Project | null>(null);
   const [allProjects, setAllProjects] = useState<import("@/lib/types").Project[]>([]);
 
+  // Most-recently-used project ordering for the switcher: read the lastUsedAt
+  // map once and re-render the dropdown by descending recency. Updated when
+  // the user selects a project below.
+  const orderedProjects = useMemo(() => {
+    if (typeof window === "undefined") return allProjects;
+    let mru: Record<string, number> = {};
+    try {
+      mru = JSON.parse(window.localStorage.getItem("projectLastUsedAt") || "{}");
+    } catch {
+      mru = {};
+    }
+    return [...allProjects].sort((a, b) => (mru[b.id] ?? 0) - (mru[a.id] ?? 0));
+  }, [allProjects]);
+
   const { isConnected, lastEvent, executionProcessesAll } = useExecutionProcessesContext();
   // Optimistic placeholder for a freshly-created execution_process. Returned
   // by the backend immediately on /chat /refine /rerun but takes a beat to
@@ -893,7 +907,7 @@ function WorkbenchInner({
                 <span className="truncate text-foreground">{currentProject?.name ?? "—"}</span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="min-w-[220px]">
-                {allProjects.map((p) => (
+                {orderedProjects.map((p) => (
                   <DropdownMenuItem
                     key={p.id}
                     onClick={() => {
@@ -909,6 +923,14 @@ function WorkbenchInner({
                         const url = new URL(window.location.href);
                         url.searchParams.set("project", p.id);
                         window.history.replaceState(null, "", url.toString());
+                        // Stamp MRU so this project floats to the top next time.
+                        try {
+                          const mru = JSON.parse(window.localStorage.getItem("projectLastUsedAt") || "{}");
+                          mru[p.id] = Date.now();
+                          window.localStorage.setItem("projectLastUsedAt", JSON.stringify(mru));
+                        } catch {
+                          /* localStorage misconfigured — ignore */
+                        }
                       }
                       setCurrentProject(p);
                       // Reset workbench navigation so we don't keep a stale workspace selected.
