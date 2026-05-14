@@ -35,6 +35,12 @@ class ArtifactBackfillStoreStub:
     async def load_codex_workspace(self, workspace_id: str):
         return self.workspace if workspace_id == self.workspace.id else None
 
+    async def list_artifacts(self, issue_id: str) -> list[dict]:
+        return []
+
+    async def save_artifact(self, artifact: dict) -> None:
+        pass
+
 
 @pytest.mark.asyncio
 async def test_issue_artifacts_backfill_missing_prd_files(monkeypatch, tmp_path):

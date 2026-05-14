@@ -120,6 +120,11 @@ class ArchitectWorkflow:
             "4. Consider the natural cohesion of the work:\n"
             "   - If functionality naturally belongs together in one file, keep it in one task\n"
             "   - If functionality spans multiple modules/files, split into separate tasks\n\n"
+            "OUTPUT FORMAT RULES:\n"
+            "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
+            "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
+            "- Do NOT write any analysis, summary, or explanation text before or after the JSON.\n"
+            "- STOP immediately after outputting the closing }. No additional text or commands.\n\n"
             "required_schema: {\n"
             '"language": "string",\n'
             '"project_name": "string",\n'
@@ -161,6 +166,8 @@ class ArchitectWorkflow:
             if getattr(task, "task_kind", "normal") == "review":
                 report = ReviewReportDocument.model_validate(payload)
                 task.result = f"Review completed: {report.decision}. Reason: {report.reason}"
+                # For review tasks, there are no artifact files written, so written_files is empty
+                object.__setattr__(report, "written_files", [])
                 return report
             design = SystemDesignDocument.model_validate(payload)
         except ValidationError as exc:
@@ -185,6 +192,13 @@ class ArchitectWorkflow:
             f"System design generated for {design.issue_title}. "
             f"Files: {design_json_path.name}, {design_md_path.name}, {impl_plan_path.name}, {dev_task_list_path.name}."
         )
+        # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
+        object.__setattr__(design, "written_files", [
+            {"name": "architect/system_design.json", "path": str(design_json_path), "kind": "architecture"},
+            {"name": "architect/system_design.md", "path": str(design_md_path), "kind": "architecture"},
+            {"name": "architect/implementation_plan.json", "path": str(impl_plan_path), "kind": "architecture"},
+            {"name": "architect/development_task_list.json", "path": str(dev_task_list_path), "kind": "architecture"},
+        ])
         return design
 
     def _validate_development_task_list(self, design: SystemDesignDocument) -> None:
@@ -265,6 +279,11 @@ class ArchitectWorkflow:
             f"requirement: {pm_artifacts.get('requirement', 'N/A')}\n"
             f"system_design: {architect_artifacts.get('system_design_json', 'N/A')}\n"
             f"implementation_report: {engineer_artifacts.get('implementation_md', 'N/A')}\n\n"
+            "OUTPUT FORMAT RULES:\n"
+            "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
+            "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
+            "- Do NOT write any analysis, summary, or explanation text before or after the JSON.\n"
+            "- STOP immediately after outputting the closing }. No additional text or commands.\n\n"
             "required_schema: {\n"
             '"language": "string",\n'
             '"project_name": "string",\n'

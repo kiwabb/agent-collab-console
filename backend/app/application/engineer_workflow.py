@@ -84,6 +84,11 @@ class EngineerWorkflow:
             "and produce exactly one JSON object that matches the required schema at the end. "
             "Do not auto-commit or auto-merge changes unless explicitly asked by the user. "
             "Use the same language as the user requirement when possible.\n\n"
+            "EFFICIENCY RULES - FOLLOW STRICTLY TO AVOID CONTEXT OVERFLOW:\n"
+            "1. NEVER read a file that exceeds 200 lines in full. Use Bash grep/find to locate the specific section you need, then read only that range with offset+limit.\n"
+            "2. Before reading any file, check its line count with `wc -l`. If it exceeds 200 lines, use grep to find relevant symbols instead.\n"
+            "3. Prefer targeted lookups: grep for function/component names, read only the lines you need.\n"
+            "4. Do not explore files out of curiosity — only read what you must modify or directly depend on.\n\n"
             "CRITICAL - TASK BOUNDARY RULES:\n"
             "1. ONLY implement what THIS SPECIFIC TASK requires - DO NOT implement future tasks:\n"
             "   - Read the task title and description carefully to understand the exact scope\n"
@@ -110,6 +115,16 @@ class EngineerWorkflow:
             f"issue_id: {issue_id}\n"
             f"issue_title: {task.title}\n\n"
             f"{upstream_context}\n\n"
+            + (
+                "REWORK REQUIRED - ARCHITECT REVIEW FEEDBACK:\n"
+                f"{task.review_comment}\n\n"
+                "You MUST address ALL points in the above feedback before producing the final JSON.\n\n"
+                if getattr(task, "review_comment", None) else ""
+            )
+            + "OUTPUT FORMAT RULES:\n"
+            "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
+            "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
+            "- STOP immediately after outputting the JSON. Do NOT run any shell commands, read files, or perform any operations after the JSON. The JSON is your complete and final response for this turn.\n\n"
             "required_schema: {\n"
             '"language": "string",\n'
             '"project_name": "string",\n'
@@ -160,6 +175,10 @@ class EngineerWorkflow:
             f"Implementation report generated for {report.issue_title}. "
             f"Status: {report.status}. File: {impl_md_path.name}."
         )
+        # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
+        object.__setattr__(report, "written_files", [
+            {"name": f"engineer/{impl_md_path.name}", "path": str(impl_md_path), "kind": "development"},
+        ])
         return report
 
     def _read_pm_artifacts(self, workspace_path: str, issue_id: str) -> dict[str, str]:

@@ -1,5 +1,17 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+import logging
+import sys
+import traceback as _traceback
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    stream=sys.stderr,
+)
+
+logger = logging.getLogger(__name__)
 
 from app.interfaces.api import router as api_router
 from app.interfaces.codex_ws import router as codex_ws_router
@@ -21,13 +33,14 @@ async def lifespan(app: FastAPI):
             codex_process_manager.terminate_all()
     except Exception:
         pass
+    # Close async store connection to avoid "threads can only be started once" on restart
+    try:
+        from app.bootstrap import async_store
+        if async_store is not None and hasattr(async_store, 'close'):
+            await async_store.close()
+    except Exception:
+        pass
 
-
-import logging
-import traceback as _traceback
-from fastapi.responses import JSONResponse
-
-logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Agent Collaboration Console", lifespan=lifespan)
 

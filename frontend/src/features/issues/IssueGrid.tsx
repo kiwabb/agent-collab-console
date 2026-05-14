@@ -9,7 +9,6 @@ import { useI18n } from "@/providers/I18nProvider";
 import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/ui/empty-state";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +17,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { getRuntimeCatalog } from "@/lib/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const RECENT_SEARCHES_KEY = "agent-collab.recentSearches";
 const MAX_RECENT_SEARCHES = 5;
@@ -166,13 +171,13 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
 
   return (
     <div className="p-8 max-w-7xl mx-auto w-full animate-in fade-in duration-700">
-      <div className="flex items-center justify-between mb-10">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-10 gap-4">
         <div>
           <h2 className="text-3xl font-black tracking-tight text-foreground mb-2">{t("issue.issues")}</h2>
           <p className="text-text-muted font-medium">{t("issue.gridSubtitle")}</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="relative">
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className="relative flex-1 sm:flex-none">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
             <input
               ref={searchInputRef}
@@ -182,7 +187,8 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
               onFocus={() => setShowSearchDropdown(true)}
               onBlur={() => setTimeout(() => setShowSearchDropdown(false), 200)}
               placeholder="Search issues..."
-              className="pl-9 pr-8 py-2 w-64 rounded-xl bg-surface-raised border border-border-subtle text-sm outline-none focus:border-brand"
+              className="py-2 w-full sm:w-64 rounded-xl bg-surface-raised border border-border-subtle text-sm outline-none focus:border-brand"
+              style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem' }}
             />
             {searchQuery && (
               <button
@@ -198,27 +204,27 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
                   Recent Searches
                 </div>
                 {recentSearches.map((search) => (
-                  <button
+                  <div
                     key={search}
                     onMouseDown={() => {
                       setSearchQuery(search);
                       setShowSearchDropdown(false);
                     }}
-                    className="w-full px-3 py-2 flex items-center gap-2 hover:bg-surface-hover text-sm text-left"
+                    className="w-full px-3 py-2 flex items-center gap-2 hover:bg-surface-hover text-sm text-left cursor-pointer"
                   >
-                    <Clock size={12} className="text-text-muted" />
+                    <Clock size={12} className="text-text-muted shrink-0" />
                     <span className="truncate">{search}</span>
                     <button
-                      onClick={(e) => {
+                      onMouseDown={(e) => {
                         e.stopPropagation();
                         removeRecentSearch(search);
                         setRecentSearches(getRecentSearches());
                       }}
-                      className="ml-auto p-1 hover:bg-surface-hover rounded"
+                      className="ml-auto p-1 hover:bg-surface-hover rounded text-text-muted hover:text-error transition-colors"
                     >
-                      <X size={10} className="text-text-muted" />
+                      <X size={10} />
                     </button>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -286,32 +292,33 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
               />
             </div>
             {projectId && (
-              <div className="mb-5">
+              <div className="mb-2">
                 <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-text-muted mb-2">
                   {t("issue.baseBranch")}
                 </label>
-                <select
-                  value={baseBranch}
-                  onChange={(e) => setBaseBranch(e.target.value)}
-                  className="w-full bg-surface-input border border-border-subtle rounded-lg px-3 py-2 text-sm outline-none focus:border-brand font-mono"
-                >
-                  {branches.length === 0 && projectDefaultBranch && (
-                    <option value={projectDefaultBranch}>{projectDefaultBranch}</option>
-                  )}
-                  {branches.map((b) => {
-                    const ago = formatRelativeTime(b.last_commit_date);
-                    return (
-                      <option key={b.name} value={b.name}>
-                        {b.name}
-                        {b.name === projectDefaultBranch ? " (default)" : ""}
-                        {ago ? `  · ${ago}` : ""}
-                      </option>
-                    );
-                  })}
-                </select>
+                <Select value={baseBranch} onValueChange={(value) => setBaseBranch(value || "")}>
+                  <SelectTrigger className="w-full bg-surface-input border-border-subtle font-mono">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {branches.length === 0 && projectDefaultBranch && (
+                      <SelectItem value={projectDefaultBranch}>{projectDefaultBranch}</SelectItem>
+                    )}
+                    {branches.map((b) => {
+                      const ago = formatRelativeTime(b.last_commit_date);
+                      return (
+                        <SelectItem key={b.name} value={b.name}>
+                          {b.name}
+                          {b.name === projectDefaultBranch ? " (default)" : ""}
+                          {ago ? `  · ${ago}` : ""}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
               </div>
             )}
-            <div className="flex gap-2">
+            <div className="flex gap-2 mt-auto pt-4">
               <button
                 type="submit"
                 className="flex-1 bg-brand text-background text-xs font-bold py-2.5 rounded-lg"

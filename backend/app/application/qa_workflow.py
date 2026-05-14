@@ -91,6 +91,11 @@ class QAWorkflow:
             f"issue_id: {issue_id}\n"
             f"issue_title: {task.title}\n\n"
             f"{upstream_context}\n\n"
+            "OUTPUT FORMAT RULES:\n"
+            "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
+            "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
+            "- Do NOT write any analysis, summary, or explanation text before or after the JSON.\n"
+            "- STOP immediately after outputting the closing }. No additional text or commands.\n\n"
             "required_schema: {\n"
             '"language": "string",\n'
             '"project_name": "string",\n'
@@ -146,6 +151,11 @@ class QAWorkflow:
             f"QA report generated for {report.issue_title}. "
             f"Status: {report.status}. Files: {qa_plan_path.name}, {qa_report_path.name}."
         )
+        # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
+        object.__setattr__(report, "written_files", [
+            {"name": "qa/qa_plan.json", "path": str(qa_plan_path), "kind": "testing"},
+            {"name": "qa/qa_report.md", "path": str(qa_report_path), "kind": "testing"},
+        ])
         return report
 
     def _read_pm_artifacts(self, workspace_path: str, issue_id: str) -> dict[str, str]:

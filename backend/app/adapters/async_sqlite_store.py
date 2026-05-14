@@ -14,6 +14,13 @@ class AsyncSQLiteStore:
         self._conn: aiosqlite.Connection | None = None
         self._conn_lock = asyncio.Lock()
 
+    async def close(self) -> None:
+        """Close the connection. Call this on app shutdown."""
+        async with self._conn_lock:
+            if self._conn is not None:
+                await self._conn.close()
+                self._conn = None
+
     async def _get_conn(self) -> aiosqlite.Connection:
         async with self._conn_lock:
             if self._conn is None:
@@ -387,6 +394,19 @@ class AsyncSQLiteStore:
                 data TEXT NOT NULL
             )
         """)
+        # Create artifact_paths table for tracking written artifacts
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS artifact_paths (
+                id TEXT PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                task_id TEXT,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(issue_id, name)
+            )
+        """)
         # Create indexes for frequently queried columns
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_project_id ON codex_tasks(project_id)")
@@ -407,6 +427,7 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_paths_issue_id ON artifact_paths(issue_id)")
         await conn.commit()
 
     async def _ensure_db(self):
@@ -734,7 +755,7 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, created_at, updated_at FROM codex_issues"
+        select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, created_at, updated_at FROM codex_issues"
         clauses, params = [], []
         if session_id:
             clauses.append("session_id = ?")
@@ -1342,3 +1363,35 @@ class AsyncSQLiteStore:
             return RuntimeCatalog(**data)
         except (json.JSONDecodeError, TypeError, ValueError):
             return None
+
+    # --- Artifact Paths ---
+
+    async def save_artifact(self, artifact: dict) -> None:
+        """Save artifact path to database. Fields: id, issue_id, task_id, name, path, kind, created_at."""
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            "INSERT OR REPLACE INTO artifact_paths (id, issue_id, task_id, name, path, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                artifact.get("id"),
+                artifact.get("issue_id"),
+                artifact.get("task_id"),
+                artifact.get("name"),
+                artifact.get("path"),
+                artifact.get("kind"),
+                artifact.get("created_at"),
+            ),
+        )
+        await conn.commit()
+
+    async def list_artifacts(self, issue_id: str) -> list[dict]:
+        """List all artifacts for an issue, ordered by created_at."""
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM artifact_paths WHERE issue_id = ? ORDER BY created_at ASC",
+            (issue_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]

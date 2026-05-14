@@ -210,8 +210,11 @@ class ExecutionProcessWorkspaceStreamManager:
             event = {
                 "type": "task_status",
                 "task_id": task_id,
+                "session_id": workspace_id,
                 "status": task.status,
+                "result": result if result is not None else getattr(task, "result", None),
                 "review_comment": getattr(task, "review_comment", None),
+                "execution_process_id": execution_process_id,
             }
             self.buffer_pending(workspace_id, event)
         

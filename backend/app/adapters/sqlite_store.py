@@ -343,6 +343,19 @@ class SQLiteStore:
                     data TEXT NOT NULL
                 )
             """)
+            # Create artifact_paths table for tracking written artifacts
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS artifact_paths (
+                    id TEXT PRIMARY KEY,
+                    issue_id TEXT NOT NULL,
+                    task_id TEXT,
+                    name TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    created_at TEXT,
+                    UNIQUE(issue_id, name)
+                )
+            """)
             # Create indexes for frequently queried columns
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)")
@@ -360,6 +373,7 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_paths_issue_id ON artifact_paths(issue_id)")
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database initialization error: %s", e)
@@ -723,7 +737,7 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        select_sql = "SELECT id, session_id, title, description, current_phase, status, is_pinned, created_at, updated_at FROM codex_issues"
+        select_sql = "SELECT id, session_id, title, description, current_phase, status, is_pinned, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, created_at, updated_at FROM codex_issues"
         if session_id:
             rows = conn.execute(f"{select_sql} WHERE session_id = ? ORDER BY is_pinned DESC, updated_at DESC, created_at DESC", (session_id,)).fetchall()
         else:
@@ -1185,3 +1199,45 @@ class SQLiteStore:
             return RuntimeCatalog(**data)
         except (json.JSONDecodeError, TypeError, ValueError):
             return None
+
+    # --- Artifact Paths ---
+
+    def save_artifact(self, artifact: dict) -> None:
+        """Save artifact path to database. Fields: id, issue_id, task_id, name, path, kind, created_at."""
+        self._ensure_db()
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO artifact_paths (id, issue_id, task_id, name, path, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    artifact.get("id"),
+                    artifact.get("issue_id"),
+                    artifact.get("task_id"),
+                    artifact.get("name"),
+                    artifact.get("path"),
+                    artifact.get("kind"),
+                    artifact.get("created_at"),
+                ),
+            )
+            conn.commit()
+        except sqlite3.Error as e:
+            logger.error("Database error saving artifact: %s", e)
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    def list_artifacts(self, issue_id: str) -> list[dict]:
+        """List all artifacts for an issue, ordered by created_at."""
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM artifact_paths WHERE issue_id = ? ORDER BY created_at ASC",
+            (issue_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]

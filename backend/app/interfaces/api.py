@@ -10,6 +10,7 @@ import json
 
 from pydantic import BaseModel
 from typing import Literal
+import subprocess
 
 from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service
 from app.domain.models import CodexIssue, Project
@@ -76,6 +77,14 @@ def _try_parse_json_line(line: str) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _pick_executor_from_tasks(tasks: list[dict]) -> tuple[str | None, str | None, str | None]:
+    """Return (executor, provider, model) inherited from the most recently updated task that has them."""
+    for task in sorted(tasks, key=lambda t: t.get("updated_at") or "", reverse=True):
+        if task.get("executor"):
+            return task.get("executor"), task.get("provider"), task.get("model")
+    return None, None, None
+
+
 async def _resolve_runtime_config(
     executor: str | None = None,
     provider: str | None = None,
@@ -83,10 +92,13 @@ async def _resolve_runtime_config(
 ) -> tuple[str, str, str, dict[str, str] | None, str]:
     catalog_service = _get_runtime_catalog_service()
     catalog = await catalog_service.load_catalog()
+    if not executor:
+        enabled = [e for e in catalog.executors if e.enabled]
+        executor = enabled[0].id if enabled else "codex"
     try:
         return catalog_service.resolve_effective_config(
             catalog,
-            executor or "codex",
+            executor,
             provider,
             model,
         )
@@ -249,7 +261,7 @@ async def _refresh_task_result(task):
     if task.status == "done" and task.result:
         workspace = await codex_store.load_codex_workspace(task.session_id)
         workspace_title = workspace.title if workspace is not None else None
-        artifact = role_workflow_service.persist_result(task, workspace_title=workspace_title)
+        artifact = await role_workflow_service.persist_result(task, workspace_title=workspace_title)
 
         # Automated Code Review Logic
         if task.role == "architect" and getattr(task, "task_kind", "normal") == "review" and task.parent_task_id:
@@ -571,7 +583,7 @@ async def _delete_task_cascade(task_id: str, *, delete_workspace: bool = True):
 
 task_runner = None
 product_manager_service = ProductManagerService()
-role_workflow_service = RoleWorkflowService()
+role_workflow_service = RoleWorkflowService(codex_store=codex_store)
 
 
 def _get_task_runner():
@@ -604,6 +616,32 @@ def _get_task_runner():
 async def health_check():
     """Health check endpoint to verify this is the correct backend."""
     return {"service": "agent-collab-console", "version": "1.0"}
+
+
+@router.get("/utils/select-directory")
+async def select_directory():
+    """Opens a native directory picker on macOS and returns the selected path."""
+    try:
+        # Use osascript to open a native folder picker on macOS.
+        # This returns the POSIX path of the selected folder.
+        # If the user cancels, it will exit with an error.
+        result = subprocess.run(
+            ["osascript", "-e", 'POSIX path of (choose folder with prompt "Select Directory")'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        path = result.stdout.strip()
+        return {"path": path}
+    except subprocess.CalledProcessError as e:
+        # User likely cancelled the dialog or osascript failed
+        if "User canceled" in e.stderr:
+            return {"path": None}
+        logger.error(f"osascript failed: {e.stderr}")
+        raise HTTPException(status_code=500, detail=f"Failed to open directory picker: {e.stderr}")
+    except Exception as e:
+        logger.error(f"Unexpected error in select_directory: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
 
 class CreateSessionRequest(BaseModel):
@@ -1050,12 +1088,14 @@ async def create_codex_workspace(request: CreateCodexSessionRequest):
         log_path=None,
         messages=[],
     )
+    logger.info(f"Creating workspace: {workspace_id} for project {request.project_id}")
     await codex_store.save_codex_workspace(workspace)
     # Broadcast new workspace
     await event_bus.append({
         "type": "session_created",
         "session": {"id": workspace.id, "title": workspace.title, "project_id": workspace.project_id, "status": workspace.status}
     })
+    logger.info(f"Workspace created and broadcasted: {workspace_id}")
     return workspace
 
 
@@ -1600,7 +1640,8 @@ async def transition_codex_issue_to_architecture(issue_id: str):
         from app.domain.models import CodexTask
 
         now = datetime.now()
-        resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config()
+        inh_exec, inh_prov, inh_model = _pick_executor_from_tasks(tasks)
+        resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(inh_exec, inh_prov, inh_model)
         architect_task = CodexTask(
             id=str(uuid4()),
             session_id=issue.session_id,
@@ -1643,6 +1684,7 @@ async def _create_development_tasks(
     ordered_tasks: list[dict],
     existing_by_title: dict[str, dict],
     workspace_path: str,
+    issue_tasks: list[dict] | None = None,
 ) -> tuple[list["CodexTask"], bool]:
     """Create or update development tasks for an issue.
 
@@ -1665,7 +1707,8 @@ async def _create_development_tasks(
                 await codex_store.save_codex_task(engineer_task)
         else:
             now = datetime.now()
-            resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config()
+            inh_exec, inh_prov, inh_model = _pick_executor_from_tasks(issue_tasks or list(existing_by_title.values()))
+            resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(inh_exec, inh_prov, inh_model)
             engineer_task = CodexTask(
                 id=str(uuid4()),
                 session_id=issue.session_id,
@@ -1748,7 +1791,7 @@ async def transition_codex_issue_to_development(issue_id: str):
 
     if created_task_ids:
         engineer_tasks, created_any = await _create_development_tasks(
-            codex_store, issue, ordered_tasks, existing_by_title, workspace_path
+            codex_store, issue, ordered_tasks, existing_by_title, workspace_path, issue_tasks=tasks
         )
     else:
         engineer_tasks = [
@@ -1818,7 +1861,8 @@ async def transition_codex_issue_to_testing(issue_id: str):
         from app.domain.models import CodexTask
 
         now = datetime.now()
-        resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config()
+        inh_exec, inh_prov, inh_model = _pick_executor_from_tasks(tasks)
+        resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(inh_exec, inh_prov, inh_model)
         qa_task = CodexTask(
             id=str(uuid4()),
             session_id=issue.session_id,
@@ -1866,16 +1910,65 @@ async def get_codex_issue_artifacts(issue_id: str):
     workspace = await codex_store.load_codex_workspace(issue.session_id)
     if workspace is None:
         return []
-    issue_root = Path(workspace.cwd) / "issues" / issue_id
 
-    tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
+    # Load artifacts from DB
+    rows = await codex_store.list_artifacts(issue_id)
+
+    # If no DB records exist, fall back to disk scanning and backfill DB
+    if not rows:
+        rows = await _scan_and_backfill_artifacts(issue_id, issue.session_id, codex_store)
+
+    MAX_FILE_SIZE = 1024 * 1024
+    result = []
+    for row in rows:
+        path = Path(row["path"])
+        content = None
+        if path.exists() and path.suffix in (".md", ".json", ".txt", ".html", ".js", ".css"):
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")[:MAX_FILE_SIZE]
+            except OSError:
+                content = None
+        result.append({
+            "id": row["id"],
+            "issue_id": row["issue_id"],
+            "task_id": row["task_id"],
+            "kind": row["kind"],
+            "name": row["name"],
+            "path": row["path"],
+            "content": content,
+            "created_at": row["created_at"],
+        })
+    return result
+
+
+async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) -> list[dict]:
+    """Scan disk for artifacts and backfill the database."""
+    workspace = await store.load_codex_workspace(session_id)
+    if workspace is None:
+        return []
+
+    tasks = await store.list_codex_tasks(session_id=session_id, issue_id=issue_id)
+    # Sort newest first so that when scanning multiple roots, newer artifacts take precedence
     sorted_tasks = sorted(
         tasks,
         key=lambda item: item.get("updated_at") or item.get("created_at") or "",
         reverse=True,
     )
 
-    MAX_FILE_SIZE = 1024 * 1024
+    # Build ordered, deduplicated list of issue roots to scan.
+    seen_wp: set[str] = set()
+    issue_roots: list[Path] = []
+    for task_row in sorted_tasks:
+        wp = task_row.get("workspace_path")
+        if wp and wp not in seen_wp:
+            seen_wp.add(wp)
+            issue_roots.append(Path(wp) / "issues" / issue_id)
+    fallback_root = Path(workspace.cwd) / "issues" / issue_id
+    if str(fallback_root) not in {str(r) for r in issue_roots}:
+        issue_roots.append(fallback_root)
+
+    # PM backfill: for each done pm task, check its own worktree for prd files
+    # and trigger persist_result if missing.
     for task_row in sorted_tasks:
         if task_row.get("role") != "product_manager":
             continue
@@ -1884,67 +1977,69 @@ async def get_codex_issue_artifacts(issue_id: str):
         workspace_path = task_row.get("workspace_path")
         if not workspace_path:
             continue
-        pm_dir = issue_root / "pm"
-        
-        # Check in pm/ subdirectory
-        has_prd_json = (pm_dir / "prd.json").exists()
-        has_prd_md = (pm_dir / "prd.md").exists()
-        
-        if not (has_prd_json and has_prd_md):
-            task = await codex_store.load_codex_task(task_row.get("id"))
+        pm_dir = Path(workspace_path) / "issues" / issue_id / "pm"
+        if not ((pm_dir / "prd.json").exists() and (pm_dir / "prd.md").exists()):
+            task = await store.load_codex_task(task_row.get("id"))
             if task is not None and getattr(task, "result", None):
-                workspace = await codex_store.load_codex_workspace(task.session_id)
-                workspace_title = workspace.title if workspace is not None else None
+                ws = await store.load_codex_workspace(task.session_id)
                 try:
-                    role_workflow_service.persist_result(task, workspace_title=workspace_title)
+                    await role_workflow_service.persist_result(task, workspace_title=ws.title if ws else None)
                 except ProductManagerArtifactError:
                     pass
-        
-        # Re-check after potential backfill
-        has_prd_json = (pm_dir / "prd.json").exists()
-        has_prd_md = (pm_dir / "prd.md").exists()
-        if has_prd_json and has_prd_md:
+        if (pm_dir / "prd.json").exists() and (pm_dir / "prd.md").exists():
             break
 
     artifact_map: dict[str, dict] = {}
-    
-    # Define a helper to map folder names to roles/categories
+
     folder_to_category = {
         "pm": "product",
         "architect": "architecture",
         "engineer": "development",
-        "qa": "testing"
+        "qa": "testing",
     }
 
-    # Recursive traversal of the issue root
-    def scan_dir(target_dir: Path):
-        if not target_dir.exists() or not target_dir.is_dir():
-            return
-        for item in sorted(target_dir.iterdir()):
-            if item.is_dir():
-                scan_dir(item)
-            elif item.is_file():
-                rel_path = item.relative_to(issue_root)
-                # Category is the first part of the relative path
-                category_folder = rel_path.parts[0] if len(rel_path.parts) > 1 else "general"
-                category = folder_to_category.get(category_folder, "general")
-                
-                # Use relative path as name for better context if in subfolder
-                display_name = str(rel_path)
-                
-                from datetime import datetime
-                artifact_map[display_name] = {
-                    "id": f"{issue_id}:{display_name}",
-                    "issue_id": issue_id,
-                    "task_id": None,
-                    "kind": category,
-                    "name": display_name,
-                    "path": str(item),
-                    "content": item.read_text(encoding="utf-8", errors="replace")[:MAX_FILE_SIZE] if item.suffix in (".md", ".json", ".txt", ".html", ".js", ".css") else "Binary content",
-                    "created_at": datetime.fromtimestamp(item.stat().st_mtime).isoformat() if item.exists() else None,
-                }
+    from datetime import datetime as dt
 
-    scan_dir(issue_root)
+    def scan_root(root: Path):
+        def _walk(target_dir: Path):
+            if not target_dir.exists() or not target_dir.is_dir():
+                return
+            for item in sorted(target_dir.iterdir()):
+                if item.is_dir():
+                    _walk(item)
+                elif item.is_file() and item.name != ".DS_Store":
+                    rel_path = item.relative_to(root)
+                    display_name = str(rel_path)
+                    # Newer root already provided this file — don't overwrite
+                    if display_name in artifact_map:
+                        continue
+                    category_folder = rel_path.parts[0] if len(rel_path.parts) > 1 else "general"
+                    artifact_map[display_name] = {
+                        "id": f"{issue_id}:{display_name}",
+                        "issue_id": issue_id,
+                        "task_id": None,
+                        "kind": folder_to_category.get(category_folder, "general"),
+                        "name": display_name,
+                        "path": str(item),
+                        "created_at": dt.fromtimestamp(item.stat().st_mtime).isoformat(),
+                    }
+        _walk(root)
+
+    for root in issue_roots:
+        scan_root(root)
+
+    # Backfill DB with scanned artifacts
+    for artifact_name, artifact_data in artifact_map.items():
+        await store.save_artifact({
+            "id": artifact_data["id"],
+            "issue_id": issue_id,
+            "task_id": artifact_data["task_id"],
+            "name": artifact_data["name"],
+            "path": artifact_data["path"],
+            "kind": artifact_data["kind"],
+            "created_at": artifact_data["created_at"],
+        })
+
     return list(artifact_map.values())
 
 

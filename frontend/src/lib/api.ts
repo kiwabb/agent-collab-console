@@ -143,6 +143,12 @@ export async function deleteProject(projectId: string, force = false): Promise<u
   return handleResponse(response);
 }
 
+export async function selectDirectory(): Promise<string | null> {
+  const response = await fetch(`${API_BASE}/utils/select-directory`);
+  const data = await handleResponse<{ path: string | null }>(response);
+  return data.path;
+}
+
 export async function getProjectBranches(projectId: string): Promise<GitBranch[]> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/branches`);
   return handleResponse<GitBranch[]>(response);

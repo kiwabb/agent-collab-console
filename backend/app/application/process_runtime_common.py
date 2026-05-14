@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sys
 import subprocess
 import threading
@@ -315,6 +316,18 @@ class BaseProcessRuntime:
         if not msg_type:
             return
 
+        # Log every LLM token stream event in real-time
+        if msg_type == "stream_event":
+            evt = parsed.get("event", {})
+            delta = evt.get("delta", {})
+            dt = delta.get("type", "")
+            import logging as _lstream
+            _lstream.getLogger(__name__).info(
+                "[LLM token] task=%s delta_type=%s chars=%d preview=%s",
+                task_id, dt, len(delta.get("text", "") or delta.get("thinking", "") or ""),
+                (delta.get("text", "") or delta.get("thinking", "") or "")[:100],
+            )
+
         session_id_val = parsed.get("session_id")
         if session_id_val and entry.resume_session_id is None:
             entry.resume_session_id = session_id_val
@@ -336,34 +349,39 @@ class BaseProcessRuntime:
             msg = parsed.get("message") or {}
             content = msg.get("content", [])
             if isinstance(content, list):
-                parts = []
+                text_parts = []
+                display_parts = []
                 for item in content:
                     if isinstance(item, dict):
                         item_type = item.get("type")
                         if item_type == "text":
                             text = item.get("text", "")
                             if text:
-                                parts.append(text)
+                                text_parts.append(text)
+                                display_parts.append(text)
                         elif item_type == "thinking":
                             thinking = item.get("thinking", "")
                             if thinking:
-                                parts.append(f"[Thinking: {thinking[:100]}...]" if len(thinking) > 100 else f"[Thinking: {thinking}]")
-                if parts:
-                    new_text = "".join(parts).strip()
-                    # Compute token-level increment vs last broadcast and emit
-                    # a message_delta event so the frontend can render typewriter.
-                    if new_text and new_text != entry.last_emitted_assistant_text:
+                                display_parts.append(f"[Thinking: {thinking[:100]}...]" if len(thinking) > 100 else f"[Thinking: {thinking}]")
+                if display_parts:
+                    new_display = "".join(display_parts).strip()
+                    if new_display and new_display != entry.last_emitted_assistant_text:
                         last = entry.last_emitted_assistant_text
-                        if new_text.startswith(last):
-                            delta = new_text[len(last):]
+                        if new_display.startswith(last):
+                            delta = new_display[len(last):]
                         else:
-                            # Non-prefix change (rare revision) — emit full new text as delta.
-                            delta = new_text
+                            delta = new_display
                         if delta:
                             entry.delta_seq += 1
-                            entry.last_emitted_assistant_text = new_text
+                            entry.last_emitted_assistant_text = new_display
                             await self._emit_message_delta(workspace_id, task_id, entry.delta_seq, delta)
-                    entry.result_text = new_text
+                            import logging as _ldelta
+                            _ldelta.getLogger(__name__).info(
+                                "[LLM stream] task=%s seq=%d chars=%d\n%s",
+                                task_id, entry.delta_seq, len(delta), delta,
+                            )
+                if text_parts:
+                    entry.result_text = "".join(text_parts).strip()
             return
 
         if msg_type == "tool_use":
@@ -420,13 +438,21 @@ class BaseProcessRuntime:
                 task.result = entry.result_text
             task.updated_at = datetime.now()
 
+            import logging as _logging
+            _logger = _logging.getLogger(__name__)
+
             if not is_chat and callable(self.refresh_task_result):
                 try:
+                    _logger.info("[LLM raw response] task=%s len=%d\n%s", task_id, len(task.result), task.result)
                     await self.refresh_task_result(task)
                 except Exception as exc:
+                    _logger.error(
+                        "refresh_task_result failed for task %s, raw response was: %s",
+                        task_id,
+                        task.result,
+                    )
                     entry.had_error = True
                     entry.result_text = str(exc)
-                    await self._append_log(task.session_id, "error", str(exc), task_id)
                     await self._mark_task_failed(task_id, entry)
                     return
 
@@ -567,7 +593,7 @@ class BaseProcessRuntime:
                     task.resume_session_id = entry.resume_session_id
                 if entry.resume_message_id:
                     task.resume_message_id = entry.resume_message_id
-                if entry.result_text:
+                if entry.result_text and task.status not in {"done", "failed", "cancelled"}:
                     task.result = entry.result_text
                 task.updated_at = datetime.now()
                 await self.codex_store.save_codex_task(task)
@@ -579,6 +605,9 @@ class BaseProcessRuntime:
         task = await self.codex_store.load_codex_task(task_id)
         if task is None or task.status in {"done", "failed", "cancelled"}:
             return
+
+        import logging as _log2
+        _logger = _log2.getLogger(__name__)
 
         execution_process_id = task.last_execution_process_id
         exit_code = getattr(entry.proc, "returncode", None)
@@ -595,12 +624,18 @@ class BaseProcessRuntime:
             # Call refresh_task_result to persist artifacts
             if callable(self.refresh_task_result):
                 try:
+                    _logger.info("[LLM raw response] task=%s len=%d\n%s", task_id, len(entry.result_text), entry.result_text)
                     await self.refresh_task_result(task)
                 except Exception as exc:
+                    _logger.error(
+                        "refresh_task_result failed for task %s, raw response was: %s",
+                        task_id,
+                        entry.result_text,
+                    )
                     task.status = "failed"
-                    await self._append_log(task.session_id, "error", f"Failed to persist artifacts: {exc}", task_id)
-            
-            process_status = "Completed"
+                    task.result = str(exc)
+
+            process_status = "Completed" if task.status == "done" else "Failed"
         else:
             task.status = "failed"
             process_status = "Failed"
@@ -656,21 +691,59 @@ class BaseProcessRuntime:
 
     # --- Async Process Management ---
 
+    async def _watchdog(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None, timeout_sec: int):
+        try:
+            await asyncio.sleep(timeout_sec)
+            if not entry.alive:
+                return
+            entry.alive = False
+            if entry.proc:
+                try:
+                    entry.proc.terminate()
+                except Exception:
+                    pass
+            if task_id:
+                task = await self.codex_store.load_codex_task(task_id)
+                if task and task.status not in {"done", "failed", "cancelled"}:
+                    task.status = "failed"
+                    task.result = f"Process exceeded maximum timeout of {timeout_sec} seconds"
+                    task.updated_at = datetime.now()
+                    await self.codex_store.save_codex_task(task)
+                    if self._event_bus:
+                        await self._event_bus.append({
+                            "type": "task_status",
+                            "task_id": task_id,
+                            "session_id": task.session_id,
+                            "status": "failed",
+                            "result": task.result,
+                            "execution_process_id": task.last_execution_process_id,
+                        })
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
     async def _reader_loop(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None):
         """Async reader loop using await stdout.readline()."""
+        idle_timeout = int(os.getenv("PROCESS_IDLE_TIMEOUT", "600"))
+        max_timeout = int(os.getenv("PROCESS_MAX_TIMEOUT", "1800"))
+        watchdog_task = asyncio.create_task(self._watchdog(workspace_id, entry, task_id, max_timeout))
+
         try:
             while entry.alive:
                 try:
-                    line = await entry.proc.stdout.readline()
+                    line = await asyncio.wait_for(entry.proc.stdout.readline(), timeout=idle_timeout)
+                except asyncio.TimeoutError:
+                    break
                 except Exception:
                     break
                 if not line:
                     break
-                
+
                 decoded = line.decode("utf-8", errors="replace")
                 await self._append_log(workspace_id, "stdout", decoded, task_id)
                 await self._capture_on_reader(workspace_id, decoded, entry, task_id)
-                
+
                 parsed = self._try_parse_json(decoded)
                 if parsed and parsed.get("type") in ("turn.completed", "result"):
                     for waiter in list(entry.pending_waiters):
@@ -678,24 +751,37 @@ class BaseProcessRuntime:
                     entry.pending_waiters.clear()
                     if task_id:
                         if parsed.get("type") == "result" and (parsed.get("is_error") or entry.had_error):
-                            await self._mark_task_failed(task_id, entry)
+                            # is_error can mean a *tool* call failed after the model
+                            # already produced the artifact JSON. If there is result
+                            # content, attempt to persist it; _mark_task_done will
+                            # call _mark_task_failed internally if persist fails.
+                            if entry.result_text:
+                                await self._mark_task_done(task_id, entry)
+                            else:
+                                await self._mark_task_failed(task_id, entry)
                         else:
                             await self._mark_task_done(task_id, entry)
         except Exception:
             pass
         finally:
             entry.alive = False
+            watchdog_task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(watchdog_task), timeout=1)
+            except Exception:
+                pass
+
             try:
                 stderr = await entry.proc.stderr.read()
                 if stderr:
                     await self._append_log(workspace_id, "stderr", stderr.decode("utf-8", errors="replace"), task_id)
             except Exception:
                 pass
-            
+
             for waiter in entry.pending_waiters:
                 waiter.set()
             entry.pending_waiters.clear()
-            
+
             await self._persist_reader_metadata(workspace_id, task_id, entry)
             await self._finalize_task_on_reader_exit(task_id, entry)
 

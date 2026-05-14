@@ -267,7 +267,7 @@ def get_codex_process_manager():
 
 task_runner = None
 help_orchestrator = None
-role_workflow_service = RoleWorkflowService()
+role_workflow_service = RoleWorkflowService(codex_store=codex_store)
 
 
 def get_task_runner(refresh_task_result):

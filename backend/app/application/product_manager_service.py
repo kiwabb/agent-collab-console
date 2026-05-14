@@ -210,7 +210,7 @@ class ProductManagerService:
             issue_id=canonical_issue_id,
         )
         if route.name == "bugfix":
-            self.persist_bugfix_artifact(task)
+            bugfix_md_path = self.persist_bugfix_artifact(task)
             bugfix_payload = ProductRequirementDocument(
                 language="zh-CN",
                 project_name=workspace_title or "workspace-project",
@@ -226,6 +226,10 @@ class ProductManagerService:
                 open_questions=[],
                 risks=[],
             )
+            # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
+            object.__setattr__(bugfix_payload, "written_files", [
+                {"name": "pm/bugfix.md", "path": str(bugfix_md_path), "kind": "product"}
+            ])
             return bugfix_payload
 
         try:
@@ -242,6 +246,11 @@ class ProductManagerService:
             prd_json_path.write_text(prd.model_dump_json(indent=2), encoding="utf-8")
             prd_md_path.write_text(self.render_markdown(prd), encoding="utf-8")
             task.result = self.build_summary(prd, prd_json_path, prd_md_path)
+            # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
+            object.__setattr__(prd, "written_files", [
+                {"name": "pm/prd.json", "path": str(prd_json_path), "kind": "product"},
+                {"name": "pm/prd.md", "path": str(prd_md_path), "kind": "product"},
+            ])
             return prd
         except (json.JSONDecodeError, ValidationError) as exc:
             # LLM returned invalid JSON or content that doesn't match the PRD schema
@@ -253,23 +262,58 @@ class ProductManagerService:
 
             error_msg = f"Failed to parse PRD JSON for task {task.id}: {type(exc).__name__}: {exc}"
             logger.error(error_msg)
-            logger.debug(f"Raw task result that failed to parse:\n{task.result[:500] if task.result else '(empty)'}...")
 
             # Save raw output for debugging (chat runs are guarded by EP.kind upstream
             # so they never reach this persist_result, see codex_task_runner / _mark_task_done).
             prd_md_path.write_text(task.result or "(empty response)", encoding="utf-8")
 
-            error_details = (
-                f"ProductManager 返回了无效的 PRD 格式\n\n"
-                f"错误类型: {type(exc).__name__}\n"
-                f"错误详情: {str(exc)}\n\n"
-                f"原始输出已保存到: {prd_md_path}\n\n"
-                f"可能的原因：\n"
-                f"1. LLM 返回了空响应（检查 API 配置和额度）\n"
-                f"2. LLM 返回了非 JSON 格式的文本\n"
-                f"3. LLM 返回的 JSON 格式不正确或缺少必需字段\n"
-                f"4. Prompt 可能需要调整以确保返回正确的 JSON 格式"
-            )
+            error_details_parts = [
+                f"ProductManager 返回了无效的 PRD 格式",
+                f"",
+                f"错误类型: {type(exc).__name__}",
+                f"错误详情: {str(exc)}",
+            ]
+
+            if isinstance(exc, ValidationError):
+                field_errors = []
+                for err in exc.errors():
+                    loc = ".".join(str(l) for l in err.get("loc", []))
+                    msg = err.get("msg", "")
+                    input_type = err.get("type", "")
+                    field_errors.append(f"  - {loc}: {msg} (input_type={input_type})")
+                if field_errors:
+                    error_details_parts.extend([
+                        "",
+                        f"字段验证错误 ({len(field_errors)} 个):",
+                        *field_errors,
+                    ])
+            elif isinstance(exc, json.JSONDecodeError):
+                error_details_parts.extend([
+                    "",
+                    f"JSON 解析失败位置: 第 {exc.lineno} 行, 第 {exc.colno} 列 (字符位置 {exc.pos})",
+                ])
+                # Show context around the error position
+                if task.result:
+                    start = max(0, exc.pos - 50)
+                    end = min(len(task.result), exc.pos + 50)
+                    context = task.result[start:end]
+                    error_details_parts.extend([
+                        f"错误上下文 (字符 {start}-{end}):",
+                        f"  {repr(context)}",
+                    ])
+
+            error_details_parts.extend([
+                "",
+                f"原始输出已保存到: {prd_md_path}",
+                "",
+                f"可能的原因：",
+                f"1. LLM 返回了空响应（检查 API 配置和额度）",
+                f"2. LLM 返回了非 JSON 格式的文本",
+                f"3. LLM 返回的 JSON 格式不正确或缺少必需字段",
+                f"4. Prompt 可能需要调整以确保返回正确的 JSON 格式",
+            ])
+
+            error_details = "\n".join(error_details_parts)
 
             raise ProductManagerArtifactError(error_details) from exc
 
@@ -383,6 +427,11 @@ class ProductManagerService:
     def _build_route_instructions(self, route: RequirementRoute) -> str:
         if route.name == "bugfix":
             return (
+                "OUTPUT FORMAT RULES:\n"
+                "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
+                "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
+                "- Do NOT write any analysis, summary, or explanation text before or after the JSON.\n"
+                "- STOP immediately after outputting the closing }. No additional text or commands.\n\n"
                 "required_schema: {"
                 '"language": "string", '
                 '"project_name": "string", '
@@ -398,6 +447,11 @@ class ProductManagerService:
                 "Focus on root problem, impact, reproduction notes, and what success looks like after the fix."
             )
         return (
+            "OUTPUT FORMAT RULES:\n"
+            "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
+            "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
+            "- Do NOT write any analysis, summary, or explanation text before or after the JSON.\n"
+            "- STOP immediately after outputting the closing }. No additional text or commands.\n\n"
             "required_schema: {"
             '"language": "string", '
             '"project_name": "string", '

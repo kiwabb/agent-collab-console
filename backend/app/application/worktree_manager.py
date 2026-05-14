@@ -114,13 +114,15 @@ class WorktreeManager:
         lock = await self._lock_for(f"issue:{issue.id}")
         async with lock:
             base = issue.git_base_branch or project.default_branch
-            # Refuse if the worktree has uncommitted changes — otherwise the squash
-            # merge silently drops them. Surface a clear error to the user.
+            # Auto-commit any uncommitted changes in the worktree so they are
+            # included in the squash merge. Engineer intentionally doesn't
+            # auto-commit during task execution, so this is the expected path.
             if issue.git_worktree_path:
                 status = await self.git.status_porcelain(issue.git_worktree_path)
                 if status.strip():
-                    raise WorktreeError(
-                        "worktree has uncommitted changes; commit them on the branch before merging"
+                    await self.git.commit_all(
+                        issue.git_worktree_path,
+                        f"chore: commit engineer changes before merge ({issue.id[:8]})",
                     )
             commit_message = message or f"Squash merge issue {issue.id[:8]}: {issue.title}"
             sha = await self.git.squash_merge(

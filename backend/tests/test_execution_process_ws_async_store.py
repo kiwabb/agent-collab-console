@@ -82,6 +82,8 @@ class AsyncStoreStub:
 @pytest.mark.asyncio
 async def test_update_task_status_supports_async_store(monkeypatch):
     store = AsyncStoreStub()
+    store.task.status = "failed"
+    store.task.result = "rerun failed without artifact"
     manager = ExecutionProcessWorkspaceStreamManager()
     published = []
 
@@ -100,6 +102,10 @@ async def test_update_task_status_supports_async_store(monkeypatch):
     assert patch[0]["value"]["task_id"] == store.task.id
     assert patch[0]["value"]["title"] == store.task.title
     assert patch[0]["value"]["logs"][0]["content"] == "hello"
+    pending_events = manager._pending_events[store.task.session_id]
+    assert pending_events[-1]["type"] == "task_status"
+    assert pending_events[-1]["status"] == "failed"
+    assert pending_events[-1]["result"] == "rerun failed without artifact"
 
 
 @pytest.mark.asyncio

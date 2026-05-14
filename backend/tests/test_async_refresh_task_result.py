@@ -54,6 +54,9 @@ class EventBusStub:
     def __init__(self):
         self.events = []
 
+    async def queue_log_event(self, event):
+        return None
+
     async def append(self, event):
         self.events.append(event)
 
@@ -106,6 +109,53 @@ async def test_codex_task_runner_awaits_async_refresh_callback():
 
     assert refreshed["called"] is True
     assert store.task.result == "persisted"
+    assert process.status == "Completed"
+
+
+@pytest.mark.asyncio
+async def test_codex_task_runner_clears_stale_result_before_rerun_refresh():
+    now = datetime.now()
+    task = CodexTask(
+        id="task-rerun-1",
+        session_id="workspace-1",
+        issue_id="issue-1",
+        title="PM task",
+        prompt="write prd",
+        role="product_manager",
+        executor="codex",
+        status="done",
+        result="stale-summary-from-previous-run",
+        workspace_path="/tmp/workspace",
+        created_at=now,
+        updated_at=now,
+    )
+    workspace = CodexSession(
+        id="workspace-1",
+        title="Workspace",
+        cwd="/tmp/workspace",
+        created_at=now,
+        last_active_at=now,
+    )
+    store = StoreStub(task, workspace)
+    bus = EventBusStub()
+    observed = {"result_at_refresh": "unset"}
+
+    async def refresh_task_result(task):
+        observed["result_at_refresh"] = task.result
+        task.result = "fresh-summary-from-rerun"
+
+    runner = CodexTaskRunner(
+        codex_store=store,
+        event_bus=bus,
+        process_manager_factory=lambda: MockManager(),
+        mock_manager_cls=MockManager,
+        refresh_task_result=refresh_task_result,
+    )
+
+    process = await runner.start_task_run(task, kind="rerun")
+
+    assert observed["result_at_refresh"] is None
+    assert store.task.result == "fresh-summary-from-rerun"
     assert process.status == "Completed"
 
 
@@ -183,3 +233,98 @@ async def test_process_runtime_mark_task_done_awaits_async_refresh_callback():
 
     assert refreshed["called"] is True
     assert store.task.result == "persisted-from-runtime"
+
+
+@pytest.mark.asyncio
+async def test_process_runtime_mark_task_done_emits_single_failure_channel_for_refresh_errors():
+    now = datetime.now()
+    task = CodexTask(
+        id="task-3",
+        session_id="workspace-3",
+        issue_id="issue-3",
+        title="PM task",
+        prompt="write prd",
+        role="product_manager",
+        executor="codex",
+        status="running",
+        workspace_path="/tmp/workspace",
+        last_execution_process_id="process-3",
+        created_at=now,
+        updated_at=now,
+    )
+    store = RuntimeStoreStub(task)
+    bus = EventBusStub()
+
+    async def refresh_task_result(task):
+        raise ValueError("ProductManager 返回了无效的 PRD 格式")
+
+    runtime = RuntimeUnderTest(
+        codex_store=store,
+        log_store=store,
+        event_bus=bus,
+        refresh_task_result=refresh_task_result,
+    )
+    entry = AsyncProcessEntry(
+        proc=None,
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        executor="codex",
+        cwd="/tmp/workspace",
+        resume_session_id=None,
+        result_text='{"ok":true}',
+    )
+
+    await runtime._mark_task_done(task.id, entry)
+
+    assert store.task.status == "failed"
+    assert store.task.result == "ProductManager 返回了无效的 PRD 格式"
+    log_events = [event for event in bus.events if event.get("type") == "log"]
+    assert log_events == []
+
+
+@pytest.mark.asyncio
+async def test_persist_reader_metadata_does_not_overwrite_terminal_failure_reason():
+    now = datetime.now()
+    task = CodexTask(
+        id="task-4",
+        session_id="workspace-4",
+        issue_id="issue-4",
+        title="PM task",
+        prompt="write prd",
+        role="product_manager",
+        executor="codex",
+        status="failed",
+        result="actual failure reason",
+        workspace_path="/tmp/workspace",
+        created_at=now,
+        updated_at=now,
+    )
+    workspace = CodexSession(
+        id="workspace-4",
+        title="Workspace",
+        cwd="/tmp/workspace",
+        created_at=now,
+        last_active_at=now,
+    )
+    store = StoreStub(task, workspace)
+    runtime = RuntimeUnderTest(
+        codex_store=store,
+        log_store=store,
+        event_bus=EventBusStub(),
+        refresh_task_result=None,
+    )
+    entry = AsyncProcessEntry(
+        proc=None,
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        executor="codex",
+        cwd="/tmp/workspace",
+        resume_session_id=None,
+        result_text='{"agent":"raw output"}',
+    )
+
+    await runtime._persist_reader_metadata(task.session_id, task.id, entry)
+
+    assert store.task.result == "actual failure reason"

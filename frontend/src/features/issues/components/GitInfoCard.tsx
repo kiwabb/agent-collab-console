@@ -16,7 +16,8 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { abandonCodexIssue, getCodexIssueDiff, mergeCodexIssue } from "@/lib/api";
-import type { CodexIssue, DiffStat, GitMergeStatus } from "@/lib/types";
+import type { CodexIssue, DiffStat, GitMergeStatus, IssueDiffResult } from "@/lib/types";
+import { DiffPanel } from "./DiffPanel";
 
 interface Props {
   issue: CodexIssue;
@@ -41,7 +42,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [merging, setMerging] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
-  const [diff, setDiff] = useState<string | null>(null);
+  const [diffResult, setDiffResult] = useState<IssueDiffResult | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [abandonOpen, setAbandonOpen] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
@@ -103,11 +104,11 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
 
   async function handleViewDiff() {
     setDiffOpen(true);
-    if (diff !== null) return;
+    if (diffResult !== null) return;
     setDiffLoading(true);
     try {
       const res = await getCodexIssueDiff(issue.id);
-      setDiff(res.diff);
+      setDiffResult(res);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load diff";
       addToast({ type: "error", title: msg });
@@ -238,55 +239,27 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
       />
 
       <Dialog open={diffOpen} onOpenChange={setDiffOpen}>
-        <DialogContent className="sm:max-w-3xl">
-          <DialogHeader>
+        <DialogContent className="sm:w-[95vw] sm:max-w-[1200px] p-0 gap-0">
+          <DialogHeader className="px-4 py-3 border-b border-border">
             <DialogTitle>{t("task.viewDiff")}</DialogTitle>
           </DialogHeader>
-          <div className="text-xs bg-muted/40 rounded max-h-[60vh] overflow-auto">
+          {/* Explicit maxHeight so overflow-y-auto has a constraint to work against */}
+          <div className="overflow-y-auto" style={{ maxHeight: "calc(82vh - 4rem)" }}>
             {diffLoading ? (
-              <span className="inline-flex items-center gap-2 p-4">
+              <span className="inline-flex items-center gap-2 p-4 text-sm">
                 <Loader2 className="animate-spin" size={14} /> Loading…
               </span>
-            ) : diff && diff.trim().length > 0 ? (
-              <DiffView diff={diff} />
             ) : (
-              <span className="block p-4">{t("task.diffEmpty")}</span>
+              <DiffPanel
+                diff={diffResult?.diff ?? ""}
+                baseBranch={diffResult?.base_branch}
+                branch={diffResult?.branch}
+                stat={diffResult?.stat}
+              />
             )}
           </div>
         </DialogContent>
       </Dialog>
     </Card>
-  );
-}
-
-/** Bare-bones unified-diff renderer.
- *
- * Colours additions/removals/hunk-headers/file-headers without bringing in a
- * heavyweight diff lib. Good enough until someone needs side-by-side view.
- */
-function DiffView({ diff }: { diff: string }) {
-  const lines = diff.split("\n");
-  return (
-    <pre className="font-mono leading-relaxed">
-      {lines.map((line, i) => {
-        let cls = "block px-3 whitespace-pre-wrap";
-        if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")) {
-          cls += " bg-muted/60 text-muted-foreground font-semibold";
-        } else if (line.startsWith("@@")) {
-          cls += " bg-brand/10 text-brand";
-        } else if (line.startsWith("+")) {
-          cls += " bg-success/10 text-success";
-        } else if (line.startsWith("-")) {
-          cls += " bg-error/10 text-error";
-        } else {
-          cls += " text-foreground/70";
-        }
-        return (
-          <span key={i} className={cls}>
-            {line || " "}
-          </span>
-        );
-      })}
-    </pre>
   );
 }

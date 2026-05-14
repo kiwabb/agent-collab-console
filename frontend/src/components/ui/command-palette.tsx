@@ -299,10 +299,10 @@ export function CommandPalette({
           ))}
 
           {tab === "bookmarks" && filteredBookmarks.map((item) => (
-            <button
+            <div
               key={item.id}
               onClick={() => handleSelect(item)}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-surface-hover transition-colors group"
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-surface-hover transition-colors group cursor-pointer"
             >
               <div className="size-8 rounded-lg bg-brand/10 flex items-center justify-center text-brand">
                 {item.icon}
@@ -313,11 +313,11 @@ export function CommandPalette({
               </div>
               <button
                 onClick={(e) => { e.stopPropagation(); removeBookmark(item.id); }}
-                className="p-1 rounded hover:bg-surface-raised text-text-muted hover:text-error"
+                className="p-1 rounded hover:bg-surface-raised text-text-muted hover:text-error transition-colors"
               >
                 <X size={12} />
               </button>
-            </button>
+            </div>
           ))}
 
           {tab === "history" && filteredHistory.map((item) => (

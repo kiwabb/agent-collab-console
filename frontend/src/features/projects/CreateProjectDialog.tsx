@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   Dialog,
@@ -14,8 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
-import { createProject } from "@/lib/api";
+import { createProject, selectDirectory } from "@/lib/api";
 import type { Project } from "@/lib/types";
+import { FolderOpen } from "lucide-react";
 
 type Source = "local" | "clone";
 
@@ -34,6 +35,13 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const [originUrl, setOriginUrl] = useState("");
   const [destParent, setDestParent] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Reset form when dialog opens
+  useEffect(() => {
+    if (open) {
+      reset();
+    }
+  }, [open]);
 
   function reset() {
     setName("");
@@ -61,6 +69,26 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       addToast({ type: "error", title: msg });
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleSelectDirectory(setter: (val: string) => void) {
+    try {
+      const path = await selectDirectory();
+      if (path) {
+        setter(path);
+        // If name is empty, try to auto-fill it from the folder name
+        if (!name.trim()) {
+          const parts = path.split(/[/\\]/);
+          const lastPart = parts[parts.length - 1] || parts[parts.length - 2]; // handle trailing slash
+          if (lastPart) {
+            setName(lastPart);
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to select directory";
+      addToast({ type: "error", title: msg });
     }
   }
 
@@ -105,11 +133,23 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
           {source === "local" ? (
             <div>
               <label className="text-xs font-medium block mb-1">{t("projects.repoPath")}</label>
-              <Input
-                value={repoPath}
-                onChange={(e) => setRepoPath(e.target.value)}
-                placeholder="/Users/you/code/agent-collab-console"
-              />
+              <div className="flex gap-2">
+                <Input
+                  value={repoPath}
+                  onChange={(e) => setRepoPath(e.target.value)}
+                  placeholder="/Users/you/code/agent-collab-console"
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => handleSelectDirectory(setRepoPath)}
+                  title={t("projects.browse")}
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           ) : (
             <>
@@ -123,11 +163,23 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1">{t("projects.destParent")}</label>
-                <Input
-                  value={destParent}
-                  onChange={(e) => setDestParent(e.target.value)}
-                  placeholder="/Users/you/code"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    value={destParent}
+                    onChange={(e) => setDestParent(e.target.value)}
+                    placeholder="/Users/you/code"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => handleSelectDirectory(setDestParent)}
+                    title={t("projects.browse")}
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             </>
           )}

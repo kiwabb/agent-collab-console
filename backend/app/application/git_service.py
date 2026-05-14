@@ -228,7 +228,10 @@ class GitService:
         base_branch: str,
         message: str,
     ) -> str:
-        """Squash-merge `source_branch` into `base_branch` on the primary repo.
+        """Squash-merge `source_branch` into `base_branch`.
+
+        Uses a temporary worktree so the primary repo's working tree is never
+        touched — the merge succeeds even when the primary repo has local edits.
 
         Returns the new commit SHA on `base_branch`.
         """
@@ -237,48 +240,116 @@ class GitService:
         _validate_branch(base_branch)
         if not message.strip():
             raise GitError("merge message must not be empty")
-        # Refuse if there are uncommitted changes on the primary repo.
-        status = await self._run(["status", "--porcelain"], cwd=repo_path)
-        if status.stdout.strip():
-            raise GitError("primary repo has uncommitted changes; aborting merge")
-        # Switch to base, squash-merge, commit.
-        await self._run(["checkout", base_branch], cwd=repo_path)
-        merge_result = await self._run(
-            ["merge", "--squash", "--", source_branch],
-            cwd=repo_path,
-            check=False,
+
+        repo_p = Path(repo_path)
+        # Place the temp worktree alongside the existing worktrees directory.
+        tmp_path = repo_p.parent / f".jm-merge-{source_branch[:24].replace('/', '-')}"
+
+        # Prune stale metadata first so a leftover entry can't block creation.
+        await self._run(["worktree", "prune"], cwd=repo_p, check=False)
+        # Remove any leftover directory from a previous failed merge.
+        if tmp_path.exists():
+            await self._run(["worktree", "remove", "--force", str(tmp_path)], cwd=repo_p, check=False)
+            import shutil as _shutil
+            if tmp_path.exists():
+                _shutil.rmtree(tmp_path, ignore_errors=True)
+
+        # --detach checks out the commit rather than the branch ref, so it
+        # never conflicts with the primary repo already having base_branch checked out.
+        await self._run(
+            ["worktree", "add", "--detach", str(tmp_path), base_branch],
+            cwd=repo_p,
         )
-        if merge_result.returncode != 0:
-            # Reset the index/work tree so we don't leave the repo in a half-merged state.
-            await self._run(["reset", "--hard", "HEAD"], cwd=repo_path, check=False)
-            raise GitError(
-                f"squash merge failed: {merge_result.stderr.strip() or merge_result.stdout.strip()}"
+        try:
+            merge_result = await self._run(
+                ["merge", "--squash", "--", source_branch],
+                cwd=tmp_path,
+                check=False,
             )
-        commit_result = await self._run(
-            ["commit", "-m", message],
-            cwd=repo_path,
-            check=False,
-        )
-        if commit_result.returncode != 0:
-            # Nothing to commit means no actual changes — surface a clearer error.
-            await self._run(["reset", "--hard", "HEAD"], cwd=repo_path, check=False)
-            raise GitError(
-                f"squash commit failed: {commit_result.stderr.strip() or commit_result.stdout.strip()}"
+            if merge_result.returncode != 0:
+                await self._run(["reset", "--hard", "HEAD"], cwd=tmp_path, check=False)
+                raise GitError(
+                    f"squash merge failed: {merge_result.stderr.strip() or merge_result.stdout.strip()}"
+                )
+            commit_result = await self._run(
+                ["commit", "-m", message],
+                cwd=tmp_path,
+                check=False,
             )
-        head = await self._run(["rev-parse", "HEAD"], cwd=repo_path)
-        return head.stdout.strip()
+            if commit_result.returncode != 0:
+                await self._run(["reset", "--hard", "HEAD"], cwd=tmp_path, check=False)
+                raise GitError(
+                    f"squash commit failed: {commit_result.stderr.strip() or commit_result.stdout.strip()}"
+                )
+            head = await self._run(["rev-parse", "HEAD"], cwd=tmp_path)
+            new_sha = head.stdout.strip()
+            # Fast-forward the primary repo to the squash commit.
+            # --autostash stashes local edits, applies ff-merge (which advances
+            # refs/heads/<base_branch> and updates working tree), then pops the
+            # stash.  This is best-effort; if it fails the git history is still
+            # correct — callers can git pull/reset manually.
+            await self._run(
+                ["merge", "--ff-only", "--autostash", new_sha],
+                cwd=repo_p,
+                check=False,
+            )
+            # If primary repo HEAD didn't move (e.g. autostash pop had conflicts
+            # and the merge was rolled back), advance the ref directly so at
+            # minimum the branch pointer is correct.
+            current_head = await self._run(["rev-parse", "HEAD"], cwd=repo_p, check=False)
+            if current_head.stdout.strip() != new_sha:
+                await self._run(
+                    ["update-ref", f"refs/heads/{base_branch}", new_sha],
+                    cwd=repo_p,
+                    check=False,
+                )
+            return new_sha
+        finally:
+            await self._run(
+                ["worktree", "remove", "--force", str(tmp_path)],
+                cwd=repo_p,
+                check=False,
+            )
+            await self._run(["worktree", "prune"], cwd=repo_p, check=False)
 
     # --- Diff / inspection ---
 
     async def worktree_diff(self, worktree_path: str | Path, base_branch: str) -> str:
         _validate_path(worktree_path)
         _validate_branch(base_branch)
-        result = await self._run(
-            ["diff", f"{base_branch}...HEAD"],
+        # Show both committed and working-directory changes vs base.
+        # This lets diff view work even when the agent hasn't committed yet.
+        tracked = await self._run(
+            ["diff", base_branch],
             cwd=worktree_path,
             check=False,
         )
-        return result.stdout
+        # Append synthetic patch entries for untracked new files.
+        untracked = await self._run(
+            ["ls-files", "--others", "--exclude-standard"],
+            cwd=worktree_path,
+            check=False,
+        )
+        parts = [tracked.stdout]
+        for rel_path in untracked.stdout.splitlines():
+            rel_path = rel_path.strip()
+            if not rel_path:
+                continue
+            try:
+                content = (Path(worktree_path) / rel_path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            lines = content.splitlines(keepends=True)
+            added = "".join(f"+{l}" if l.endswith("\n") else f"+{l}\n" for l in lines)
+            parts.append(
+                f"diff --git a/{rel_path} b/{rel_path}\n"
+                f"new file mode 100644\n"
+                f"--- /dev/null\n"
+                f"+++ b/{rel_path}\n"
+                f"@@ -0,0 +1,{len(lines)} @@\n"
+                f"{added}"
+            )
+        return "".join(parts)
 
     async def head_commit(self, worktree_path: str | Path) -> str:
         _validate_path(worktree_path)
@@ -290,6 +361,24 @@ class GitService:
         _validate_path(worktree_path)
         result = await self._run(["status", "--porcelain"], cwd=worktree_path)
         return result.stdout
+
+    async def commit_all(self, worktree_path: str | Path, message: str) -> str | None:
+        """Stage every change (tracked + untracked) and commit.
+
+        Returns the new HEAD SHA, or None if there was nothing to commit.
+        """
+        _validate_path(worktree_path)
+        if not message.strip():
+            raise GitError("commit message must not be empty")
+        await self._run(["add", "-A"], cwd=worktree_path)
+        result = await self._run(["commit", "-m", message], cwd=worktree_path, check=False)
+        if result.returncode != 0:
+            # "nothing to commit" is not a real error.
+            if "nothing to commit" in result.stdout or "nothing to commit" in result.stderr:
+                return None
+            raise GitError(f"git commit failed: {result.stderr.strip() or result.stdout.strip()}")
+        head = await self._run(["rev-parse", "HEAD"], cwd=worktree_path)
+        return head.stdout.strip()
 
     async def branch_exists(self, repo_path: str | Path, branch: str) -> bool:
         """Return True iff `branch` is currently a local ref on the repo."""
@@ -341,7 +430,7 @@ class GitService:
         _validate_path(worktree_path)
         _validate_branch(base_branch)
         result = await self._run(
-            ["diff", "--shortstat", f"{base_branch}...HEAD"],
+            ["diff", "--shortstat", base_branch],
             cwd=worktree_path,
             check=False,
         )

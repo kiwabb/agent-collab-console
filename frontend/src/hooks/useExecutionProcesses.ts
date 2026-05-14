@@ -5,6 +5,7 @@ import { applyExecutionProcessPatch } from "@/lib/applyExecutionProcessPatch";
 import { getExecutionProcesses, getWorkspaceStreamUrl } from "@/lib/api";
 import type { ExecutionProcessesState, ExecutionProcess, LogEvent } from "@/lib/types";
 import type { BusEvent } from "@/contexts/ExecutionProcessesContext";
+import { useWorkbenchStore } from "@/store/workbenchStore";
 
 function createEmptyExecutionProcesses(): ExecutionProcessesState {
   return { execution_processes: {} };
@@ -66,6 +67,11 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
       setIsInitialized(false);
       setError(null);
       dataRef.current = createEmptyExecutionProcesses();
+      
+      // Update store
+      useWorkbenchStore.getState().setExecutionProcesses({});
+      useWorkbenchStore.getState().setIsConnected(false);
+      
       return;
     }
 
@@ -88,6 +94,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
         };
         dataRef.current = next;
         setData(next);
+        useWorkbenchStore.getState().setExecutionProcesses(next.execution_processes);
         setIsInitialized(true);
         setError(null);
       } catch {
@@ -114,6 +121,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
         ws.onopen = () => {
           setError(null);
           setIsConnected(true);
+          useWorkbenchStore.getState().setIsConnected(true);
           retryAttemptsRef.current = 0;
           if (retryTimerRef.current) {
             clearTimeout(retryTimerRef.current);
@@ -139,11 +147,13 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
               const next = applyExecutionProcessPatch(current, patches as Parameters<typeof applyExecutionProcessPatch>[1]);
               dataRef.current = next;
               setData(next);
+              useWorkbenchStore.getState().setExecutionProcesses(next.execution_processes);
             }
 
             if (msg.Events) {
               msg.Events.forEach((evt) => {
                 setLastEvent(evt);
+                useWorkbenchStore.getState().setLastEvent(evt as BusEvent);
                 if (onEvent) onEvent(evt);
               });
             }
@@ -158,6 +168,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
               ws.close(1000, "finished");
               wsRef.current = null;
               setIsConnected(false);
+              useWorkbenchStore.getState().setIsConnected(false);
             }
           } catch (err) {
             console.error("Failed to process WebSocket message:", err);
@@ -171,6 +182,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
 
         ws.onclose = (evt) => {
           setIsConnected(false);
+          useWorkbenchStore.getState().setIsConnected(false);
           wsRef.current = null;
 
           if (

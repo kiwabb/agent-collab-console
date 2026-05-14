@@ -5,12 +5,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
+FRONTEND_SWC_CACHE_DIR="$FRONTEND_DIR/.next/cache/next-swc"
+FRONTEND_NODE_BIN=""
 BACKEND_VENV_PYTHON=""
 BACKEND_UVICORN_CMD=()
 export CODEX_SOURCE_ROOT="$ROOT_DIR"
 export CODEX_WORKSPACE_ROOT="${CODEX_WORKSPACE_ROOT:-/tmp/agent-collab-console-workspaces}"
 
 mkdir -p "$CODEX_WORKSPACE_ROOT"
+mkdir -p "$FRONTEND_SWC_CACHE_DIR"
 
 if [[ -x "$BACKEND_DIR/.venv314/bin/python" ]]; then
   BACKEND_VENV_PYTHON="$BACKEND_DIR/.venv314/bin/python"
@@ -72,6 +75,16 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ -x /usr/local/bin/node ]]; then
+  FRONTEND_NODE_BIN="/usr/local/bin/node"
+elif command -v node >/dev/null 2>&1; then
+  FRONTEND_NODE_BIN="$(command -v node)"
+else
+  echo "Error: 'node' command not found."
+  echo "Install Node.js and frontend dependencies first."
+  exit 1
+fi
+
 if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
   echo "Error: frontend dependencies are missing."
   echo "Run:"
@@ -91,14 +104,15 @@ else
 fi
 (
   cd "$BACKEND_DIR"
-  exec "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --port 8000
+  exec "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --port 8000 2>&1
 ) &
 BACKEND_PID=$!
 
 echo "Starting frontend on http://localhost:4000"
 (
   cd "$FRONTEND_DIR"
-  exec npm run dev
+  export NEXT_SWC_PATH="$FRONTEND_SWC_CACHE_DIR"
+  exec env -u NODE_OPTIONS "$FRONTEND_NODE_BIN" ./node_modules/next/dist/bin/next dev --port 4000
 ) &
 FRONTEND_PID=$!
 

@@ -88,6 +88,7 @@ class CodexProcessManager:
         cwd: str | None = None,
         workspace_id: str | None = None,
         env_overrides: dict[str, str] | None = None,
+        force_new_session: bool = False,
         **legacy_kwargs,
     ) -> str:
         """Async write_input - awaits runtime's write_input_async directly."""
@@ -106,6 +107,7 @@ class CodexProcessManager:
             resume_message_id=resume_message_id,
             cwd=cwd,
             env_overrides=env_overrides,
+            force_new_session=force_new_session,
             **legacy_kwargs,
         )
 

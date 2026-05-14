@@ -70,6 +70,11 @@ class CodexTaskRunner:
         if task.status == "running":
             raise ValueError("Task already running")
 
+        # Non-chat runs must not carry over the previous summary/result, or the
+        # refresh step may skip extracting the new run's output from logs.
+        if kind != "chat":
+            task.result = None
+
         # Resolve effective executor/provider/model from runtime catalog
         # Also get rendered command args and env vars from templates
         executor, provider, model, rendered_env, rendered_command_args, executor_type = await self._resolve_effective_config(
@@ -127,6 +132,7 @@ class CodexTaskRunner:
                 cwd=task.workspace_path,
                 env_overrides=rendered_env,
                 command_args=rendered_command_args,
+                force_new_session=kind in ("rerun", "initial"),
             )
         except Exception:
             task.status = "failed"

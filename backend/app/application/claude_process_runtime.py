@@ -46,6 +46,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         cwd: str | None = None,
         env_overrides: dict[str, str] | None = None,
         command_args: list[str] | None = None,
+        force_new_session: bool = False,
         **legacy_kwargs,
     ) -> str:
         """Write input using asyncio subprocess."""
@@ -69,6 +70,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
                 model=model,
                 env_overrides=env_overrides,
                 command_args=command_args,
+                force_new_session=force_new_session,
             )
         else:
             if evt:
@@ -94,6 +96,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
                 model=model,
                 env_overrides=env_overrides,
                 command_args=command_args,
+                force_new_session=force_new_session,
             )
 
         if wait and evt:
@@ -120,6 +123,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         model: str | None = None,
         env_overrides: dict[str, str] | None = None,
         command_args: list[str] | None = None,
+        force_new_session: bool = False,
     ) -> AsyncProcessEntry:
         """Async version of _spawn_process using asyncio.create_subprocess_exec."""
         workspace = await self.codex_store.load_codex_workspace(workspace_id)
@@ -139,8 +143,11 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             })
 
         effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
+        # When force_new_session=True, do NOT fallback to workspace.claude_thread_id
+        # When force_new_session=False, use resume_session_id or fallback to workspace.claude_thread_id
+        effective_resume_id = resume_session_id if force_new_session else (resume_session_id or workspace.claude_thread_id)
         cmd = self._build_claude_command(
-            resume_session_id or workspace.claude_thread_id,
+            effective_resume_id,
             resume_message_id=resume_message_id,
             model=model,
         )
@@ -181,7 +188,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             task_id=task_id,
             executor="claude",
             cwd=effective_cwd,
-            resume_session_id=resume_session_id or workspace.claude_thread_id,
+            resume_session_id=effective_resume_id,
             resume_message_id=resume_message_id,
             pending_waiters=[waiter] if waiter else [],
         )

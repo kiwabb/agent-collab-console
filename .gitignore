@@ -25,7 +25,7 @@ backend/console.db-wal
 
 # Issue artifacts produced by role workflows at runtime (PRD / system_design /
 # implementation reports etc). Local-only; never commit.
-issues/
+/issues/
 
 # References
 references/

@@ -239,6 +239,62 @@ async def test_codex_item_delta_ignored_for_non_agent_message_item(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_codex_failed_turn_uses_turn_error_not_prior_final_answer(tmp_path):
+    """If Codex emits a final_answer item before the turn later completes as
+    failed, the task failure reason must come from the turn error payload
+    instead of the previously captured assistant text."""
+    db = await _seed_db(tmp_path, ep_id="ep-codex-failed-1")
+    bus = _EventBusSpy()
+
+    from app.application.codex_app_server_runtime import CodexAppServerRuntime
+    runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
+    runtime.codex_store = db
+    runtime._log_store = db
+    runtime._event_bus = bus
+    runtime._processes = {}
+    runtime.help_orchestrator = None
+    runtime._mock_manager_cls = None
+    runtime._data_dir = str(tmp_path)
+    runtime.refresh_task_result = None
+
+    entry = AsyncProcessEntry(
+        proc=None,  # type: ignore[arg-type]
+        output_task=None,
+        alive=True,
+        session_id="ws-1",
+        task_id="task-1",
+        executor="codex",
+        cwd=str(tmp_path),
+        resume_session_id=None,
+    )
+    runtime._processes["task-1"] = entry
+
+    callback = runtime._make_app_server_notification_callback("ws-1", "task-1")
+
+    await callback("item.completed", {
+        "item": {
+            "type": "agent_message",
+            "phase": "final_answer",
+            "text": "{\"language\":\"zh-CN\"}",
+        }
+    })
+    await callback("turn.completed", {
+        "status": "failed",
+        "turn": {
+            "status": "failed",
+            "error": {
+                "message": "ProductManager 返回了无效的 PRD 格式",
+            },
+        },
+    })
+
+    task = await db.load_codex_task("task-1")
+    assert task is not None
+    assert task.status == "failed"
+    assert task.result == "ProductManager 返回了无效的 PRD 格式"
+
+
+@pytest.mark.asyncio
 async def test_event_bus_routes_message_delta_to_message_stream_manager(monkeypatch):
     """When event_bus._broadcast_to_ws sees a message_delta event, it must call
     message_stream_manager.publish_delta(execution_process_id, delta_event_dict)."""

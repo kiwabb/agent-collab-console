@@ -80,6 +80,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         cwd: str | None = None,
         env_overrides: dict[str, str] | None = None,
         command_args: list[str] | None = None,
+        force_new_session: bool = False,
         **legacy_kwargs,
     ) -> str:
         workspace_id = self._resolve_workspace_id(workspace_id, **legacy_kwargs)
@@ -103,6 +104,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             model=model,
             env_overrides=env_overrides,
             command_args=command_args,
+            force_new_session=force_new_session,
         )
 
         await self._append_log(workspace_id, "stdin", prompt_text, task_id)
@@ -164,6 +166,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         model: str | None = None,
         env_overrides: dict[str, str] | None = None,
         command_args: list[str] | None = None,
+        force_new_session: bool = False,
     ) -> AsyncProcessEntry:
         import sys
 
@@ -282,7 +285,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 await client.initialize()
                 await client.initialized()
                 
-                effective_resume_id = resume_session_id or workspace.thread_id
+                # When force_new_session=True, do NOT fallback to workspace.thread_id
+                # When force_new_session=False, use resume_session_id or fallback to workspace.thread_id
+                effective_resume_id = resume_session_id if force_new_session else (resume_session_id or workspace.thread_id)
+
                 if effective_resume_id:
                     try:
                         res = await client.thread_fork(effective_resume_id)
@@ -357,7 +363,15 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 if entry:
                     status = params.get("status") or params.get("turn", {}).get("status")
                     if str(status).lower() == "failed":
+                        error_payload = params.get("error") or params.get("turn", {}).get("error") or {}
+                        error_message = None
+                        if isinstance(error_payload, dict):
+                            error_message = error_payload.get("message") or error_payload.get("detail")
+                        if not error_message:
+                            error_message = params.get("message") or params.get("detail")
                         entry.had_error = True
+                        if isinstance(error_message, str) and error_message.strip():
+                            entry.result_text = error_message.strip()
                         await self._mark_task_failed(task_id, entry)
                     else:
                         await self._mark_task_done(task_id, entry)

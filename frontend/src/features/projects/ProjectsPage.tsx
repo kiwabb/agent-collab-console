@@ -230,7 +230,11 @@ export function ProjectsPage() {
       <header className="border-b sticky top-0 z-10 bg-background/95 backdrop-blur">
         <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => router.push("/")} aria-label={t("projects.backToWorkbench")}>
+            <Button variant="ghost" size="sm" onClick={() => {
+              const pid = selectedProjectId();
+              if (pid) router.push("/");
+              else router.push("/projects");
+            }} aria-label={t("projects.backToWorkbench")}>
               <ChevronLeft size={16} />
               <span className="ml-1">{t("projects.backToWorkbench")}</span>
             </Button>

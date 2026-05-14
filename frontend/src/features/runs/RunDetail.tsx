@@ -12,7 +12,9 @@ import { useI18n } from "@/providers/I18nProvider";
 import { normalizeLogs } from "@/lib/codexLogNormalizer";
 import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { renderMessageWithLinks } from "@/lib/utils";
+import { shouldShowTopErrorCard } from "@/lib/runDetailErrorState";
 
 interface RunDetailProps {
   process: ExecutionProcess | null;
@@ -112,6 +114,7 @@ export function RunDetail({
   const { t } = useI18n();
   const [message, setMessage] = useState("");
   const [runMode, setRunMode] = useState<RunMode>("auto");
+  const [showRerunConfirm, setShowRerunConfirm] = useState(false);
   // Auto-scroll the messages / logs panes to the bottom when new content arrives.
   // We scroll the container itself (not via scrollIntoView on a sentinel) because:
   //   - sentinel-based scrollIntoView is smooth-animated and gets cut off by
@@ -192,6 +195,10 @@ export function RunDetail({
     [normalizedLogs],
   );
   const taskStatus = String(taskMeta?.status || "").toLowerCase();
+  const showTopErrorCard = useMemo(
+    () => shouldShowTopErrorCard(errorEntry, taskStatus, taskMeta?.result),
+    [errorEntry, taskStatus, taskMeta?.result],
+  );
   const canRunInitial = !process && !!taskMeta && (taskStatus === "pending" || taskStatus === "failed");
   const unlockStatus = useMemo(
     () => taskMeta ? getDevelopmentTaskUnlockStatus(taskMeta, allTasks) : { unlocked: true, reason: null },
@@ -207,11 +214,8 @@ export function RunDetail({
 
   const handleRunAgain = useCallback(() => {
     if (!onRunAgain) return;
-    if (!window.confirm("重跑会基于原始 prompt 重新生成并覆盖现有产物（如 prd.md / system_design.json）。确认继续？")) {
-      return;
-    }
-    onRunAgain(executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
-  }, [onRunAgain, executionConfig.executor, executionConfig.provider, executionConfig.model]);
+    setShowRerunConfirm(true);
+  }, [onRunAgain]);
 
   const handleSend = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -365,12 +369,21 @@ export function RunDetail({
             <TooltipContent side="bottom">Delete Session</TooltipContent>
           </Tooltip>
         </div>
-        {errorEntry && (
-          <div className="mt-4 flex gap-3 rounded-xl border border-error/25 bg-error/10 px-4 py-3 text-error">
+        {showTopErrorCard && errorEntry && (
+          <div className="mt-4 flex max-h-48 gap-3 rounded-xl border border-error/25 bg-error/10 px-4 py-3 text-error">
             <AlertCircle size={16} className="mt-0.5 shrink-0" />
-            <div className="min-w-0">
+            <div className="min-w-0 overflow-y-auto pr-1">
               <p className="text-[10px] font-black uppercase tracking-[0.18em]">{errorEntry.label || t("run.error")}</p>
-              <p className="mt-1 text-xs leading-relaxed break-words text-error/90">{errorEntry.content}</p>
+              <p className="mt-1 text-xs leading-relaxed break-words whitespace-pre-wrap text-error/90">{errorEntry.content}</p>
+            </div>
+          </div>
+        )}
+        {taskStatus === "failed" && taskMeta?.result && (
+          <div className="mt-4 flex max-h-48 gap-3 rounded-xl border border-error/25 bg-error/10 px-4 py-3 text-error">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <div className="min-w-0 overflow-y-auto pr-1">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em]">任务执行失败</p>
+              <p className="mt-1 text-xs leading-relaxed break-words text-error/90 whitespace-pre-wrap">{taskMeta.result}</p>
             </div>
           </div>
         )}
@@ -393,6 +406,15 @@ export function RunDetail({
             <p className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap font-medium">
               {taskMeta.review_comment}
             </p>
+            {taskMeta.status === "rework" && (
+              <button
+                onClick={() => onSendMessage(taskMeta.review_comment!, "refine")}
+                className="mt-1 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl bg-error text-background hover:bg-error/90 transition-all shadow-md active:scale-[0.98]"
+              >
+                <RotateCcw size={13} />
+                按建议修订
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -617,6 +639,19 @@ export function RunDetail({
           </button>
         </form>
       </div>
+
+      <ConfirmDialog
+        open={showRerunConfirm}
+        onOpenChange={setShowRerunConfirm}
+        title={t("run.rerun")}
+        description="重跑会基于原始 prompt 重新生成并覆盖现有产物（如 prd.md / system_design.json）。确认继续？"
+        confirmText={t("run.rerun")}
+        onConfirm={() => {
+          setShowRerunConfirm(false);
+          onRunAgain?.(executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model);
+        }}
+        variant="warning"
+      />
     </div>
   );
 }
