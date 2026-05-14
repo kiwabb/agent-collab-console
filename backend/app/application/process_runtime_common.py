@@ -56,6 +56,14 @@ class AsyncProcessEntry:
     # as a delta event. `delta_seq` is monotonically increasing per-entry.
     last_emitted_assistant_text: str = ""
     delta_seq: int = 0
+    # Tool-event dedup: tool_use IDs already mirrored to the log store.
+    # Claude stream-json can re-emit the same assistant message multiple times
+    # while a turn is in-flight, so we guard the emission per tool_use_id.
+    emitted_tool_use_ids: set = field(default_factory=set)
+    emitted_tool_result_ids: set = field(default_factory=set)
+    # Codex item tracking: maps item.id to a started_at timestamp so we can
+    # compute durationMs on completion.
+    tool_item_started_at: dict = field(default_factory=dict)
 
     @property
     def workspace_id(self) -> str:
@@ -363,6 +371,23 @@ class BaseProcessRuntime:
                             thinking = item.get("thinking", "")
                             if thinking:
                                 display_parts.append(f"[Thinking: {thinking[:100]}...]" if len(thinking) > 100 else f"[Thinking: {thinking}]")
+                        elif item_type == "tool_use":
+                            tool_use_id = item.get("id") or item.get("tool_use_id") or ""
+                            if tool_use_id and tool_use_id in entry.emitted_tool_use_ids:
+                                continue
+                            if tool_use_id:
+                                entry.emitted_tool_use_ids.add(tool_use_id)
+                            payload = json.dumps(
+                                {
+                                    "kind": "tool_use",
+                                    "tool_use_id": tool_use_id,
+                                    "tool_name": item.get("name") or item.get("tool_name") or "",
+                                    "input": item.get("input") or {},
+                                },
+                                ensure_ascii=False,
+                                default=str,
+                            )
+                            await self._append_log(workspace_id, "tool_use", payload, task_id)
                 if display_parts:
                     new_display = "".join(display_parts).strip()
                     if new_display and new_display != entry.last_emitted_assistant_text:
@@ -384,16 +409,73 @@ class BaseProcessRuntime:
                     entry.result_text = "".join(text_parts).strip()
             return
 
+        if msg_type == "user":
+            # Claude stream-json emits tool_result entries inside a "user" turn.
+            # Surface them as structured tool_result logs so the UI can fold
+            # them onto the matching tool_use card.
+            msg = parsed.get("message") or {}
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict) or item.get("type") != "tool_result":
+                        continue
+                    tool_use_id = item.get("tool_use_id") or item.get("id") or ""
+                    if tool_use_id and tool_use_id in entry.emitted_tool_result_ids:
+                        continue
+                    if tool_use_id:
+                        entry.emitted_tool_result_ids.add(tool_use_id)
+                    raw_content = item.get("content")
+                    if isinstance(raw_content, list):
+                        text_chunks = []
+                        for piece in raw_content:
+                            if isinstance(piece, dict) and isinstance(piece.get("text"), str):
+                                text_chunks.append(piece["text"])
+                            elif isinstance(piece, str):
+                                text_chunks.append(piece)
+                        result_text = "\n".join(text_chunks)
+                    elif isinstance(raw_content, str):
+                        result_text = raw_content
+                    else:
+                        result_text = ""
+                    payload = json.dumps(
+                        {
+                            "kind": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "output": result_text,
+                            "is_error": bool(item.get("is_error")),
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    await self._append_log(workspace_id, "tool_result", payload, task_id)
+            return
+
         if msg_type == "tool_use":
-            tool_name = parsed.get("tool_name") or ""
-            tool_data = parsed.get("input", {})
-            await self._append_log(workspace_id, "tool_use", f"Tool: {tool_name} | Input: {tool_data}", task_id)
+            payload = json.dumps(
+                {
+                    "kind": "tool_use",
+                    "tool_use_id": parsed.get("tool_use_id") or parsed.get("id") or "",
+                    "tool_name": parsed.get("tool_name") or parsed.get("name") or "",
+                    "input": parsed.get("input") or {},
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+            await self._append_log(workspace_id, "tool_use", payload, task_id)
             return
 
         if msg_type == "tool_result":
-            result_content = parsed.get("result", "")
-            is_error = parsed.get("is_error", False)
-            await self._append_log(workspace_id, "tool_result", f"Result: {result_content} | Error: {is_error}", task_id)
+            payload = json.dumps(
+                {
+                    "kind": "tool_result",
+                    "tool_use_id": parsed.get("tool_use_id") or parsed.get("id") or "",
+                    "output": parsed.get("result") if isinstance(parsed.get("result"), str) else parsed.get("output", ""),
+                    "is_error": bool(parsed.get("is_error")),
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+            await self._append_log(workspace_id, "tool_result", payload, task_id)
             return
 
         if msg_type == "result":

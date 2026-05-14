@@ -16,6 +16,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { renderMessageWithLinks } from "@/lib/utils";
 import { shouldShowTopErrorCard } from "@/lib/runDetailErrorState";
+import { MessageMarkdown } from "./MessageMarkdown";
+import { ToolBlock } from "./toolBlocks/ToolBlocks";
 
 interface RunDetailProps {
   process: ExecutionProcess | null;
@@ -484,12 +486,16 @@ export function RunDetail({
                           <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">{msg.role}</span>
                         </div>
                         <div className={cn(
-                          "p-5 rounded-2xl text-[13.5px] leading-relaxed border whitespace-pre-wrap font-medium",
+                          "p-5 rounded-2xl text-[13.5px] leading-relaxed border font-medium",
                           msg.role === "assistant"
                             ? "bg-brand/5 border-brand/20 text-foreground/90 shadow-sm"
                             : "bg-surface-raised/40 border-border-subtle text-text-secondary"
                         )}>
-                          {msg.content}
+                          {msg.role === "assistant" ? (
+                            <MessageMarkdown content={msg.content || ""} />
+                          ) : (
+                            <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                          )}
                         </div>
                       </motion.div>
                     ))}
@@ -505,12 +511,12 @@ export function RunDetail({
                           <div className="size-1.5 rounded-full bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)] animate-pulse" />
                           <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">assistant · 输出中</span>
                         </div>
-                        <div className="p-5 rounded-2xl text-[13.5px] leading-relaxed border whitespace-pre-wrap font-medium bg-brand/5 border-brand/20 text-foreground/90 shadow-sm">
-                          {liveStream.pendingAssistant.text}
-                          <motion.span 
+                        <div className="p-5 rounded-2xl text-[13.5px] leading-relaxed border font-medium bg-brand/5 border-brand/20 text-foreground/90 shadow-sm">
+                          <MessageMarkdown content={liveStream.pendingAssistant.text || ""} />
+                          <motion.span
                             animate={{ opacity: [0, 1, 0] }}
                             transition={{ duration: 0.8, repeat: Infinity }}
-                            className="inline-block ml-0.5 -mb-0.5 w-1.5 h-4 bg-brand"
+                            className="inline-block ml-0.5 -mb-0.5 w-1.5 h-4 bg-brand align-middle"
                           >&nbsp;</motion.span>
                         </div>
                       </motion.div>
@@ -542,43 +548,46 @@ export function RunDetail({
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ duration: 0.2 }}
-                        className={cn(
-                          "flex gap-4 group px-3 py-2 rounded-xl border transition-colors",
-                          log.type === "error"
-                            ? "bg-error/10 border-error/20"
-                            : log.type === "command"
-                              ? "bg-surface-raised/50 border-border-subtle"
-                              : "bg-surface/30 border-transparent hover:bg-surface-hover/50"
-                        )}
                       >
-                        <span className="shrink-0 text-[10px] font-mono font-bold text-text-muted/30 select-none w-8 text-right group-hover:text-text-muted/60 transition-colors">{i + 1}</span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={cn(
-                              "text-[9px] font-black uppercase tracking-[0.16em]",
-                              log.type === "error" ? "text-error" : "text-text-muted"
-                            )}>
-                              {log.label}
-                            </span>
-                            {log.status && (
-                              <span className={cn(
-                                "text-[9px] font-black uppercase tracking-widest",
-                                log.status === "failed" ? "text-error" : log.status === "success" ? "text-success" : "text-brand"
-                              )}>
-                                {log.status}
-                              </span>
+                        {log.type === "tool" ? (
+                          <ToolBlock entry={log} />
+                        ) : (
+                          <div
+                            className={cn(
+                              "flex gap-4 group px-3 py-2 rounded-xl border transition-colors",
+                              log.type === "error"
+                                ? "bg-error/10 border-error/20"
+                                : log.type === "assistant"
+                                  ? "bg-brand/5 border-brand/20"
+                                  : log.type === "help"
+                                    ? "bg-warning/10 border-warning/20"
+                                    : "bg-surface/30 border-transparent hover:bg-surface-hover/50",
                             )}
+                          >
+                            <span className="shrink-0 text-[10px] font-mono font-bold text-text-muted/30 select-none w-8 text-right group-hover:text-text-muted/60 transition-colors">
+                              {i + 1}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span
+                                  className={cn(
+                                    "text-[9px] font-black uppercase tracking-[0.16em]",
+                                    log.type === "error" ? "text-error" : "text-text-muted",
+                                  )}
+                                >
+                                  {log.label}
+                                </span>
+                              </div>
+                              {log.type === "assistant" && log.content ? (
+                                <MessageMarkdown content={log.content} />
+                              ) : log.content ? (
+                                <p className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-text-secondary group-hover:text-foreground transition-colors">
+                                  {log.content}
+                                </p>
+                              ) : null}
+                            </div>
                           </div>
-                          {log.command && (
-                            <pre className="mb-2 whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-foreground">{log.command}</pre>
-                          )}
-                          {log.content && (
-                            <p className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-text-secondary group-hover:text-foreground transition-colors">{log.content}</p>
-                          )}
-                          {log.output && (
-                            <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-background/60 p-3 font-mono text-[11px] leading-relaxed text-text-secondary">{log.output}</pre>
-                          )}
-                        </div>
+                        )}
                       </motion.div>
                     ))}
                   </AnimatePresence>

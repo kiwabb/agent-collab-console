@@ -249,7 +249,26 @@ export interface HelpRequest {
 }
 
 // Normalized log entry types for UI
-export type NormalizedEntryType = "status" | "error" | "assistant" | "command" | "help" | "raw";
+export type NormalizedEntryType =
+  | "status"
+  | "error"
+  | "assistant"
+  | "thinking"
+  | "command"
+  | "tool"
+  | "help"
+  | "raw";
+
+export type ToolCategory =
+  | "bash"
+  | "read"
+  | "edit"
+  | "search"
+  | "todo"
+  | "web"
+  | "mcp"
+  | "fileChange"
+  | "other";
 
 export interface NormalizedEntry {
   id: string;
@@ -266,6 +285,14 @@ export interface NormalizedEntry {
   executionProcessId?: string | null;
   timestamp?: string;
   itemId?: string | null;
+  // Structured tool entry (when type === "tool")
+  toolName?: string;
+  toolUseId?: string;
+  category?: ToolCategory;
+  args?: Record<string, unknown>;
+  filePath?: string;
+  durationMs?: number;
+  isError?: boolean;
 }
 
 // Execution processes state

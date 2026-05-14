@@ -341,6 +341,36 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                     task.resume_session_id = thread_id
                     await self.codex_store.save_codex_task(task)
 
+    _TOOL_ITEM_TYPES = {
+        "command_execution",
+        "commandexecution",
+        "file_change",
+        "filechange",
+        "mcp_tool_call",
+        "mcptoolcall",
+        "web_search",
+        "websearch",
+    }
+
+    @classmethod
+    def _is_tool_item(cls, item_type: str | None) -> bool:
+        if not item_type:
+            return False
+        normalized = str(item_type).strip().lower().replace("-", "_").replace(" ", "_")
+        return normalized in cls._TOOL_ITEM_TYPES
+
+    @staticmethod
+    def _normalize_tool_item_type(item_type: str | None) -> str:
+        return str(item_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    async def _emit_tool_event(self, workspace_id: str, task_id: str | None, payload: dict):
+        await self._append_log(
+            workspace_id,
+            "tool_event",
+            json.dumps(payload, ensure_ascii=False, default=str),
+            task_id,
+        )
+
     def _make_app_server_notification_callback(self, workspace_id: str, task_id: str | None):
         async def callback(method: str, params: dict) -> bool:
             task = await self.codex_store.load_codex_task(task_id) if task_id else None
@@ -380,6 +410,24 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                     entry.pending_waiters.clear()
                 return False
 
+            if method in ("item/started", "item.started"):
+                item = params.get("item", {})
+                if self._is_tool_item(item.get("type")):
+                    entry = self._processes.get(task_id or workspace_id)
+                    item_id = item.get("id") or ""
+                    if entry is not None and item_id:
+                        entry.tool_item_started_at[item_id] = datetime.now()
+                    await self._emit_tool_event(workspace_id, task_id, {
+                        "kind": "tool_started",
+                        "tool_use_id": item_id,
+                        "item_type": self._normalize_tool_item_type(item.get("type")),
+                        "tool_name": item.get("name") or item.get("tool_name") or "",
+                        "command": item.get("command"),
+                        "file_path": item.get("path") or item.get("file_path"),
+                        "input": item.get("input") or item.get("arguments") or {},
+                    })
+                return False
+
             if method in ("item/completed", "item.completed"):
                 item = params.get("item", {})
                 if is_agent_message_item_type(item.get("type")) and item.get("phase") == "final_answer":
@@ -389,6 +437,36 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                         entry.result_text = text
                     if task_id:
                         await self._persist_assistant_message(task_id, execution_process_id, text)
+                    return False
+                if self._is_tool_item(item.get("type")):
+                    entry = self._processes.get(task_id or workspace_id)
+                    item_id = item.get("id") or ""
+                    duration_ms = None
+                    if entry is not None and item_id:
+                        started = entry.tool_item_started_at.pop(item_id, None)
+                        if started is not None:
+                            duration_ms = int((datetime.now() - started).total_seconds() * 1000)
+                    exit_code = item.get("exit_code")
+                    is_error = False
+                    status_value = str(item.get("status") or "").lower()
+                    if status_value in {"failed", "error", "cancelled", "canceled", "aborted", "timeout"}:
+                        is_error = True
+                    if isinstance(exit_code, int) and exit_code != 0:
+                        is_error = True
+                    await self._emit_tool_event(workspace_id, task_id, {
+                        "kind": "tool_completed",
+                        "tool_use_id": item_id,
+                        "item_type": self._normalize_tool_item_type(item.get("type")),
+                        "tool_name": item.get("name") or item.get("tool_name") or "",
+                        "command": item.get("command"),
+                        "file_path": item.get("path") or item.get("file_path"),
+                        "input": item.get("input") or item.get("arguments") or {},
+                        "output": item.get("aggregated_output") or item.get("output") or item.get("result") or "",
+                        "exit_code": exit_code,
+                        "is_error": is_error,
+                        "status": item.get("status"),
+                        "duration_ms": duration_ms,
+                    })
                 return False
 
             # Token-level streaming: codex emits incremental item.delta / item.updated
