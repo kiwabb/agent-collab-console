@@ -78,6 +78,11 @@ function TabsContent({ className, children, ...props }: TabsPrimitive.Panel.Prop
       {...props}
     >
       <motion.div
+        // Inherit the Panel's box so children that rely on `h-full` / flex
+        // layout don't collapse to 0 height. Without this the panel renders
+        // but its first descendant (e.g. RunDetail's root) has no height,
+        // making the inner tabs' absolute content invisible.
+        className="h-full w-full flex flex-col min-h-0"
         initial={{ opacity: 0, x: 10 }}
         animate={{ opacity: 1, x: 0 }}
         exit={{ opacity: 0, x: -10 }}
