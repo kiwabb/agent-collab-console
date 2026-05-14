@@ -99,7 +99,7 @@ import { KeyboardShortcutsModal } from "@/components/ui/keyboard-shortcuts-modal
 import { CommandPalette } from "@/components/ui/command-palette";
 import { MacroRecorder, useMacros } from "@/components/ui/macro-recorder";
 import { PresenceIndicator } from "@/components/ui/presence-indicator";
-import { HelloWorld } from "@/components/HelloWorld";
+import { FadeIn } from "@/components/ui/animated-transitions";
 
 type NavigationState = "home" | "workspace" | "issue";
 
@@ -1126,15 +1126,22 @@ function WorkbenchInner({
         {view === "home" && (
           <div className="h-full overflow-y-auto no-scrollbar">
             <div className="p-8 max-w-7xl mx-auto w-full">
-              <HelloWorld className="mb-8" />
-            </div>
-            <WorkspaceGrid
+              <FadeIn direction="up" delay={0.1}>
+                <div className="mb-6">
+                  <h1 className="text-3xl font-bold tracking-tight">工作区</h1>
+                  <p className="text-sm text-muted-foreground mt-1">选择或创建一个工作区开始</p>
+                </div>
+              </FadeIn>
+              <FadeIn direction="up" delay={0.1} className="w-full">
+                <WorkspaceGrid
               workspaces={workspaces}
               onSelect={handleSelectWorkspace}
               onCreate={handleCreateWorkspace}
               onDelete={handleDeleteWorkspace}
               isLoading={isLoadingWorkspaces}
-            />
+                />
+              </FadeIn>
+            </div>
           </div>
         )}
 
