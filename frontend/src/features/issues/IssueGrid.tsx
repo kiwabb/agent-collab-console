@@ -4,6 +4,7 @@ import type { CodexIssue, GitBranch, RuntimeCatalog } from "@/lib/types";
 import { getProjectBranches } from "@/lib/api";
 import { ListTodo, Plus, ChevronRight, MessageSquare, Trash2, Search, X, Clock } from "lucide-react";
 import { useEffect, useMemo, useState, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
@@ -170,14 +171,23 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
   }
 
   return (
-    <div className="p-8 max-w-7xl mx-auto w-full animate-in fade-in duration-700">
+    <div className="p-8 max-w-7xl mx-auto w-full">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-10 gap-4">
-        <div>
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.5 }}
+        >
           <h2 className="text-3xl font-black tracking-tight text-foreground mb-2">{t("issue.issues")}</h2>
           <p className="text-text-muted font-medium">{t("issue.gridSubtitle")}</p>
-        </div>
+        </motion.div>
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          <div className="relative flex-1 sm:flex-none">
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.1 }}
+            className="relative flex-1 sm:flex-none"
+          >
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
             <input
               ref={searchInputRef}
@@ -187,242 +197,282 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
               onFocus={() => setShowSearchDropdown(true)}
               onBlur={() => setTimeout(() => setShowSearchDropdown(false), 200)}
               placeholder="Search issues..."
-              className="py-2 w-full sm:w-64 rounded-xl bg-surface-raised border border-border-subtle text-sm outline-none focus:border-brand"
+              className="py-2 w-full sm:w-64 rounded-xl bg-surface-raised border border-border-subtle text-sm outline-none focus:border-brand transition-all focus:ring-2 focus:ring-brand/20"
               style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem' }}
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-surface-hover rounded"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-surface-hover rounded transition-colors"
               >
                 <X size={14} className="text-text-muted" />
               </button>
             )}
-            {showSearchDropdown && recentSearches.length > 0 && !searchQuery && (
-              <div className="absolute top-full left-0 right-0 mt-2 py-2 rounded-xl bg-surface-raised border border-border-subtle shadow-xl z-50">
-                <div className="px-3 py-1 text-[10px] font-black uppercase tracking-widest text-text-muted mb-1">
-                  Recent Searches
-                </div>
-                {recentSearches.map((search) => (
-                  <div
-                    key={search}
-                    onMouseDown={() => {
-                      setSearchQuery(search);
-                      setShowSearchDropdown(false);
-                    }}
-                    className="w-full px-3 py-2 flex items-center gap-2 hover:bg-surface-hover text-sm text-left cursor-pointer"
-                  >
-                    <Clock size={12} className="text-text-muted shrink-0" />
-                    <span className="truncate">{search}</span>
-                    <button
-                      onMouseDown={(e) => {
-                        e.stopPropagation();
-                        removeRecentSearch(search);
-                        setRecentSearches(getRecentSearches());
-                      }}
-                      className="ml-auto p-1 hover:bg-surface-hover rounded text-text-muted hover:text-error transition-colors"
-                    >
-                      <X size={10} />
-                    </button>
+            <AnimatePresence>
+              {showSearchDropdown && recentSearches.length > 0 && !searchQuery && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  className="absolute top-full left-0 right-0 mt-2 py-2 rounded-xl bg-surface-raised border border-border-subtle shadow-xl z-50"
+                >
+                  <div className="px-3 py-1 text-[10px] font-black uppercase tracking-widest text-text-muted mb-1">
+                    Recent Searches
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <button
+                  {recentSearches.map((search) => (
+                    <div
+                      key={search}
+                      onMouseDown={() => {
+                        setSearchQuery(search);
+                        setShowSearchDropdown(false);
+                      }}
+                      className="w-full px-3 py-2 flex items-center gap-2 hover:bg-surface-hover text-sm text-left cursor-pointer transition-colors"
+                    >
+                      <Clock size={12} className="text-text-muted shrink-0" />
+                      <span className="truncate">{search}</span>
+                      <button
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                          removeRecentSearch(search);
+                          setRecentSearches(getRecentSearches());
+                        }}
+                        className="ml-auto p-1 hover:bg-surface-hover rounded text-text-muted hover:text-error transition-colors"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+          <motion.button
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
             onClick={() => setIsCreating(true)}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 transition-all"
           >
             <Plus size={18} />
             {t("issue.new")}
-          </button>
+          </motion.button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {isLoading && (
-          <>
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="p-6 rounded-2xl bg-surface/40 border border-border-subtle flex flex-col h-full min-h-[180px]">
-                <div className="flex items-start justify-between mb-4">
-                  <Skeleton variant="card" className="size-10" />
-                  <Skeleton variant="default" className="w-16 h-5" />
-                </div>
-                <Skeleton variant="text" className="w-3/4 mb-2" />
-                <Skeleton variant="text" className="w-1/2 mb-6" />
-                <div className="mt-auto">
-                  <Skeleton variant="text" className="w-24" />
-                </div>
-              </div>
-            ))}
-          </>
-        )}
+      <motion.div 
+        layout
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
+      >
+        <AnimatePresence mode="popLayout">
+          {isLoading && (
+            <>
+              {[1, 2, 3].map((i) => (
+                <motion.div 
+                  key={`skeleton-${i}`}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="p-6 rounded-2xl bg-surface/40 border border-border-subtle flex flex-col h-full min-h-[180px]"
+                >
+                  <div className="flex items-start justify-between mb-4">
+                    <Skeleton variant="card" className="size-10" />
+                    <Skeleton variant="default" className="w-16 h-5" />
+                  </div>
+                  <Skeleton variant="text" className="w-3/4 mb-2" />
+                  <Skeleton variant="text" className="w-1/2 mb-6" />
+                  <div className="mt-auto">
+                    <Skeleton variant="text" className="w-24" />
+                  </div>
+                </motion.div>
+              ))}
+            </>
+          )}
 
-        {isCreating && (
-          <form
-            onSubmit={handleSubmit}
-            className="p-6 rounded-2xl bg-surface-raised border border-brand/50 shadow-2xl animate-in zoom-in duration-300 flex flex-col h-full"
-          >
-            <div className="size-10 rounded-xl bg-brand/10 flex items-center justify-center mb-4">
-              <ListTodo size={20} className="text-brand" />
-            </div>
-            <input
-              autoFocus
-              type="text"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              placeholder={t("issue.titlePlaceholder")}
-              className="w-full bg-surface-input border border-border-subtle rounded-lg px-4 py-2.5 text-sm outline-none focus:border-brand mb-3"
-            />
-            <textarea
-              value={newDesc}
-              onChange={(e) => setNewDesc(e.target.value)}
-              placeholder={t("issue.descriptionOptional")}
-              rows={3}
-              className="w-full bg-surface-input border border-border-subtle rounded-lg px-4 py-2.5 text-sm outline-none focus:border-brand mb-5 resize-none flex-1"
-            />
-            <div className="mb-5">
-              <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-text-muted mb-2">
-                {t("task.executor")}
-              </label>
-              <ExecutionConfigSelector
-                value={executionConfig}
-                onChange={setExecutionConfig}
-                catalog={catalog}
+          {isCreating && (
+            <motion.form
+              key="create-form"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              onSubmit={handleSubmit}
+              className="p-6 rounded-2xl bg-surface-raised border border-brand/50 shadow-2xl flex flex-col h-full z-10"
+            >
+              <div className="size-10 rounded-xl bg-brand/10 flex items-center justify-center mb-4">
+                <ListTodo size={20} className="text-brand" />
+              </div>
+              <input
+                autoFocus
+                type="text"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                placeholder={t("issue.titlePlaceholder")}
+                className="w-full bg-surface-input border border-border-subtle rounded-lg px-4 py-2.5 text-sm outline-none focus:border-brand mb-3 transition-colors"
               />
-            </div>
-            {projectId && (
-              <div className="mb-2">
+              <textarea
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+                placeholder={t("issue.descriptionOptional")}
+                rows={3}
+                className="w-full bg-surface-input border border-border-subtle rounded-lg px-4 py-2.5 text-sm outline-none focus:border-brand mb-5 resize-none flex-1 transition-colors"
+              />
+              <div className="mb-5">
                 <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-text-muted mb-2">
-                  {t("issue.baseBranch")}
+                  {t("task.executor")}
                 </label>
-                <Select value={baseBranch} onValueChange={(value) => setBaseBranch(value || "")}>
-                  <SelectTrigger className="w-full bg-surface-input border-border-subtle font-mono">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {branches.length === 0 && projectDefaultBranch && (
-                      <SelectItem value={projectDefaultBranch}>{projectDefaultBranch}</SelectItem>
-                    )}
-                    {branches.map((b) => {
-                      const ago = formatRelativeTime(b.last_commit_date);
-                      return (
-                        <SelectItem key={b.name} value={b.name}>
-                          {b.name}
-                          {b.name === projectDefaultBranch ? " (default)" : ""}
-                          {ago ? `  · ${ago}` : ""}
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
+                <ExecutionConfigSelector
+                  value={executionConfig}
+                  onChange={setExecutionConfig}
+                  catalog={catalog}
+                />
               </div>
-            )}
-            <div className="flex gap-2 mt-auto pt-4">
-              <button
-                type="submit"
-                className="flex-1 bg-brand text-background text-xs font-bold py-2.5 rounded-lg"
-              >
-                {t("issue.create")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsCreating(false)}
-                className="flex-1 bg-surface-hover text-text-secondary text-xs font-bold py-2.5 rounded-lg border border-border-subtle"
-              >
-                {t("issue.cancel")}
-              </button>
-            </div>
-          </form>
-        )}
-
-        {filteredIssues.map((issue) => (
-          <div
-            key={issue.id}
-            onClick={() => onSelect(issue.id)}
-            className="group p-6 rounded-2xl bg-surface/40 border border-border-subtle hover:bg-surface-hover hover:border-brand/30 hover:shadow-2xl transition-all cursor-pointer flex flex-col h-full min-h-[180px]"
-          >
-            <div className="flex items-start justify-between mb-4">
-              <div className="size-10 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center group-hover:bg-brand/5 group-hover:border-brand/20 transition-all">
-                <MessageSquare size={18} className="text-text-muted group-hover:text-brand" />
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={cn(
-                  "px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest border",
-                  issue.current_phase === "completed"
-                    ? "bg-success/10 text-success border-success/20"
-                    : "bg-brand/10 text-brand border-brand/20"
-                )}>
-                  {issue.current_phase.replace("_", " ")}
+              {projectId && (
+                <div className="mb-2">
+                  <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-text-muted mb-2">
+                    {t("issue.baseBranch")}
+                  </label>
+                  <Select value={baseBranch} onValueChange={(value) => setBaseBranch(value || "")}>
+                    <SelectTrigger className="w-full bg-surface-input border-border-subtle font-mono">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {branches.length === 0 && projectDefaultBranch && (
+                        <SelectItem value={projectDefaultBranch}>{projectDefaultBranch}</SelectItem>
+                      )}
+                      {branches.map((b) => {
+                        const ago = formatRelativeTime(b.last_commit_date);
+                        return (
+                          <SelectItem key={b.name} value={b.name}>
+                            {b.name}
+                            {b.name === projectDefaultBranch ? " (default)" : ""}
+                            {ago ? `  · ${ago}` : ""}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
                 </div>
+              )}
+              <div className="flex gap-2 mt-auto pt-4">
+                <Button
+                  type="submit"
+                  className="flex-1"
+                >
+                  {t("issue.create")}
+                </Button>
                 <Button
                   type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className="text-text-muted hover:text-error hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDeleteTarget(issue);
-                  }}
-                  title={t("issue.delete")}
-                  aria-label={t("issue.delete")}
+                  variant="outline"
+                  onClick={() => setIsCreating(false)}
+                  className="flex-1"
                 >
-                  <Trash2 size={12} />
+                  {t("issue.cancel")}
                 </Button>
               </div>
-            </div>
+            </motion.form>
+          )}
 
-            <h3 className="text-[16px] font-bold text-foreground mb-2 line-clamp-2 group-hover:text-brand transition-colors">
-              {issue.title}
-            </h3>
-            
-            {issue.description && (
-              <p className="text-[12px] text-text-secondary line-clamp-2 mb-6 opacity-80 leading-relaxed">
-                {issue.description}
-              </p>
-            )}
-
-            <div className="mt-auto flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-text-muted">
-              <div className="flex items-center gap-1.5">
-                <div className="size-1 rounded-full bg-brand/30" />
-                <span>Issue ID: {issue.id.slice(0, 8)}</span>
+          {filteredIssues.map((issue, index) => (
+            <motion.div
+              key={issue.id}
+              layout
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: index * 0.05 }}
+              onClick={() => onSelect(issue.id)}
+              className="group p-6 rounded-2xl bg-surface/40 border border-border-subtle hover:bg-surface-hover hover:border-brand/30 hover:shadow-2xl transition-all cursor-pointer flex flex-col h-full min-h-[180px]"
+            >
+              <div className="flex items-start justify-between mb-4">
+                <div className="size-10 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center group-hover:bg-brand/5 group-hover:border-brand/20 transition-all">
+                  <MessageSquare size={18} className="text-text-muted group-hover:text-brand transition-colors" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className={cn(
+                    "px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest border transition-colors",
+                    issue.current_phase === "completed"
+                      ? "bg-success/10 text-success border-success/20"
+                      : "bg-brand/10 text-brand border-brand/20"
+                  )}>
+                    {issue.current_phase.replace("_", " ")}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-text-muted hover:text-error hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-all"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteTarget(issue);
+                    }}
+                    title={t("issue.delete")}
+                    aria-label={t("issue.delete")}
+                  >
+                    <Trash2 size={12} />
+                  </Button>
+                </div>
               </div>
-              <ChevronRight size={14} className="ml-auto opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all text-brand" />
-            </div>
-          </div>
-        ))}
+
+              <h3 className="text-[16px] font-bold text-foreground mb-2 line-clamp-2 group-hover:text-brand transition-colors">
+                {issue.title}
+              </h3>
+              
+              {issue.description && (
+                <p className="text-[12px] text-text-secondary line-clamp-2 mb-6 opacity-80 leading-relaxed group-hover:opacity-100 transition-opacity">
+                  {issue.description}
+                </p>
+              )}
+
+              <div className="mt-auto flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-text-muted">
+                <div className="flex items-center gap-1.5">
+                  <div className="size-1 rounded-full bg-brand/30 transition-colors group-hover:bg-brand" />
+                  <span>Issue ID: {issue.id.slice(0, 8)}</span>
+                </div>
+                <ChevronRight size={14} className="ml-auto opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all text-brand" />
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
 
         {filteredIssues.length === 0 && !isCreating && searchQuery && (
-          <div className="col-span-full flex flex-col items-center justify-center py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="col-span-full flex flex-col items-center justify-center py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20"
+          >
             <div className="size-16 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-6 shadow-sm">
               <Search size={32} className="text-text-muted/40" />
             </div>
             <p className="text-sm font-bold text-text-muted mb-6">No results for "{searchQuery}"</p>
-            <button
+            <Button
               onClick={() => setSearchQuery("")}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:bg-brand/90 transition-all"
+              className="flex items-center gap-2"
             >
               Clear Search
-            </button>
-          </div>
+            </Button>
+          </motion.div>
         )}
 
         {filteredIssues.length === 0 && !isCreating && !searchQuery && (
-          <div className="col-span-full flex flex-col items-center justify-center py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="col-span-full flex flex-col items-center justify-center py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20"
+          >
             <div className="size-16 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-6 shadow-sm">
               <ListTodo size={32} className="text-text-muted/40" />
             </div>
             <p className="text-sm font-bold text-text-muted mb-6">{t("issue.noIssues")}</p>
-            <button
+            <Button
               onClick={() => setIsCreating(true)}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:bg-brand/90 transition-all"
+              className="flex items-center gap-2 px-6"
             >
               <Plus size={16} />
               {t("issue.new")}
-            </button>
-          </div>
+            </Button>
+          </motion.div>
         )}
-      </div>
+      </motion.div>
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent className="sm:max-w-md" showCloseButton={false}>

@@ -42,6 +42,13 @@
 
   --animate-spin-slow: spin 8s linear infinite;
 
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+  }
+
   /* Aliases so Tailwind utility classes (bg-popover, text-muted-foreground, etc.)
      resolve correctly via CSS custom properties defined in :root */
   --color-popover: var(--popover);
@@ -61,7 +68,6 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-card: var(--card);
-}
 
 @layer base {
   :root {

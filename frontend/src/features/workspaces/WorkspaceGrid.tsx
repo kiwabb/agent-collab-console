@@ -9,6 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { motion, AnimatePresence } from "framer-motion";
+import { Button } from "@/components/ui/button";
 
 const FAVORITES_KEY = "agent-collab.favorites";
 
@@ -117,150 +119,185 @@ export function WorkspaceGrid({
   }, [deleteTarget, onDelete, addToast]);
 
   return (
-    <div className="p-8 max-w-7xl mx-auto w-full animate-in fade-in duration-700">
+    <div className="p-8 max-w-7xl mx-auto w-full">
       <div className="flex items-center justify-between mb-10">
-        <div>
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.5 }}
+        >
           <h2 className="text-3xl font-black tracking-tight text-foreground mb-2">{t("workspace.title")}</h2>
           <p className="text-text-muted font-medium">{t("workspace.subtitle")}</p>
-        </div>
-        <button
+        </motion.div>
+        <motion.button
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          transition={{ duration: 0.5, delay: 0.1 }}
           onClick={() => setIsCreating(true)}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+          className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 transition-all"
         >
           <Plus size={18} />
           {t("workspace.new")}
-        </button>
+        </motion.button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        {isLoading && (
-          <>
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="p-6 rounded-2xl bg-surface/40 border border-border-subtle overflow-hidden">
-                <div className="flex items-start justify-between mb-6">
-                  <Skeleton variant="circle" className="size-12" />
-                </div>
-                <Skeleton variant="text" className="w-3/4 mb-2" />
-                <Skeleton variant="text" className="w-1/3" />
-              </div>
-            ))}
-          </>
-        )}
-
-        {isCreating && (
-          <form
-            onSubmit={handleSubmit}
-            className="p-6 rounded-2xl bg-surface-raised border border-brand/50 shadow-2xl animate-in zoom-in duration-300"
-          >
-            <div className="size-10 rounded-xl bg-brand/10 flex items-center justify-center mb-4">
-              <Plus size={20} className="text-brand" />
-            </div>
-            <input
-              autoFocus
-              type="text"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              placeholder={t("workspace.namePlaceholder")}
-              className="w-full bg-surface-input border border-border-subtle rounded-lg px-4 py-2.5 text-sm outline-none focus:border-brand mb-4"
-            />
-            <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={isCreating}
-                className="flex-1 bg-brand text-background text-xs font-bold py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {isCreating && (
-                  <div className="flex gap-1">
-                    <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.3s]" />
-                    <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.15s]" />
-                    <div className="size-1 bg-current rounded-full animate-bounce" />
+      <motion.div 
+        layout
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+      >
+        <AnimatePresence mode="popLayout">
+          {isLoading && (
+            <>
+              {[1, 2, 3, 4].map((i) => (
+                <motion.div 
+                  key={`skeleton-${i}`}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="p-6 rounded-2xl bg-surface/40 border border-border-subtle overflow-hidden"
+                >
+                  <div className="flex items-start justify-between mb-6">
+                    <Skeleton variant="circle" className="size-12" />
                   </div>
-                )}
-                {t("workspace.create")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsCreating(false)}
-                disabled={isCreating}
-                className="flex-1 bg-surface-hover text-text-secondary text-xs font-bold py-2 rounded-lg border border-border-subtle disabled:opacity-50"
-              >
-                {t("workspace.cancel")}
-              </button>
-            </div>
-          </form>
-        )}
+                  <Skeleton variant="text" className="w-3/4 mb-2" />
+                  <Skeleton variant="text" className="w-1/3" />
+                </motion.div>
+              ))}
+            </>
+          )}
 
-        {displayedWorkspaces.map((ws) => (
-          <div
-            key={ws.id}
-            onClick={() => onSelect(ws.id)}
-            className="group relative p-6 rounded-2xl bg-surface/40 border border-border-subtle hover:bg-surface-hover hover:border-border-strong hover:shadow-2xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden"
-          >
-            <div className="absolute top-0 right-0 p-4 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={(e) => toggleFavorite(ws, e)}
-                className={cn(
-                  "p-2 rounded-lg hover:bg-surface-hover transition-all",
-                  favorites.has(ws.id) ? "text-warning" : "text-text-muted hover:text-warning"
-                )}
-              >
-                <Star size={14} className={favorites.has(ws.id) ? "fill-warning" : ""} />
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteClick(ws);
-                }}
-                className="p-2 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
+          {isCreating && (
+            <motion.form
+              key="create-form"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              onSubmit={handleSubmit}
+              className="p-6 rounded-2xl bg-surface-raised border border-brand/50 shadow-2xl z-10"
+            >
+              <div className="size-10 rounded-xl bg-brand/10 flex items-center justify-center mb-4">
+                <Plus size={20} className="text-brand" />
+              </div>
+              <input
+                autoFocus
+                type="text"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                placeholder={t("workspace.namePlaceholder")}
+                className="w-full bg-surface-input border border-border-subtle rounded-lg px-4 py-2.5 text-sm outline-none focus:border-brand mb-4 transition-colors"
+              />
+              <div className="flex gap-2">
+                <Button
+                  type="submit"
+                  disabled={isCreating}
+                  className="flex-1"
+                >
+                  {isCreating && (
+                    <div className="flex gap-1 mr-2">
+                      <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.3s]" />
+                      <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.15s]" />
+                      <div className="size-1 bg-current rounded-full animate-bounce" />
+                    </div>
+                  )}
+                  {t("workspace.create")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsCreating(false)}
+                  disabled={isCreating}
+                  className="flex-1"
+                >
+                  {t("workspace.cancel")}
+                </Button>
+              </div>
+            </motion.form>
+          )}
 
-            <div className="size-12 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-6 shadow-sm group-hover:scale-110 group-hover:bg-brand/5 group-hover:border-brand/20 transition-all">
-              {favorites.has(ws.id) ? (
-                <Star size={24} className="text-warning fill-warning" />
-              ) : (
-                <Folder size={24} className="text-text-muted group-hover:text-brand" />
+          {displayedWorkspaces.map((ws, index) => (
+            <motion.div
+              key={ws.id}
+              layout
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: index * 0.05 }}
+              onClick={() => onSelect(ws.id)}
+              className="group relative p-6 rounded-2xl bg-surface/40 border border-border-subtle hover:bg-surface-hover hover:border-border-strong hover:shadow-2xl transition-all cursor-pointer overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 p-4 flex gap-1 opacity-0 group-hover:opacity-100 transition-all z-10">
+                <button
+                  onClick={(e) => toggleFavorite(ws, e)}
+                  className={cn(
+                    "p-2 rounded-lg hover:bg-surface-hover transition-all",
+                    favorites.has(ws.id) ? "text-warning" : "text-text-muted hover:text-warning"
+                  )}
+                >
+                  <Star size={14} className={favorites.has(ws.id) ? "fill-warning" : ""} />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteClick(ws);
+                  }}
+                  className="p-2 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+
+              <div className="size-12 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-6 shadow-sm group-hover:scale-110 group-hover:bg-brand/5 group-hover:border-brand/20 transition-all">
+                {favorites.has(ws.id) ? (
+                  <Star size={24} className="text-warning fill-warning" />
+                ) : (
+                  <Folder size={24} className="text-text-muted group-hover:text-brand" />
+                )}
+              </div>
+
+              <h3 className="text-[17px] font-black text-foreground mb-2 truncate group-hover:text-brand transition-colors">
+                {ws.title}
+              </h3>
+              {ws.cwd && (
+                <div className="text-[10px] font-mono text-text-muted/60 mb-3 truncate" title={ws.cwd}>
+                  {ws.cwd}
+                </div>
               )}
-            </div>
-
-            <h3 className="text-[17px] font-black text-foreground mb-2 truncate group-hover:text-brand transition-colors">
-              {ws.title}
-            </h3>
-            {ws.cwd && (
-              <div className="text-[10px] font-mono text-text-muted/60 mb-3 truncate" title={ws.cwd}>
-                {ws.cwd}
+              <div className="flex items-center gap-3 text-text-muted">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest group-hover:text-text-primary transition-colors">
+                  <Clock size={12} />
+                  <span>{t("workspace.recent")}</span>
+                </div>
+                <ChevronRight size={14} className="ml-auto opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all text-brand" />
               </div>
-            )}
-            <div className="flex items-center gap-3 text-text-muted">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest">
-                <Clock size={12} />
-                <span>{t("workspace.recent")}</span>
-              </div>
-              <ChevronRight size={14} className="ml-auto opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all text-brand" />
-            </div>
-          </div>
-        ))}
+            </motion.div>
+          ))}
+        </AnimatePresence>
 
         {displayedWorkspaces.length === 0 && !isCreating && (
-          <EmptyState
-            icon="workspace"
-            title={t("workspace.empty")}
-            description="Create your first workspace to get started"
-            action={
-              <button
-                onClick={() => setIsCreating(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 hover:bg-brand/90 transition-all"
-              >
-                <Plus size={16} />
-                {t("workspace.new")}
-              </button>
-            }
-            className="col-span-full py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20"
-          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="col-span-full"
+          >
+            <EmptyState
+              icon="workspace"
+              title={t("workspace.empty")}
+              description="Create your first workspace to get started"
+              action={
+                <Button
+                  onClick={() => setIsCreating(true)}
+                  className="flex items-center gap-2 px-6"
+                >
+                  <Plus size={16} />
+                  {t("workspace.new")}
+                </Button>
+              }
+              className="col-span-full py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20"
+            />
+          </motion.div>
         )}
-      </div>
+      </motion.div>
 
       <ConfirmDialog
         open={!!deleteTarget}

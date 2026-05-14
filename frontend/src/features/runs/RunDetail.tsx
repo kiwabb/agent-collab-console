@@ -2,6 +2,7 @@
 
 import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCatalog, RunMode } from "@/lib/types";
 import { RotateCcw, Trash2, Send, Terminal, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
 import { useExecutionProcessLogStream } from "@/hooks/useExecutionProcessLogStream";
@@ -278,7 +279,17 @@ export function RunDetail({
             {taskMeta?.role === "qa" && taskMeta?.status === "done" && qaReportStatus && (
               <QaReportBadge status={qaReportStatus} onView={onViewQaReport} />
             )}
-            <StatusBadge status={process.status} />
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={process.status}
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.1 }}
+                transition={{ duration: 0.2 }}
+              >
+                <StatusBadge status={process.status} />
+              </motion.div>
+            </AnimatePresence>
           </div>
         </div>
         <div className="mb-4">
@@ -457,59 +468,59 @@ export function RunDetail({
                 />
               ) : (
                 <div className="space-y-8">
-                  {taskMeta?.status === "awaiting_review" && (
-                    <div className="p-5 rounded-2xl bg-warning/5 border border-warning/20 space-y-4 animate-in slide-in-from-top-2 duration-300">
-                      <h4 className="text-[10px] font-black uppercase tracking-widest text-warning flex items-center gap-2">
-                        <Activity size={12} className="animate-spin" />
-                        架构师正在自动评审中...
-                      </h4>
-                      <p className="text-xs text-text-muted leading-relaxed">
-                        系统已自动委派架构师角色对您的代码实现进行全自动化审计，评审结果将在完成后自动同步。
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Feedback moved to top */}
-
-                  {mergedMessages.map((msg) => (
-                    <div key={msg.id} className="flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                      <div className="flex items-center gap-2.5 px-1">
+                  <AnimatePresence initial={false}>
+                    {mergedMessages.map((msg) => (
+                      <motion.div
+                        key={msg.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="flex flex-col gap-3"
+                      >
+                        <div className="flex items-center gap-2.5 px-1">
+                          <div className={cn(
+                            "size-1.5 rounded-full",
+                            msg.role === "assistant" ? "bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)]" : "bg-text-muted/40"
+                          )} />
+                          <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">{msg.role}</span>
+                        </div>
                         <div className={cn(
-                          "size-1.5 rounded-full",
-                          msg.role === "assistant" ? "bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)]" : "bg-text-muted/40"
-                        )} />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">{msg.role}</span>
-                      </div>
-                      <div className={cn(
-                        "p-5 rounded-2xl text-[13.5px] leading-relaxed border whitespace-pre-wrap font-medium",
-                        msg.role === "assistant"
-                          ? "bg-brand/5 border-brand/20 text-foreground/90 shadow-sm"
-                          : "bg-surface-raised/40 border-border-subtle text-text-secondary"
-                      )}>
-                        {msg.content}
-                      </div>
-                    </div>
-                  ))}
-                  {/* In-flight typewriter bubble — visible while the agent is streaming
-                      tokens. Disappears the moment the final message_created event arrives
-                      (handled inside the stream hook). */}
-                  {liveStream.pendingAssistant && (
-                    <div className="flex flex-col gap-3">
-                      <div className="flex items-center gap-2.5 px-1">
-                        <div className="size-1.5 rounded-full bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)] animate-pulse" />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">assistant · 输出中</span>
-                      </div>
-                      <div className="p-5 rounded-2xl text-[13.5px] leading-relaxed border whitespace-pre-wrap font-medium bg-brand/5 border-brand/20 text-foreground/90 shadow-sm">
-                        {liveStream.pendingAssistant.text}
-                        <span className="inline-block ml-0.5 -mb-0.5 w-1.5 h-4 bg-brand animate-pulse">&nbsp;</span>
-                      </div>
-                    </div>
-                  )}
+                          "p-5 rounded-2xl text-[13.5px] leading-relaxed border whitespace-pre-wrap font-medium",
+                          msg.role === "assistant"
+                            ? "bg-brand/5 border-brand/20 text-foreground/90 shadow-sm"
+                            : "bg-surface-raised/40 border-border-subtle text-text-secondary"
+                        )}>
+                          {msg.content}
+                        </div>
+                      </motion.div>
+                    ))}
+                    {liveStream.pendingAssistant && (
+                      <motion.div
+                        key="pending-assistant"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        className="flex flex-col gap-3"
+                      >
+                        <div className="flex items-center gap-2.5 px-1">
+                          <div className="size-1.5 rounded-full bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)] animate-pulse" />
+                          <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">assistant · 输出中</span>
+                        </div>
+                        <div className="p-5 rounded-2xl text-[13.5px] leading-relaxed border whitespace-pre-wrap font-medium bg-brand/5 border-brand/20 text-foreground/90 shadow-sm">
+                          {liveStream.pendingAssistant.text}
+                          <motion.span 
+                            animate={{ opacity: [0, 1, 0] }}
+                            transition={{ duration: 0.8, repeat: Infinity }}
+                            className="inline-block ml-0.5 -mb-0.5 w-1.5 h-4 bg-brand"
+                          >&nbsp;</motion.span>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               )}
             </TabsContent>
 
-            <TabsContent ref={logsContainerRef} value="logs" className="absolute inset-0 m-0 overflow-y-auto p-6 animate-in fade-in duration-300 bg-background/40">
+            <TabsContent ref={logsContainerRef} value="logs" className="absolute inset-0 m-0 overflow-y-auto p-6 bg-background/40">
               {isLoadingLogs ? (
                 <div className="py-20 flex flex-col items-center justify-center gap-4 text-[10px] uppercase font-black tracking-widest text-text-muted opacity-40">
                   <Terminal size={24} className="animate-pulse text-brand" />
@@ -524,45 +535,53 @@ export function RunDetail({
                 />
               ) : (
                 <div className="selection:bg-brand/30 pb-10 space-y-2">
-                  {normalizedLogs.map((log, i) => (
-                    <div key={log.id || i} className={cn(
-                      "flex gap-4 group px-3 py-2 rounded-xl border transition-colors animate-in fade-in slide-in-from-left-1 duration-200",
-                      log.type === "error"
-                        ? "bg-error/10 border-error/20"
-                        : log.type === "command"
-                          ? "bg-surface-raised/50 border-border-subtle"
-                          : "bg-surface/30 border-transparent hover:bg-surface-hover/50"
-                    )}>
-                      <span className="shrink-0 text-[10px] font-mono font-bold text-text-muted/30 select-none w-8 text-right group-hover:text-text-muted/60 transition-colors">{i + 1}</span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className={cn(
-                            "text-[9px] font-black uppercase tracking-[0.16em]",
-                            log.type === "error" ? "text-error" : "text-text-muted"
-                          )}>
-                            {log.label}
-                          </span>
-                          {log.status && (
+                  <AnimatePresence initial={false}>
+                    {normalizedLogs.map((log, i) => (
+                      <motion.div
+                        key={log.id || i}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className={cn(
+                          "flex gap-4 group px-3 py-2 rounded-xl border transition-colors",
+                          log.type === "error"
+                            ? "bg-error/10 border-error/20"
+                            : log.type === "command"
+                              ? "bg-surface-raised/50 border-border-subtle"
+                              : "bg-surface/30 border-transparent hover:bg-surface-hover/50"
+                        )}
+                      >
+                        <span className="shrink-0 text-[10px] font-mono font-bold text-text-muted/30 select-none w-8 text-right group-hover:text-text-muted/60 transition-colors">{i + 1}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 mb-1">
                             <span className={cn(
-                              "text-[9px] font-black uppercase tracking-widest",
-                              log.status === "failed" ? "text-error" : log.status === "success" ? "text-success" : "text-brand"
+                              "text-[9px] font-black uppercase tracking-[0.16em]",
+                              log.type === "error" ? "text-error" : "text-text-muted"
                             )}>
-                              {log.status}
+                              {log.label}
                             </span>
+                            {log.status && (
+                              <span className={cn(
+                                "text-[9px] font-black uppercase tracking-widest",
+                                log.status === "failed" ? "text-error" : log.status === "success" ? "text-success" : "text-brand"
+                              )}>
+                                {log.status}
+                              </span>
+                            )}
+                          </div>
+                          {log.command && (
+                            <pre className="mb-2 whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-foreground">{log.command}</pre>
+                          )}
+                          {log.content && (
+                            <p className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-text-secondary group-hover:text-foreground transition-colors">{log.content}</p>
+                          )}
+                          {log.output && (
+                            <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-background/60 p-3 font-mono text-[11px] leading-relaxed text-text-secondary">{log.output}</pre>
                           )}
                         </div>
-                        {log.command && (
-                          <pre className="mb-2 whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-foreground">{log.command}</pre>
-                        )}
-                        {log.content && (
-                          <p className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-text-secondary group-hover:text-foreground transition-colors">{log.content}</p>
-                        )}
-                        {log.output && (
-                          <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-background/60 p-3 font-mono text-[11px] leading-relaxed text-text-secondary">{log.output}</pre>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
                 </div>
               )}
             </TabsContent>

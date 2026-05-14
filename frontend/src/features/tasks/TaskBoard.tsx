@@ -21,6 +21,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import type { CodexTask, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
 import { Plus, Layout, Activity, Clock, Terminal, Trash2, GripVertical, Link, Check, Table2, Kanban } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { type Phase, PHASE_CONFIG } from "@/features/issues/phaseUtils";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
@@ -110,12 +111,15 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
   };
 
   return (
-    <div
+    <motion.div
+      layout
       onClick={onClick}
+      whileHover={{ y: -2, scale: 1.01, boxShadow: "0 10px 25px -5px rgba(0,0,0,0.1)" }}
+      whileTap={{ scale: 0.98 }}
       className={cn(
-        "group/card p-5 rounded-2xl bg-surface/40 border hover:bg-surface-hover hover:border-brand/30 hover:shadow-2xl hover:-translate-y-0.5 transition-all cursor-pointer animate-in fade-in slide-in-from-bottom-2 duration-500",
+        "group/card p-5 rounded-2xl bg-surface/40 border border-border-subtle hover:bg-surface-hover hover:border-brand/30 transition-all cursor-pointer",
         !unlocked && "opacity-60",
-        isDragging && "shadow-2xl border-brand/50 bg-surface-raised rotate-2"
+        isDragging && "shadow-2xl border-brand/50 bg-surface-raised rotate-2 z-50"
       )}
     >
       <div className="flex items-start justify-between mb-3">
@@ -129,7 +133,7 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
             status === "rework" ? "bg-error shadow-[0_0_8px_rgba(239,68,68,0.4)]" :
             "bg-text-muted"
           )} />
-          <span className="text-[9px] font-black uppercase tracking-widest text-text-secondary group-hover/card:text-foreground">
+          <span className="text-[9px] font-black uppercase tracking-widest text-text-secondary group-hover/card:text-foreground transition-colors">
             {rawStatus}
           </span>
         </div>
@@ -146,7 +150,7 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
           </div>
           {task.phase === "development" && task.sequence_index != null && (
             <span className={cn(
-              "text-[9px] font-black px-1.5 py-0.5 rounded-md",
+              "text-[9px] font-black px-1.5 py-0.5 rounded-md transition-colors",
               unlocked ? "text-brand bg-brand/10" : "text-warning bg-warning/10"
             )}>
               #{task.sequence_index + 1}
@@ -165,16 +169,16 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
       </h4>
 
       <div className="flex items-center gap-4 text-[10px] font-bold text-text-muted">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 transition-colors group-hover/card:text-text-secondary">
           <Activity size={12} />
           <span>{task.role.split('_').pop()?.toUpperCase()}</span>
         </div>
-        <div className="flex items-center gap-1.5 ml-auto">
+        <div className="flex items-center gap-1.5 ml-auto transition-colors group-hover/card:text-text-secondary">
           <Clock size={12} />
           <span>{formatRelativeTime(task.created_at)}</span>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -434,29 +438,43 @@ export function TaskBoard({
                     id={phase.id}
                   >
                     <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20" data-tour="artifacts">
-                      {phaseTasks.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-16 px-4 border-2 border-dashed border-border-subtle rounded-2xl bg-surface/10">
-                          <div className="size-10 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-3 opacity-40">
-                            <Plus size={16} className="text-text-muted" />
-                          </div>
-                          <p className="text-[10px] font-black uppercase tracking-widest text-text-muted/50">{t("task.ready")}</p>
-                        </div>
-                      ) : (
-                        phaseTasks.map((task) => {
-                          const process = pickLatestExecutionProcessForTask(executionProcesses, task.id);
-                          const unlocked = isDevelopmentTaskUnlocked(task, tasks);
+                      <AnimatePresence mode="popLayout">
+                        {phaseTasks.length === 0 ? (
+                          <motion.div 
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="flex flex-col items-center justify-center py-16 px-4 border-2 border-dashed border-border-subtle rounded-2xl bg-surface/10"
+                          >
+                            <div className="size-10 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-3 opacity-40">
+                              <Plus size={16} className="text-text-muted" />
+                            </div>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-text-muted/50">{t("task.ready")}</p>
+                          </motion.div>
+                        ) : (
+                          phaseTasks.map((task, index) => {
+                            const process = pickLatestExecutionProcessForTask(executionProcesses, task.id);
+                            const unlocked = isDevelopmentTaskUnlocked(task, tasks);
 
-                          return (
-                            <SortableTaskCard
-                              key={task.id}
-                              task={task}
-                              process={process ?? undefined}
-                              unlocked={unlocked}
-                              onClick={() => onSelectTask(task.id)}
-                            />
-                          );
-                        })
-                      )}
+                            return (
+                              <motion.div
+                                key={task.id}
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.95 }}
+                                transition={{ duration: 0.2, delay: index * 0.03 }}
+                              >
+                                <SortableTaskCard
+                                  task={task}
+                                  process={process ?? undefined}
+                                  unlocked={unlocked}
+                                  onClick={() => onSelectTask(task.id)}
+                                />
+                              </motion.div>
+                            );
+                          })
+                        )}
+                      </AnimatePresence>
                     </div>
                   </SortableContext>
                 </div>
