@@ -243,7 +243,7 @@ export function SettingsPage() {
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-bold">{option.label}</p>
                             <p className="text-[10px] opacity-60 truncate">
-                              {option.value === 'zh-CN' ? '简体中文' : 'English (United States)'}
+                              {locale === option.value ? t("settings.language.zh") : t("settings.language.en")}
                             </p>
                           </div>
                           {locale === option.value && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
