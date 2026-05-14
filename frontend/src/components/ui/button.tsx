@@ -55,6 +55,8 @@ function Button({
   motionProps,
   ...props
 }: ButtonProps) {
+  // Omit motion-conflicting keys from native props to avoid type overlap
+  const { onDrag, onDragStart, onDragEnd, onAnimationStart, onAnimationEnd, style, ...nativeProps } = props
   return (
     <MotionButton
       data-slot="button"
@@ -62,7 +64,7 @@ function Button({
       whileTap={{ scale: 0.98, translateY: "1px" }}
       transition={{ type: "spring", stiffness: 400, damping: 15 }}
       {...motionProps}
-      {...(props as any)}
+      {...nativeProps}
     />
   )
 }
