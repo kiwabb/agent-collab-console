@@ -55,7 +55,7 @@ function normalizeNotificationEvent(
   idx: number,
   keyBase = `norm-${idx}`
 ): NormalizedEntry | null {
-  const method = typeof event.method === "string" ? event.method.replaceAll("/", ".") : "";
+  const method = typeof event.method === "string" ? event.method.replace(/\//g, ".") : "";
   if (!method) return null;
 
   const params = event.params && typeof event.params === "object" ? (event.params as Record<string, unknown>) : {};

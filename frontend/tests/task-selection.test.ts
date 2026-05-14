@@ -17,6 +17,7 @@ function makeTask(id: string, issueId: string | null, status: string): CodexTask
   return {
     id,
     session_id: "s1",
+    project_id: null,
     issue_id: issueId,
     phase: "dev",
     title: `Task ${id}`,
@@ -29,6 +30,11 @@ function makeTask(id: string, issueId: string | null, status: string): CodexTask
     task_kind: "task",
     blocked_by_help_id: null,
     workspace_path: null,
+    git_branch: null,
+    git_base_branch: null,
+    git_worktree_path: null,
+    git_merge_status: "open" as any,
+    git_last_commit_sha: null,
     resume_session_id: null,
     resume_message_id: null,
     last_execution_process_id: null,
@@ -53,10 +59,10 @@ function makeProcess(id: string, taskId: string, status: string): ExecutionProce
 
 test("groupIssuesByPhase groups issues by current_phase", () => {
   const issues: CodexIssue[] = [
-    { id: "i1", session_id: "s1", title: "Issue 1", description: null, current_phase: "requirements", status: "open", created_at: null, updated_at: null },
-    { id: "i2", session_id: "s1", title: "Issue 2", description: null, current_phase: "architecture", status: "open", created_at: null, updated_at: null },
-    { id: "i3", session_id: "s1", title: "Issue 3", description: null, current_phase: "development", status: "open", created_at: null, updated_at: null },
-    { id: "i4", session_id: "s1", title: "Issue 4", description: null, current_phase: "testing", status: "open", created_at: null, updated_at: null },
+    { id: "i1", session_id: "s1", project_id: null, title: "Issue 1", description: null, current_phase: "requirements", status: "open", git_branch: null, git_base_branch: null, git_worktree_path: null, git_merge_status: "open", git_last_commit_sha: null, created_at: null, updated_at: null },
+    { id: "i2", session_id: "s1", project_id: null, title: "Issue 2", description: null, current_phase: "architecture", status: "open", git_branch: null, git_base_branch: null, git_worktree_path: null, git_merge_status: "open", git_last_commit_sha: null, created_at: null, updated_at: null },
+    { id: "i3", session_id: "s1", project_id: null, title: "Issue 3", description: null, current_phase: "development", status: "open", git_branch: null, git_base_branch: null, git_worktree_path: null, git_merge_status: "open", git_last_commit_sha: null, created_at: null, updated_at: null },
+    { id: "i4", session_id: "s1", project_id: null, title: "Issue 4", description: null, current_phase: "testing", status: "open", git_branch: null, git_base_branch: null, git_worktree_path: null, git_merge_status: "open", git_last_commit_sha: null, created_at: null, updated_at: null },
   ];
 
   const result = groupIssuesByPhase(issues);
@@ -73,7 +79,7 @@ test("groupIssuesByPhase groups issues by current_phase", () => {
 
 test("groupIssuesByPhase defaults unknown phases to requirements", () => {
   const issues: CodexIssue[] = [
-    { id: "i1", session_id: "s1", title: "Issue 1", description: null, current_phase: "unknown_phase", status: "open", created_at: null, updated_at: null },
+    { id: "i1", session_id: "s1", project_id: null, title: "Issue 1", description: null, current_phase: "unknown_phase", status: "open", git_branch: null, git_base_branch: null, git_worktree_path: null, git_merge_status: "open", git_last_commit_sha: null, created_at: null, updated_at: null },
   ];
 
   const result = groupIssuesByPhase(issues);
