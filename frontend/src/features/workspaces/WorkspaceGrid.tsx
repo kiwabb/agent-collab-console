@@ -149,9 +149,9 @@ export function WorkspaceGrid({
       >
         <AnimatePresence mode="popLayout">
           {isLoading && (
-            <>
+            <motion.div key="loading-skeletons">
               {[1, 2, 3, 4].map((i) => (
-                <motion.div 
+                <motion.div
                   key={`skeleton-${i}`}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -165,7 +165,7 @@ export function WorkspaceGrid({
                   <Skeleton variant="text" className="w-1/3" />
                 </motion.div>
               ))}
-            </>
+            </motion.div>
           )}
 
           {isCreating && (
