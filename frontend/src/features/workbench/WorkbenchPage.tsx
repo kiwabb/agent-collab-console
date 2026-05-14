@@ -98,6 +98,7 @@ import { KeyboardShortcutsModal } from "@/components/ui/keyboard-shortcuts-modal
 import { CommandPalette } from "@/components/ui/command-palette";
 import { MacroRecorder, useMacros } from "@/components/ui/macro-recorder";
 import { PresenceIndicator } from "@/components/ui/presence-indicator";
+import { HelloWorld } from "@/components/HelloWorld";
 
 type NavigationState = "home" | "workspace" | "issue";
 
@@ -1123,6 +1124,9 @@ function WorkbenchInner({
 
         {view === "home" && (
           <div className="h-full overflow-y-auto no-scrollbar">
+            <div className="p-8 max-w-7xl mx-auto w-full">
+              <HelloWorld className="mb-8" />
+            </div>
             <WorkspaceGrid
               workspaces={workspaces}
               onSelect={handleSelectWorkspace}
