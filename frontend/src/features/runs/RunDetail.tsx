@@ -247,7 +247,7 @@ export function RunDetail({
         {canRunInitial && onRunInitial && (
           <div className="mt-6 flex flex-col items-center gap-3">
             {!unlockStatus.unlocked && blockedReason && (
-              <p className="text-[10px] font-black uppercase tracking-widest text-warning">{t(blockedReason as any)}</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-warning">{t(blockedReason)}</p>
             )}
             <ExecutionConfigSelector
               value={executionConfig}

@@ -416,7 +416,7 @@ export function TaskBoard({
                     <div className="flex items-center gap-3">
                       <div className={`size-2.5 rounded-full ${phase.color} shadow-sm`} />
                       <h3 className="text-[11px] font-black uppercase tracking-[0.25em] text-text-secondary group-hover/column:text-foreground transition-colors">
-                        {t(phase.labelKey as any)}
+                        {t(phase.labelKey)}
                       </h3>
                       <span className="text-[10px] font-black text-text-muted bg-surface-raised px-2.5 py-0.5 rounded-full border border-border-subtle shadow-sm">
                         {phaseTasks.length}

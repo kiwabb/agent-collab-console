@@ -93,7 +93,7 @@ export function IssueDetailPanel({
                     : "text-text-muted hover:text-foreground hover:bg-surface-hover"
                 )}
               >
-                {t(c.labelKey as any)}
+                {t(c.labelKey)}
               </button>
             );
           })}
@@ -204,7 +204,7 @@ export function IssueDetailPanel({
           ) : (
             <>
               <Play size={16} className="fill-current" />
-              <span>{t(config.buttonLabelKey as any)}</span>
+              <span>{t(config.buttonLabelKey)}</span>
             </>
           )}
         </button>

@@ -799,7 +799,7 @@ function WorkbenchInner({
       const config = PHASE_CONFIG[phase as Phase] ?? PHASE_CONFIG.requirements;
       const task = await createCodexTask(
         currentWorkspaceId,
-        `${t(config.labelKey as any)} - ${currentIssue.title}`,
+        `${t(config.labelKey)} - ${currentIssue.title}`,
         currentIssue.description || "",
         null,
         executor,

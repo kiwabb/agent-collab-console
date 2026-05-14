@@ -8,7 +8,7 @@ const STORAGE_KEY = "agent-collab.locale";
 interface I18nContextValue {
   locale: Locale;
   setLocale: (locale: Locale) => void;
-  t: (key: TranslationKey, params?: Record<string, string | number>) => string;
+  t: (key: string, params?: Record<string, string | number>) => string;
 }
 
 const I18nContext = createContext<I18nContextValue | null>(null);
@@ -31,8 +31,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     () => ({
       locale,
       setLocale: setLocaleState,
-      t: (key: TranslationKey, params?: Record<string, string | number>) => {
-        const value = getDictionaryValue(locale, key);
+      t: (key: string, params?: Record<string, string | number>) => {
+        const value = getDictionaryValue(locale, key as TranslationKey);
         if (!params) return value;
         return value.replace(/\{(\w+)\}/g, (_, k) => String(params[k] ?? `{${k}}`));
       },
