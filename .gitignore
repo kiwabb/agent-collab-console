@@ -22,6 +22,7 @@ backend/console.db-wal
 
 # Task workspaces
 .task-workspaces/
+.worktrees/
 
 # Issue artifacts produced by role workflows at runtime (PRD / system_design /
 # implementation reports etc). Local-only; never commit.
