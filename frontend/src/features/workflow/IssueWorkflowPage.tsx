@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 
 import {
   confirmReplan,
@@ -24,6 +26,7 @@ interface Props {
 type View = "loading" | "no-graph" | "preview" | "saved";
 
 export function IssueWorkflowPage({ issueId }: Props) {
+  const router = useRouter();
   const [view, setView] = useState<View>("loading");
   const [graph, setGraph] = useState<WorkflowGraph | null>(null);
   const [proposal, setProposal] = useState<ProposedDAG | null>(null);
@@ -124,9 +127,19 @@ export function IssueWorkflowPage({ issueId }: Props) {
   return (
     <div className="flex flex-col gap-4 p-6">
       <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Issue Workflow</h1>
-          <p className="text-xs text-muted-foreground">Issue ID: {issueId}</p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.push("/")}
+            className="rounded border border-border bg-card p-1.5 hover:bg-accent"
+            aria-label="Back to workbench"
+          >
+            <ArrowLeft size={16} />
+          </button>
+          <div>
+            <h1 className="text-xl font-semibold">Issue Workflow</h1>
+            <p className="text-xs text-muted-foreground">Issue ID: {issueId}</p>
+          </div>
         </div>
         <div className="flex gap-2">
           {(view === "no-graph" || view === "saved") && (

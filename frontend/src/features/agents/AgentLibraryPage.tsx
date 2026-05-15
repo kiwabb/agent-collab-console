@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 
 import { listAgents } from "@/lib/api";
 import type { Agent } from "@/lib/types";
@@ -13,6 +15,7 @@ import type { Agent } from "@/lib/types";
  * this with a full CRUD UI + system-prompt editor.
  */
 export function AgentLibraryPage() {
+  const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -36,9 +39,17 @@ export function AgentLibraryPage() {
 
   return (
     <div className="flex flex-col gap-4 p-6">
-      <header className="flex items-baseline gap-2">
+      <header className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => router.push("/")}
+          className="rounded border border-border bg-card p-1.5 hover:bg-accent"
+          aria-label="Back to workbench"
+        >
+          <ArrowLeft size={16} />
+        </button>
         <h1 className="text-xl font-semibold">Agent Library</h1>
-        <span className="text-xs text-muted-foreground">PR1 preview — DAG editor lands in PR4</span>
+        <span className="text-xs text-muted-foreground">Workflow DAG · agents registry</span>
       </header>
 
       {loading && <div className="text-sm text-muted-foreground">Loading agents…</div>}

@@ -90,6 +90,8 @@ import {
   AlertCircle,
   Search,
   Keyboard,
+  Workflow,
+  Users,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -1014,6 +1016,38 @@ function WorkbenchInner({
                 </span>
               </TooltipContent>
             </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => router.push("/agents")}
+                  className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors cursor-pointer outline-none"
+                  aria-label="Agent Library"
+                >
+                  <Users size={18} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <span className="flex items-center gap-1.5">Agent Library</span>
+              </TooltipContent>
+            </Tooltip>
+
+            {currentIssue && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => router.push(`/issues/${currentIssue.id}/workflow`)}
+                    className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors cursor-pointer outline-none"
+                    aria-label="Workflow DAG"
+                  >
+                    <Workflow size={18} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  <span className="flex items-center gap-1.5">Workflow DAG</span>
+                </TooltipContent>
+              </Tooltip>
+            )}
 
             <Tooltip>
               <TooltipTrigger asChild>
