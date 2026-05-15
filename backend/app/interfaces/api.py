@@ -57,13 +57,9 @@ class RateLimitError(APIError):
 
 router = APIRouter(prefix="/api")
 
-VALID_ISSUE_PHASES = {"requirements", "architecture", "development", "testing"}
-ROLE_PHASE_DEFAULTS = {
-    "product_manager": "requirements",
-    "architect": "architecture",
-    "engineer": "development",
-    "qa": "testing",
-}
+# Legacy phase enums removed (PR5 destructive). Phase is now a free-form tag
+# on tasks and a derived presentation field on issues — the source of truth is
+# the agent registry's role_keys and the workflow graph's node states.
 
 
 def _try_parse_json_line(line: str) -> dict | None:
@@ -331,185 +327,6 @@ async def _build_execution_process_payload(process):
     ) if codex_store is not None else []
     return build_execution_process_view(process, task, messages, logs)
 
-
-def _has_requirements_artifacts(workspace_path: str | None, issue_id: str) -> bool:
-    if not workspace_path:
-        return False
-    issue_root = Path(workspace_path) / "issues" / issue_id
-    if not issue_root.exists() or not issue_root.is_dir():
-        return False
-    
-    # Check in pm/ subdirectory
-    pm_dir = issue_root / "pm"
-    return any(
-        (pm_dir / name).exists()
-        for name in {"requirement.md", "prd.json", "prd.md"}
-    )
-
-
-def _has_architecture_artifacts(workspace_path: str | None, issue_id: str) -> tuple[bool, str]:
-    """Returns (has_artifacts, error_detail). error_detail is empty string when artifacts exist."""
-    if not workspace_path:
-        return False, "架构产物路径无效"
-    issue_root = Path(workspace_path) / "issues" / issue_id
-    if not issue_root.exists() or not issue_root.is_dir():
-        return False, "架构产物不存在"
-    
-    # Check in architect/ subdirectory
-    architect_dir = issue_root / "architect"
-    design_path = architect_dir / "system_design.json"
-    plan_path = architect_dir / "implementation_plan.json"
-    
-    if not design_path.exists():
-        return False, "请先生成 system_design.json 架构产物后再流转到开发"
-    if not plan_path.exists():
-        return False, "请先生成 implementation_plan.json 架构产物后再流转到开发"
-    try:
-        payload = json.loads(plan_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return False, "implementation_plan.json 格式无效"
-    if not isinstance(payload, list) or len(payload) == 0:
-        return False, "架构产物 implementation_plan.json 为空，请先生成有效拆分任务后再流转到开发"
-    # Validate structure: each item must be a dict with a string title
-    for i, item in enumerate(payload):
-        if not isinstance(item, dict):
-            return False, f"implementation_plan.json 第 {i+1} 项必须是对象，请检查格式"
-        title = item.get("title")
-        if not isinstance(title, str) or not title.strip():
-            return False, f"implementation_plan.json 第 {i+1} 项缺少有效的 title 字段"
-    return True, ""
-
-
-def _has_engineer_artifacts(workspace_path: str | None, issue_id: str) -> tuple[bool, str]:
-    """Returns (has_artifacts, error_detail). Engineer must have at least one implementation*.md."""
-    if not workspace_path:
-        return False, "开发产物路径无效"
-    from app.application.issue_artifact_documents import IssueArtifactDocuments
-
-    docs = IssueArtifactDocuments()
-    artifacts = docs.engineer_find_artifacts(workspace_path, issue_id)
-    if not artifacts:
-        return False, "请先完成开发产物（implementation*.md）后再流转到测试"
-    return True, ""
-
-
-def _engineer_tasks_all_done(tasks: list[dict], issue_id: str) -> tuple[bool, str]:
-    """Returns (ok, error_detail). All engineer tasks for this issue must be status='done', and at least one must exist."""
-    engineer_rows = [
-        t for t in tasks
-        if t.get("role") == "engineer" and t.get("issue_id") == issue_id
-    ]
-    if not engineer_rows:
-        return False, "请先创建并完成开发任务后再流转到测试"
-    unfinished = [
-        str(t.get("title") or t.get("id") or "")
-        for t in engineer_rows
-        if str(t.get("status") or "").lower() != "done"
-    ]
-    if unfinished:
-        joined = "、".join(unfinished)
-        return False, f"以下开发任务尚未完成：{joined}"
-    return True, ""
-
-
-def _load_implementation_tasks(workspace_path: str | None, issue_id: str) -> list[dict]:
-    if not workspace_path:
-        return []
-    issue_root = Path(workspace_path) / "issues" / issue_id
-    
-    # Check in architect/ subdirectory
-    architect_dir = issue_root / "architect"
-    design_path = architect_dir / "system_design.json"
-    plan_path = architect_dir / "implementation_plan.json"
-    
-    if not design_path.exists() or not plan_path.exists():
-        return []
-    try:
-        payload = json.loads(plan_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
-    if not isinstance(payload, list):
-        return []
-    normalized = []
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "").strip()
-        description = str(item.get("description") or "").strip()
-        priority = str(item.get("priority") or "P1").strip() or "P1"
-        if not title:
-            continue
-        normalized.append({"title": title, "description": description, "priority": priority})
-    return normalized
-
-
-def _load_development_task_list(workspace_path: str | None, issue_id: str) -> tuple[bool, str, list[str]]:
-    """Load and validate development_task_list.json.
-
-    Returns: (success, error_message, ordered_titles)
-    """
-    if not workspace_path:
-        return False, "workspace_path 无效", []
-
-    issue_root = Path(workspace_path) / "issues" / issue_id
-    
-    # Check in architect/ subdirectory
-    architect_dir = issue_root / "architect"
-    dev_list_path = architect_dir / "development_task_list.json"
-
-    if not dev_list_path.exists():
-        return False, "请先生成 development_task_list.json 架构产物后再流转到开发", []
-
-    try:
-        payload = json.loads(dev_list_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return False, "development_task_list.json 格式无效", []
-
-    if not isinstance(payload, list):
-        return False, "development_task_list.json 必须是数组", []
-
-    titles = [str(t).strip() for t in payload if t]
-
-    if not titles:
-        return False, "development_task_list.json 不能为空", []
-
-    if len(titles) != len(set(titles)):
-        return False, "development_task_list.json 包含重复的 title", []
-
-    return True, "", titles
-
-
-def _validate_and_order_implementation_tasks(
-    impl_tasks: list[dict], dev_task_list: list[str]
-) -> tuple[bool, str, list[dict]]:
-    """Validate development_task_list matches implementation_tasks and return ordered tasks.
-
-    Returns: (success, error_message, ordered_tasks)
-    """
-    # Check for duplicates in implementation_tasks first
-    impl_titles = [task["title"] for task in impl_tasks]
-    if len(impl_titles) != len(set(impl_titles)):
-        return False, "implementation_plan.json 包含重复的 title", []
-
-    impl_set = set(impl_titles)
-    dev_set = set(dev_task_list)
-
-    if dev_set != impl_set:
-        missing = impl_set - dev_set
-        extra = dev_set - impl_set
-        parts = []
-        if missing:
-            parts.append(f"缺少: {missing}")
-        if extra:
-            parts.append(f"多余: {extra}")
-        return False, f"development_task_list 与 implementation_plan 不匹配。{'; '.join(parts)}", []
-
-    # Build title -> task map (safe now after duplicate check)
-    task_map = {task["title"]: task for task in impl_tasks}
-
-    # Return tasks in development_task_list order
-    ordered = [task_map[title] for title in dev_task_list]
-    return True, "", ordered
 
 
 def _is_task_running(status: str | None) -> bool:
@@ -1540,10 +1357,11 @@ async def get_codex_issue(issue_id: str):
 
 @router.post("/codex/issues/{issue_id}/phase")
 async def update_codex_issue_phase(issue_id: str, request: UpdateIssuePhaseRequest):
+    """Set the issue's current_phase tag. PR5: no longer validates against a
+    fixed enum — phase is a free-form display field synced by the scheduler.
+    """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    if request.current_phase not in VALID_ISSUE_PHASES:
-        raise HTTPException(status_code=400, detail=f"Invalid issue phase: {request.current_phase}")
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
@@ -1598,305 +1416,6 @@ async def duplicate_codex_issue(issue_id: str):
                 raise HTTPException(status_code=500, detail=f"failed to create issue worktree: {exc}")
     await codex_store.save_codex_issue(new_issue)
     return new_issue
-
-
-@router.post("/codex/issues/{issue_id}/transition-to-architecture")
-async def transition_codex_issue_to_architecture(issue_id: str):
-    if codex_store is None:
-        raise HTTPException(status_code=503, detail="SQLite store not available")
-
-    issue = await codex_store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
-    if issue.current_phase not in ["requirements", "architecture"]:
-        raise HTTPException(status_code=409, detail="只有需求或架构阶段的 issue 才能流转到架构")
-
-    session = await codex_store.load_codex_session(issue.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail=f"Session '{issue.session_id}' not found")
-
-    tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
-    if any(_is_task_running(task.get("status")) for task in tasks):
-        raise HTTPException(status_code=409, detail="当前有任务仍在运行，请等待完成后再流转")
-
-    workspace_path = next((task.get("workspace_path") for task in tasks if task.get("workspace_path")), None) or session.cwd
-    if not _has_requirements_artifacts(workspace_path, issue_id):
-        raise HTTPException(status_code=409, detail="请先生成需求产物后再流转到架构")
-
-    existing_architect_row = next(
-        (task for task in tasks if task.get("role") == "architect" and task.get("issue_id") == issue_id),
-        None,
-    )
-
-    issue.current_phase = "architecture"
-    issue.updated_at = datetime.now()
-    await codex_store.save_codex_issue(issue)
-
-    architect_task = None
-    created = False
-    if existing_architect_row is not None:
-        architect_task = await codex_store.load_codex_task(existing_architect_row["id"])
-    else:
-        from app.domain.models import CodexTask
-
-        now = datetime.now()
-        inh_exec, inh_prov, inh_model = _pick_executor_from_tasks(tasks)
-        resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(inh_exec, inh_prov, inh_model)
-        architect_task = CodexTask(
-            id=str(uuid4()),
-            session_id=issue.session_id,
-            issue_id=issue.id,
-            phase="architecture",
-            title=f"架构 - {issue.title}",
-            prompt="请基于当前需求产物进行架构设计。",
-            role="architect",
-            executor=resolved_executor,
-            provider=resolved_provider,
-            model=resolved_model,
-            status="pending",
-            result=None,
-            parent_task_id=None,
-            task_kind="normal",
-            blocked_by_help_id=None,
-            workspace_path=workspace_path,
-            resume_session_id=None,
-            resume_message_id=None,
-            created_at=now,
-            updated_at=now,
-        )
-        await codex_store.save_codex_task(architect_task)
-        created = True
-        await event_bus.append({
-            "type": "task_created",
-            "task": architect_task.model_dump(mode="json"),
-        })
-
-    return {
-        "issue": issue.model_dump(mode="json"),
-        "task": architect_task.model_dump(mode="json") if architect_task is not None else None,
-        "created": created,
-    }
-
-
-async def _create_development_tasks(
-    codex_store,
-    issue: "CodexIssue",
-    ordered_tasks: list[dict],
-    existing_by_title: dict[str, dict],
-    workspace_path: str,
-    issue_tasks: list[dict] | None = None,
-) -> tuple[list["CodexTask"], bool]:
-    """Create or update development tasks for an issue.
-
-    Returns a tuple of (engineer_tasks, created_any).
-    """
-    from app.domain.models import CodexTask
-
-    engineer_tasks = []
-    created_any = False
-    for idx, item in enumerate(ordered_tasks):
-        task_title = f"开发 - {issue.title} - {item['title']}"
-        task_prompt = f"请实现以下开发任务：{item['title']}\n\n任务描述：{item['description']}\n\n优先级：{item['priority']}"
-        existing_row = existing_by_title.get(task_title.strip().lower())
-        if existing_row is not None:
-            engineer_task = await codex_store.load_codex_task(existing_row["id"])
-            if engineer_task.sequence_index != idx or engineer_task.sequence_group != issue.id:
-                engineer_task.sequence_index = idx
-                engineer_task.sequence_group = issue.id
-                engineer_task.updated_at = datetime.now()
-                await codex_store.save_codex_task(engineer_task)
-        else:
-            now = datetime.now()
-            inh_exec, inh_prov, inh_model = _pick_executor_from_tasks(issue_tasks or list(existing_by_title.values()))
-            resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(inh_exec, inh_prov, inh_model)
-            engineer_task = CodexTask(
-                id=str(uuid4()),
-                session_id=issue.session_id,
-                issue_id=issue.id,
-                phase="development",
-                title=task_title,
-                prompt=task_prompt,
-                role="engineer",
-                executor=resolved_executor,
-                provider=resolved_provider,
-                model=resolved_model,
-                status="pending",
-                result=None,
-                parent_task_id=None,
-                task_kind="normal",
-                blocked_by_help_id=None,
-                workspace_path=workspace_path,
-                resume_session_id=None,
-                resume_message_id=None,
-                sequence_index=idx,
-                sequence_group=issue.id,
-                created_at=now,
-                updated_at=now,
-            )
-            await codex_store.save_codex_task(engineer_task)
-            created_any = True
-        engineer_tasks.append(engineer_task)
-    return engineer_tasks, created_any
-
-
-@router.post("/codex/issues/{issue_id}/transition-to-development")
-async def transition_codex_issue_to_development(issue_id: str):
-    if codex_store is None:
-        raise HTTPException(status_code=503, detail="SQLite store not available")
-
-    issue = await codex_store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
-    if issue.current_phase not in ["architecture", "development"]:
-        raise HTTPException(status_code=409, detail="只有架构或开发阶段的 issue 才能流转到开发")
-
-    session = await codex_store.load_codex_session(issue.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail=f"Session '{issue.session_id}' not found")
-
-    tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
-    if any(_is_task_running(task.get("status")) for task in tasks):
-        raise HTTPException(status_code=409, detail="当前有任务仍在运行，请等待完成后再流转")
-
-    workspace_path = next((task.get("workspace_path") for task in tasks if task.get("workspace_path")), None) or session.cwd
-    has_artifacts, artifact_error = _has_architecture_artifacts(workspace_path, issue_id)
-    if not has_artifacts:
-        raise HTTPException(status_code=409, detail=artifact_error)
-
-    success, error_msg, dev_task_list = _load_development_task_list(workspace_path, issue_id)
-    if not success:
-        raise HTTPException(status_code=409, detail=error_msg)
-
-    implementation_tasks = _load_implementation_tasks(workspace_path, issue_id)
-    success, error_msg, ordered_tasks = _validate_and_order_implementation_tasks(implementation_tasks, dev_task_list)
-    if not success:
-        raise HTTPException(status_code=409, detail=error_msg)
-
-    existing_rows = [task for task in tasks if task.get("role") == "engineer" and task.get("issue_id") == issue_id]
-    existing_by_title = {str(task.get("title") or "").strip().lower(): task for task in existing_rows}
-
-    created_task_ids: set[str] = set()
-    for idx, item in enumerate(ordered_tasks):
-        task_title = f"开发 - {issue.title} - {item['title']}"
-        existing_row = existing_by_title.get(task_title.strip().lower())
-        if existing_row is not None:
-            existing_task = await codex_store.load_codex_task(existing_row["id"])
-            if existing_task is not None and (existing_task.sequence_index != idx or existing_task.sequence_group != issue.id):
-                existing_task.sequence_index = idx
-                existing_task.sequence_group = issue.id
-                existing_task.updated_at = datetime.now()
-                await codex_store.save_codex_task(existing_task)
-        else:
-            created_task_ids.add(str(idx))
-
-    if created_task_ids:
-        engineer_tasks, created_any = await _create_development_tasks(
-            codex_store, issue, ordered_tasks, existing_by_title, workspace_path, issue_tasks=tasks
-        )
-    else:
-        engineer_tasks = [
-            await codex_store.load_codex_task(row["id"])
-            for row in existing_rows
-            if row["id"] is not None
-        ]
-        engineer_tasks = [t for t in engineer_tasks if t is not None]
-        created_any = False
-
-    issue.current_phase = "development"
-    issue.updated_at = datetime.now()
-    await codex_store.save_codex_issue(issue)
-    return {
-        "issue": issue.model_dump(mode="json"),
-        "tasks": [task.model_dump(mode="json") for task in engineer_tasks],
-        "created": created_any,
-    }
-
-
-@router.post("/codex/issues/{issue_id}/transition-to-testing")
-async def transition_codex_issue_to_testing(issue_id: str):
-    if codex_store is None:
-        raise HTTPException(status_code=503, detail="SQLite store not available")
-
-    issue = await codex_store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
-    if issue.current_phase not in ["development", "testing"]:
-        raise HTTPException(status_code=409, detail="只有开发或测试阶段的 issue 才能流转到测试")
-
-    session = await codex_store.load_codex_session(issue.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail=f"Session '{issue.session_id}' not found")
-
-    tasks = await codex_store.list_codex_tasks(session_id=issue.session_id, issue_id=issue_id)
-    if any(_is_task_running(task.get("status")) for task in tasks):
-        raise HTTPException(status_code=409, detail="当前有任务仍在运行，请等待完成后再流转")
-
-    ok, error_msg = _engineer_tasks_all_done(tasks, issue_id)
-    if not ok:
-        raise HTTPException(status_code=409, detail=error_msg)
-
-    workspace_path = next(
-        (task.get("workspace_path") for task in tasks if task.get("workspace_path")),
-        None,
-    ) or session.cwd
-
-    ok, error_msg = _has_engineer_artifacts(workspace_path, issue_id)
-    if not ok:
-        raise HTTPException(status_code=409, detail=error_msg)
-
-    existing_qa_row = next(
-        (task for task in tasks if task.get("role") == "qa" and task.get("issue_id") == issue_id),
-        None,
-    )
-
-    issue.current_phase = "testing"
-    issue.updated_at = datetime.now()
-    await codex_store.save_codex_issue(issue)
-
-    qa_task = None
-    created = False
-    if existing_qa_row is not None:
-        qa_task = await codex_store.load_codex_task(existing_qa_row["id"])
-    else:
-        from app.domain.models import CodexTask
-
-        now = datetime.now()
-        inh_exec, inh_prov, inh_model = _pick_executor_from_tasks(tasks)
-        resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(inh_exec, inh_prov, inh_model)
-        qa_task = CodexTask(
-            id=str(uuid4()),
-            session_id=issue.session_id,
-            issue_id=issue.id,
-            phase="testing",
-            title=f"测试 - {issue.title}",
-            prompt="请基于当前开发产物对该需求进行 QA 验收。",
-            role="qa",
-            executor=resolved_executor,
-            provider=resolved_provider,
-            model=resolved_model,
-            status="pending",
-            result=None,
-            parent_task_id=None,
-            task_kind="normal",
-            blocked_by_help_id=None,
-            workspace_path=workspace_path,
-            resume_session_id=None,
-            resume_message_id=None,
-            created_at=now,
-            updated_at=now,
-        )
-        await codex_store.save_codex_task(qa_task)
-        created = True
-        await event_bus.append({
-            "type": "task_created",
-            "task": qa_task.model_dump(mode="json"),
-        })
-
-    return {
-        "issue": issue.model_dump(mode="json"),
-        "task": qa_task.model_dump(mode="json") if qa_task is not None else None,
-        "created": created,
-    }
 
 
 @router.get("/codex/issues/{issue_id}/artifacts")
@@ -2232,17 +1751,9 @@ async def create_codex_task(request: CreateTaskRequest):
             raise HTTPException(status_code=404, detail="Issue not found")
         if issue.session_id != request.session_id:
             raise HTTPException(status_code=409, detail="Issue does not belong to workspace")
-    resolved_phase = request.phase
-    expected_phase = ROLE_PHASE_DEFAULTS.get(request.role)
-    if resolved_phase is None:
-        resolved_phase = expected_phase or (issue.current_phase if request.issue_id is not None else "requirements")
-    if resolved_phase not in VALID_ISSUE_PHASES:
-        raise HTTPException(status_code=400, detail=f"Invalid task phase: {resolved_phase}")
-    if expected_phase is not None and resolved_phase != expected_phase:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Role '{request.role}' must run in phase '{expected_phase}', got '{resolved_phase}'",
-        )
+    # PR5: phase is now free-form. Default to role_key when caller omits it
+    # (the new DAG flow ignores this field anyway).
+    resolved_phase = request.phase or (request.role or (issue.current_phase if request.issue_id is not None else "general"))
 
     # Resolve and validate executor/provider/model against runtime catalog
     resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(
@@ -3073,3 +2584,275 @@ async def test_runtime_executor(request: TestExecutorRequest):
         return {"success": False, "error": "Request timed out after 10s"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# --- Agent CRUD (PR1: Workflow DAG, behind WORKFLOW_DAG_ENABLED) ---
+
+class AgentCreateRequest(BaseModel):
+    name: str
+    role_key: str
+    description: str | None = None
+    system_prompt_template: str
+    workspace_id: str | None = None
+    input_schema: list[dict] | None = None
+    output_schema: dict | None = None
+    default_executor: str | None = None
+    default_provider: str | None = None
+    default_model: str | None = None
+    artifact_subdir: str | None = None
+    persist_kind: str | None = None
+    triggers_replan_on_done: bool = False
+    triggers_replan_on_fail: bool = False
+
+
+class AgentUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    system_prompt_template: str | None = None
+    input_schema: list[dict] | None = None
+    output_schema: dict | None = None
+    default_executor: str | None = None
+    default_provider: str | None = None
+    default_model: str | None = None
+    artifact_subdir: str | None = None
+    persist_kind: str | None = None
+    triggers_replan_on_done: bool | None = None
+    triggers_replan_on_fail: bool | None = None
+
+
+def _require_agent_store():
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    return codex_store
+
+
+@router.get("/agents")
+async def list_agents(workspace_id: str | None = None, role_key: str | None = None):
+    """List agents available to a workspace (workspace-specific + global) or all globals."""
+    store = _require_agent_store()
+    agents = await store.list_agents(workspace_id=workspace_id, role_key=role_key)
+    return [a.model_dump() for a in agents]
+
+
+@router.get("/agents/{agent_id}")
+async def get_agent(agent_id: str):
+    store = _require_agent_store()
+    agent = await store.load_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    return agent.model_dump()
+
+
+@router.post("/agents", status_code=201)
+async def create_agent(request: AgentCreateRequest):
+    """Create a custom (non-builtin) agent.
+
+    Note: the API never lets callers create a builtin agent — that flag is reserved
+    for the startup seeder. Custom agents default `artifact_subdir` to `node_<role_key>`
+    so their artifacts don't collide with legacy role subdirs (pm/architect/...).
+    """
+    store = _require_agent_store()
+    from app.domain.models import Agent
+    if not request.role_key.strip():
+        raise HTTPException(status_code=400, detail="role_key is required")
+    if not request.system_prompt_template.strip():
+        raise HTTPException(status_code=400, detail="system_prompt_template is required")
+    # Enforce uniqueness within scope (matches DB UNIQUE constraint, but returns a clean error).
+    existing = await store.list_agents(workspace_id=request.workspace_id, role_key=request.role_key)
+    same_scope = [a for a in existing if a.workspace_id == request.workspace_id]
+    if same_scope:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Agent with role_key '{request.role_key}' already exists in this scope",
+        )
+    now = datetime.now()
+    agent = Agent(
+        id=str(uuid4()),
+        workspace_id=request.workspace_id,
+        name=request.name,
+        role_key=request.role_key,
+        description=request.description,
+        system_prompt_template=request.system_prompt_template,
+        input_schema=request.input_schema or [],
+        output_schema=request.output_schema or {},
+        default_executor=request.default_executor,
+        default_provider=request.default_provider,
+        default_model=request.default_model,
+        artifact_subdir=request.artifact_subdir or f"node_{request.role_key}",
+        persist_kind=request.persist_kind,
+        triggers_replan_on_done=request.triggers_replan_on_done,
+        triggers_replan_on_fail=request.triggers_replan_on_fail,
+        is_builtin=False,
+        created_at=now,
+        updated_at=now,
+    )
+    await store.save_agent(agent)
+    return agent.model_dump()
+
+
+@router.patch("/agents/{agent_id}")
+async def update_agent(agent_id: str, request: AgentUpdateRequest):
+    store = _require_agent_store()
+    agent = await store.load_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    # Builtin agents are partially editable: only trigger flags and prompt overrides.
+    if agent.is_builtin:
+        forbidden_changes = {k for k, v in request.model_dump(exclude_unset=True).items() if v is not None and k not in {"triggers_replan_on_done", "triggers_replan_on_fail"}}
+        if forbidden_changes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Built-in agents only allow editing replan triggers; got: {sorted(forbidden_changes)}",
+            )
+    updates = request.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(agent, field, value)
+    agent.updated_at = datetime.now()
+    await store.save_agent(agent)
+    return agent.model_dump()
+
+
+@router.delete("/agents/{agent_id}", status_code=204)
+async def delete_agent(agent_id: str):
+    store = _require_agent_store()
+    agent = await store.load_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    if agent.is_builtin:
+        raise HTTPException(status_code=400, detail="Built-in agents cannot be deleted")
+    deleted = await store.delete_agent(agent_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    return Response(status_code=204)
+
+
+# --- Workflow plan endpoint (PR2) ---
+
+
+@router.post("/codex/issues/{issue_id}/plan")
+async def propose_issue_plan(issue_id: str):
+    """Run the orchestrator and return a proposed DAG. Does NOT persist."""
+    store = _require_agent_store()
+    issue = await store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+    from app.application.workflow_orchestrator import WorkflowOrchestrator
+    orchestrator = WorkflowOrchestrator(store=store)
+    try:
+        dag = await orchestrator.propose_graph(issue)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return dag
+
+
+# --- Workflow graph persistence (PR3) ---
+
+class SaveGraphRequest(BaseModel):
+    dag: dict
+    created_by: str = "user"
+
+
+def _graph_to_dict(graph) -> dict:
+    return {
+        "id": graph.id,
+        "issue_id": graph.issue_id,
+        "preset_id": graph.preset_id,
+        "status": graph.status,
+        "dag_json": graph.dag_json,
+        "created_by": graph.created_by,
+        "locked_at": graph.locked_at.isoformat() if graph.locked_at else None,
+        "created_at": graph.created_at.isoformat() if graph.created_at else None,
+        "updated_at": graph.updated_at.isoformat() if graph.updated_at else None,
+        "nodes": [n.model_dump() for n in graph.nodes],
+        "edges": [e.model_dump() for e in graph.edges],
+    }
+
+
+@router.get("/codex/issues/{issue_id}/graph")
+async def get_issue_graph(issue_id: str):
+    store = _require_agent_store()
+    graph = await store.load_workflow_graph_for_issue(issue_id)
+    if graph is None:
+        raise HTTPException(status_code=404, detail="No workflow graph exists for this issue")
+    return _graph_to_dict(graph)
+
+
+@router.post("/codex/issues/{issue_id}/graph", status_code=201)
+async def save_issue_graph(issue_id: str, request: SaveGraphRequest):
+    """Persist (or overwrite) the workflow graph for an issue from a DAG payload."""
+    store = _require_agent_store()
+    issue = await store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+    agents = await store.list_agents(workspace_id=None)
+    from app.application.workflow_orchestrator import validate_dag
+    try:
+        validate_dag(request.dag, {a.id for a in agents})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    from app.application.workflow_scheduler import materialize_graph_from_dag
+    graph = await materialize_graph_from_dag(store, issue_id, request.dag, created_by=request.created_by)
+    return _graph_to_dict(graph)
+
+
+@router.post("/codex/issues/{issue_id}/graph/start")
+async def start_issue_graph(issue_id: str):
+    """Begin DAG execution. Returns the graph after the first settle pass."""
+    store = _require_agent_store()
+    graph = await store.load_workflow_graph_for_issue(issue_id)
+    if graph is None:
+        raise HTTPException(status_code=404, detail="No workflow graph exists for this issue")
+    from app.application.workflow_scheduler import WorkflowScheduler
+    from app.application.event_bus import _workflow_task_dispatcher
+    scheduler = WorkflowScheduler(store=store, task_dispatcher=_workflow_task_dispatcher)
+    graph = await scheduler.start_graph(graph.id)
+    return _graph_to_dict(graph)
+
+
+# --- Replanner endpoints (PR6) ---
+
+
+@router.get("/codex/issues/{issue_id}/graph/replan-pending")
+async def list_replan_pending(issue_id: str):
+    store = _require_agent_store()
+    graph = await store.load_workflow_graph_for_issue(issue_id)
+    if graph is None:
+        return []
+    pending = await store.list_pending_replans(graph.id)
+    return [
+        {
+            "id": r.id,
+            "graph_id": r.graph_id,
+            "triggered_by_node_key": r.triggered_by_node_key,
+            "trigger_reason": r.trigger_reason,
+            "diff": json.loads(r.diff_json) if r.diff_json else {},
+            "rationale": r.rationale,
+            "status": r.status,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in pending
+    ]
+
+
+@router.post("/codex/issues/{issue_id}/graph/replan/{replan_id}/confirm")
+async def confirm_replan(issue_id: str, replan_id: str):
+    store = _require_agent_store()
+    from app.application.workflow_scheduler import WorkflowScheduler, WorkflowSchedulerError
+    scheduler = WorkflowScheduler(store=store, task_dispatcher=None)
+    try:
+        graph = await scheduler.apply_replan(replan_id, "confirmed")
+    except (ValueError, WorkflowSchedulerError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _graph_to_dict(graph)
+
+
+@router.post("/codex/issues/{issue_id}/graph/replan/{replan_id}/reject")
+async def reject_replan(issue_id: str, replan_id: str):
+    store = _require_agent_store()
+    from app.application.workflow_scheduler import WorkflowScheduler, WorkflowSchedulerError
+    scheduler = WorkflowScheduler(store=store, task_dispatcher=None)
+    try:
+        graph = await scheduler.apply_replan(replan_id, "rejected")
+    except (ValueError, WorkflowSchedulerError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _graph_to_dict(graph)

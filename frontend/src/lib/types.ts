@@ -481,3 +481,137 @@ export interface IssueTemplate {
   phases: string[];
   created_at: string | null;
 }
+
+// --- Workflow DAG (PR1) ---
+
+export interface Agent {
+  id: string;
+  workspace_id: string | null;
+  name: string;
+  role_key: string;
+  description: string | null;
+  system_prompt_template: string;
+  input_schema: Array<Record<string, unknown>>;
+  output_schema: Record<string, unknown>;
+  default_executor: string | null;
+  default_provider: string | null;
+  default_model: string | null;
+  artifact_subdir: string | null;
+  persist_kind: string | null;
+  triggers_replan_on_done: boolean;
+  triggers_replan_on_fail: boolean;
+  is_builtin: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CreateAgentRequest {
+  name: string;
+  role_key: string;
+  description?: string | null;
+  system_prompt_template: string;
+  workspace_id?: string | null;
+  input_schema?: Array<Record<string, unknown>>;
+  output_schema?: Record<string, unknown>;
+  default_executor?: string | null;
+  default_provider?: string | null;
+  default_model?: string | null;
+  artifact_subdir?: string | null;
+  persist_kind?: string | null;
+  triggers_replan_on_done?: boolean;
+  triggers_replan_on_fail?: boolean;
+}
+
+export interface UpdateAgentRequest {
+  name?: string;
+  description?: string | null;
+  system_prompt_template?: string;
+  input_schema?: Array<Record<string, unknown>>;
+  output_schema?: Record<string, unknown>;
+  default_executor?: string | null;
+  default_provider?: string | null;
+  default_model?: string | null;
+  artifact_subdir?: string | null;
+  persist_kind?: string | null;
+  triggers_replan_on_done?: boolean;
+  triggers_replan_on_fail?: boolean;
+}
+
+export type WorkflowNodeStatus =
+  | "pending"
+  | "blocked"
+  | "ready"
+  | "running"
+  | "done"
+  | "failed"
+  | "skipped"
+  | "needs_rework";
+
+export type WorkflowEdgeType =
+  | "sequence"
+  | "parallel-fanout"
+  | "refine-loop"
+  | "retry-on-fail"
+  | "conditional";
+
+export interface WorkflowNode {
+  id: string;
+  graph_id: string;
+  node_key: string;
+  agent_id: string;
+  title: string | null;
+  prompt_override: string | null;
+  status: WorkflowNodeStatus;
+  task_id: string | null;
+  artifact_dir: string | null;
+  retries: number;
+  max_retries: number;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  graph_id: string;
+  from_node_key: string;
+  to_node_key: string;
+  edge_type: WorkflowEdgeType;
+  condition_expr: string | null;
+  created_at: string | null;
+}
+
+export interface WorkflowGraph {
+  id: string;
+  issue_id: string;
+  preset_id: string | null;
+  status: string;
+  dag_json: string;
+  created_by: string | null;
+  locked_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+}
+
+export interface ProposedDAGNode {
+  node_key: string;
+  agent_id: string;
+  role_key: string;
+  title: string;
+}
+
+export interface ProposedDAGEdge {
+  from_node_key: string;
+  to_node_key: string;
+  edge_type: WorkflowEdgeType;
+  condition_expr?: string | null;
+}
+
+export interface ProposedDAG {
+  meta: { intent?: string; rationale?: string; created_by?: string };
+  nodes: ProposedDAGNode[];
+  edges: ProposedDAGEdge[];
+}

@@ -21,6 +21,13 @@ from app.application.project_service import ProjectService
 from app.application.worktree_manager import WorktreeManager
 
 
+# Workflow DAG feature flag. Default ON now that PR5 migrations and PR6
+# replanner are in place. Set WORKFLOW_DAG_ENABLED=false to temporarily roll
+# back to the legacy phase pipeline (transition endpoints are deleted, so the
+# rollback also requires reverting their removal).
+WORKFLOW_DAG_ENABLED = os.getenv("WORKFLOW_DAG_ENABLED", "true").lower() == "true"
+
+
 # Determine store path - default to backend/console.db
 db_path_str = os.getenv("SQLITE_DB_PATH", "console.db")
 # Make path relative to backend directory if not absolute

@@ -17,8 +17,6 @@ import type {
   SendMessageResult,
   ResolveApprovalRequest,
   HelpRequest,
-  IssuePhaseTransitionResult,
-  IssuePhaseMultiTaskTransitionResult,
   UpdateCodexTaskRequest,
   RuntimeCatalog,
   RuntimeCatalogRequest,
@@ -26,6 +24,11 @@ import type {
   TestExecutorResponse,
   Project,
   GitBranch,
+  Agent,
+  CreateAgentRequest,
+  UpdateAgentRequest,
+  WorkflowGraph,
+  ProposedDAG,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
@@ -309,26 +312,9 @@ export async function updateCodexIssuePhase(issueId: string, currentPhase: strin
   return handleResponse<CodexIssue>(response);
 }
 
-export async function transitionIssueToArchitecture(issueId: string): Promise<IssuePhaseTransitionResult> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/transition-to-architecture`, {
-    method: "POST",
-  });
-  return handleResponse<IssuePhaseTransitionResult>(response);
-}
-
-export async function transitionIssueToDevelopment(issueId: string): Promise<IssuePhaseMultiTaskTransitionResult> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/transition-to-development`, {
-    method: "POST",
-  });
-  return handleResponse<IssuePhaseMultiTaskTransitionResult>(response);
-}
-
-export async function transitionIssueToTesting(issueId: string): Promise<IssuePhaseTransitionResult> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/transition-to-testing`, {
-    method: "POST",
-  });
-  return handleResponse<IssuePhaseTransitionResult>(response);
-}
+// Legacy transitionIssueTo{Architecture,Development,Testing} helpers removed
+// in the DAG migration. Use planIssue / saveIssueGraph / startIssueGraph /
+// the workflow scheduler endpoints instead.
 
 export async function deleteCodexIssue(issueId: string): Promise<unknown> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}`, {
@@ -751,6 +737,111 @@ export async function bulkDeleteIssues(issueIds: string[]): Promise<void> {
     body: JSON.stringify({ issue_ids: issueIds }),
   });
   return handleResponse(response);
+}
+
+// --- Agents (PR1: Workflow DAG) ---
+
+export async function listAgents(opts: { workspaceId?: string; roleKey?: string } = {}): Promise<Agent[]> {
+  const params = new URLSearchParams();
+  if (opts.workspaceId) params.set("workspace_id", opts.workspaceId);
+  if (opts.roleKey) params.set("role_key", opts.roleKey);
+  const qs = params.toString();
+  const response = await fetch(`${API_BASE}/agents${qs ? `?${qs}` : ""}`);
+  return handleResponse<Agent[]>(response);
+}
+
+export async function getAgent(agentId: string): Promise<Agent> {
+  const response = await fetch(`${API_BASE}/agents/${agentId}`);
+  return handleResponse<Agent>(response);
+}
+
+export async function createAgent(body: CreateAgentRequest): Promise<Agent> {
+  const response = await fetch(`${API_BASE}/agents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<Agent>(response);
+}
+
+export async function updateAgent(agentId: string, body: UpdateAgentRequest): Promise<Agent> {
+  const response = await fetch(`${API_BASE}/agents/${agentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<Agent>(response);
+}
+
+export async function deleteAgent(agentId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/agents/${agentId}`, { method: "DELETE" });
+  if (!response.ok && response.status !== 204) {
+    return handleResponse(response);
+  }
+}
+
+// --- Workflow plan / graph (PR2 + PR3) ---
+
+export async function planIssue(issueId: string): Promise<ProposedDAG> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/plan`, { method: "POST" });
+  return handleResponse<ProposedDAG>(response);
+}
+
+export async function getIssueGraph(issueId: string): Promise<WorkflowGraph | null> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph`);
+  if (response.status === 404) return null;
+  return handleResponse<WorkflowGraph>(response);
+}
+
+export async function saveIssueGraph(issueId: string, dag: ProposedDAG, createdBy = "user"): Promise<WorkflowGraph> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dag, created_by: createdBy }),
+  });
+  return handleResponse<WorkflowGraph>(response);
+}
+
+export async function startIssueGraph(issueId: string): Promise<WorkflowGraph> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/start`, { method: "POST" });
+  return handleResponse<WorkflowGraph>(response);
+}
+
+export interface ReplanPending {
+  id: string;
+  graph_id: string;
+  triggered_by_node_key: string;
+  trigger_reason: string;
+  diff: {
+    added_nodes?: Array<{ node_key: string; role_key?: string; title?: string }>;
+    added_edges?: Array<{ from_node_key: string; to_node_key: string; edge_type: string }>;
+    removed_node_keys?: string[];
+    rationale?: string;
+  };
+  rationale: string | null;
+  status: string;
+  created_at: string | null;
+}
+
+export async function listReplanPending(issueId: string): Promise<ReplanPending[]> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/replan-pending`);
+  return handleResponse<ReplanPending[]>(response);
+}
+
+export async function confirmReplan(issueId: string, replanId: string): Promise<WorkflowGraph> {
+  const response = await fetch(
+    `${API_BASE}/codex/issues/${issueId}/graph/replan/${replanId}/confirm`,
+    { method: "POST" }
+  );
+  return handleResponse<WorkflowGraph>(response);
+}
+
+export async function rejectReplan(issueId: string, replanId: string): Promise<WorkflowGraph> {
+  const response = await fetch(
+    `${API_BASE}/codex/issues/${issueId}/graph/replan/${replanId}/reject`,
+    { method: "POST" }
+  );
+  return handleResponse<WorkflowGraph>(response);
 }
 
 // WebSocket URL builders

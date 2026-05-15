@@ -201,6 +201,7 @@ class CodexTask(BaseModel):
     sequence_index: int | None = None  # Position in development task sequence (0-based)
     sequence_group: str | None = None  # Group identifier for sequencing (typically issue_id)
     review_comment: str | None = None  # Architect's review feedback
+    workflow_node_id: str | None = None  # FK → workflow_nodes.id (PR1+: DAG-aware tasks)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -341,4 +342,125 @@ class IssueTemplate(BaseModel):
     description: str | None = None
     phases: list[str] = Field(default_factory=list)  # Default phases to create
     created_at: datetime | None = None
+
+
+# --- Workflow DAG Models (PR1) ---
+# These replace the hardcoded 4-phase role pipeline with a first-class
+# Agent registry + DAG-of-nodes execution model. Built-in agents preserve
+# legacy behavior; the orchestrator/scheduler land in later PRs.
+
+NodeStatus = Literal[
+    "pending", "blocked", "ready", "running",
+    "done", "failed", "skipped", "needs_rework",
+]
+
+EdgeType = Literal[
+    "sequence", "parallel-fanout", "refine-loop",
+    "retry-on-fail", "conditional",
+]
+
+
+class Agent(BaseModel):
+    """A pluggable agent definition.
+
+    Replaces hardcoded role dispatch in role_workflow_service.py. Each Agent
+    owns its system prompt template, input/output schema, and runtime defaults.
+    """
+    id: str
+    workspace_id: str | None = None  # None = global agent
+    name: str
+    role_key: str  # Stable key for backward compat (product_manager/architect/...)
+    description: str | None = None
+    system_prompt_template: str
+    # Declares which upstream artifacts to inject: list of {node_key|role_key, required, artifact_glob}
+    input_schema: list[dict] = Field(default_factory=list)
+    # Declares produced artifacts: {artifacts: [{name, kind, path_template}]}
+    output_schema: dict = Field(default_factory=dict)
+    default_executor: str | None = None
+    default_provider: str | None = None
+    default_model: str | None = None
+    artifact_subdir: str | None = None  # legacy subdir (pm/architect/...) or "node_<key>" for custom
+    persist_kind: str | None = None  # Hooks RoleWorkflowService.persist_result()
+    triggers_replan_on_done: bool = False  # PM/architect set this true
+    triggers_replan_on_fail: bool = False  # QA sets this true
+    is_builtin: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class WorkflowNode(BaseModel):
+    """One node in a workflow graph (an agent invocation slot)."""
+    id: str
+    graph_id: str
+    node_key: str  # Stable key within the graph (used by edges)
+    agent_id: str
+    title: str | None = None
+    prompt_override: str | None = None  # Optional per-node override of agent.system_prompt_template
+    status: NodeStatus = "pending"
+    task_id: str | None = None
+    artifact_dir: str | None = None
+    retries: int = 0
+    max_retries: int = 1
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class WorkflowEdge(BaseModel):
+    """An edge connecting two nodes within the same graph."""
+    id: str
+    graph_id: str
+    from_node_key: str
+    to_node_key: str
+    edge_type: EdgeType = "sequence"
+    condition_expr: str | None = None  # JSON-logic style mini-DSL (evaluated by scheduler)
+    created_at: datetime | None = None
+
+
+class WorkflowGraph(BaseModel):
+    """A DAG describing how an issue is executed.
+
+    `dag_json` is the editable source of truth. The nodes/edges lists are
+    derived/materialized views that the scheduler queries directly.
+    """
+    id: str
+    issue_id: str
+    preset_id: str | None = None
+    status: str = "draft"  # draft | running | done | failed | cancelled
+    dag_json: str  # Serialized {nodes:[...], edges:[...], meta:{...}}
+    created_by: str | None = None  # "orchestrator" | "user" | "preset"
+    locked_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    # Convenience populated by store (not persisted directly on graphs table)
+    nodes: list[WorkflowNode] = Field(default_factory=list)
+    edges: list[WorkflowEdge] = Field(default_factory=list)
+
+
+class WorkflowPreset(BaseModel):
+    """A reusable graph template (e.g. legacy 4-phase, bug-fix, docs-only)."""
+    id: str
+    name: str
+    description: str | None = None
+    dag_template_json: str
+    is_builtin: bool = False
+    created_at: datetime | None = None
+
+
+class GraphReplanPending(BaseModel):
+    """A replan proposal awaiting user Confirm/Reject.
+
+    Emitted by the scheduler when a node with triggers_replan_on_done/fail
+    completes; suspends downstream dispatch until resolved.
+    """
+    id: str
+    graph_id: str
+    triggered_by_node_key: str
+    trigger_reason: str  # "node_done" | "node_failed"
+    diff_json: str  # {added_nodes, removed_node_keys, added_edges, removed_edge_ids}
+    rationale: str | None = None
+    status: Literal["pending", "confirmed", "rejected"] = "pending"
+    created_at: datetime | None = None
+    resolved_at: datetime | None = None
 

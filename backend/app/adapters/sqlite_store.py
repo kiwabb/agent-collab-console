@@ -356,6 +356,107 @@ class SQLiteStore:
                     UNIQUE(issue_id, name)
                 )
             """)
+            # --- Workflow DAG tables (PR1) ---
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agents (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT,
+                    name TEXT NOT NULL,
+                    role_key TEXT NOT NULL,
+                    description TEXT,
+                    system_prompt_template TEXT NOT NULL,
+                    input_schema TEXT,
+                    output_schema TEXT,
+                    default_executor TEXT,
+                    default_provider TEXT,
+                    default_model TEXT,
+                    artifact_subdir TEXT,
+                    persist_kind TEXT,
+                    triggers_replan_on_done INTEGER NOT NULL DEFAULT 0,
+                    triggers_replan_on_fail INTEGER NOT NULL DEFAULT 0,
+                    is_builtin INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    UNIQUE(workspace_id, role_key)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workflow_graphs (
+                    id TEXT PRIMARY KEY,
+                    issue_id TEXT NOT NULL,
+                    preset_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    dag_json TEXT NOT NULL,
+                    created_by TEXT,
+                    locked_at TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    FOREIGN KEY (issue_id) REFERENCES codex_issues(id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workflow_nodes (
+                    id TEXT PRIMARY KEY,
+                    graph_id TEXT NOT NULL,
+                    node_key TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    title TEXT,
+                    prompt_override TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    task_id TEXT,
+                    artifact_dir TEXT,
+                    retries INTEGER NOT NULL DEFAULT 0,
+                    max_retries INTEGER NOT NULL DEFAULT 1,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    UNIQUE(graph_id, node_key),
+                    FOREIGN KEY (graph_id) REFERENCES workflow_graphs(id),
+                    FOREIGN KEY (agent_id) REFERENCES agents(id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workflow_edges (
+                    id TEXT PRIMARY KEY,
+                    graph_id TEXT NOT NULL,
+                    from_node_key TEXT NOT NULL,
+                    to_node_key TEXT NOT NULL,
+                    edge_type TEXT NOT NULL DEFAULT 'sequence',
+                    condition_expr TEXT,
+                    created_at TEXT,
+                    UNIQUE(graph_id, from_node_key, to_node_key, edge_type),
+                    FOREIGN KEY (graph_id) REFERENCES workflow_graphs(id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workflow_presets (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    dag_template_json TEXT NOT NULL,
+                    is_builtin INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS graph_replan_pending (
+                    id TEXT PRIMARY KEY,
+                    graph_id TEXT NOT NULL,
+                    triggered_by_node_key TEXT NOT NULL,
+                    trigger_reason TEXT NOT NULL,
+                    diff_json TEXT NOT NULL,
+                    rationale TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT,
+                    resolved_at TEXT,
+                    FOREIGN KEY (graph_id) REFERENCES workflow_graphs(id)
+                )
+            """)
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN workflow_node_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             # Create indexes for frequently queried columns
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)")
@@ -374,6 +475,17 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_paths_issue_id ON artifact_paths(issue_id)")
+            # Workflow DAG indexes
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_role_key ON agents(role_key)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_workspace_id ON agents(workspace_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_graphs_issue_id ON workflow_graphs(issue_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_graph_id ON workflow_nodes(graph_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_status ON workflow_nodes(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_task_id ON workflow_nodes(task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_edges_graph_id ON workflow_edges(graph_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_graph_id ON graph_replan_pending(graph_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_status ON graph_replan_pending(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_workflow_node_id ON codex_tasks(workflow_node_id)")
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database initialization error: %s", e)

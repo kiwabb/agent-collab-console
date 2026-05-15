@@ -117,6 +117,10 @@ def test_create_task_can_set_phase(client, project_ctx):
     ],
 )
 def test_create_task_defaults_phase_for_each_role(client, project_ctx, role, expected_phase):
+    """Phase is now a free-form tag — the test still passes a role and gets
+    back *a* phase, but the precise phase value is no longer constrained to
+    the legacy 4-phase enum. We just verify the task was created with the
+    supplied role."""
     issue = client.post(
         "/api/codex/issues",
         json={"session_id": project_ctx["session_id"], "title": "role default"},
@@ -132,10 +136,12 @@ def test_create_task_defaults_phase_for_each_role(client, project_ctx, role, exp
         },
     )
     assert task_resp.status_code == 201
-    assert task_resp.json()["phase"] == expected_phase
+    assert task_resp.json()["role"] == role
 
 
-def test_create_task_rejects_mismatched_role_and_phase(client, project_ctx):
+def test_create_task_allows_any_role_phase_combination(client, project_ctx):
+    """PR5: role and phase are decoupled. An engineer-role task with
+    phase='requirements' is now allowed (and useful for custom DAGs)."""
     issue = client.post(
         "/api/codex/issues",
         json={"session_id": project_ctx["session_id"], "title": "mismatch"},
@@ -151,7 +157,7 @@ def test_create_task_rejects_mismatched_role_and_phase(client, project_ctx):
             "phase": "requirements",
         },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 201
 
 
 def test_update_issue_phase(client, project_ctx):
@@ -167,16 +173,18 @@ def test_update_issue_phase(client, project_ctx):
     assert resp.json()["current_phase"] == "development"
 
 
-def test_update_issue_phase_rejects_invalid_phase(client, project_ctx):
+def test_update_issue_phase_accepts_freeform_value(client, project_ctx):
+    """PR5: issue phase is no longer enum-validated. Any string sticks."""
     issue = client.post(
         "/api/codex/issues",
-        json={"session_id": project_ctx["session_id"], "title": "invalid"},
+        json={"session_id": project_ctx["session_id"], "title": "freeform"},
     ).json()
     resp = client.post(
         f"/api/codex/issues/{issue['id']}/phase",
         json={"current_phase": "frob"},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert resp.json()["current_phase"] == "frob"
 
 
 def test_chat_task_creates_own_worktree(client, project_ctx):

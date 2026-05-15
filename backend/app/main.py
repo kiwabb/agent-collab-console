@@ -24,6 +24,27 @@ async def lifespan(app: FastAPI):
     import asyncio
     from app.application.event_bus import event_bus
     event_bus.set_loop(asyncio.get_running_loop())
+    # Seed built-in workflow agents (idempotent — only creates missing rows).
+    try:
+        from app.bootstrap import async_store, WORKFLOW_DAG_ENABLED
+        from app.application.agent_seed import seed_builtin_agents
+        if async_store is not None:
+            created = await seed_builtin_agents(async_store)
+            if created:
+                logger.info("Seeded %d built-in workflow agents", created)
+        # PR5: when DAG mode is on, backfill 4-phase graphs for legacy issues
+        # so the new UI can render them without a special case.
+        if WORKFLOW_DAG_ENABLED and async_store is not None:
+            from app.application.four_phase_preset import (
+                backfill_graphs_for_existing_issues,
+                ensure_four_phase_preset,
+            )
+            await ensure_four_phase_preset(async_store)
+            migrated = await backfill_graphs_for_existing_issues(async_store)
+            if migrated:
+                logger.info("Backfilled %d legacy issues with 4-phase preset graph", migrated)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to seed built-in agents: %s", exc)
     yield
     # Shutdown: terminate all running Codex processes via formal terminate_all() interface
     # This avoids orphan child processes when the backend exits

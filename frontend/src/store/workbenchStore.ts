@@ -1,5 +1,35 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
+
+// Shared helper: convert legacy "transition to X" intent into a graph start.
+// Typed as `any` because the store is declared further down the file and we
+// only need access to a handful of methods/fields — this is a migration
+// shim, not stable surface.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function startGraphForIssue(get: any, set: any, flagKey: string, issueId: string, newPhase: string) {
+  set((state: any) => { state[flagKey] = true; });  // eslint-disable-line @typescript-eslint/no-explicit-any
+  try {
+    let graph = await getIssueGraph(issueId);
+    if (graph === null) {
+      const proposed = await planIssue(issueId);
+      graph = await saveIssueGraph(issueId, proposed);
+    }
+    await startIssueGraph(issueId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const issue = get().issues.find((i: any) => i.id === issueId);
+    if (issue && get().updateIssue) {
+      get().updateIssue(issueId, { ...issue, current_phase: newPhase });
+    }
+    if (get().loadIssueArtifacts) {
+      await get().loadIssueArtifacts(issueId);
+    }
+  } catch (err) {
+    set((state: any) => { state.error = err instanceof Error ? err.message : 'Graph start failed'; });  // eslint-disable-line @typescript-eslint/no-explicit-any
+    throw err;
+  } finally {
+    set((state: any) => { state[flagKey] = false; });  // eslint-disable-line @typescript-eslint/no-explicit-any
+  }
+}
 import type {
   Workspace,
   Project,
@@ -26,9 +56,10 @@ import {
   getCodexIssueArtifacts,
   getPendingApprovals,
   getRuntimeCatalog,
-  transitionIssueToArchitecture,
-  transitionIssueToDevelopment,
-  transitionIssueToTesting,
+  planIssue,
+  getIssueGraph,
+  saveIssueGraph,
+  startIssueGraph,
   refineCodexTask,
   chatCodexTask,
   sendCodexTask,
@@ -453,53 +484,19 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>()(
       }
     },
 
+    // Phase transitions now route through the workflow DAG:
+    //   1. plan (heuristic) → 2. save graph (if missing) → 3. start graph.
+    // We keep three separate methods so existing callers / UI labels don't
+    // change, but they all share the same code path now. The `phase` arg only
+    // updates the issue's display label.
     transitionToArchitecture: async (issueId) => {
-      set((state) => { state.isTransitioningToArchitecture = true; });
-      try {
-        const result = await transitionIssueToArchitecture(issueId);
-        get().updateIssue(result.issue.id, result.issue);
-        if (result.task) get().addTask(result.task);
-        await get().loadIssueArtifacts(issueId);
-      } catch (err) {
-        set((state) => { state.error = err instanceof Error ? err.message : 'Transition failed'; });
-        throw err;
-      } finally {
-        set((state) => { state.isTransitioningToArchitecture = false; });
-      }
+      await startGraphForIssue(get, set, 'isTransitioningToArchitecture', issueId, 'architecture');
     },
-
     transitionToDevelopment: async (issueId) => {
-      set((state) => { state.isTransitioningToDevelopment = true; });
-      try {
-        const result = await transitionIssueToDevelopment(issueId);
-        get().updateIssue(result.issue.id, result.issue);
-        get().updateTasks((prevTasks) => {
-          const byId = new Map(prevTasks.map((task) => [task.id, task]));
-          for (const task of result.tasks) byId.set(task.id, task);
-          return Array.from(byId.values());
-        });
-        await get().loadIssueArtifacts(issueId);
-      } catch (err) {
-        set((state) => { state.error = err instanceof Error ? err.message : 'Transition failed'; });
-        throw err;
-      } finally {
-        set((state) => { state.isTransitioningToDevelopment = false; });
-      }
+      await startGraphForIssue(get, set, 'isTransitioningToDevelopment', issueId, 'development');
     },
-
     transitionToTesting: async (issueId) => {
-      set((state) => { state.isTransitioningToTesting = true; });
-      try {
-        const result = await transitionIssueToTesting(issueId);
-        get().updateIssue(result.issue.id, result.issue);
-        if (result.task) get().addTask(result.task);
-        await get().loadIssueArtifacts(issueId);
-      } catch (err) {
-        set((state) => { state.error = err instanceof Error ? err.message : 'Transition failed'; });
-        throw err;
-      } finally {
-        set((state) => { state.isTransitioningToTesting = false; });
-      }
+      await startGraphForIssue(get, set, 'isTransitioningToTesting', issueId, 'testing');
     },
 
     sendMessage: async (taskId, content, mode) => {

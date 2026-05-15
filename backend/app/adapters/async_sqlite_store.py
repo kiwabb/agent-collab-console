@@ -407,6 +407,109 @@ class AsyncSQLiteStore:
                 UNIQUE(issue_id, name)
             )
         """)
+        # --- Workflow DAG tables (PR1) ---
+        # Agent = first-class replacement for hardcoded roles.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS agents (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT,
+                name TEXT NOT NULL,
+                role_key TEXT NOT NULL,
+                description TEXT,
+                system_prompt_template TEXT NOT NULL,
+                input_schema TEXT,
+                output_schema TEXT,
+                default_executor TEXT,
+                default_provider TEXT,
+                default_model TEXT,
+                artifact_subdir TEXT,
+                persist_kind TEXT,
+                triggers_replan_on_done INTEGER NOT NULL DEFAULT 0,
+                triggers_replan_on_fail INTEGER NOT NULL DEFAULT 0,
+                is_builtin INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(workspace_id, role_key)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_graphs (
+                id TEXT PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                preset_id TEXT,
+                status TEXT NOT NULL DEFAULT 'draft',
+                dag_json TEXT NOT NULL,
+                created_by TEXT,
+                locked_at TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (issue_id) REFERENCES codex_issues(id)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_nodes (
+                id TEXT PRIMARY KEY,
+                graph_id TEXT NOT NULL,
+                node_key TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                title TEXT,
+                prompt_override TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                task_id TEXT,
+                artifact_dir TEXT,
+                retries INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 1,
+                started_at TEXT,
+                completed_at TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(graph_id, node_key),
+                FOREIGN KEY (graph_id) REFERENCES workflow_graphs(id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_edges (
+                id TEXT PRIMARY KEY,
+                graph_id TEXT NOT NULL,
+                from_node_key TEXT NOT NULL,
+                to_node_key TEXT NOT NULL,
+                edge_type TEXT NOT NULL DEFAULT 'sequence',
+                condition_expr TEXT,
+                created_at TEXT,
+                UNIQUE(graph_id, from_node_key, to_node_key, edge_type),
+                FOREIGN KEY (graph_id) REFERENCES workflow_graphs(id)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_presets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                dag_template_json TEXT NOT NULL,
+                is_builtin INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS graph_replan_pending (
+                id TEXT PRIMARY KEY,
+                graph_id TEXT NOT NULL,
+                triggered_by_node_key TEXT NOT NULL,
+                trigger_reason TEXT NOT NULL,
+                diff_json TEXT NOT NULL,
+                rationale TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT,
+                resolved_at TEXT,
+                FOREIGN KEY (graph_id) REFERENCES workflow_graphs(id)
+            )
+        """)
+        # Add workflow_node_id FK to codex_tasks for DAG-aware runtime routing.
+        try:
+            await conn.execute("ALTER TABLE codex_tasks ADD COLUMN workflow_node_id TEXT")
+        except Exception:
+            pass  # Column already exists
         # Create indexes for frequently queried columns
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_project_id ON codex_tasks(project_id)")
@@ -428,6 +531,17 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_paths_issue_id ON artifact_paths(issue_id)")
+        # Workflow DAG indexes
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_role_key ON agents(role_key)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_workspace_id ON agents(workspace_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_graphs_issue_id ON workflow_graphs(issue_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_graph_id ON workflow_nodes(graph_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_status ON workflow_nodes(status)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_task_id ON workflow_nodes(task_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_edges_graph_id ON workflow_edges(graph_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_graph_id ON graph_replan_pending(graph_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_status ON graph_replan_pending(status)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_workflow_node_id ON codex_tasks(workflow_node_id)")
         await conn.commit()
 
     async def _ensure_db(self):
@@ -778,14 +892,15 @@ class AsyncSQLiteStore:
                 status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path,
                 git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha,
                 resume_session_id, resume_message_id, last_execution_process_id,
-                sequence_index, sequence_group, review_comment, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                sequence_index, sequence_group, review_comment, workflow_node_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (task.id, task.session_id, task.project_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
              task.provider, task.model, task.status, task.result, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
              task.workspace_path,
              task.git_branch, task.git_base_branch, task.git_worktree_path, task.git_merge_status, task.git_last_commit_sha,
              task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
              task.sequence_index, task.sequence_group, task.review_comment,
+             getattr(task, "workflow_node_id", None),
              self._format_datetime(task.created_at),
              self._format_datetime(task.updated_at)),
         )
@@ -829,6 +944,7 @@ class AsyncSQLiteStore:
             sequence_index=row["sequence_index"] if "sequence_index" in keys else None,
             sequence_group=row["sequence_group"] if "sequence_group" in keys else None,
             review_comment=row["review_comment"] if "review_comment" in keys else None,
+            workflow_node_id=row["workflow_node_id"] if "workflow_node_id" in keys and row["workflow_node_id"] else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1395,3 +1511,364 @@ class AsyncSQLiteStore:
         ) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    # --- Agents (PR1: Workflow DAG) ---
+
+    def _row_to_agent(self, row) -> "Agent":
+        from app.domain.models import Agent
+        return Agent(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            name=row["name"],
+            role_key=row["role_key"],
+            description=row["description"],
+            system_prompt_template=row["system_prompt_template"],
+            input_schema=json.loads(row["input_schema"]) if row["input_schema"] else [],
+            output_schema=json.loads(row["output_schema"]) if row["output_schema"] else {},
+            default_executor=row["default_executor"],
+            default_provider=row["default_provider"],
+            default_model=row["default_model"],
+            artifact_subdir=row["artifact_subdir"],
+            persist_kind=row["persist_kind"],
+            triggers_replan_on_done=bool(row["triggers_replan_on_done"]),
+            triggers_replan_on_fail=bool(row["triggers_replan_on_fail"]),
+            is_builtin=bool(row["is_builtin"]),
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    async def save_agent(self, agent: "Agent") -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """
+            INSERT OR REPLACE INTO agents (
+                id, workspace_id, name, role_key, description, system_prompt_template,
+                input_schema, output_schema, default_executor, default_provider, default_model,
+                artifact_subdir, persist_kind, triggers_replan_on_done, triggers_replan_on_fail,
+                is_builtin, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                agent.id,
+                agent.workspace_id,
+                agent.name,
+                agent.role_key,
+                agent.description,
+                agent.system_prompt_template,
+                json.dumps(agent.input_schema) if agent.input_schema else None,
+                json.dumps(agent.output_schema) if agent.output_schema else None,
+                agent.default_executor,
+                agent.default_provider,
+                agent.default_model,
+                agent.artifact_subdir,
+                agent.persist_kind,
+                1 if agent.triggers_replan_on_done else 0,
+                1 if agent.triggers_replan_on_fail else 0,
+                1 if agent.is_builtin else 0,
+                self._format_datetime(agent.created_at),
+                self._format_datetime(agent.updated_at),
+            ),
+        )
+        await conn.commit()
+
+    async def load_agent(self, agent_id: str) -> "Agent | None":
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)) as cur:
+            row = await cur.fetchone()
+        return self._row_to_agent(row) if row else None
+
+    async def list_agents(self, workspace_id: str | None = None, role_key: str | None = None) -> list["Agent"]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM agents WHERE 1=1"
+        params: list = []
+        # Workspace scoping: when workspace_id is provided, return both global (NULL) and workspace-specific.
+        if workspace_id is not None:
+            sql += " AND (workspace_id IS NULL OR workspace_id = ?)"
+            params.append(workspace_id)
+        else:
+            sql += " AND workspace_id IS NULL"
+        if role_key is not None:
+            sql += " AND role_key = ?"
+            params.append(role_key)
+        sql += " ORDER BY is_builtin DESC, created_at ASC"
+        async with conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        return [self._row_to_agent(r) for r in rows]
+
+    async def delete_agent(self, agent_id: str) -> bool:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        cur = await conn.execute("DELETE FROM agents WHERE id = ? AND is_builtin = 0", (agent_id,))
+        await conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    # --- Workflow Graphs / Nodes / Edges / Replan (PR3) ---
+
+    def _row_to_workflow_graph(self, row) -> "WorkflowGraph":
+        from app.domain.models import WorkflowGraph
+        return WorkflowGraph(
+            id=row["id"],
+            issue_id=row["issue_id"],
+            preset_id=row["preset_id"],
+            status=row["status"],
+            dag_json=row["dag_json"],
+            created_by=row["created_by"],
+            locked_at=self._parse_datetime(row["locked_at"]),
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    def _row_to_workflow_node(self, row) -> "WorkflowNode":
+        from app.domain.models import WorkflowNode
+        return WorkflowNode(
+            id=row["id"],
+            graph_id=row["graph_id"],
+            node_key=row["node_key"],
+            agent_id=row["agent_id"],
+            title=row["title"],
+            prompt_override=row["prompt_override"],
+            status=row["status"],
+            task_id=row["task_id"],
+            artifact_dir=row["artifact_dir"],
+            retries=row["retries"] or 0,
+            max_retries=row["max_retries"] or 1,
+            started_at=self._parse_datetime(row["started_at"]),
+            completed_at=self._parse_datetime(row["completed_at"]),
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    def _row_to_workflow_edge(self, row) -> "WorkflowEdge":
+        from app.domain.models import WorkflowEdge
+        return WorkflowEdge(
+            id=row["id"],
+            graph_id=row["graph_id"],
+            from_node_key=row["from_node_key"],
+            to_node_key=row["to_node_key"],
+            edge_type=row["edge_type"],
+            condition_expr=row["condition_expr"],
+            created_at=self._parse_datetime(row["created_at"]),
+        )
+
+    async def save_workflow_graph(
+        self,
+        graph: "WorkflowGraph",
+        nodes: list["WorkflowNode"] | None = None,
+        edges: list["WorkflowEdge"] | None = None,
+    ) -> None:
+        """Persist graph + rebuild derived nodes/edges atomically."""
+        await self._ensure_db()
+        conn = await self._get_conn()
+        now_iso = self._format_datetime(datetime.now())
+        await conn.execute(
+            """
+            INSERT OR REPLACE INTO workflow_graphs (
+                id, issue_id, preset_id, status, dag_json, created_by,
+                locked_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                graph.id,
+                graph.issue_id,
+                graph.preset_id,
+                graph.status,
+                graph.dag_json,
+                graph.created_by,
+                self._format_datetime(graph.locked_at),
+                self._format_datetime(graph.created_at) or now_iso,
+                now_iso,
+            ),
+        )
+        if nodes is not None:
+            await conn.execute("DELETE FROM workflow_nodes WHERE graph_id = ?", (graph.id,))
+            for n in nodes:
+                await conn.execute(
+                    """
+                    INSERT INTO workflow_nodes (
+                        id, graph_id, node_key, agent_id, title, prompt_override,
+                        status, task_id, artifact_dir, retries, max_retries,
+                        started_at, completed_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        n.id,
+                        n.graph_id,
+                        n.node_key,
+                        n.agent_id,
+                        n.title,
+                        n.prompt_override,
+                        n.status,
+                        n.task_id,
+                        n.artifact_dir,
+                        n.retries,
+                        n.max_retries,
+                        self._format_datetime(n.started_at),
+                        self._format_datetime(n.completed_at),
+                        self._format_datetime(n.created_at) or now_iso,
+                        now_iso,
+                    ),
+                )
+        if edges is not None:
+            await conn.execute("DELETE FROM workflow_edges WHERE graph_id = ?", (graph.id,))
+            for e in edges:
+                await conn.execute(
+                    """
+                    INSERT INTO workflow_edges (
+                        id, graph_id, from_node_key, to_node_key, edge_type,
+                        condition_expr, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        e.id,
+                        e.graph_id,
+                        e.from_node_key,
+                        e.to_node_key,
+                        e.edge_type,
+                        e.condition_expr,
+                        self._format_datetime(e.created_at) or now_iso,
+                    ),
+                )
+        await conn.commit()
+
+    async def load_workflow_graph(self, graph_id: str) -> "WorkflowGraph | None":
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM workflow_graphs WHERE id = ?", (graph_id,)) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        graph = self._row_to_workflow_graph(row)
+        async with conn.execute(
+            "SELECT * FROM workflow_nodes WHERE graph_id = ? ORDER BY created_at ASC",
+            (graph_id,),
+        ) as cur:
+            node_rows = await cur.fetchall()
+        async with conn.execute(
+            "SELECT * FROM workflow_edges WHERE graph_id = ? ORDER BY created_at ASC",
+            (graph_id,),
+        ) as cur:
+            edge_rows = await cur.fetchall()
+        graph.nodes = [self._row_to_workflow_node(r) for r in node_rows]
+        graph.edges = [self._row_to_workflow_edge(r) for r in edge_rows]
+        return graph
+
+    async def load_workflow_graph_for_issue(self, issue_id: str) -> "WorkflowGraph | None":
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT id FROM workflow_graphs WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
+            (issue_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return await self.load_workflow_graph(row["id"])
+
+    async def update_workflow_node(
+        self,
+        node_id: str,
+        *,
+        status: str | None = None,
+        task_id: str | None = None,
+        artifact_dir: str | None = None,
+        retries: int | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        sets: list[str] = []
+        params: list = []
+        if status is not None:
+            sets.append("status = ?"); params.append(status)
+        if task_id is not None:
+            sets.append("task_id = ?"); params.append(task_id)
+        if artifact_dir is not None:
+            sets.append("artifact_dir = ?"); params.append(artifact_dir)
+        if retries is not None:
+            sets.append("retries = ?"); params.append(retries)
+        if started_at is not None:
+            sets.append("started_at = ?"); params.append(self._format_datetime(started_at))
+        if completed_at is not None:
+            sets.append("completed_at = ?"); params.append(self._format_datetime(completed_at))
+        sets.append("updated_at = ?"); params.append(self._format_datetime(datetime.now()))
+        params.append(node_id)
+        await conn.execute(f"UPDATE workflow_nodes SET {', '.join(sets)} WHERE id = ?", tuple(params))
+        await conn.commit()
+
+    async def find_node_by_task_id(self, task_id: str) -> "WorkflowNode | None":
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM workflow_nodes WHERE task_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (task_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return self._row_to_workflow_node(row) if row else None
+
+    async def save_replan_pending(self, replan: "GraphReplanPending") -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """
+            INSERT OR REPLACE INTO graph_replan_pending (
+                id, graph_id, triggered_by_node_key, trigger_reason,
+                diff_json, rationale, status, created_at, resolved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                replan.id,
+                replan.graph_id,
+                replan.triggered_by_node_key,
+                replan.trigger_reason,
+                replan.diff_json,
+                replan.rationale,
+                replan.status,
+                self._format_datetime(replan.created_at),
+                self._format_datetime(replan.resolved_at),
+            ),
+        )
+        await conn.commit()
+
+    async def list_pending_replans(self, graph_id: str) -> list["GraphReplanPending"]:
+        from app.domain.models import GraphReplanPending
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM graph_replan_pending WHERE graph_id = ? AND status = 'pending' ORDER BY created_at ASC",
+            (graph_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        out: list[GraphReplanPending] = []
+        for r in rows:
+            out.append(GraphReplanPending(
+                id=r["id"],
+                graph_id=r["graph_id"],
+                triggered_by_node_key=r["triggered_by_node_key"],
+                trigger_reason=r["trigger_reason"],
+                diff_json=r["diff_json"],
+                rationale=r["rationale"],
+                status=r["status"],
+                created_at=self._parse_datetime(r["created_at"]),
+                resolved_at=self._parse_datetime(r["resolved_at"]),
+            ))
+        return out
+
+    async def resolve_replan(self, replan_id: str, status: str) -> bool:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        cur = await conn.execute(
+            "UPDATE graph_replan_pending SET status = ?, resolved_at = ? WHERE id = ? AND status = 'pending'",
+            (status, self._format_datetime(datetime.now()), replan_id),
+        )
+        await conn.commit()
+        return (cur.rowcount or 0) > 0

@@ -23,9 +23,10 @@ import {
   getCodexTasks,
   getCodexIssueArtifacts,
   updateCodexIssuePhase,
-  transitionIssueToArchitecture,
-  transitionIssueToDevelopment,
-  transitionIssueToTesting,
+  planIssue,
+  getIssueGraph,
+  saveIssueGraph,
+  startIssueGraph,
   createCodexIssue,
   deleteCodexIssue,
   createCodexTask,
@@ -708,84 +709,56 @@ function WorkbenchInner({
     }
   }
 
-  const handleTransitionToArchitecture = useCallback(async () => {
-    if (!currentIssue) return;
-    setIsTransitioningToArchitecture(true);
-    try {
-      const result = await transitionIssueToArchitecture(currentIssue.id);
-      setIssues((prev) => prev.map((issue) => (issue.id === result.issue.id ? result.issue : issue)));
-      const architectureTask = result.task;
-      if (architectureTask) {
-        setTasks((prev) => {
-          const exists = prev.some((task) => task.id === architectureTask.id);
-          if (exists) {
-            return prev.map((task) => (task.id === architectureTask.id ? architectureTask : task));
-          }
-          return [...prev, architectureTask];
-        });
+  // Legacy "transition to phase X" handlers now share one path: plan the
+  // workflow DAG (if missing), then start it. The phase label is updated
+  // locally for kanban display purposes.
+  const startGraphForPhase = useCallback(
+    async (
+      phase: string,
+      setBusy: (busy: boolean) => void,
+      toastOk: string,
+      toastErr: string,
+    ) => {
+      if (!currentIssue) return;
+      setBusy(true);
+      try {
+        let graph = await getIssueGraph(currentIssue.id);
+        if (graph === null) {
+          const proposed = await planIssue(currentIssue.id);
+          graph = await saveIssueGraph(currentIssue.id, proposed);
+        }
+        await startIssueGraph(currentIssue.id);
+        setIssues((prev) =>
+          prev.map((issue) =>
+            issue.id === currentIssue.id ? { ...issue, current_phase: phase } : issue
+          )
+        );
+        const freshArtifacts = await getCodexIssueArtifacts(currentIssue.id);
+        setArtifacts(freshArtifacts);
+        addToast({ type: "success", title: toastOk });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : toastErr;
+        setError(msg);
+        addToast({ type: "error", title: toastErr, message: msg });
+      } finally {
+        setBusy(false);
       }
-      const freshArtifacts = await getCodexIssueArtifacts(currentIssue.id);
-      setArtifacts(freshArtifacts);
-      addToast({ type: "success", title: "Transitioned to Architecture" });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to transition issue to architecture";
-      setError(msg);
-      addToast({ type: "error", title: "Failed to transition", message: msg });
-    } finally {
-      setIsTransitioningToArchitecture(false);
-    }
-  }, [currentIssue]);
+    },
+    [currentIssue]
+  );
 
-  const handleTransitionToDevelopment = useCallback(async () => {
-    if (!currentIssue) return;
-    setIsTransitioningToDevelopment(true);
-    try {
-      const result = await transitionIssueToDevelopment(currentIssue.id);
-      setIssues((prev) => prev.map((issue) => (issue.id === result.issue.id ? result.issue : issue)));
-      setTasks((prev) => {
-        const byId = new Map(prev.map((task) => [task.id, task]));
-        for (const task of result.tasks) byId.set(task.id, task);
-        return Array.from(byId.values());
-      });
-      const freshArtifacts = await getCodexIssueArtifacts(currentIssue.id);
-      setArtifacts(freshArtifacts);
-      addToast({ type: "success", title: "Transitioned to Development" });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to transition issue to development";
-      setError(msg);
-      addToast({ type: "error", title: "Failed to transition", message: msg });
-    } finally {
-      setIsTransitioningToDevelopment(false);
-    }
-  }, [currentIssue]);
-
-  const handleTransitionToTesting = useCallback(async () => {
-    if (!currentIssue) return;
-    setIsTransitioningToTesting(true);
-    try {
-      const result = await transitionIssueToTesting(currentIssue.id);
-      setIssues((prev) => prev.map((issue) => (issue.id === result.issue.id ? result.issue : issue)));
-      const qaTask = result.task;
-      if (qaTask) {
-        setTasks((prev) => {
-          const exists = prev.some((task) => task.id === qaTask.id);
-          if (exists) {
-            return prev.map((task) => (task.id === qaTask.id ? qaTask : task));
-          }
-          return [...prev, qaTask];
-        });
-      }
-      const freshArtifacts = await getCodexIssueArtifacts(currentIssue.id);
-      setArtifacts(freshArtifacts);
-      addToast({ type: "success", title: "已流转到测试阶段" });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "流转到测试失败";
-      setError(msg);
-      addToast({ type: "error", title: "流转失败", message: msg });
-    } finally {
-      setIsTransitioningToTesting(false);
-    }
-  }, [currentIssue]);
+  const handleTransitionToArchitecture = useCallback(
+    () => startGraphForPhase("architecture", setIsTransitioningToArchitecture, "Transitioned to Architecture", "Failed to transition"),
+    [startGraphForPhase]
+  );
+  const handleTransitionToDevelopment = useCallback(
+    () => startGraphForPhase("development", setIsTransitioningToDevelopment, "Transitioned to Development", "Failed to transition"),
+    [startGraphForPhase]
+  );
+  const handleTransitionToTesting = useCallback(
+    () => startGraphForPhase("testing", setIsTransitioningToTesting, "已流转到测试阶段", "流转失败"),
+    [startGraphForPhase]
+  );
 
   async function handleRunPhaseRole(
     phase: string,

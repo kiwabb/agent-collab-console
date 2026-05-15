@@ -79,15 +79,23 @@ class EventBus:
                 if workspace_id and task_id:
                     await stream_manager.update_task_status(
                         workspace_id,
-                        task_id, 
-                        status, 
+                        task_id,
+                        status,
                         result,
                         execution_process_id=execution_process_id,
                     )
                     if execution_process_id and str(status or "").lower() in {"done", "completed", "failed", "killed"}:
                         await message_stream_manager.publish_finished(execution_process_id)
                         await raw_log_stream_manager.publish_finished(execution_process_id)
-            
+
+                # Workflow DAG: notify scheduler on terminal task statuses so
+                # the graph can advance / open a replan.
+                if task_id and str(status or "").lower() in {"done", "failed", "completed", "killed"}:
+                    try:
+                        await self._notify_workflow_scheduler(task_id)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[EventBus] workflow scheduler notify error: {exc}", file=sys.stderr)
+
             elif event_type == "task_deleted":
                 task_id = event.get("task_id")
                 workspace_id = event.get("session_id")
@@ -171,6 +179,18 @@ class EventBus:
             print(f"[EventBus] Error broadcasting event {event.get('type')}: {e}", file=sys.stderr)
             traceback.print_exc()
 
+    async def _notify_workflow_scheduler(self, task_id: str) -> None:
+        """Forward a terminal task_status event to the workflow scheduler."""
+        from app.bootstrap import async_store
+        if async_store is None:
+            return
+        task = await async_store.load_codex_task(task_id)
+        if task is None or not getattr(task, "workflow_node_id", None):
+            return
+        from app.application.workflow_scheduler import WorkflowScheduler
+        scheduler = WorkflowScheduler(store=async_store, task_dispatcher=_workflow_task_dispatcher)
+        await scheduler.on_task_completed(task)
+
     def subscribe(self) -> asyncio.Queue:
         with self._lock:
             queue = asyncio.Queue()
@@ -181,6 +201,23 @@ class EventBus:
         with self._lock:
             if queue in self.subscribers:
                 self.subscribers.remove(queue)
+
+
+async def _workflow_task_dispatcher(task) -> None:
+    """Dispatch a workflow-scheduler-created task through the real CodexTaskRunner.
+
+    Pulled out as a module-level function so the scheduler can use it from
+    both the explicit start_graph path (interfaces/api.py) and the implicit
+    settle-after-task-done path (event_bus._notify_workflow_scheduler).
+    """
+    from app.bootstrap import get_task_runner
+    # `refresh_task_result` is None-safe at the runner layer; we don't have a
+    # session-level handle here, so pass a noop coroutine. Production callers
+    # always provide the real one via bootstrap.
+    async def _noop(_t):  # noqa: ANN001
+        return None
+    runner = get_task_runner(_noop)
+    await runner.start_task_run(task)
 
 
 # Global event bus instance
