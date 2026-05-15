@@ -359,6 +359,20 @@ export interface ProjectStats {
   issues_abandoned: number;
 }
 
+export interface CodexStats {
+  workspaces_total: number;
+  sessions_total: number;
+  sessions_active: number;
+  tasks_total: number;
+  tasks_pending: number;
+  tasks_running: number;
+  tasks_completed: number;
+  tasks_failed: number;
+  executor_codex_available: boolean;
+  executor_claude_available: boolean;
+  last_activity_at: string | null;
+}
+
 export interface ProjectAuditEntry {
   id: number;
   project_id: string | null;

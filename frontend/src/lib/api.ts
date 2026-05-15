@@ -167,6 +167,11 @@ export async function getProjectStats(projectId: string): Promise<import("./type
   return handleResponse<import("./types").ProjectStats>(response);
 }
 
+export async function getCodexStats(): Promise<import("./types").CodexStats> {
+  const response = await fetch(`${API_BASE}/codex/stats`);
+  return handleResponse<import("./types").CodexStats>(response);
+}
+
 export async function getProjectAudit(
   projectId: string,
   limit = 10,
