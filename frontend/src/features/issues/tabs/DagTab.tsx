@@ -1,9 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
-
 import {
   confirmReplan,
   getIssueGraph,
@@ -15,9 +12,9 @@ import {
   type ReplanPending,
 } from "@/lib/api";
 import type { ProposedDAG, WorkflowGraph } from "@/lib/types";
-
-import { ReplanDiffModal } from "./ReplanDiffModal";
-import { WorkflowGraphView } from "./WorkflowGraphView";
+import { ReplanDiffModal } from "@/features/workflow/ReplanDiffModal";
+import { WorkflowGraphView } from "@/features/workflow/WorkflowGraphView";
+import { Button } from "@/components/ui/button";
 
 interface Props {
   issueId: string;
@@ -25,8 +22,7 @@ interface Props {
 
 type View = "loading" | "no-graph" | "preview" | "saved";
 
-export function IssueWorkflowPage({ issueId }: Props) {
-  const router = useRouter();
+export function DagTab({ issueId }: Props) {
   const [view, setView] = useState<View>("loading");
   const [graph, setGraph] = useState<WorkflowGraph | null>(null);
   const [proposal, setProposal] = useState<ProposedDAG | null>(null);
@@ -61,7 +57,7 @@ export function IssueWorkflowPage({ issueId }: Props) {
   }, [issueId, loadPendingReplans]);
 
   useEffect(() => {
-    loadGraph();
+    void loadGraph();
   }, [loadGraph]);
 
   async function handleReplanDecision(replanId: string, decision: "confirm" | "reject") {
@@ -126,101 +122,59 @@ export function IssueWorkflowPage({ issueId }: Props) {
 
   return (
     <div className="flex flex-col gap-4 p-6">
-      <header className="flex items-baseline justify-between">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => router.push("/")}
-            className="rounded border border-border bg-card p-1.5 hover:bg-accent"
-            aria-label="Back to workbench"
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <div>
-            <h1 className="text-xl font-semibold">Issue Workflow</h1>
-            <p className="text-xs text-muted-foreground">Issue ID: {issueId}</p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          {(view === "no-graph" || view === "saved") && (
-            <button
-              type="button"
-              className="rounded border border-border bg-card px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
-              disabled={busy}
-              onClick={handleAutoPlan}
-            >
-              {busy ? "Planning…" : "Auto-plan"}
-            </button>
-          )}
-          {view === "preview" && (
-            <>
-              <button
-                type="button"
-                className="rounded border border-border bg-card px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
-                disabled={busy}
-                onClick={() => {
-                  setProposal(null);
-                  loadGraph();
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="rounded border border-primary bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                disabled={busy}
-                onClick={handleSave}
-              >
-                {busy ? "Saving…" : "Save graph"}
-              </button>
-            </>
-          )}
-          {view === "saved" && graph && graph.status === "draft" && (
-            <button
-              type="button"
-              className="rounded border border-primary bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50"
-              disabled={busy}
-              onClick={handleStart}
-            >
-              {busy ? "Starting…" : "Start"}
-            </button>
-          )}
-        </div>
-      </header>
+      <div className="flex justify-end gap-2">
+        {(view === "no-graph" || view === "saved") && (
+          <Button onClick={handleAutoPlan} disabled={busy}>
+            {busy ? "Planning…" : "Auto-plan"}
+          </Button>
+        )}
+        {view === "preview" && (
+          <>
+            <Button variant="outline" disabled={busy} onClick={() => { setProposal(null); void loadGraph(); }}>
+              Cancel
+            </Button>
+            <Button disabled={busy} onClick={handleSave}>
+              {busy ? "Saving…" : "Save graph"}
+            </Button>
+          </>
+        )}
+        {view === "saved" && graph && graph.status === "draft" && (
+          <Button disabled={busy} onClick={handleStart}>
+            {busy ? "Starting…" : "Start"}
+          </Button>
+        )}
+      </div>
 
       {error && (
-        <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <div className="rounded border border-error/40 bg-error/10 px-3 py-2 text-sm text-error">
           {error}
         </div>
       )}
 
-      {view === "loading" && <div className="text-sm text-muted-foreground">Loading…</div>}
+      {view === "loading" && <div className="text-sm text-text-muted">Loading…</div>}
 
       {view === "no-graph" && (
-        <div className="rounded border border-dashed border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+        <div className="rounded border border-dashed border-border-subtle p-6 text-center text-sm text-text-muted">
           No workflow graph yet for this issue. Click <b>Auto-plan</b> to ask the orchestrator for a DAG proposal.
         </div>
       )}
 
       {view === "preview" && proposal && (
         <div className="flex flex-col gap-3">
-          <div className="rounded border border-border bg-muted/30 px-3 py-2 text-xs">
-            <div>
-              <b>Intent:</b> {proposal.meta?.intent ?? "(unknown)"}
-            </div>
-            <div className="text-muted-foreground">{proposal.meta?.rationale}</div>
+          <div className="rounded border border-border-subtle bg-surface/40 px-3 py-2 text-xs">
+            <div><b>Intent:</b> {proposal.meta?.intent ?? "(unknown)"}</div>
+            <div className="text-text-muted">{proposal.meta?.rationale}</div>
           </div>
-          <WorkflowGraphView graph={proposal} className="rounded border border-border bg-card" />
+          <WorkflowGraphView graph={proposal} className="rounded border border-border-subtle bg-surface" />
         </div>
       )}
 
       {view === "saved" && graph && (
         <div className="flex flex-col gap-3">
-          <div className="text-xs text-muted-foreground">
-            Graph <code className="font-mono">{graph.id.slice(0, 8)}…</code> · status:{" "}
-            <b>{graph.status}</b> · created_by: {graph.created_by ?? "—"}
+          <div className="text-xs text-text-muted">
+            Graph <code className="font-mono">{graph.id.slice(0, 8)}…</code> · status: <b>{graph.status}</b> · created_by: {graph.created_by ?? "—"}
           </div>
-          <WorkflowGraphView graph={graph} className="rounded border border-border bg-card" />
+          <WorkflowGraphView graph={graph} className="rounded border border-border-subtle bg-surface" />
         </div>
       )}
 

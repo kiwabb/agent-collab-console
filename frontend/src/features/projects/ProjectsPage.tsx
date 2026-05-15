@@ -18,6 +18,7 @@ import type { GitBranch, Project } from "@/lib/types";
 
 import { CreateProjectDialog } from "./CreateProjectDialog";
 import { BranchListView } from "./BranchListView";
+import { STATS_LABELS } from "./statsLabels";
 
 function SetupScriptCard({
   project,
@@ -220,7 +221,7 @@ export function ProjectsPage() {
   const handleSelectAndEnter = useCallback(
     (project: Project) => {
       setSelectedProjectId(project.id);
-      router.push("/");
+      router.push(`/projects/${project.id}`);
     },
     [router],
   );
@@ -232,7 +233,7 @@ export function ProjectsPage() {
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => {
               const pid = selectedProjectId();
-              if (pid) router.push("/");
+              if (pid) router.push(`/projects/${pid}`);
               else router.push("/projects");
             }} aria-label={t("projects.backToWorkbench")}>
               <ChevronLeft size={16} />
@@ -347,19 +348,19 @@ export function ProjectsPage() {
                   {stats && (
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs pt-2 border-t border-border-subtle">
                       <span>
-                        <span className="text-muted-foreground">{t("projects.statsWorkspaces")}:</span>{" "}
-                        <span className="font-semibold">{stats.workspaces}</span>
+                        <span className="text-muted-foreground">{STATS_LABELS.total}:</span>{" "}
+                        <span className="font-semibold">{stats.issues_total}</span>
                       </span>
                       <span>
-                        <span className="text-muted-foreground">{t("projects.statsOpen")}:</span>{" "}
+                        <span className="text-muted-foreground">{STATS_LABELS.open}:</span>{" "}
                         <span className="font-semibold">{stats.issues_open}</span>
                       </span>
                       <span>
-                        <span className="text-muted-foreground">{t("projects.statsMerged")}:</span>{" "}
+                        <span className="text-muted-foreground">{STATS_LABELS.merged}:</span>{" "}
                         <span className="font-semibold text-success">{stats.issues_merged}</span>
                       </span>
                       <span>
-                        <span className="text-muted-foreground">{t("projects.statsAbandoned")}:</span>{" "}
+                        <span className="text-muted-foreground">{STATS_LABELS.abandoned}:</span>{" "}
                         <span className="font-semibold text-muted-foreground">{stats.issues_abandoned}</span>
                       </span>
                     </div>

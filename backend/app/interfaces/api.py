@@ -2731,15 +2731,26 @@ async def delete_agent(agent_id: str):
 
 @router.post("/codex/issues/{issue_id}/plan")
 async def propose_issue_plan(issue_id: str):
-    """Run the orchestrator and return a proposed DAG. Does NOT persist."""
+    """Run the orchestrator and return a proposed DAG. Does NOT persist.
+
+    Tries the real LLM (configured via the runtime catalog) first; silently
+    falls back to the keyword heuristic when the LLM is unreachable, the
+    response can't be parsed/validated, or `WORKFLOW_ORCHESTRATOR_LLM` is
+    explicitly set to "false".
+    """
+    import os
     store = _require_agent_store()
     issue = await store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
     from app.application.workflow_orchestrator import WorkflowOrchestrator
-    orchestrator = WorkflowOrchestrator(store=store)
+    from app.application.llm_runner import build_llm_runner
+
+    llm_disabled = os.getenv("WORKFLOW_ORCHESTRATOR_LLM", "").lower() == "false"
+    llm_runner = None if llm_disabled else build_llm_runner(_get_runtime_catalog_service())
+    orchestrator = WorkflowOrchestrator(store=store, llm_runner=llm_runner)
     try:
-        dag = await orchestrator.propose_graph(issue)
+        dag = await orchestrator.propose_graph(issue, use_llm=not llm_disabled)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return dag

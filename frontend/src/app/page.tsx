@@ -1,5 +1,5 @@
-import WorkbenchPage from "@/features/workbench/WorkbenchPage";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return <WorkbenchPage />;
+  redirect("/projects");
 }

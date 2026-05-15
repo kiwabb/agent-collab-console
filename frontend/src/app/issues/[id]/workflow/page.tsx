@@ -1,10 +1,6 @@
-import { IssueWorkflowPage } from "@/features/workflow/IssueWorkflowPage";
+import { redirect } from "next/navigation";
 
-interface Props {
-  params: Promise<{ id: string }>;
-}
-
-export default async function Page({ params }: Props) {
+export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <IssueWorkflowPage issueId={id} />;
+  redirect(`/issues/${id}?tab=dag`);
 }

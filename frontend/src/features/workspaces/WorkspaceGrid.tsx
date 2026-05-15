@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import type { Workspace } from "@/lib/types";
 import { Folder, ChevronRight, Clock, Plus, Trash2, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -30,8 +30,8 @@ function saveFavorites(favorites: Set<string>) {
 interface WorkspaceGridProps {
   workspaces: Workspace[];
   onSelect: (id: string) => void;
-  onCreate: (title: string) => void;
-  onDelete: (id: string) => void;
+  onCreate: (title: string) => void | Promise<void>;
+  onDelete: (id: string) => void | Promise<void>;
   isLoading?: boolean;
 }
 
@@ -44,7 +44,8 @@ export function WorkspaceGrid({
 }: WorkspaceGridProps) {
   const { t } = useI18n();
   const { addToast } = useToast();
-  const [isCreating, setIsCreating] = useState(false);
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -60,19 +61,20 @@ export function WorkspaceGrid({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
-    setIsCreating(true);
+    setIsSubmitting(true);
     try {
       await onCreate(newTitle.trim());
       addToast({ type: "success", title: "Workspace created" });
       setNewTitle("");
-      setIsCreating(false);
+      setIsFormOpen(false);
     } catch (err) {
       addToast({
         type: "error",
         title: "Failed to create workspace",
         message: err instanceof Error ? err.message : String(err),
       });
-      setIsCreating(false);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -135,7 +137,7 @@ export function WorkspaceGrid({
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
           transition={{ duration: 0.5, delay: 0.1 }}
-          onClick={() => setIsCreating(true)}
+          onClick={() => setIsFormOpen(true)}
           className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-background font-bold text-sm shadow-lg shadow-brand/20 transition-all"
         >
           <Plus size={18} />
@@ -168,7 +170,7 @@ export function WorkspaceGrid({
             </motion.div>
           )}
 
-          {isCreating && (
+          {isFormOpen && (
             <motion.form
               key="create-form"
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -191,10 +193,10 @@ export function WorkspaceGrid({
               <div className="flex gap-2">
                 <Button
                   type="submit"
-                  disabled={isCreating}
+                  disabled={isSubmitting || !newTitle.trim()}
                   className="flex-1"
                 >
-                  {isCreating && (
+                  {isSubmitting && (
                     <div className="flex gap-1 mr-2">
                       <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.3s]" />
                       <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.15s]" />
@@ -206,8 +208,11 @@ export function WorkspaceGrid({
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setIsCreating(false)}
-                  disabled={isCreating}
+                  onClick={() => {
+                    setIsFormOpen(false);
+                    setNewTitle("");
+                  }}
+                  disabled={isSubmitting}
                   className="flex-1"
                 >
                   {t("workspace.cancel")}
@@ -274,7 +279,7 @@ export function WorkspaceGrid({
           ))}
         </AnimatePresence>
 
-        {displayedWorkspaces.length === 0 && !isCreating && (
+        {displayedWorkspaces.length === 0 && !isFormOpen && (
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -286,7 +291,7 @@ export function WorkspaceGrid({
               description="Create your first workspace to get started"
               action={
                 <Button
-                  onClick={() => setIsCreating(true)}
+                  onClick={() => setIsFormOpen(true)}
                   className="flex items-center gap-2 px-6"
                 >
                   <Plus size={16} />

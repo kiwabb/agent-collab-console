@@ -203,6 +203,25 @@ export async function abandonCodexIssue(issueId: string): Promise<CodexIssue> {
   return handleResponse<CodexIssue>(response);
 }
 
+export async function pinCodexIssue(issueId: string, isPinned: boolean): Promise<CodexIssue> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_pinned: isPinned }),
+  });
+  return handleResponse<CodexIssue>(response);
+}
+
+export async function duplicateCodexIssue(issueId: string): Promise<CodexIssue> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/duplicate`, { method: "POST" });
+  return handleResponse<CodexIssue>(response);
+}
+
+export async function getCodexIssue(issueId: string): Promise<CodexIssue> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}`);
+  return handleResponse<CodexIssue>(response);
+}
+
 export async function getWorkspace(workspaceId: string): Promise<Workspace> {
   const response = await fetch(`${API_BASE}/codex/workspaces/${workspaceId}`);
   return handleResponse<Workspace>(response);
@@ -218,6 +237,22 @@ export async function deleteWorkspace(workspaceId: string): Promise<unknown> {
 export async function deleteAllWorkspaces(): Promise<unknown> {
   const response = await fetch(`${API_BASE}/codex/workspaces`, {
     method: "DELETE",
+  });
+  return handleResponse(response);
+}
+
+export async function sendWorkspaceInput(workspaceId: string, input: string): Promise<unknown> {
+  const response = await fetch(`${API_BASE}/codex/workspaces/${workspaceId}/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input }),
+  });
+  return handleResponse(response);
+}
+
+export async function terminateWorkspace(workspaceId: string): Promise<unknown> {
+  const response = await fetch(`${API_BASE}/codex/workspaces/${workspaceId}/terminate`, {
+    method: "POST",
   });
   return handleResponse(response);
 }

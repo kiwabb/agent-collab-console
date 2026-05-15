@@ -11,7 +11,7 @@ import type {
   RuntimeExecutorConfig,
 } from "@/lib/types";
 import type { TranslationKey } from "@/lib/i18n";
-import { testRuntimeExecutor } from "@/lib/api";
+import { testRuntimeExecutor, validateRuntimeCatalog } from "@/lib/api";
 import { Loader2, CheckCircle, XCircle } from "lucide-react";
 
 interface RuntimeCatalogEditorProps {
@@ -122,13 +122,31 @@ export function RuntimeCatalogEditor({
 
   return (
     <div className={cn("space-y-6", className)}>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">{t("runtime.configure.title")}</h2>
           <p className="text-sm text-muted-foreground">
             {t("runtime.configure.desc")}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              const result = await validateRuntimeCatalog(localCatalog);
+              if (result.valid) {
+                alert("Catalog is valid.");
+              } else {
+                alert("Validation failed: " + (result.error ?? "Unknown error"));
+              }
+            } catch (err) {
+              alert("Validation failed: " + (err instanceof Error ? err.message : String(err)));
+            }
+          }}
+          className="text-xs font-bold uppercase tracking-widest text-text-muted hover:text-foreground border border-border-subtle rounded-md px-3 py-1.5"
+        >
+          Validate
+        </button>
       </div>
 
       <div className="space-y-4">
