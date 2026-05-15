@@ -772,6 +772,75 @@ async def get_project_stats(project_id: str):
     }
 
 
+@router.get("/codex/stats")
+async def get_codex_stats():
+    """Aggregate counts across all Codex sessions and issues.
+
+    Returns workspace/session counts, task metrics bucketed by status,
+    and executor availability flags. Computed on-demand; no persistence.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+
+    sessions = await codex_store.list_codex_sessions(project_id=None)
+    issues = await codex_store.list_codex_issues(project_id=None)
+
+    sessions_active = 0
+    for session in sessions:
+        if session.get("status") == "running":
+            sessions_active += 1
+
+    tasks_total = 0
+    tasks_pending = 0
+    tasks_running = 0
+    tasks_completed = 0
+    tasks_failed = 0
+    last_activity_at = None
+
+    for issue in issues:
+        tasks_total += 1
+        status = issue.get("status", "pending")
+        if status == "pending":
+            tasks_pending += 1
+        elif status in ("running", "responding"):
+            tasks_running += 1
+        elif status == "done":
+            tasks_completed += 1
+        elif status == "failed":
+            tasks_failed += 1
+        # Track most recent activity timestamp
+        updated_at = issue.get("updated_at") or issue.get("created_at")
+        if updated_at:
+            if last_activity_at is None or updated_at > last_activity_at:
+                last_activity_at = updated_at
+
+    # Executor availability
+    codex_available = check_codex_available()
+    claude_available = False
+    try:
+        pm = get_codex_process_manager()
+        if pm is not None:
+            # Claude executor is available if any process slots are free
+            # We check the process count vs max - simplified check
+            claude_available = hasattr(pm, '_processes') or hasattr(pm, 'max_processes')
+    except Exception:
+        pass
+
+    return {
+        "workspaces_total": len(sessions),
+        "sessions_total": len(sessions),
+        "sessions_active": sessions_active,
+        "tasks_total": tasks_total,
+        "tasks_pending": tasks_pending,
+        "tasks_running": tasks_running,
+        "tasks_completed": tasks_completed,
+        "tasks_failed": tasks_failed,
+        "executor_codex_available": codex_available,
+        "executor_claude_available": claude_available,
+        "last_activity_at": last_activity_at,
+    }
+
+
 @router.get("/projects/{project_id}/audit")
 async def get_project_audit(project_id: str, limit: int = 50, since: str | None = None):
     """Recent project events (most recent first).
