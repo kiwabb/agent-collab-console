@@ -435,6 +435,12 @@ async def health_check():
     return {"service": "agent-collab-console", "version": "1.0"}
 
 
+@router.get("/browser-smoke")
+async def browser_smoke():
+    """Minimal smoke endpoint for browser health checks."""
+    return {"ok": True}
+
+
 @router.get("/utils/select-directory")
 async def select_directory():
     """Opens a native directory picker on macOS and returns the selected path."""
