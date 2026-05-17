@@ -209,7 +209,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
   return (
     <div className="h-full flex flex-col min-h-0 flex-1">
       <div className="flex-1 min-h-[500px] h-[650px] lg:h-[calc(100vh-320px)] grid grid-cols-[220px_240px_1fr] gap-px bg-border-subtle">
-        <div className="bg-surface overflow-auto flex flex-col">
+        <div className="bg-surface overflow-y-auto flex flex-col min-h-0">
           <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">Tasks</div>
           {tasks.length === 0 && (
             <div className="flex-1 flex items-center justify-center">
@@ -241,7 +241,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
           ))}
         </div>
 
-        <div className="bg-surface overflow-auto flex flex-col">
+        <div className="bg-surface overflow-y-auto flex flex-col min-h-0">
           <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">Runs</div>
           {runs.length === 0 && (
             <div className="flex-1 flex items-center justify-center">
@@ -316,7 +316,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
               </button>
             </div>
           )}
-          <div className="flex-1 overflow-auto p-4 font-mono text-xs leading-relaxed">
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-xs leading-relaxed flex flex-col">
             {!selectedRunId && messages.length === 0 && (
               <div className="h-full flex items-center justify-center">
                 <EmptyState
@@ -412,7 +412,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
             )}
           </div>
 
-          <div className="border-t border-border-subtle p-3 bg-surface flex flex-col gap-2">
+          <div className="border-t border-border-subtle p-3 bg-surface flex flex-col gap-2 shrink-0">
             {isFreshTask ? (
               <>
                 <div className="flex items-center gap-2">
