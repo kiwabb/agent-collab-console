@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, Circle, GitBranch, GitFork, MessageSquarePlus, Loader2 } from "lucide-react";
+import { CheckCircle2, Circle, GitBranch, GitFork, MessageSquarePlus, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { useI18n } from "@/providers/I18nProvider";
 import {
   forkCodexIssue,
@@ -68,6 +68,7 @@ export function IssueDetailPage({ issueId }: Props) {
   const [forking, setForking] = useState(false);
   const [planDraft, setPlanDraft] = useState("");
   const [approvingPlan, setApprovingPlan] = useState(false);
+  const [checklistExpanded, setChecklistExpanded] = useState<boolean | null>(null);
 
   const handleFork = useCallback(async () => {
     setForking(true);
@@ -213,7 +214,7 @@ export function IssueDetailPage({ issueId }: Props) {
     : "—";
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="flex flex-col min-h-full">
       {/* Header */}
       <div className="px-8 pt-6 pb-5 border-b border-border-subtle bg-surface z-10 relative shadow-sm">
         <div className="flex flex-col gap-3 max-w-6xl w-full mx-auto">
@@ -282,60 +283,73 @@ export function IssueDetailPage({ issueId }: Props) {
         {/* A4: narrative timeline distilled from each role's task.result */}
         <IssueNarrativeTimeline issueId={issueId} reloadKey={issue?.updated_at ?? undefined} />
 
-        {checklist && checklist.criteria.length > 0 && (
-          <div className="px-8 mt-6">
-            <div className="max-w-6xl mx-auto w-full">
-              <div className="rounded-xl border border-border-subtle bg-surface shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b border-border-subtle bg-surface-hover flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <span className="font-bold text-[12px] uppercase tracking-wider text-foreground">{t("issue.checklist")}</span>
-                    <div className="flex items-center gap-2">
-                      <div className="w-32 h-1.5 bg-border-subtle rounded-full overflow-hidden shadow-inner">
-                        <div 
-                          className="h-full bg-success transition-all duration-500 ease-out" 
-                          style={{ width: `${Math.round((checklist.criteria.filter(c => c.covered).length / checklist.criteria.length) * 100)}%` }}
-                        />
+        {checklist && checklist.criteria.length > 0 && (() => {
+          const hasUncovered = checklist.criteria.some(c => !c.covered);
+          const isChecklistExpanded = checklistExpanded !== null ? checklistExpanded : hasUncovered;
+          return (
+            <div className="px-8 mt-6">
+              <div className="max-w-6xl mx-auto w-full">
+                <div className="rounded-xl border border-border-subtle bg-surface shadow-sm overflow-hidden">
+                  <div 
+                    role="button"
+                    onClick={() => setChecklistExpanded(!isChecklistExpanded)}
+                    className="px-4 py-3 border-b border-border-subtle bg-surface-hover flex items-center justify-between cursor-pointer select-none hover:bg-surface-hover/80 transition-colors"
+                  >
+                    <div className="flex items-center gap-4">
+                      <span className="font-bold text-[12px] uppercase tracking-wider text-foreground">{t("issue.checklist")}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="w-32 h-1.5 bg-border-subtle rounded-full overflow-hidden shadow-inner">
+                          <div 
+                            className="h-full bg-success transition-all duration-500 ease-out" 
+                            style={{ width: `${Math.round((checklist.criteria.filter(c => c.covered).length / checklist.criteria.length) * 100)}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] font-mono text-text-muted">
+                          {checklist.criteria.filter((c) => c.covered).length}/{checklist.criteria.length}
+                        </span>
                       </div>
-                      <span className="text-[11px] font-mono text-text-muted">
-                        {checklist.criteria.filter((c) => c.covered).length}/{checklist.criteria.length}
-                      </span>
+                    </div>
+                    <div className="text-text-muted">
+                      {isChecklistExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </div>
                   </div>
-                </div>
-                <ul className="divide-y divide-border-subtle">
-                  {checklist.criteria.slice(0, 6).map((c, i) => (
-                    <li
-                      key={i}
-                      className="flex items-center gap-3 px-4 py-2.5 text-[13px] transition-colors hover:bg-surface-hover/50"
-                    >
-                      {c.covered ? (
-                        <CheckCircle2 size={16} className="text-success shrink-0" />
-                      ) : (
-                        <Circle size={16} className="text-border-strong shrink-0" />
+                  {isChecklistExpanded && (
+                    <ul className="divide-y divide-border-subtle">
+                      {checklist.criteria.slice(0, 6).map((c, i) => (
+                        <li
+                          key={i}
+                          className="flex items-center gap-3 px-4 py-2.5 text-[13px] transition-colors hover:bg-surface-hover/50"
+                        >
+                          {c.covered ? (
+                            <CheckCircle2 size={16} className="text-success shrink-0" />
+                          ) : (
+                            <Circle size={16} className="text-border-strong shrink-0" />
+                          )}
+                          <span className={cn("flex-1", c.covered ? "text-text-secondary line-through" : "text-foreground font-medium")}>
+                            {c.text}
+                          </span>
+                          {c.source && (
+                            <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted/80 bg-surface-raised px-1.5 py-0.5 rounded border border-border-subtle shrink-0">
+                              {c.source}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                      {checklist.criteria.length > 6 && (
+                        <li className="px-4 py-2.5 text-[12px] font-medium text-text-muted bg-surface-hover flex items-center gap-2">
+                          <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                            <span className="block w-1 h-1 bg-text-muted rounded-full opacity-50 shadow-[4px_0_0_0_currentColor,-4px_0_0_0_currentColor]" />
+                          </div>
+                          {t("issue.checklistMore", { count: checklist.criteria.length - 6 })}
+                        </li>
                       )}
-                      <span className={cn("flex-1", c.covered ? "text-text-secondary line-through" : "text-foreground font-medium")}>
-                        {c.text}
-                      </span>
-                      {c.source && (
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted/80 bg-surface-raised px-1.5 py-0.5 rounded border border-border-subtle shrink-0">
-                          {c.source}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                  {checklist.criteria.length > 6 && (
-                    <li className="px-4 py-2.5 text-[12px] font-medium text-text-muted bg-surface-hover flex items-center gap-2">
-                      <div className="w-4 h-4 flex items-center justify-center shrink-0">
-                        <span className="block w-1 h-1 bg-text-muted rounded-full opacity-50 shadow-[4px_0_0_0_currentColor,-4px_0_0_0_currentColor]" />
-                      </div>
-                      {t("issue.checklistMore", { count: checklist.criteria.length - 6 })}
-                    </li>
+                    </ul>
                   )}
-                </ul>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {issue?.status === "awaiting_approval" && (
           <div className="mt-4 max-w-3xl rounded-xl border border-brand/40 bg-brand/[0.04] p-4">
