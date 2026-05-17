@@ -286,7 +286,23 @@ class CodexTaskRunner:
         if self._role_workflow_service.is_managed_role(task.role) and prompt_override is None and not (resume_session_id or resume_message_id):
             workspace = await self.codex_store.load_codex_workspace(task.session_id) if self.codex_store is not None else None
             workspace_title = workspace.title if workspace is not None else None
-            managed_prompt = self._role_workflow_service.build_prompt(task, workspace_title=workspace_title)
+            # Resolve the project repo path so role builders can inject
+            # accumulated team_notes.md context.
+            project_repo_path = None
+            if self.codex_store is not None and getattr(task, "project_id", None):
+                load_project = getattr(self.codex_store, "load_project", None)
+                if callable(load_project):
+                    try:
+                        proj = await load_project(task.project_id)
+                        if proj is not None:
+                            project_repo_path = proj.repo_path
+                    except Exception:
+                        project_repo_path = None
+            managed_prompt = self._role_workflow_service.build_prompt(
+                task,
+                workspace_title=workspace_title,
+                project_repo_path=project_repo_path,
+            )
             if managed_prompt is not None:
                 return managed_prompt
         if task.executor != "codex":

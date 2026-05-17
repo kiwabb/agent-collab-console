@@ -11,6 +11,12 @@ BACKEND_VENV_PYTHON=""
 BACKEND_UVICORN_CMD=()
 export CODEX_SOURCE_ROOT="$ROOT_DIR"
 export CODEX_WORKSPACE_ROOT="${CODEX_WORKSPACE_ROOT:-/tmp/agent-collab-console-workspaces}"
+# Real-CLI mode is the production default — Engineer must actually patch the
+# worktree, QA must actually run tests. Override with `REAL_CLI=false ./dev-local.sh`
+# for offline / demo mode where you want mock outputs.
+export REAL_CLI="${REAL_CLI:-true}"
+# Same idea for the Codex process manager. Disable only for fast unit tests.
+export CODEX_LAUNCH_ENABLED="${CODEX_LAUNCH_ENABLED:-true}"
 
 mkdir -p "$CODEX_WORKSPACE_ROOT"
 mkdir -p "$FRONTEND_SWC_CACHE_DIR"
@@ -35,26 +41,46 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-check_port() {
+free_port() {
   local port=$1
   local service=$2
+  local pids
+  pids="$(lsof -ti :"$port" 2>/dev/null || true)"
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+  echo "Port $port ($service) is in use by PID(s): $pids — killing to free it."
+  kill $pids 2>/dev/null || true
+  # Wait up to ~5s for graceful exit, then SIGKILL anything still alive.
+  for _ in 1 2 3 4 5; do
+    pids="$(lsof -ti :"$port" 2>/dev/null || true)"
+    [[ -z "$pids" ]] && break
+    sleep 1
+  done
+  if [[ -n "$pids" ]]; then
+    echo "PID(s) $pids still holding port $port — sending SIGKILL."
+    kill -9 $pids 2>/dev/null || true
+    sleep 1
+  fi
   if lsof -i :"$port" >/dev/null 2>&1; then
-    echo "Error: port $port is already in use by another process."
-    if [[ "$port" == "8000" ]]; then
-      echo "If a non-backend service is running on 8000, the frontend (port 5173) will proxy /api to that wrong service,"
-      echo "causing the page to show briefly then go blank or show errors."
-    fi
-    echo "Stop the conflicting service or free port $port, then re-run this script."
-    echo "To free port $port, you can run:"
-    echo "  lsof -ti:$port | xargs kill -9"
+    echo "Error: failed to free port $port. Inspect with: lsof -i :$port"
     exit 1
   fi
+  echo "Port $port is free."
 }
 
 if ! command -v codex >/dev/null 2>&1; then
   echo "Error: 'codex' command not found in your local shell."
   echo "Please verify 'which codex' works before starting the local workspace."
   exit 1
+fi
+
+if [[ "$REAL_CLI" == "true" ]] && ! command -v claude >/dev/null 2>&1; then
+  echo "Warning: REAL_CLI=true but 'claude' command not found in PATH."
+  echo "Engineer/QA tasks routed to the Claude executor will fail. Either:"
+  echo "  - Install Claude Code: https://docs.claude.com/claude-code"
+  echo "  - Set CLAUDE_CMD to an alternative binary, or"
+  echo "  - Re-run with REAL_CLI=false to use mock adapters."
 fi
 
 if [[ -n "$BACKEND_VENV_PYTHON" ]]; then
@@ -92,10 +118,10 @@ if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
   exit 1
 fi
 
-check_port 8000 "backend"
-check_port 4000 "frontend"
+free_port 9000 "backend"
+free_port 4000 "frontend"
 
-echo "Starting backend on http://localhost:8000"
+echo "Starting backend on http://localhost:9000"
 echo "Codex workspace root: $CODEX_WORKSPACE_ROOT"
 if [[ -n "$BACKEND_VENV_PYTHON" ]]; then
   echo "Using backend virtualenv: $BACKEND_VENV_PYTHON"
@@ -104,7 +130,7 @@ else
 fi
 (
   cd "$BACKEND_DIR"
-  exec "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --port 8000 2>&1
+  exec "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --port 9000 2>&1
 ) &
 BACKEND_PID=$!
 
@@ -119,7 +145,7 @@ FRONTEND_PID=$!
 echo
 echo "Codex Terminal Workspace is starting."
 echo "Frontend: http://localhost:4000"
-echo "Backend:  http://localhost:8000"
+echo "Backend:  http://localhost:9000"
 echo "Press Ctrl+C to stop both services."
 echo
 

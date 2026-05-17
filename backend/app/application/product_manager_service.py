@@ -21,6 +21,7 @@ class ProductRequirementDocument(BaseModel):
     issue_id: str
     issue_title: str
     original_requirements: str
+    plan_summary: list[str] = Field(default_factory=list)
     product_goals: list[str] = Field(default_factory=list)
     user_stories: list[str] = Field(default_factory=list)
     requirement_analysis: str
@@ -29,6 +30,9 @@ class ProductRequirementDocument(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    # Set this when you cannot reasonably proceed without user input.
+    # The framework will pause the pipeline and re-run you once answered.
+    clarification_question: str | None = None
 
 
 class BugfixRequirementDocument(BaseModel):
@@ -59,6 +63,8 @@ class ProductManagerService:
         "issue_title": "issue_title",
         "originalrequirements": "original_requirements",
         "original_requirements": "original_requirements",
+        "plansummary": "plan_summary",
+        "plan_summary": "plan_summary",
         "productgoals": "product_goals",
         "product_goals": "product_goals",
         "userstories": "user_stories",
@@ -217,6 +223,7 @@ class ProductManagerService:
                 issue_id=canonical_issue_id,
                 issue_title=task.title,
                 original_requirements=task.prompt,
+                plan_summary=[],
                 product_goals=[],
                 user_stories=[],
                 requirement_analysis="bugfix",
@@ -233,8 +240,21 @@ class ProductManagerService:
             return bugfix_payload
 
         try:
-            payload = json.loads(task.result)
+            from app.application.tolerant_json import tolerant_json_loads
+            payload = tolerant_json_loads(task.result)
             prd = ProductRequirementDocument.model_validate(payload)
+            if not prd.plan_summary:
+                fallback_plan = []
+                if getattr(prd, "development_task_list", None):
+                    fallback_plan = list(prd.development_task_list[:10])
+                elif prd.product_goals:
+                    fallback_plan = list(prd.product_goals[:10])
+                if not fallback_plan:
+                    fallback_plan = [task.title]
+                prd.plan_summary = [
+                    item if str(item).strip().startswith("-") else f"- {item}"
+                    for item in fallback_plan
+                ][:10]
             prd_json_path = self.documents.prd_json_path(task.workspace_path, canonical_issue_id)
             prd_md_path = self.documents.prd_md_path(task.workspace_path, canonical_issue_id)
             self.documents.ensure_issue_root(task.workspace_path, canonical_issue_id)
@@ -319,6 +339,7 @@ class ProductManagerService:
 
     def _validate_prd_content(self, prd: ProductRequirementDocument) -> None:
         has_structured_content = any([
+            bool(prd.plan_summary),
             bool(prd.product_goals),
             bool(prd.user_stories),
             bool(prd.requirement_pool),
@@ -348,8 +369,13 @@ class ProductManagerService:
             "## Original Requirements",
             prd.original_requirements,
             "",
-            "## Product Goals",
+            "## Plan Summary",
         ]
+        lines.extend([f"- {item}" for item in prd.plan_summary] or ["- None"])
+        lines.extend([
+            "",
+            "## Product Goals",
+        ])
         lines.extend([f"- {item}" for item in prd.product_goals] or ["- None"])
         lines.extend(["", "## User Stories"])
         lines.extend([f"- {item}" for item in prd.user_stories] or ["- None"])
@@ -438,6 +464,7 @@ class ProductManagerService:
                 '"issue_id": "string", '
                 '"issue_title": "string", '
                 '"original_requirements": "string", '
+                '"plan_summary": ["string"], '
                 '"problem_statement": "string", '
                 '"suspected_impact": "string", '
                 '"reproduction_notes": ["string"], '
@@ -458,6 +485,7 @@ class ProductManagerService:
             '"issue_id": "string", '
             '"issue_title": "string", '
             '"original_requirements": "string", '
+            '"plan_summary": ["string"], '
             '"product_goals": ["string"], '
             '"user_stories": ["string"], '
             '"requirement_analysis": "string", '

@@ -29,7 +29,7 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   compactMode: false,
 };
 
-function getInitialPreferences(): UserPreferences {
+function readStoredPreferences(): UserPreferences {
   if (typeof window === "undefined") return DEFAULT_PREFERENCES;
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -47,16 +47,29 @@ function applyPreferences(prefs: UserPreferences) {
 }
 
 export function PreferencesProvider({ children }: { children: React.ReactNode }) {
-  const { resolvedTheme } = useTheme();
-  const [prefs, setPrefs] = useState<UserPreferences>(getInitialPreferences);
+  // Touch theme provider so prefs render lifecycle stays coupled with it.
+  useTheme();
+  // Same SSR-safe pattern as ThemeProvider — seed with defaults, hydrate
+  // from localStorage in a useEffect after first commit. Prevents the
+  // Settings page hydration mismatch when user previously toggled fontSize
+  // or compactMode.
+  const [prefs, setPrefs] = useState<UserPreferences>(DEFAULT_PREFERENCES);
+  const [hydrated, setHydrated] = useState(false);
 
   const setFontSize = (fontSize: FontSize) => setPrefs((p) => ({ ...p, fontSize }));
   const setReducedMotion = (reducedMotion: ReducedMotion) => setPrefs((p) => ({ ...p, reducedMotion }));
   const setCompactMode = (compactMode: CompactMode) => setPrefs((p) => ({ ...p, compactMode }));
 
   useEffect(() => {
+    const stored = readStoredPreferences();
+    setPrefs(stored);
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
-  }, [prefs]);
+  }, [prefs, hydrated]);
 
   useEffect(() => {
     applyPreferences(prefs);

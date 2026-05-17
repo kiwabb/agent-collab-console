@@ -33,9 +33,15 @@ def reseed_builtins():
     yield
 
 
-async def _make_issue_in_store(store, title="Feat foo") -> CodexIssue:
-    session = CodexSession(id=str(uuid4()), title="ws", cwd="/tmp", status="idle",
-                          created_at=datetime.now())
+async def _make_issue_in_store(store, title="Feat foo", *, plan_first_pm: bool = True) -> CodexIssue:
+    session = CodexSession(
+        id=str(uuid4()),
+        title="ws",
+        cwd="/tmp",
+        status="idle",
+        created_at=datetime.now(),
+        settings={"plan_first_pm": plan_first_pm},
+    )
     await store.save_codex_session(session)
     issue = CodexIssue(id=str(uuid4()), session_id=session.id, title=title,
                      description="", created_at=datetime.now())
@@ -123,6 +129,132 @@ def test_scheduler_walks_chain_to_completion_via_task_callback():
         final = await store.load_workflow_graph(graph.id)
         assert final.status == "done"
         assert all(n.status == "done" for n in final.nodes)
+
+    _run(run())
+
+
+def test_scheduler_pauses_for_plan_approval_and_resumes_after_approval():
+    import app.bootstrap as bootstrap_module
+    store = bootstrap_module.async_store
+
+    dispatched: list[str] = []
+
+    async def auto_done_dispatcher(task):
+        dispatched.append(task.id)
+        task.status = "done"
+        task.updated_at = datetime.now()
+        await store.save_codex_task(task)
+
+    async def run():
+        issue = await _make_issue_in_store(store, title="Implement feature X")
+        orchestrator = WorkflowOrchestrator(store=store)
+        dag = await orchestrator.propose_graph(issue)
+        graph = await materialize_graph_from_dag(store, issue.id, dag)
+
+        scheduler = WorkflowScheduler(store=store, task_dispatcher=auto_done_dispatcher)
+        await scheduler.start_graph(graph.id)
+        graph = await store.load_workflow_graph(graph.id)
+        pm_node = next(n for n in graph.nodes if n.node_key == "product_manager")
+        assert pm_node.status == "running"
+        assert len(dispatched) == 1
+
+        pm_task = await store.load_codex_task(pm_node.task_id)
+        await scheduler.on_task_completed(pm_task)
+
+        paused_issue = await store.load_codex_issue(issue.id)
+        assert paused_issue is not None
+        assert paused_issue.status == "awaiting_approval"
+        assert paused_issue.review_comment
+        paused_graph = await store.load_workflow_graph(graph.id)
+        architect_node = next(n for n in paused_graph.nodes if n.node_key == "architect")
+        assert architect_node.status != "running"
+        assert len(dispatched) == 1
+
+        paused_issue.status = "in_progress"
+        await store.save_codex_issue(paused_issue)
+        await scheduler.settle(graph.id)
+
+        resumed_graph = await store.load_workflow_graph(graph.id)
+        architect_node = next(n for n in resumed_graph.nodes if n.node_key == "architect")
+        assert architect_node.status == "running"
+        assert len(dispatched) == 2
+
+    _run(run())
+
+
+def test_scheduler_can_disable_plan_first_gate():
+    import app.bootstrap as bootstrap_module
+    store = bootstrap_module.async_store
+
+    dispatched: list[str] = []
+
+    async def auto_done_dispatcher(task):
+        dispatched.append(task.id)
+        task.status = "done"
+        task.updated_at = datetime.now()
+        await store.save_codex_task(task)
+
+    async def run():
+        issue = await _make_issue_in_store(store, title="Fast path feature", plan_first_pm=False)
+        orchestrator = WorkflowOrchestrator(store=store)
+        dag = await orchestrator.propose_graph(issue)
+        graph = await materialize_graph_from_dag(store, issue.id, dag)
+
+        scheduler = WorkflowScheduler(store=store, task_dispatcher=auto_done_dispatcher)
+        await scheduler.start_graph(graph.id)
+        pm_node = next(n for n in (await store.load_workflow_graph(graph.id)).nodes if n.node_key == "product_manager")
+        pm_task = await store.load_codex_task(pm_node.task_id)
+        await scheduler.on_task_completed(pm_task)
+
+        next_graph = await store.load_workflow_graph(graph.id)
+        architect_node = next(n for n in next_graph.nodes if n.node_key == "architect")
+        assert architect_node.status == "running"
+        assert len(dispatched) >= 2
+        saved_issue = await store.load_codex_issue(issue.id)
+        assert saved_issue is not None
+        assert saved_issue.status != "awaiting_approval"
+
+    _run(run())
+
+
+def test_approve_plan_endpoint_resumes_scheduler(client, monkeypatch):
+    import app.bootstrap as bootstrap_module
+    from app.application.workflow_scheduler import WorkflowScheduler
+
+    store = bootstrap_module.async_store
+    calls: list[str] = []
+
+    async def fake_settle(self, graph_id):
+        calls.append(graph_id)
+        return await self._require_graph(graph_id)
+
+    monkeypatch.setattr(WorkflowScheduler, "settle", fake_settle)
+
+    async def run():
+        issue = await _make_issue_in_store(store, title="Endpoint approval")
+        orchestrator = WorkflowOrchestrator(store=store)
+        dag = await orchestrator.propose_graph(issue)
+        graph = await materialize_graph_from_dag(store, issue.id, dag)
+
+        issue = await store.load_codex_issue(issue.id)
+        assert issue is not None
+        issue.status = "awaiting_approval"
+        issue.review_comment = "- confirm PRD"
+        await store.save_codex_issue(issue)
+
+        response = client.post(
+            f"/api/codex/issues/{issue.id}/approve-plan",
+            json={"review_comment": "- confirm PRD\n- continue to Architect"},
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["status"] == "in_progress"
+        assert payload["review_comment"] == "- confirm PRD\n- continue to Architect"
+        assert calls == [graph.id]
+
+        saved = await store.load_codex_issue(issue.id)
+        assert saved is not None
+        assert saved.status == "in_progress"
 
     _run(run())
 

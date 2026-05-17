@@ -78,10 +78,14 @@ class WorkflowScheduler:
                 await self.store.update_workflow_node(node.id, status=new_status)
                 node.status = new_status
 
+        issue = await self.store.load_codex_issue(graph.issue_id)
+        if issue is not None and issue.status == "awaiting_approval":
+            return await self._require_graph(graph_id)
+
         # Dispatch all ready nodes (concurrent dispatch handles parallel-fanout naturally).
         ready_nodes = [n for n in graph.nodes if n.status == "ready"]
         if ready_nodes:
-            issue = await self.store.load_codex_issue(graph.issue_id)
+            issue = issue or await self.store.load_codex_issue(graph.issue_id)
             if issue is None:
                 raise WorkflowSchedulerError(f"Graph {graph_id} references missing issue {graph.issue_id}")
             agents_by_id = {a.id: a for a in await self.store.list_agents(workspace_id=None)}
@@ -98,8 +102,10 @@ class WorkflowScheduler:
 
         Looks up the workflow_node for the task, updates its status, then:
           1. consider retry-on-fail edges (auto-retry without user input)
-          2. consider replan triggers (suspend graph, surface diff to user)
-          3. fall through to a regular settle pass
+          2. handle QA-fail → Engineer auto-rework (no user prompt; bounded
+             by engineer.max_retries)
+          3. consider replan triggers (suspend graph, surface diff to user)
+          4. fall through to a regular settle pass
         """
         if not getattr(task, "workflow_node_id", None):
             return
@@ -135,11 +141,76 @@ class WorkflowScheduler:
                 await self.settle(graph.id)
                 return
 
-        # 2. replan triggers — only when the completed agent has the flag set.
+        # 2. QA failure → Engineer auto-rework. The QA report on disk is the
+        #    feedback channel; we just reset the relevant nodes and settle.
+        if await self._maybe_trigger_qa_rework(graph, node, terminal):
+            return
+
+        # 3. replan triggers — only when the completed agent has the flag set.
         await self._maybe_open_replan(graph, node, terminal)
 
-        # 3. ordinary settle pass.
+        # 3.5 plan-first gate — pause after Product Manager until the user
+        # approves the plan summary.
+        if await self._maybe_pause_for_plan_approval(graph, node, terminal):
+            return
+
+        # 4. ordinary settle pass.
         await self.settle(graph.id)
+
+    async def _maybe_trigger_qa_rework(
+        self, graph: WorkflowGraph, completed_node: WorkflowNode, terminal: str
+    ) -> bool:
+        """When QA fails, automatically reset the upstream Engineer node so it
+        re-runs with the QA report as feedback. Returns True if a rework was
+        dispatched (caller should NOT continue to replan/settle paths).
+
+        Bounded by `engineer.max_retries` so we can't loop forever. The QA
+        report is already on disk at qa/qa_report.md and is read at
+        Engineer-prompt-build time via `task.review_comment`.
+        """
+        if terminal != "failed":
+            return False
+        # Identify whether the completed node is QA. Use both role hints
+        # available — node_key (canonical for built-in agents) and the
+        # underlying agent.role_key (in case node_key was customised).
+        if completed_node.node_key != "qa":
+            agents = await self.store.list_agents(workspace_id=None)
+            agent = next((a for a in agents if a.id == completed_node.agent_id), None)
+            if agent is None or agent.role_key != "qa":
+                return False
+
+        engineer_node = next(
+            (n for n in graph.nodes if n.node_key == "engineer"), None
+        )
+        if engineer_node is None:
+            return False
+        if engineer_node.retries >= max(engineer_node.max_retries, 1):
+            logger.info(
+                "QA failed but engineer rework budget exhausted (retries=%s/%s) — "
+                "falling through to replanner",
+                engineer_node.retries, engineer_node.max_retries,
+            )
+            return False
+
+        # Reset both nodes so the scheduler re-fires Engineer first, then QA
+        # naturally becomes ready again once Engineer is done.
+        await self.store.update_workflow_node(
+            engineer_node.id,
+            status="pending",
+            retries=engineer_node.retries + 1,
+            completed_at=None,
+        )
+        await self.store.update_workflow_node(
+            completed_node.id,
+            status="pending",
+            completed_at=None,
+        )
+        logger.info(
+            "QA failed → resetting engineer for rework (attempt %s/%s)",
+            engineer_node.retries + 1, engineer_node.max_retries,
+        )
+        await self.settle(graph.id)
+        return True
 
     async def _maybe_open_replan(self, graph: WorkflowGraph, node: WorkflowNode, terminal: str) -> None:
         """Check whether this node's completion should suspend the graph for replan."""
@@ -177,6 +248,61 @@ class WorkflowScheduler:
         await self.store.save_replan_pending(replan)
         # NOTE: settle() will see this pending replan and refuse to dispatch
         # until it's confirmed/rejected.
+
+    async def _maybe_pause_for_plan_approval(
+        self, graph: WorkflowGraph, node: WorkflowNode, terminal: str
+    ) -> bool:
+        if terminal != "done":
+            return False
+        agents = await self.store.list_agents(workspace_id=None)
+        agent = next((a for a in agents if a.id == node.agent_id), None)
+        if agent is None or agent.role_key != "product_manager":
+            return False
+        issue = await self.store.load_codex_issue(graph.issue_id)
+        if issue is None:
+            return False
+        if not await self._is_plan_first_enabled(issue.session_id):
+            return False
+
+        plan_summary = await self._read_pm_plan_summary(issue)
+        issue.review_comment = plan_summary or (
+            "[PLAN] PM 阶段完成，请确认 PRD 后继续"
+        )
+        issue.current_phase = "architecture"
+        issue.status = "awaiting_approval"
+        issue.updated_at = datetime.now()
+        await self.store.save_codex_issue(issue)
+        logger.info("Plan-first gate engaged for issue %s", issue.id)
+        return True
+
+    async def _is_plan_first_enabled(self, session_id: str) -> bool:
+        workspace = await self.store.load_codex_session(session_id)
+        settings = getattr(workspace, "settings", None) or {}
+        return bool(settings.get("plan_first_pm", True))
+
+    async def _read_pm_plan_summary(self, issue: CodexIssue) -> str | None:
+        if not getattr(issue, "git_worktree_path", None):
+            return None
+        try:
+            from app.application.issue_artifact_documents import IssueArtifactDocuments
+            docs = IssueArtifactDocuments()
+            path = docs.pm_prd_json_path(issue.git_worktree_path, issue.id)
+            if not path.exists():
+                return None
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            summary = payload.get("plan_summary") or []
+            if not isinstance(summary, list):
+                return None
+            bullets = [str(item).strip() for item in summary if str(item).strip()]
+            if not bullets:
+                return None
+            return "\n".join(
+                item if item.startswith("-") else f"- {item}"
+                for item in bullets[:10]
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to read plan summary for issue %s: %s", issue.id, exc)
+            return None
 
     async def apply_replan(self, replan_id: str, decision: str) -> WorkflowGraph:
         """Resolve a pending replan (decision='confirmed'|'rejected') and resume settle."""
@@ -292,16 +418,49 @@ class WorkflowScheduler:
             return
 
         prompt = node.prompt_override or self._render_prompt_template(agent, issue, node)
+        # `[builtin:<role>]` is a placeholder telling the runtime to defer to
+        # RoleWorkflowService — but downstream prompt builders use
+        # `task.prompt` as the *user_requirement* line. Substitute the real
+        # issue title + description so PM/Architect/Engineer/QA see actual
+        # context, not the literal `[builtin:engineer]` string.
+        if isinstance(prompt, str) and prompt.startswith("[builtin:"):
+            issue_body = (issue.description or "").strip()
+            if issue.title and issue_body:
+                prompt = f"{issue.title}\n\n{issue_body}"
+            else:
+                prompt = issue.title or issue_body or prompt
+
+        # Engineer rework: when this is a retry caused by an upstream QA
+        # failure, surface the most recent QA report on disk as feedback so
+        # the engineer prompt builder includes it under "REWORK REQUIRED".
+        review_comment = None
+        if agent.role_key == "engineer" and node.retries > 0 and issue.git_worktree_path:
+            review_comment = self._read_latest_qa_failure_summary(
+                issue.git_worktree_path, issue.id
+            )
+        if agent.role_key == "architect" and getattr(issue, "review_comment", None):
+            review_comment = issue.review_comment
+
         # Inherit worktree/git state from the issue so the runner can locate
         # artifacts. Falls back to None when the issue has no worktree yet
         # (tests, ephemeral issues) — the runner should tolerate that.
+        # Built-in role workflows treat `task.title` as the user-facing issue
+        # title (it ends up in PRD `issue_title` and engineer `issue_title`
+        # fields). When the node title is a generic role tag, prefer the
+        # actual issue title so artifacts capture the real intent.
+        managed_role = agent.role_key in {"product_manager", "architect", "engineer", "qa"}
+        effective_title = (
+            issue.title
+            if (managed_role and issue.title)
+            else (node.title or agent.name)
+        )
         task = CodexTask(
             id=str(uuid4()),
             session_id=issue.session_id,
             project_id=issue.project_id,
             issue_id=issue.id,
             phase=agent.role_key,  # Free-form tag now; kept for backward compat with old kanban
-            title=node.title or agent.name,
+            title=effective_title,
             prompt=prompt,
             role=agent.role_key,
             executor=agent.default_executor or "codex",
@@ -313,10 +472,15 @@ class WorkflowScheduler:
             git_base_branch=issue.git_base_branch,
             git_worktree_path=issue.git_worktree_path,
             workflow_node_id=node.id,
+            review_comment=review_comment,
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
         await self.store.save_codex_task(task)
+        if agent.role_key == "architect" and getattr(issue, "review_comment", None):
+            issue.review_comment = None
+            issue.updated_at = datetime.now()
+            await self.store.save_codex_issue(issue)
         await self.store.update_workflow_node(
             node.id,
             status="running",
@@ -338,6 +502,58 @@ class WorkflowScheduler:
                     status="failed",
                     completed_at=datetime.now(),
                 )
+
+    def _read_latest_qa_failure_summary(
+        self, workspace_path: str, issue_id: str
+    ) -> str | None:
+        """Return a short summary of the QA report on disk if it indicates a
+        failure, formatted as actionable feedback for the engineer."""
+        try:
+            from pathlib import Path
+            qa_plan_path = Path(workspace_path) / "issues" / issue_id / "qa" / "qa_plan.json"
+            qa_report_path = Path(workspace_path) / "issues" / issue_id / "qa" / "qa_report.md"
+            if not qa_plan_path.exists():
+                return None
+            plan = json.loads(qa_plan_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to read QA artifacts for rework feedback: %s", exc)
+            return None
+
+        status = plan.get("status", "unknown")
+        if status not in {"failed", "needs_follow_up"}:
+            # Engineer is being re-fired but QA didn't actually fail —
+            # nothing useful to feed forward.
+            return None
+
+        bugs = plan.get("bugs_found") or []
+        gaps = plan.get("test_gaps") or []
+        risks = plan.get("risks") or []
+        commands = plan.get("commands_run") or []
+        recommendation = plan.get("final_recommendation") or ""
+
+        def bullets(items):
+            return [f"  - {x}" for x in items] if items else ["  (none reported)"]
+
+        lines = [
+            f"QA marked the previous engineer pass as **{status}**. You must address each item below before the next QA run.",
+            "",
+        ]
+        if recommendation:
+            lines.extend([f"Final recommendation: {recommendation}", ""])
+        lines.append("Bugs found:")
+        lines.extend(bullets(bugs))
+        lines.extend(["", "Test gaps / framework notes:"])
+        lines.extend(bullets(gaps))
+        lines.extend(["", "Risks:"])
+        lines.extend(bullets(risks))
+        lines.extend(["", "Commands actually run by QA (with exit codes):"])
+        lines.extend(bullets(commands))
+        if qa_report_path.exists():
+            lines.extend([
+                "",
+                f"Full QA report on disk: {qa_report_path.relative_to(workspace_path)}",
+            ])
+        return "\n".join(line for line in lines if line is not None)
 
     def _render_prompt_template(self, agent: Agent, issue: CodexIssue, node: WorkflowNode) -> str:
         """Render a system-prompt template with simple field substitution.
@@ -362,14 +578,126 @@ class WorkflowScheduler:
         if latest is None:
             return
         statuses = {n.status for n in latest.nodes}
+        previous_status = latest.status
+        terminal_now = False
         if statuses and statuses <= {"done", "skipped"}:
             if latest.status != "done":
                 latest.status = "done"
                 await self.store.save_workflow_graph(latest)
+                terminal_now = True
         elif "failed" in statuses and not any(s in {"pending", "blocked", "ready", "running"} for s in statuses):
             if latest.status != "failed":
                 latest.status = "failed"
                 await self.store.save_workflow_graph(latest)
+                terminal_now = True
+
+        # Auto-advance the issue's `current_phase` when all nodes whose
+        # agent role matches a known phase have completed. This keeps the
+        # issue header's phase chip in sync with the DAG progress without
+        # the UI having to know the role→phase mapping.
+        await self._maybe_advance_phase(latest)
+
+        # Sink lessons into the project's team_notes.md the FIRST time the
+        # graph lands terminal. Best-effort — never blocks the graph.
+        if terminal_now and previous_status not in {"done", "failed"}:
+            await self._record_project_memory(latest)
+
+    async def _record_project_memory(self, graph: WorkflowGraph) -> None:
+        try:
+            from app.application.project_memory_service import project_memory
+            issue = await self.store.load_codex_issue(graph.issue_id)
+            if issue is None:
+                return
+            project_repo_path = None
+            if issue.project_id:
+                load_project = getattr(self.store, "load_project", None)
+                if callable(load_project):
+                    proj = await load_project(issue.project_id)
+                    if proj is not None:
+                        project_repo_path = proj.repo_path
+            project_memory.record_issue_completion(
+                project_repo_path,
+                issue_id=issue.id,
+                issue_title=issue.title or issue.id,
+                worktree_path=issue.git_worktree_path,
+                graph_status=graph.status,
+            )
+            # S3c: auto-distill team_notes.md once it accumulates past
+            # DISTILL_TRIGGER_BLOCKS raw issue entries. Reuses the
+            # orchestrator LLM runner so we share the runtime catalog
+            # config. Best-effort — distillation failures are silent.
+            try:
+                import os
+                if os.getenv("WORKFLOW_ORCHESTRATOR_LLM", "").lower() != "false":
+                    from app.application.llm_runner import build_llm_runner
+                    from app.bootstrap import codex_store as _store  # local import to avoid cycles
+                    catalog_service = None
+                    try:
+                        from app.bootstrap import (
+                            get_runtime_catalog_service as _get_catalog_service,
+                        )
+                        catalog_service = _get_catalog_service()
+                    except (ImportError, AttributeError):
+                        # Older bootstrap shape — try the api layer's resolver.
+                        try:
+                            from app.interfaces.api import _get_runtime_catalog_service as _api_get
+                            catalog_service = _api_get()
+                        except Exception:  # noqa: BLE001
+                            catalog_service = None
+                    if catalog_service is not None:
+                        runner = build_llm_runner(catalog_service)
+                        await project_memory.maybe_distill(project_repo_path, runner)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("project memory distill skipped: %s", exc)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("project memory append failed for graph %s: %s", graph.id, exc)
+
+    # Role → phase the issue advances *into* once every node of that role
+    # completes successfully. E.g. once all `product_manager` nodes are done,
+    # we transition the issue into the `architecture` phase.
+    _ROLE_TO_NEXT_PHASE = {
+        "product_manager": "architecture",
+        "architect": "development",
+        "engineer": "testing",
+        "qa": "done",
+    }
+
+    async def _maybe_advance_phase(self, graph: WorkflowGraph) -> None:
+        if graph is None:
+            return
+        issue = await self.store.load_codex_issue(graph.issue_id)
+        if issue is None:
+            return
+        agents_by_id = {a.id: a for a in await self.store.list_agents(workspace_id=None)}
+        # Group nodes by role.
+        from collections import defaultdict
+        statuses_by_role: dict[str, set[str]] = defaultdict(set)
+        for node in graph.nodes:
+            agent = agents_by_id.get(node.agent_id)
+            role = (agent.role_key if agent else None) or node.node_key
+            statuses_by_role[role].add(node.status)
+        # Walk roles in the canonical order and pick the *latest* fully-
+        # completed role's next phase as the target. This handles non-linear
+        # DAGs (e.g. multiple architects) and ensures we only step forward.
+        target_phase = None
+        for role in ("product_manager", "architect", "engineer", "qa"):
+            statuses = statuses_by_role.get(role)
+            if statuses and statuses <= {"done", "skipped"}:
+                target_phase = self._ROLE_TO_NEXT_PHASE.get(role)
+        if target_phase is None or target_phase == issue.current_phase:
+            return
+        # Only step forward in the canonical phase order; never regress.
+        order = ["requirements", "architecture", "development", "testing", "done"]
+        try:
+            cur_idx = order.index(issue.current_phase or "requirements")
+            tgt_idx = order.index(target_phase)
+        except ValueError:
+            return
+        if tgt_idx <= cur_idx:
+            return
+        issue.current_phase = target_phase
+        issue.updated_at = datetime.now()
+        await self.store.save_codex_issue(issue)
 
 
 # Convenience for callers building a graph from a proposed DAG JSON

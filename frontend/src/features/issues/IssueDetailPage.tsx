@@ -1,14 +1,36 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { getCodexIssue } from "@/lib/api";
+import { CheckCircle2, Circle, GitBranch, GitFork, MessageSquarePlus, Loader2 } from "lucide-react";
+import { useI18n } from "@/providers/I18nProvider";
+import {
+  forkCodexIssue,
+  approveCodexIssuePlan,
+  getCodexIssue,
+  getCodexIssueChecklist,
+  steerCodexIssue,
+  type IssueChecklist,
+} from "@/lib/api";
 import type { CodexIssue } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/toast";
 import { DagTab } from "./tabs/DagTab";
 import { TasksRunsTab } from "./tabs/TasksRunsTab";
 import { ArtifactsTab } from "./tabs/ArtifactsTab";
 import { DiffMergeTab } from "./tabs/DiffMergeTab";
+import { IssueNarrativeTimeline } from "./components/IssueNarrativeTimeline";
 
 interface Props {
   issueId: string;
@@ -21,19 +43,131 @@ function isTab(s: string | null): s is TabId {
   return s !== null && (TABS as readonly string[]).includes(s);
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  open: "Queued",
+  in_progress: "Running",
+  completed: "Done",
+  failed: "Failed",
+  awaiting_approval: "Awaiting approval",
+  cancelled: "Cancelled",
+};
+
 export function IssueDetailPage({ issueId }: Props) {
+  const { t } = useI18n();
   const router = useRouter();
   const params = useSearchParams();
+  const { addToast } = useToast();
   const urlTab = params.get("tab");
   const initialTab: TabId = isTab(urlTab) ? urlTab : "dag";
   const [tab, setTab] = useState<TabId>(initialTab);
   const [issue, setIssue] = useState<CodexIssue | null>(null);
+  const [checklist, setChecklist] = useState<IssueChecklist | null>(null);
+  const [steerOpen, setSteerOpen] = useState(false);
+  const [steerDraft, setSteerDraft] = useState("");
+  const [steerSending, setSteerSending] = useState(false);
+  const [forking, setForking] = useState(false);
+  const [planDraft, setPlanDraft] = useState("");
+  const [approvingPlan, setApprovingPlan] = useState(false);
+
+  const handleFork = useCallback(async () => {
+    setForking(true);
+    try {
+      const forked = await forkCodexIssue(issueId);
+      addToast({
+        type: "success",
+        title: t("issue.forked"),
+        message: t("issue.forkHint"),
+      });
+      router.push(`/issues/${forked.id}`);
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: t("issue.forkFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setForking(false);
+    }
+  }, [issueId, addToast, router]);
+
+  const handleSendSteer = useCallback(async () => {
+    const msg = steerDraft.trim();
+    if (!msg) return;
+    setSteerSending(true);
+    try {
+      await steerCodexIssue(issueId, msg);
+      addToast({
+        type: "success",
+        title: t("issue.steerSent"),
+        message: t("issue.steerSentHint"),
+      });
+      setSteerDraft("");
+      setSteerOpen(false);
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: t("issue.steerFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSteerSending(false);
+    }
+  }, [issueId, steerDraft, addToast]);
+
+  const loadIssue = useCallback(async () => {
+    try {
+      const next = await getCodexIssue(issueId);
+      setIssue(next);
+    } catch {
+      setIssue(null);
+    }
+  }, [issueId]);
 
   useEffect(() => {
-    getCodexIssue(issueId)
-      .then(setIssue)
-      .catch(() => setIssue(null));
+    void loadIssue();
+  }, [loadIssue]);
+
+  // Poll issue status while not in a terminal state so the header, approval
+  // card, and checklist update without a page reload.
+  useEffect(() => {
+    const terminal = new Set(["completed", "failed", "cancelled", "abandoned"]);
+    if (terminal.has(issue?.status ?? "")) return;
+    const id = window.setInterval(() => { void loadIssue(); }, 3000);
+    return () => window.clearInterval(id);
+  }, [issue?.status, loadIssue]);
+
+  // A3: poll the acceptance checklist while phases progress so completed
+  // items tick off live.
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const c = await getCodexIssueChecklist(issueId);
+        if (!cancelled) setChecklist(c);
+      } catch {
+        // silent — endpoint absent → no checklist
+      }
+    }
+    void tick();
+    const id = window.setInterval(tick, 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, [issueId]);
+
+  useEffect(() => {
+    if (isTab(urlTab) && urlTab !== tab) setTab(urlTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlTab]);
+
+  useEffect(() => {
+    if (issue?.status === "awaiting_approval") {
+      setPlanDraft(issue.review_comment ?? "");
+      return;
+    }
+    setPlanDraft("");
+  }, [issue?.status, issue?.review_comment]);
 
   const onTabChange = (next: string) => {
     if (!isTab(next)) return;
@@ -43,38 +177,286 @@ export function IssueDetailPage({ issueId }: Props) {
     router.replace(`?${sp.toString()}`, { scroll: false });
   };
 
+  const handleApprovePlan = useCallback(async () => {
+    const draft = planDraft.trim();
+    if (!draft && !(issue?.review_comment || "").trim()) return;
+    setApprovingPlan(true);
+    try {
+      await approveCodexIssuePlan(issueId, draft);
+      addToast({
+        type: "success",
+        title: t("issue.planApproval.approved"),
+      });
+      await loadIssue();
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: t("issue.planApproval.failed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setApprovingPlan(false);
+    }
+  }, [planDraft, issue?.review_comment, issueId, addToast, loadIssue, t]);
+
+  // Bug-fix: when the orchestration has marched the issue's `current_phase`
+  // all the way to `done` but the bookkeeping `status` field hasn't been
+  // flipped from the default `open`, the header used to claim "Queued" which
+  // is misleading. Derive a smarter label from the phase in that case.
+  const effectiveStatus =
+    issue?.status === "open" && (issue.current_phase === "done" || issue.current_phase === "completed")
+      ? "completed"
+      : issue?.status;
+  const kind = inferStatusKind(effectiveStatus);
+  const statusLabel = effectiveStatus
+    ? STATUS_LABEL[effectiveStatus] ?? effectiveStatus
+    : "—";
+
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-6 py-4 border-b border-border-subtle">
-        <h1 className="text-xl font-black tracking-tight truncate">
-          {issue?.title ?? "Issue"}
-        </h1>
-        <p className="text-xs text-text-muted mt-0.5">
-          Phase: <b>{issue?.current_phase ?? "—"}</b> · Status: <b>{issue?.status ?? "—"}</b>
-        </p>
+    <div className="h-full flex flex-col overflow-y-auto overflow-x-hidden">
+      {/* Header */}
+      <div className="px-8 pt-6 pb-5 border-b border-border-subtle bg-surface z-10 relative shadow-sm">
+        <div className="flex flex-col gap-3 max-w-6xl w-full mx-auto">
+          {/* Top Row: Meta */}
+          <div className="flex items-center gap-2 text-[12px] font-mono text-text-muted">
+            <StatusBadge kind={kind} label={statusLabel} className="mr-1 shadow-sm" />
+            <span>{t("issue.metaLabel")}</span>
+            <span className="text-border-subtle">/</span>
+            <span className="text-foreground font-semibold">{issueId.slice(0, 8)}</span>
+            {issue?.git_branch && (
+              <>
+                <span className="text-border-subtle">/</span>
+                <span className="flex items-center gap-1.5 text-brand bg-brand/10 border border-brand/20 px-2 py-0.5 rounded-md">
+                  <GitBranch size={12} />
+                  {issue.git_branch}
+                </span>
+              </>
+            )}
+            <div className="ml-auto flex items-center gap-3">
+              <span className="text-[11px] text-text-muted uppercase tracking-wider">
+                {t("issue.phaseLabel")} <span className="text-foreground font-bold">{issue?.current_phase ?? "—"}</span>
+              </span>
+              {issue?.created_at && (
+                <>
+                  <span className="text-border-subtle">·</span>
+                  <span className="text-[11px] text-text-muted">
+                    {t("issue.createdAt", { time: new Date(issue.created_at).toLocaleString() })}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Bottom Row: Title and Actions */}
+          <div className="flex items-center justify-between gap-4 mt-2">
+            <h1 className="text-2xl font-bold tracking-tight truncate text-foreground leading-tight">
+              {issue?.title ?? t("issue.titleFallback")}
+            </h1>
+            <div className="flex items-center gap-2.5 shrink-0">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void handleFork()}
+                disabled={forking || !issue?.git_worktree_path}
+                title={t("issue.forkHelp")}
+                className="gap-2 h-8 px-3.5 text-[12px] font-medium shadow-sm hover:shadow-md transition-shadow"
+              >
+                {forking ? <Loader2 size={14} className="animate-spin" /> : <GitFork size={14} />}
+                {t("issue.fork")}
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setSteerOpen(true)}
+                disabled={!issue?.git_worktree_path}
+                title={issue?.git_worktree_path ? t("issue.steerHelp") : t("issue.noActiveWorktree")}
+                className="gap-2 h-8 px-3.5 text-[12px] font-semibold bg-brand hover:bg-brand-strong text-black shadow-sm shadow-brand/20 hover:shadow-md transition-all"
+              >
+                <MessageSquarePlus size={14} />
+                {t("issue.steer")}
+              </Button>
+            </div>
+          </div>
+        </div>
       </div>
-      <Tabs value={tab} onValueChange={onTabChange} className="flex-1 min-h-0 flex flex-col">
-        <TabsList className="mx-6 mt-3 self-start">
-          <TabsTrigger value="dag">DAG</TabsTrigger>
-          <TabsTrigger value="tasks">Tasks · Runs</TabsTrigger>
-          <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
-          <TabsTrigger value="diff">Diff · Merge</TabsTrigger>
+
+        {/* A4: narrative timeline distilled from each role's task.result */}
+        <IssueNarrativeTimeline issueId={issueId} reloadKey={issue?.updated_at ?? undefined} />
+
+        {checklist && checklist.criteria.length > 0 && (
+          <div className="px-8 mt-6">
+            <div className="max-w-6xl mx-auto w-full">
+              <div className="rounded-xl border border-border-subtle bg-surface shadow-sm overflow-hidden">
+                <div className="px-4 py-3 border-b border-border-subtle bg-surface-hover flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <span className="font-bold text-[12px] uppercase tracking-wider text-foreground">{t("issue.checklist")}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-32 h-1.5 bg-border-subtle rounded-full overflow-hidden shadow-inner">
+                        <div 
+                          className="h-full bg-success transition-all duration-500 ease-out" 
+                          style={{ width: `${Math.round((checklist.criteria.filter(c => c.covered).length / checklist.criteria.length) * 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-[11px] font-mono text-text-muted">
+                        {checklist.criteria.filter((c) => c.covered).length}/{checklist.criteria.length}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <ul className="divide-y divide-border-subtle">
+                  {checklist.criteria.slice(0, 6).map((c, i) => (
+                    <li
+                      key={i}
+                      className="flex items-center gap-3 px-4 py-2.5 text-[13px] transition-colors hover:bg-surface-hover/50"
+                    >
+                      {c.covered ? (
+                        <CheckCircle2 size={16} className="text-success shrink-0" />
+                      ) : (
+                        <Circle size={16} className="text-border-strong shrink-0" />
+                      )}
+                      <span className={cn("flex-1", c.covered ? "text-text-secondary line-through" : "text-foreground font-medium")}>
+                        {c.text}
+                      </span>
+                      {c.source && (
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted/80 bg-surface-raised px-1.5 py-0.5 rounded border border-border-subtle shrink-0">
+                          {c.source}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                  {checklist.criteria.length > 6 && (
+                    <li className="px-4 py-2.5 text-[12px] font-medium text-text-muted bg-surface-hover flex items-center gap-2">
+                      <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                        <span className="block w-1 h-1 bg-text-muted rounded-full opacity-50 shadow-[4px_0_0_0_currentColor,-4px_0_0_0_currentColor]" />
+                      </div>
+                      {t("issue.checklistMore", { count: checklist.criteria.length - 6 })}
+                    </li>
+                  )}
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {issue?.status === "awaiting_approval" && (
+          <div className="mt-4 max-w-3xl rounded-xl border border-brand/40 bg-brand/[0.04] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-brand">
+                  {t("issue.planApproval.title")}
+                </h2>
+                <p className="text-[12px] text-text-muted mt-0.5">
+                  {t("issue.planApproval.description")}
+                </p>
+              </div>
+              <StatusBadge kind="awaiting" label={t("workspace.console.status.awaitingApproval")} />
+            </div>
+            <textarea
+              value={planDraft}
+              onChange={(e) => setPlanDraft(e.target.value)}
+              rows={7}
+              placeholder={t("issue.planApproval.placeholder")}
+              className="mt-3 w-full rounded-md border border-border-subtle bg-background px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-brand/50"
+            />
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <p className="text-[12px] text-text-muted">
+                {t("issue.planApproval.helper")}
+              </p>
+              <Button
+                size="sm"
+                onClick={() => void handleApprovePlan()}
+                disabled={approvingPlan || (!planDraft.trim() && !(issue.review_comment || "").trim())}
+                className="gap-1.5 bg-brand hover:bg-brand-strong text-black font-semibold"
+              >
+                {approvingPlan ? (
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 size={12} className="animate-spin" />
+                    {t("issue.planApproval.saving")}
+                  </span>
+                ) : (
+                  t("issue.planApproval.approve")
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
+      <Dialog open={steerOpen} onOpenChange={setSteerOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("issue.steerDialogTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("issue.steerDialogBody")}
+            </DialogDescription>
+          </DialogHeader>
+          <textarea
+            autoFocus
+            value={steerDraft}
+            onChange={(e) => setSteerDraft(e.target.value)}
+            rows={5}
+            placeholder={t("issue.steerPlaceholder")}
+            className="w-full rounded-md border border-border-subtle bg-background px-3 py-2 text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-brand/50"
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSteerOpen(false)}
+              disabled={steerSending}
+            >
+              {t("issue.cancel")}
+            </Button>
+            <Button
+              onClick={() => void handleSendSteer()}
+              disabled={steerSending || !steerDraft.trim()}
+              className="bg-brand hover:bg-brand-strong text-black font-semibold"
+            >
+              {steerSending ? (
+                <span className="flex items-center gap-1.5">
+                  <Loader2 size={12} className="animate-spin" /> {t("issue.sending")}
+                </span>
+              ) : (
+                t("issue.sendToAgent")
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Tabs */}
+      <Tabs value={tab} onValueChange={onTabChange} className="flex flex-col mt-4 pb-12">
+        <TabsList
+          variant="line"
+          className="px-6 pt-2 self-stretch border-b border-border-subtle gap-6 shrink-0"
+        >
+          <UnderlineTab value="dag" label="DAG" />
+          <UnderlineTab value="tasks" label={t("issue.tab.tasksRuns")} />
+          <UnderlineTab value="artifacts" label={t("console.artifacts")} />
+          <UnderlineTab value="diff" label={t("issue.tab.diffMerge")} />
         </TabsList>
-        <div className="flex-1 min-h-0 overflow-auto">
-          <TabsContent value="dag" className="m-0">
+        <div className="flex flex-col flex-1 min-h-[600px] lg:min-h-[calc(100vh-380px)]">
+          <TabsContent value="dag" className="m-0 h-full flex flex-col">
             <DagTab issueId={issueId} />
           </TabsContent>
-          <TabsContent value="tasks" className="m-0">
+          <TabsContent value="tasks" className="m-0 h-full flex flex-col">
             <TasksRunsTab issueId={issueId} issue={issue} />
           </TabsContent>
-          <TabsContent value="artifacts" className="m-0">
-            <ArtifactsTab issueId={issueId} />
+          <TabsContent value="artifacts" className="m-0 h-full flex flex-col">
+            <ArtifactsTab issueId={issueId} active={tab === "artifacts"} issue={issue} />
           </TabsContent>
-          <TabsContent value="diff" className="m-0">
-            <DiffMergeTab issueId={issueId} issue={issue} />
+          <TabsContent value="diff" className="m-0 h-full flex flex-col">
+            <DiffMergeTab issueId={issueId} issue={issue} active={tab === "diff"} />
           </TabsContent>
         </div>
       </Tabs>
     </div>
+  );
+}
+
+function UnderlineTab({ value, label }: { value: string; label: string }) {
+  return (
+    <TabsTrigger
+      value={value}
+      className="px-0 py-2.5 h-auto text-[13px] font-medium text-text-muted data-active:text-foreground after:bottom-[-1px] after:bg-foreground"
+    >
+      {label}
+    </TabsTrigger>
   );
 }

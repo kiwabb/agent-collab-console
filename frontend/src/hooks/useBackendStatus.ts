@@ -57,15 +57,13 @@ export function useBackendStatus(): BackendStatusInfo {
     return () => window.clearTimeout(id);
   }, [isConnected]);
 
-  let status: BackendStatus;
-  if (!healthOk) {
-    status = "offline";
-  } else if (isConnected) {
-    status = "online";
-  } else {
-    const downFor = wsDownSinceRef.current ? Date.now() - wsDownSinceRef.current : 0;
-    status = downFor > OFFLINE_GRACE_MS ? "offline" : "reconnecting";
-  }
+  // `offline` is reserved for "the backend HTTP endpoint is failing". The
+  // execution-process WebSocket only opens when a workspace is selected;
+  // its disconnected state on the Inbox/Approvals/Settings routes is not
+  // a backend problem and shouldn't surface here. Pages that care about
+  // WS health surface their own loading/reconnecting indicators.
+  void isConnected;
+  const status: BackendStatus = healthOk ? "online" : "offline";
 
   return { status, retry: ping };
 }

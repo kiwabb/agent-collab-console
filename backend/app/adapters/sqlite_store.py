@@ -117,12 +117,14 @@ class SQLiteStore:
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
                     cwd TEXT NOT NULL,
+                    project_id TEXT,
                     status TEXT DEFAULT 'idle',
                     created_at TEXT,
                     last_active_at TEXT,
                     log_path TEXT,
                     thread_id TEXT,
-                    claude_thread_id TEXT
+                    claude_thread_id TEXT,
+                    settings_json TEXT
                 );
                 CREATE TABLE IF NOT EXISTS codex_messages (
                     id TEXT PRIMARY KEY,
@@ -135,11 +137,21 @@ class SQLiteStore:
                 CREATE TABLE IF NOT EXISTS codex_issues (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
+                    project_id TEXT,
                     title TEXT NOT NULL,
                     description TEXT,
                     current_phase TEXT NOT NULL DEFAULT 'requirements',
                     status TEXT NOT NULL DEFAULT 'open',
+                    review_comment TEXT,
                     is_pinned INTEGER NOT NULL DEFAULT 0,
+                    milestone TEXT,
+                    git_branch TEXT,
+                    git_base_branch TEXT,
+                    git_worktree_path TEXT,
+                    git_merge_status TEXT DEFAULT 'open',
+                    git_last_commit_sha TEXT,
+                    github_pr_url TEXT,
+                    github_pr_state TEXT,
                     created_at TEXT,
                     updated_at TEXT,
                     FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
@@ -240,6 +252,14 @@ class SQLiteStore:
                 conn.execute("ALTER TABLE codex_sessions ADD COLUMN claude_thread_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_sessions ADD COLUMN project_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_sessions ADD COLUMN settings_json TEXT")
+            except sqlite3.OperationalError:
+                pass
             # Add task_id column to log_events for task-scoped log attribution
             try:
                 conn.execute("ALTER TABLE log_events ADD COLUMN task_id TEXT")
@@ -303,6 +323,50 @@ class SQLiteStore:
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN model TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN project_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN review_comment TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN milestone TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN git_branch TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN git_base_branch TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN git_worktree_path TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN git_merge_status TEXT DEFAULT 'open'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN git_last_commit_sha TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_url TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_state TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
             # Add executor/provider/model snapshot columns to execution_processes
             try:
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
@@ -680,13 +744,14 @@ class SQLiteStore:
         conn = self._get_conn()
         try:
             conn.execute(
-                "INSERT OR REPLACE INTO codex_sessions (id, title, cwd, status, created_at, last_active_at, log_path, thread_id, claude_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (session.id, session.title, session.cwd, session.status,
+                "INSERT OR REPLACE INTO codex_sessions (id, title, cwd, project_id, status, created_at, last_active_at, log_path, thread_id, claude_thread_id, settings_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (session.id, session.title, session.cwd, session.project_id, session.status,
                  self._format_datetime(session.created_at),
                  self._format_datetime(session.last_active_at),
                  session.log_path,
                  session.thread_id,
-                 session.claude_thread_id),
+                 session.claude_thread_id,
+                 json.dumps(session.settings, ensure_ascii=False) if getattr(session, "settings", None) is not None else None),
             )
             # Persist messages
             conn.execute("DELETE FROM codex_messages WHERE session_id = ?", (session.id,))
@@ -737,12 +802,14 @@ class SQLiteStore:
             id=row["id"],
             title=row["title"],
             cwd=row["cwd"],
+            project_id=row["project_id"] if "project_id" in row.keys() else None,
             status=row["status"],
             created_at=self._parse_datetime(row["created_at"]),
             last_active_at=self._parse_datetime(row["last_active_at"]),
             log_path=row["log_path"],
             thread_id=row["thread_id"] if "thread_id" in row.keys() else None,
             claude_thread_id=row["claude_thread_id"] if "claude_thread_id" in row.keys() else None,
+            settings=json.loads(row["settings_json"]) if "settings_json" in row.keys() and row["settings_json"] else {"plan_first_pm": True},
             messages=messages,
         )
 
@@ -754,10 +821,12 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT id, title, status, created_at, last_active_at FROM codex_sessions ORDER BY last_active_at DESC").fetchall()
+        rows = conn.execute("SELECT id, title, project_id, status, created_at, last_active_at, settings_json FROM codex_sessions ORDER BY last_active_at DESC").fetchall()
         conn.close()
-        return [{"id": r["id"], "title": r["title"], "status": r["status"],
-                 "created_at": r["created_at"], "last_active_at": r["last_active_at"]} for r in rows]
+        return [{"id": r["id"], "title": r["title"], "project_id": r["project_id"], "status": r["status"],
+                 "created_at": r["created_at"], "last_active_at": r["last_active_at"],
+                 "settings": json.loads(r["settings_json"]) if r["settings_json"] else {"plan_first_pm": True}}
+                for r in rows]
 
     def list_codex_workspaces(self) -> list[dict]:
         return self.list_codex_sessions()
@@ -809,15 +878,25 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO codex_issues (id, session_id, title, description, current_phase, status, is_pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO codex_issues (id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 issue.id,
                 issue.session_id,
+                issue.project_id,
                 issue.title,
                 issue.description,
                 issue.current_phase,
                 issue.status,
+                issue.review_comment,
                 1 if issue.is_pinned else 0,
+                issue.milestone,
+                issue.git_branch,
+                issue.git_base_branch,
+                issue.git_worktree_path,
+                issue.git_merge_status,
+                issue.git_last_commit_sha,
+                getattr(issue, "github_pr_url", None),
+                getattr(issue, "github_pr_state", None),
                 self._format_datetime(issue.created_at),
                 self._format_datetime(issue.updated_at),
             ),
@@ -836,11 +915,21 @@ class SQLiteStore:
         return CodexIssue(
             id=row["id"],
             session_id=row["session_id"],
+            project_id=row["project_id"] if "project_id" in row.keys() else None,
             title=row["title"],
             description=row["description"],
             current_phase=row["current_phase"],
             status=row["status"],
+            review_comment=row["review_comment"] if "review_comment" in row.keys() else None,
             is_pinned=bool(row["is_pinned"]),
+            milestone=row["milestone"] if "milestone" in row.keys() and row["milestone"] else None,
+            git_branch=row["git_branch"] if "git_branch" in row.keys() and row["git_branch"] else None,
+            git_base_branch=row["git_base_branch"] if "git_base_branch" in row.keys() and row["git_base_branch"] else None,
+            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in row.keys() and row["git_worktree_path"] else None,
+            git_merge_status=row["git_merge_status"] if "git_merge_status" in row.keys() and row["git_merge_status"] else "open",
+            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in row.keys() and row["git_last_commit_sha"] else None,
+            github_pr_url=row["github_pr_url"] if "github_pr_url" in row.keys() and row["github_pr_url"] else None,
+            github_pr_state=row["github_pr_state"] if "github_pr_state" in row.keys() and row["github_pr_state"] else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -849,7 +938,7 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        select_sql = "SELECT id, session_id, title, description, current_phase, status, is_pinned, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, created_at, updated_at FROM codex_issues"
+        select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, created_at, updated_at FROM codex_issues"
         if session_id:
             rows = conn.execute(f"{select_sql} WHERE session_id = ? ORDER BY is_pinned DESC, updated_at DESC, created_at DESC", (session_id,)).fetchall()
         else:
@@ -1276,9 +1365,10 @@ class SQLiteStore:
         conn = self._get_conn()
         from datetime import datetime as dt
         now = dt.now()
+        completed_at_value = self._format_datetime(completed_at) if completed_at is not None else None
         conn.execute(
             "UPDATE execution_processes SET status = ?, exit_code = ?, completed_at = ?, updated_at = ? WHERE id = ?",
-            (status, exit_code, self._format_datetime(completed_at or now), self._format_datetime(now), process_id),
+            (status, exit_code, completed_at_value, self._format_datetime(now), process_id),
         )
         conn.commit()
         conn.close()

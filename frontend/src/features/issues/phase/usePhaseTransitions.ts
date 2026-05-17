@@ -29,7 +29,7 @@ export interface UsePhaseTransitionsOptions {
 const DEFAULT_TOASTS: Record<PhaseAction, { ok: string; err: string }> = {
   to_architecture: { ok: "Transitioned to Architecture", err: "Failed to transition" },
   to_development: { ok: "Transitioned to Development", err: "Failed to transition" },
-  to_testing: { ok: "已流转到测试阶段", err: "流转失败" },
+  to_testing: { ok: "Transitioned to Testing", err: "Transition failed" },
 };
 
 export function usePhaseTransitions(opts: UsePhaseTransitionsOptions) {

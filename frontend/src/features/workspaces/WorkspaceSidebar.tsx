@@ -5,6 +5,7 @@ import type { Workspace } from "@/lib/types";
 import { RefreshCw, Plus, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface WorkspaceSidebarProps {
   workspaces: Workspace[];
@@ -26,27 +27,28 @@ export function WorkspaceSidebar({
   onDeleteAll,
 }: WorkspaceSidebarProps) {
   const { addToast } = useToast();
+  const { t } = useI18n();
   const [title, setTitle] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
-const [isCreating, setIsCreating] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [optimisticWorkspaces, setOptimisticWorkspaces] = useState<Workspace[] | null>(null);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
     setIsCreating(true);
     try {
       await onCreate(title.trim());
-      addToast({ type: "success", title: "Workspace created" });
+      addToast({ type: "success", title: t("workspace.toast.created") });
       setTitle("");
       setShowForm(false);
     } catch (err) {
       addToast({
         type: "error",
-        title: "Failed to create workspace",
+        title: t("workspace.toast.createFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
@@ -63,11 +65,11 @@ const [isCreating, setIsCreating] = useState(false);
     setIsDeleting(true);
     try {
       await onDelete(deleteTarget!.id);
-      addToast({ type: "success", title: "Workspace deleted" });
+      addToast({ type: "success", title: t("workspace.toast.deleted") });
     } catch (err) {
       addToast({
         type: "error",
-        title: "Failed to delete workspace",
+        title: t("workspace.toast.deleteFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
@@ -80,11 +82,11 @@ const [isCreating, setIsCreating] = useState(false);
     setIsDeleting(true);
     try {
       await onDeleteAll();
-      addToast({ type: "success", title: "All workspaces deleted" });
+      addToast({ type: "success", title: t("workspace.toast.deletedAll") });
     } catch (err) {
       addToast({
         type: "error",
-        title: "Failed to delete workspaces",
+        title: t("workspace.toast.deleteAllFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
@@ -106,21 +108,23 @@ const [isCreating, setIsCreating] = useState(false);
           ) : (
             <ChevronDown size={14} className="text-text-muted" />
           )}
-          <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-text-muted">Workspaces</h2>
+          <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-text-muted">
+            {t("sidebar.workspaces")}
+          </h2>
         </button>
         {!isCollapsed && (
           <div className="flex gap-2">
             <button
               onClick={onRefresh}
               className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors"
-              aria-label="Refresh"
+              aria-label={t("workspace.refresh")}
             >
               <RefreshCw size={14} />
             </button>
             <button
               onClick={() => setShowForm(!showForm)}
               className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-foreground transition-colors"
-              aria-label="New Workspace"
+              aria-label={t("workspace.new")}
             >
               <Plus size={14} />
             </button>
@@ -136,7 +140,7 @@ const [isCreating, setIsCreating] = useState(false);
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Workspace name"
+            placeholder={t("workspace.namePlaceholder")}
             disabled={isCreating}
             autoFocus
             className="w-full px-3 py-2 text-sm rounded-lg cc-input outline-none disabled:opacity-50"
@@ -147,14 +151,14 @@ const [isCreating, setIsCreating] = useState(false);
               disabled={isCreating}
               className="flex-1 px-3 py-1.5 text-xs font-bold rounded-lg bg-brand text-background hover:bg-brand/90 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isCreating ? "Creating..." : "Create"}
+              {isCreating ? t("workspace.creating") : t("workspace.create")}
             </button>
             <button
               type="button"
               onClick={() => setShowForm(false)}
               className="flex-1 px-3 py-1.5 text-xs font-bold rounded-lg border border-border-subtle hover:bg-surface-hover transition-all active:scale-[0.98]"
             >
-              Cancel
+              {t("workspace.cancel")}
             </button>
           </div>
         </form>
@@ -165,7 +169,7 @@ const [isCreating, setIsCreating] = useState(false);
       <nav className="flex-1 overflow-y-auto p-3 no-scrollbar space-y-1">
         {workspaces.length === 0 && !showForm ? (
           <div className="flex flex-col items-center justify-center h-40 opacity-20">
-            <p className="text-[10px] uppercase tracking-widest font-bold">No workspaces found</p>
+            <p className="text-[10px] uppercase tracking-widest font-bold">{t("workspace.empty")}</p>
           </div>
         ) : (
           workspaces.map((ws) => (
@@ -189,7 +193,7 @@ const [isCreating, setIsCreating] = useState(false);
                   setDeleteTarget(ws);
                 }}
                 className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all active:scale-90"
-                aria-label="Delete workspace"
+                aria-label={t("workspace.delete")}
               >
                 <Trash2 size={12} />
               </button>
@@ -205,7 +209,7 @@ const [isCreating, setIsCreating] = useState(false);
             className="w-full flex items-center justify-center gap-2 px-3 py-2 text-[11px] font-bold uppercase tracking-widest text-text-muted hover:text-error hover:bg-error/5 rounded-lg transition-all"
           >
             <Trash2 size={12} />
-            Clean all data
+            {t("workspace.deleteAllData")}
           </button>
         </div>
       )}
@@ -213,9 +217,9 @@ const [isCreating, setIsCreating] = useState(false);
     <ConfirmDialog
       open={!!deleteTarget}
       onOpenChange={(open) => !open && setDeleteTarget(null)}
-      title="Delete Workspace"
-      description={deleteTarget ? `Are you sure you want to delete "${deleteTarget.title}"? This action cannot be undone.` : undefined}
-      confirmText="Delete"
+      title={t("workspace.dialog.deleteSingleTitle")}
+      description={deleteTarget ? t("workspace.dialog.deleteSingleDescription", { name: deleteTarget.title }) : undefined}
+      confirmText={t("workspace.action.delete")}
       onConfirm={handleDeleteConfirm}
       isLoading={isDeleting}
       variant="destructive"
@@ -223,9 +227,9 @@ const [isCreating, setIsCreating] = useState(false);
     <ConfirmDialog
       open={deleteAllOpen}
       onOpenChange={setDeleteAllOpen}
-      title="Delete All Workspaces"
-      description={`Are you sure you want to delete all ${workspaces.length} workspaces? This action cannot be undone.`}
-      confirmText="Delete All"
+      title={t("workspace.dialog.deleteAllTitle")}
+      description={t("workspace.dialog.deleteAllDescription", { count: workspaces.length })}
+      confirmText={t("workspace.action.delete")}
       onConfirm={handleDeleteAllConfirm}
       isLoading={isDeleting}
       variant="destructive"

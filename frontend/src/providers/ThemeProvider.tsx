@@ -22,7 +22,7 @@ export function resolveThemePreference(theme: ThemePreference, systemPrefersDark
   return systemPrefersDark ? "dark" : "light";
 }
 
-function getInitialTheme(): ThemePreference {
+function readStoredTheme(): ThemePreference {
   if (typeof window === "undefined") return DEFAULT_THEME;
   const stored = window.localStorage.getItem(STORAGE_KEY);
   return stored === "light" || stored === "dark" || stored === "system" ? stored : DEFAULT_THEME;
@@ -40,9 +40,24 @@ function applyResolvedTheme(theme: ResolvedTheme) {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemePreference>(getInitialTheme);
+  // SSR-safe initial state: BOTH server and first client render must agree
+  // before hydration completes. We seed with DEFAULT_THEME, then the
+  // useEffect below hydrates from localStorage *after* React commits the
+  // initial tree. This prevents the "theme button class differs" hydration
+  // mismatch on the Settings page (and anywhere else that paints based on
+  // selected theme during SSR).
+  const [theme, setThemeState] = useState<ThemePreference>(DEFAULT_THEME);
   const [systemPrefersDark, setSystemPrefersDark] = useState(getSystemPrefersDark);
+  const [hydrated, setHydrated] = useState(false);
   const resolvedTheme = resolveThemePreference(theme, systemPrefersDark);
+
+  // Hydrate from localStorage on mount.
+  useEffect(() => {
+    const stored = readStoredTheme();
+    if (stored !== theme) setThemeState(stored);
+    setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -53,8 +68,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!hydrated) return; // don't clobber pre-hydration storage
     window.localStorage.setItem(STORAGE_KEY, theme);
-  }, [theme]);
+  }, [theme, hydrated]);
 
   useEffect(() => {
     applyResolvedTheme(resolvedTheme);

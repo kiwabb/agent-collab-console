@@ -12,6 +12,7 @@ import { useI18n } from "@/providers/I18nProvider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { deleteProject, getProjectAudit, getProjectBranches, getProjectStats, listProjects, repairProject, updateProject } from "@/lib/api";
+import { emitDataEvent } from "@/lib/dataEvents";
 import type { ProjectAuditEntry, ProjectStats } from "@/lib/types";
 import { Textarea } from "@/components/ui/textarea";
 import type { GitBranch, Project } from "@/lib/types";
@@ -124,6 +125,14 @@ export function ProjectsPage() {
   }, []);
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
+  // When a normal delete reports "N workspace(s) attached", we surface a
+  // second confirm asking permission to cascade. Holds the project id and
+  // the backend message so the user sees the full context.
+  const [cascadePending, setCascadePending] = useState<{
+    project: Project;
+    detail: string;
+  } | null>(null);
+  const [deletingProject, setDeletingProject] = useState(false);
 
   const activeProject = useMemo(
     () => projects?.find((p) => p.id === activeId) ?? null,
@@ -194,29 +203,43 @@ export function ProjectsPage() {
     };
   }, [activeId, addToast]);
 
-  const handleConfirmDelete = useCallback(
-    async (force = false) => {
-      if (!pendingDelete) return;
+  const performDelete = useCallback(
+    async (project: Project, force: boolean) => {
+      setDeletingProject(true);
       try {
-        await deleteProject(pendingDelete.id, force);
+        await deleteProject(project.id, force);
+        emitDataEvent("projects:changed");
+        emitDataEvent("workspaces:changed");
         addToast({ type: "success", title: t("projects.toastDeleted") });
-        if (selectedProjectId() === pendingDelete.id) setSelectedProjectId(null);
+        if (selectedProjectId() === project.id) setSelectedProjectId(null);
         setPendingDelete(null);
+        setCascadePending(null);
         await refresh();
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Failed to delete project";
         // 409 = "project has N workspace(s) attached; pass ?force=true to cascade-delete"
         if (!force && /workspace\(s\) attached/.test(msg)) {
-          if (window.confirm(t("projects.confirmCascade").replace("{detail}", msg))) {
-            await handleConfirmDelete(true);
-            return;
-          }
+          setPendingDelete(null);
+          setCascadePending({ project, detail: msg });
+          return;
         }
         addToast({ type: "error", title: msg });
+      } finally {
+        setDeletingProject(false);
       }
     },
-    [pendingDelete, addToast, refresh, t],
+    [addToast, refresh, t],
   );
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!pendingDelete) return;
+    await performDelete(pendingDelete, false);
+  }, [pendingDelete, performDelete]);
+
+  const handleCascadeConfirm = useCallback(async () => {
+    if (!cascadePending) return;
+    await performDelete(cascadePending.project, true);
+  }, [cascadePending, performDelete]);
 
   const handleSelectAndEnter = useCallback(
     (project: Project) => {
@@ -456,7 +479,26 @@ export function ProjectsPage() {
         description={pendingDelete ? t("projects.confirmDeleteBody").replace("{name}", pendingDelete.name) : ""}
         confirmText={t("projects.delete")}
         cancelText={t("projects.cancel")}
-        onConfirm={() => handleConfirmDelete(false)}
+        isLoading={deletingProject}
+        onConfirm={() => void handleConfirmDelete()}
+      />
+
+      <ConfirmDialog
+        open={cascadePending !== null}
+        onOpenChange={(next) => {
+          if (!next) setCascadePending(null);
+        }}
+        title="Cascade-delete this project?"
+        description={
+          cascadePending
+            ? `${cascadePending.detail}\n\nForce-delete will remove the project plus all attached workspaces, issues, tasks and logs. This cannot be undone.`
+            : ""
+        }
+        confirmText="Force delete"
+        cancelText="Keep project"
+        variant="destructive"
+        isLoading={deletingProject}
+        onConfirm={() => void handleCascadeConfirm()}
       />
     </div>
   );

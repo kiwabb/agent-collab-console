@@ -136,6 +136,7 @@ class CodexSession(BaseModel):
     log_path: str | None = None
     thread_id: str | None = None  # Codex app-server thread id, used for Codex resume
     claude_thread_id: str | None = None  # Claude session id, stored separately to avoid cross-executor pollution
+    settings: dict[str, bool] = Field(default_factory=lambda: {"plan_first_pm": True})
     messages: list[CodexMessage] = []  # Persisted chat history
 
 
@@ -150,6 +151,7 @@ class CodexIssue(BaseModel):
     description: str | None = None
     current_phase: str = "requirements"
     status: str = "open"
+    review_comment: str | None = None
     is_pinned: bool = False
     milestone: str | None = None  # Milestone grouping (e.g., "v1.0", "sprint-1")
     # Git state — primary location. Tasks under this issue share the worktree below.
@@ -158,6 +160,13 @@ class CodexIssue(BaseModel):
     git_worktree_path: str | None = None
     git_merge_status: str = "open"  # "open" | "merged" | "abandoned"
     git_last_commit_sha: str | None = None
+    # GitHub PR loop (S2-PR). Populated by /api/codex/issues/{id}/pr/create
+    # and refreshed by /pr/refresh.
+    github_pr_url: str | None = None
+    # Mirrors `gh pr view --json state,reviewDecision` — typical values:
+    # `OPEN/MERGED/CLOSED` for state, `APPROVED/CHANGES_REQUESTED/REVIEW_REQUIRED` for decision.
+    # Stored as "<state>:<reviewDecision?>" so a single column carries both.
+    github_pr_state: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -463,4 +472,3 @@ class GraphReplanPending(BaseModel):
     status: Literal["pending", "confirmed", "rejected"] = "pending"
     created_at: datetime | None = None
     resolved_at: datetime | None = None
-

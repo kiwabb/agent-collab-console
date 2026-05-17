@@ -57,15 +57,19 @@ elif store is not None:
 effective_store = async_store if async_store is not None else store
 session_service = SessionService(store=effective_store)
 
-# Configure adapter: use REAL_CLI=true for real subprocess execution
-# Default is Fake*Adapter for safe/demo mode
-use_real_cli = os.getenv("REAL_CLI", "false").lower() == "true"
+# Configure adapter: REAL_CLI=true makes the system actually invoke a CLI to
+# write code instead of returning mock strings. Default ON — without it the
+# Engineer phase never patches the worktree and the system is just a doc
+# generator. Set REAL_CLI=false for offline tests / demos.
+use_real_cli = os.getenv("REAL_CLI", "true").lower() == "true"
 
 if use_real_cli:
     # Real CLI adapters - commands configurable via CLAUDE_CMD and CODEX_CMD env vars
-    # Values are space-separated shell commands, e.g. "python3 -c \"print('done')\""
-    claude_cmd_str = os.getenv("CLAUDE_CMD", "python3 -c \"print('task completed')\"")
-    codex_cmd_str = os.getenv("CODEX_CMD", "python3 -c \"print('planned')\"")
+    # Values are space-separated shell commands. Defaults try the system
+    # `claude` / `codex` binaries — if those aren't installed the adapter
+    # call will fail loudly, which is the correct signal to the user.
+    claude_cmd_str = os.getenv("CLAUDE_CMD", "claude")
+    codex_cmd_str = os.getenv("CODEX_CMD", "codex")
     worker_adapter = ClaudeCliAdapter(command=shlex.split(claude_cmd_str))
     master_adapter = CodexCliAdapter(command=shlex.split(codex_cmd_str))
 else:

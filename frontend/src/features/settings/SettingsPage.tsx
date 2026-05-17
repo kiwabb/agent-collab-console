@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { useTheme, type ThemePreference } from "@/providers/ThemeProvider";
 import { usePreferences, type FontSize } from "@/providers/PreferencesProvider";
 import { useI18n } from "@/providers/I18nProvider";
@@ -10,12 +9,9 @@ import { RuntimeCatalogEditor } from "@/components/runtime/RuntimeCatalogEditor"
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { Kbd } from "@/components/ui/kbd";
 import { AutoSaveIndicator } from "@/components/ui/auto-save-indicator";
 import type { SaveStatus } from "@/hooks/useAutoSave";
 import {
-  ChevronLeft,
   Moon,
   Sun,
   Monitor,
@@ -24,7 +20,6 @@ import {
   Database,
   Palette,
   Check,
-  Activity,
   AlertCircle,
   Type,
   Zap,
@@ -35,7 +30,6 @@ import type { Locale } from "@/lib/i18n";
 import type { RuntimeCatalog } from "@/lib/types";
 
 export function SettingsPage() {
-  const router = useRouter();
   const { theme, setTheme } = useTheme();
   const { fontSize, reducedMotion, compactMode, setFontSize, setReducedMotion, setCompactMode } = usePreferences();
   const { locale, setLocale, t } = useI18n();
@@ -70,56 +64,21 @@ export function SettingsPage() {
   ];
 
   return (
-    <div className="flex flex-col h-screen bg-background font-sans overflow-hidden">
-      {/* Topbar */}
-      <header className="h-16 shrink-0 flex items-center justify-between px-8 border-b border-border-subtle bg-surface/80 backdrop-blur-xl z-50">
-        <div className="flex items-center gap-8">
-          <div 
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => router.push("/")}
-          >
-            <div className="size-8 rounded-xl bg-brand flex items-center justify-center shadow-lg shadow-brand/20">
-              <Activity size={18} className="text-background" />
-            </div>
-            <span className="text-lg font-black tracking-tighter text-foreground">JACKMOUSE.AI</span>
+    <div className="flex flex-col h-full bg-background font-sans overflow-hidden">
+      {/* Inline header strip — full app shell is provided by the parent
+          (WorkbenchShell), so this page only adds the title + save status. */}
+      <div className="shrink-0 flex items-center justify-between px-6 pt-5 pb-3 border-b border-border-subtle">
+        <div className="flex items-center gap-3">
+          <div className="size-8 rounded-xl bg-brand/10 flex items-center justify-center shadow-inner">
+            <Settings size={18} className="text-brand" />
           </div>
-
-          <div className="h-4 w-px bg-border-subtle" />
-
-          <div className="flex items-center gap-6">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => router.push("/")}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold text-text-muted hover:bg-surface-hover hover:text-foreground transition-all group"
-                >
-                  <ChevronLeft size={16} className="group-hover:-translate-x-0.5 transition-transform" />
-                  {t("nav.home")}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                <span className="flex items-center gap-1.5">
-                  {t("nav.home")}
-                  <Kbd>H</Kbd>
-                </span>
-              </TooltipContent>
-            </Tooltip>
-
-            <div className="flex items-center gap-3">
-              <div className="size-8 rounded-xl bg-brand/10 flex items-center justify-center shadow-inner">
-                <Settings size={18} className="text-brand animate-spin-slow" />
-              </div>
-              <h1 className="text-[10px] font-black tracking-[0.2em] text-foreground uppercase opacity-80">
-                {t("settings.title")}
-              </h1>
-            </div>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight">{t("settings.title")}</h1>
+            <p className="text-[11px] text-text-muted">{t("settings.preferences")}</p>
           </div>
         </div>
-
-        <div className="flex items-center gap-4">
-          <AutoSaveIndicator status={saveStatus} error={saveError} />
-        </div>
-      </header>
+        <AutoSaveIndicator status={saveStatus} error={saveError} />
+      </div>
 
       {/* Main Content with Sidebar Layout */}
       <div className="flex-1 flex overflow-hidden">

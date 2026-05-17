@@ -64,6 +64,14 @@ class AsyncProcessEntry:
     # Codex item tracking: maps item.id to a started_at timestamp so we can
     # compute durationMs on completion.
     tool_item_started_at: dict = field(default_factory=dict)
+    # Idle-timeout bookkeeping: monotonic timestamp of the most recent stdout
+    # line / IPC event we received from the subprocess. The Codex runtime
+    # watches this and aborts a task when nothing has streamed for too long
+    # (default 180s) — the long total-turn timeout alone isn't enough to
+    # catch a hung tool-result loop.
+    last_event_at: float = 0.0
+    idle_timed_out: bool = False
+    idle_timeout_seconds: int | None = None
 
     @property
     def workspace_id(self) -> str:
@@ -693,6 +701,10 @@ class BaseProcessRuntime:
 
         execution_process_id = task.last_execution_process_id
         exit_code = getattr(entry.proc, "returncode", None)
+        if not entry.result_text and not entry.had_error:
+            fallback_result = await self._build_idle_timeout_fallback_result(task, entry)
+            if fallback_result:
+                entry.result_text = fallback_result
 
         if entry.had_error:
             task.status = "failed"
@@ -706,7 +718,8 @@ class BaseProcessRuntime:
             # Call refresh_task_result to persist artifacts
             if callable(self.refresh_task_result):
                 try:
-                    _logger.info("[LLM raw response] task=%s len=%d\n%s", task_id, len(entry.result_text), entry.result_text)
+                    raw_result = entry.result_text or ""
+                    _logger.info("[LLM raw response] task=%s len=%d\n%s", task_id, len(raw_result), raw_result)
                     await self.refresh_task_result(task)
                 except Exception as exc:
                     _logger.error(
@@ -720,16 +733,23 @@ class BaseProcessRuntime:
             process_status = "Completed" if task.status == "done" else "Failed"
         else:
             task.status = "failed"
+            if entry.idle_timed_out:
+                timeout_seconds = entry.idle_timeout_seconds or "unknown"
+                task.result = (
+                    "Runtime went idle before emitting a final result "
+                    f"(idle timeout: {timeout_seconds} seconds)."
+                )
             process_status = "Failed"
 
         task.updated_at = datetime.now()
         await self.codex_store.save_codex_task(task)
 
         if execution_process_id:
+            final_exit_code = 0 if task.status == "done" and exit_code is None else exit_code
             await self.codex_store.update_execution_process_status(
                 execution_process_id,
                 process_status,
-                exit_code=exit_code,
+                exit_code=final_exit_code,
                 completed_at=datetime.now(),
             )
 
@@ -771,6 +791,56 @@ class BaseProcessRuntime:
         except (json.JSONDecodeError, TypeError):
             return None
 
+    async def _build_idle_timeout_fallback_result(self, task, entry) -> str | None:
+        """Recover engineer output when the runtime stalls after file changes."""
+        if not entry.idle_timed_out or entry.had_error:
+            return None
+        if getattr(task, "role", None) != "engineer":
+            return None
+        if not getattr(task, "workspace_path", None):
+            return None
+
+        try:
+            from app.application.engineer_workflow import EngineerWorkflow
+
+            changed_files = EngineerWorkflow()._git_changed_files(task.workspace_path)
+        except Exception:
+            return None
+        if not changed_files:
+            return None
+
+        workspace_title = "workspace-project"
+        try:
+            workspace = await self.codex_store.load_codex_workspace(task.session_id)
+        except Exception:
+            workspace = None
+        if workspace is not None and getattr(workspace, "title", None):
+            workspace_title = workspace.title
+
+        payload = {
+            "language": "en",
+            "project_name": workspace_title,
+            "issue_id": task.issue_id or task.id,
+            "issue_title": task.title,
+            "status": "partial",
+            "summary": (
+                "Framework fallback recovered the engineer output after the runtime "
+                f"went idle for {entry.idle_timeout_seconds or 'an unknown number of'} seconds "
+                "before emitting the final JSON report."
+            ),
+            "changed_files": changed_files,
+            "completed_tasks": [],
+            "deferred_tasks": [],
+            "risks": [
+                "The engineer runtime stalled after applying code changes, so this report was synthesized from git state.",
+            ],
+            "verification_commands": [],
+            "qa_notes": [
+                "Review the changed files carefully because the engineer did not emit its normal structured completion report.",
+            ],
+        }
+        return json.dumps(payload, ensure_ascii=False)
+
     # --- Async Process Management ---
 
     async def _watchdog(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None, timeout_sec: int):
@@ -807,7 +877,7 @@ class BaseProcessRuntime:
 
     async def _reader_loop(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None):
         """Async reader loop using await stdout.readline()."""
-        idle_timeout = int(os.getenv("PROCESS_IDLE_TIMEOUT", "600"))
+        idle_timeout = int(os.getenv("PROCESS_IDLE_TIMEOUT", "180"))
         max_timeout = int(os.getenv("PROCESS_MAX_TIMEOUT", "1800"))
         watchdog_task = asyncio.create_task(self._watchdog(workspace_id, entry, task_id, max_timeout))
 
@@ -816,6 +886,8 @@ class BaseProcessRuntime:
                 try:
                     line = await asyncio.wait_for(entry.proc.stdout.readline(), timeout=idle_timeout)
                 except asyncio.TimeoutError:
+                    entry.idle_timed_out = True
+                    entry.idle_timeout_seconds = idle_timeout
                     break
                 except Exception:
                     break
@@ -847,6 +919,16 @@ class BaseProcessRuntime:
             pass
         finally:
             entry.alive = False
+            try:
+                if entry.idle_timed_out and entry.proc and entry.proc.returncode is None:
+                    entry.proc.terminate()
+                    try:
+                        await asyncio.wait_for(entry.proc.wait(), timeout=2)
+                    except Exception:
+                        entry.proc.kill()
+                        await entry.proc.wait()
+            except Exception:
+                pass
             watchdog_task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(watchdog_task), timeout=1)

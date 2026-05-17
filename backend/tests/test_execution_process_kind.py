@@ -84,6 +84,30 @@ def test_sync_store_defaults_kind_to_initial_on_load(tmp_path):
     assert loaded.triggering_message_id is None
 
 
+def test_sync_store_keeps_completed_at_null_for_running_status(tmp_path):
+    from app.adapters.sqlite_store import SQLiteStore
+
+    db_path = tmp_path / "running.db"
+    store = SQLiteStore(str(db_path))
+    now = datetime.now()
+    ep = ExecutionProcess(
+        id="ep-running-sync",
+        task_id="t-1",
+        session_id="s-1",
+        status="Running",
+        created_at=now,
+        updated_at=now,
+    )
+    store.save_execution_process(ep)
+
+    store.update_execution_process_status("ep-running-sync", "Running", exit_code=None, completed_at=None)
+    loaded = store.load_execution_process("ep-running-sync")
+
+    assert loaded is not None
+    assert loaded.status == "Running"
+    assert loaded.completed_at is None
+
+
 def test_sync_store_migrates_legacy_rows_to_initial(tmp_path):
     """Simulate a pre-migration DB (no kind column), then migration should backfill 'initial'."""
     import sqlite3
@@ -162,3 +186,28 @@ async def test_async_store_defaults_kind_to_initial_on_load(tmp_path):
     loaded = await store.load_execution_process("ep-async-2")
     assert loaded.kind == "initial"
     assert loaded.triggering_message_id is None
+
+
+@pytest.mark.asyncio
+async def test_async_store_keeps_completed_at_null_for_running_status(tmp_path):
+    from app.adapters.async_sqlite_store import AsyncSQLiteStore
+
+    db_path = tmp_path / "async_running.db"
+    store = AsyncSQLiteStore(str(db_path))
+    now = datetime.now()
+    ep = ExecutionProcess(
+        id="ep-running-async",
+        task_id="t-1",
+        session_id="s-1",
+        status="Running",
+        created_at=now,
+        updated_at=now,
+    )
+    await store.save_execution_process(ep)
+
+    await store.update_execution_process_status("ep-running-async", "Running", exit_code=None, completed_at=None)
+    loaded = await store.load_execution_process("ep-running-async")
+
+    assert loaded is not None
+    assert loaded.status == "Running"
+    assert loaded.completed_at is None

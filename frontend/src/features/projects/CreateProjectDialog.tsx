@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { createProject, selectDirectory } from "@/lib/api";
+import { emitDataEvent } from "@/lib/dataEvents";
 import type { Project } from "@/lib/types";
 import { FolderOpen } from "lucide-react";
 
@@ -62,6 +63,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
         origin_url: source === "clone" ? originUrl.trim() : undefined,
         dest_parent: source === "clone" ? destParent.trim() : undefined,
       });
+      emitDataEvent("projects:changed");
       reset();
       onCreated(project);
     } catch (err) {

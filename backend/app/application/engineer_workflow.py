@@ -30,6 +30,9 @@ class EngineerReportDocument(BaseModel):
     risks: list[str]
     verification_commands: list[str]
     qa_notes: list[str]
+    # Set this when you cannot reasonably proceed without user input.
+    # The framework will pause the pipeline and re-run you once answered.
+    clarification_question: str | None = None
 
 
 class EngineerWorkflow:
@@ -121,6 +124,12 @@ class EngineerWorkflow:
                 "You MUST address ALL points in the above feedback before producing the final JSON.\n\n"
                 if getattr(task, "review_comment", None) else ""
             )
+            + "TOOL USE REQUIREMENT (NEW — strictly enforced):\n"
+            "- When status will be 'completed' or 'partial', you MUST actually call Write/Edit/Bash tools to modify files in the workspace. A description of what you would do is NOT acceptable.\n"
+            "- Before deciding 'changed_files' and the final status, run `git diff --name-only` to confirm which files actually changed under your edits. Use that list verbatim as 'changed_files'.\n"
+            "- The system runs a post-execution git-diff cross-check. If you claim 'status=completed' but git diff is empty, the framework will downgrade the status to 'partial' and the Architect Review will see the discrepancy.\n"
+            "- 'changed_files=[]' is only acceptable when status='blocked' or when the requirement was already implemented and nothing needed to change (state this explicitly in summary).\n"
+            "- DO NOT claim status='blocked' just because pm/requirement.md looks empty — that's a stub file, not the real requirements. The real requirements live in the `existing_prd` section of this prompt (which is read from pm/prd.json). If the existing_prd section above contains a PRD, you have requirements; you must NOT use 'requirements are missing' as a reason to block.\n\n"
             + "OUTPUT FORMAT RULES:\n"
             "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
             "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
@@ -151,7 +160,8 @@ class EngineerWorkflow:
         canonical_issue_id = task.issue_id or task.id
 
         try:
-            payload = json.loads(task.result)
+            from app.application.tolerant_json import tolerant_json_loads
+            payload = tolerant_json_loads(task.result)
         except json.JSONDecodeError as exc:
             raise EngineerWorkflowError(f"Engineer output is not valid JSON: {exc}") from exc
 
@@ -165,6 +175,23 @@ class EngineerWorkflow:
             report = EngineerReportDocument.model_validate(payload)
         except ValidationError as exc:
             raise EngineerWorkflowError(f"Engineer output does not match schema: {exc}") from exc
+
+        # Post-execution cross-check: an Engineer claiming `completed` MUST
+        # have produced an actual git diff. If not, downgrade to `partial`
+        # and prepend a qa_note flagging the discrepancy. This stops models
+        # from declaring victory while only writing a markdown report.
+        if report.status == "completed":
+            actually_changed = self._git_changed_files(task.workspace_path)
+            if not actually_changed:
+                report.status = "partial"
+                claim_note = (
+                    "[framework] Engineer claimed status=completed but git diff against the base "
+                    "branch shows no file changes. Downgraded to partial pending real implementation. "
+                    f"Claimed changed_files: {report.changed_files!r}"
+                )
+                # Pydantic models are frozen-ish in v2; mutate via __setattr__.
+                report.qa_notes = [claim_note, *list(report.qa_notes or [])]
+                report.changed_files = []
 
         self._docs.ensure_issue_root(task.workspace_path, canonical_issue_id)
 
@@ -180,6 +207,53 @@ class EngineerWorkflow:
             {"name": f"engineer/{impl_md_path.name}", "path": str(impl_md_path), "kind": "development"},
         ])
         return report
+
+    def _git_changed_files(self, workspace_path: str | None) -> list[str]:
+        """Return files that differ from the base branch in this worktree.
+
+        Compares against `git merge-base origin/main HEAD` first (most
+        common base reference), then `main`, then `HEAD~1`. Returns an
+        empty list if no git diff machinery is reachable, which makes the
+        post-execution check fail-open rather than fail-closed.
+        """
+        if not workspace_path:
+            return []
+        import subprocess
+        # Try a few bases in order of preference.
+        for base in ("origin/main", "main", "HEAD~1"):
+            try:
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", f"{base}..HEAD"],
+                    cwd=workspace_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                return []
+            if result.returncode == 0:
+                committed = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                # Also include uncommitted working-tree changes the model
+                # may not have committed yet.
+                try:
+                    wt = subprocess.run(
+                        ["git", "status", "--porcelain"],
+                        cwd=workspace_path,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if wt.returncode == 0:
+                        wt_files = [
+                            line[3:].strip()
+                            for line in wt.stdout.splitlines()
+                            if line.strip() and not line[3:].startswith("issues/")
+                        ]
+                        return list({*committed, *wt_files})
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+                return committed
+        return []
 
     def _read_pm_artifacts(self, workspace_path: str, issue_id: str) -> dict[str, str]:
         artifacts: dict[str, str] = {}
@@ -213,15 +287,27 @@ class EngineerWorkflow:
         implementation_plan: str,
     ) -> str:
         parts = []
-        if requirement:
-            parts.append(f"requirement_document:\n{requirement}\n")
-        else:
-            parts.append("NOTE: requirement.md is missing. Treat this as an underspecified requirement.\n")
-
+        # `pm/requirement.md` is just a stub template auto-generated when the
+        # issue is created — only contains the title + an empty Description
+        # field. It's the seed PM reads to *write* the PRD; it is not itself
+        # the requirements. When the real PRD is present, suppress the stub
+        # so the engineer agent doesn't get tricked into "spec is empty".
         if prd:
             parts.append(f"existing_prd:\n{prd}\n")
+            parts.append(
+                "IMPORTANT: The PRD above (existing_prd) IS the authoritative "
+                "requirements for this task. DO NOT read pm/requirement.md — "
+                "that file is just a stub template containing only the issue "
+                "title. If you must read upstream files, read pm/prd.json or "
+                "pm/prd.md, NOT pm/requirement.md.\n"
+            )
+        elif requirement:
+            parts.append(f"requirement_document:\n{requirement}\n")
         else:
-            parts.append("NOTE: prd.json is missing. Use qa_notes or deferred_tasks for any missing requirement details.\n")
+            parts.append(
+                "NOTE: Neither pm/prd.json nor pm/requirement.md is present. "
+                "Treat this as an underspecified requirement and surface it in qa_notes.\n"
+            )
 
         if bugfix:
             parts.append(f"existing_bugfix:\n{bugfix}\n")

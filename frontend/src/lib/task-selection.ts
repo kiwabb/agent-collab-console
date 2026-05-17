@@ -159,27 +159,28 @@ export function pickLatestExecutionProcessForTask(
   return newest;
 }
 
+const TASK_WAITING_STATES = new Set(["waiting_for_help", "awaiting_review", "rework"]);
+
 export function getTaskRuntimeStatus(
   task: CodexTask | null | undefined,
   executionProcesses: ExecutionProcess[],
 ): string {
   if (!task) return "pending";
-  
+
   const taskStatus = String(task.status || "pending").toLowerCase();
-  
-  // Always return task status for business-level states
-  // Task status represents the actual business state (done, awaiting_review, rework, etc.)
-  // ExecutionProcess status only represents the runtime execution state (Running, Completed, Failed)
-  
-  // If task has a definitive status, use it
-  if (taskStatus && taskStatus !== "pending") {
+
+  // Waiting states come from task metadata, not runtime — always preserve them
+  if (TASK_WAITING_STATES.has(taskStatus)) {
     return task.status || "pending";
   }
-  
-  // Only for pending tasks, check if there's an active execution process
+
+  // Prefer latest execution process status over stale task status
   const latestProcess = pickLatestExecutionProcessForTask(executionProcesses, task.id);
-  if (latestProcess?.status && String(latestProcess.status).toLowerCase() === "running") {
-    return "running";
+  if (latestProcess?.status) {
+    const epStatus = String(latestProcess.status).toLowerCase();
+    if (epStatus === "completed") return "completed";
+    if (epStatus === "failed") return "failed";
+    if (epStatus === "running") return "running";
   }
 
   return task.status || "pending";

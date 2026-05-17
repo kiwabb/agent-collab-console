@@ -20,7 +20,7 @@ import time
 import subprocess
 import requests
 
-API_BASE = "http://localhost:8000/api"
+API_BASE = "http://localhost:9000/api"
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -55,7 +55,7 @@ def main():
 
     print("\n[1] Starting backend with CODEX_LAUNCH_ENABLED=true ...")
     backend_proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "8000"],
+        [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "9000"],
         cwd=BACKEND_DIR,
         env=env,
         stdout=subprocess.PIPE,

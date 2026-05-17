@@ -196,7 +196,7 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
               onChange={(e) => setSearchQuery(e.target.value)}
               onFocus={() => setShowSearchDropdown(true)}
               onBlur={() => setTimeout(() => setShowSearchDropdown(false), 200)}
-              placeholder="Search issues..."
+              placeholder={t("issue.searchPlaceholder")}
               className="py-2 w-full sm:w-64 rounded-xl bg-surface-raised border border-border-subtle text-sm outline-none focus:border-brand transition-all focus:ring-2 focus:ring-brand/20"
               style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem' }}
             />
@@ -217,7 +217,7 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
                   className="absolute top-full left-0 right-0 mt-2 py-2 rounded-xl bg-surface-raised border border-border-subtle shadow-xl z-50"
                 >
                   <div className="px-3 py-1 text-[10px] font-black uppercase tracking-widest text-text-muted mb-1">
-                    Recent Searches
+                    {t("issue.recentSearches")}
                   </div>
                   {recentSearches.map((search) => (
                     <div

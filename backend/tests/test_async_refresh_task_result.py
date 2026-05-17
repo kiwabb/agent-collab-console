@@ -1,3 +1,5 @@
+import json
+import subprocess
 from datetime import datetime
 
 import pytest
@@ -160,8 +162,9 @@ async def test_codex_task_runner_clears_stale_result_before_rerun_refresh():
 
 
 class RuntimeStoreStub:
-    def __init__(self, task: CodexTask):
+    def __init__(self, task: CodexTask, workspace: CodexSession | None = None):
         self.task = task
+        self.workspace = workspace
         self.saved_messages = []
 
     async def load_codex_task(self, task_id: str):
@@ -171,6 +174,14 @@ class RuntimeStoreStub:
 
     async def save_codex_task(self, task: CodexTask):
         self.task = task.model_copy(deep=True)
+
+    async def load_codex_workspace(self, workspace_id: str):
+        if self.workspace and workspace_id == self.workspace.id:
+            return self.workspace
+        return None
+
+    async def save_codex_workspace(self, workspace: CodexSession):
+        self.workspace = workspace.model_copy(deep=True)
 
     async def update_execution_process_status(self, process_id: str, status: str, exit_code=None, completed_at=None):
         return None
@@ -328,3 +339,77 @@ async def test_persist_reader_metadata_does_not_overwrite_terminal_failure_reaso
     await runtime._persist_reader_metadata(task.session_id, task.id, entry)
 
     assert store.task.result == "actual failure reason"
+
+
+@pytest.mark.asyncio
+async def test_finalize_task_on_reader_exit_salvages_idle_engineer_with_changed_files(tmp_path):
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    app_dir = tmp_path / "backend" / "app"
+    app_dir.mkdir(parents=True)
+    target = app_dir / "sample.py"
+    target.write_text("print('before')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "baseline"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    target.write_text("print('after')\n", encoding="utf-8")
+
+    now = datetime.now()
+    task = CodexTask(
+        id="task-engineer-idle",
+        session_id="workspace-engineer",
+        issue_id="issue-engineer",
+        title="Engineer task",
+        prompt="implement change",
+        role="engineer",
+        executor="claude",
+        status="running",
+        workspace_path=str(tmp_path),
+        last_execution_process_id="process-engineer",
+        created_at=now,
+        updated_at=now,
+    )
+    workspace = CodexSession(
+        id="workspace-engineer",
+        title="Recovered Workspace",
+        cwd=str(tmp_path),
+        created_at=now,
+        last_active_at=now,
+    )
+    store = RuntimeStoreStub(task, workspace)
+    bus = EventBusStub()
+    captured: dict[str, object] = {}
+
+    async def refresh_task_result(task):
+        captured["payload"] = json.loads(task.result)
+        task.result = "persisted-fallback-report"
+
+    runtime = RuntimeUnderTest(
+        codex_store=store,
+        log_store=store,
+        event_bus=bus,
+        refresh_task_result=refresh_task_result,
+    )
+    entry = AsyncProcessEntry(
+        proc=None,
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        task_id=task.id,
+        executor="claude",
+        cwd=str(tmp_path),
+        resume_session_id=None,
+        idle_timed_out=True,
+        idle_timeout_seconds=180,
+    )
+
+    await runtime._finalize_task_on_reader_exit(task.id, entry)
+
+    assert store.task.status == "done"
+    assert store.task.result == "persisted-fallback-report"
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["status"] == "partial"
+    assert payload["project_name"] == "Recovered Workspace"
+    assert "backend/app/sample.py" in payload["changed_files"]

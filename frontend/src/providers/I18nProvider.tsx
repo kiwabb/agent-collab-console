@@ -13,19 +13,29 @@ interface I18nContextValue {
 
 const I18nContext = createContext<I18nContextValue | null>(null);
 
-function getInitialLocale(): Locale {
+function readStoredLocale(): Locale {
   if (typeof window === "undefined") return DEFAULT_LOCALE;
   const stored = window.localStorage.getItem(STORAGE_KEY);
   return isLocale(stored) ? stored : DEFAULT_LOCALE;
 }
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(getInitialLocale);
+  // SSR-safe init — seed default, hydrate from localStorage after mount.
+  const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
+    const stored = readStoredLocale();
+    if (stored !== locale) setLocaleState(stored);
+    setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
     window.localStorage.setItem(STORAGE_KEY, locale);
     document.documentElement.lang = locale;
-  }, [locale]);
+  }, [locale, hydrated]);
 
   const value = useMemo(
     () => ({

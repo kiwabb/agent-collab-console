@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   chatCodexTask,
   getCodexTasks,
@@ -8,15 +9,18 @@ import {
   getRuntimeCatalog,
   refineCodexTask,
   rerunCodexTask,
+  runCodexTask,
   terminateCodexTask,
   updateCodexTask,
 } from "@/lib/api";
 import { useExecutionProcessLogStream } from "@/hooks/useExecutionProcessLogStream";
 import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
-import type { CodexIssue, CodexTask, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
+import type { CodexIssue, CodexTask, CodexTaskMessage, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
+import { useI18n } from "@/providers/I18nProvider";
+import { ExecutionConfigSelector, normalizeExecutionConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
+import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -26,19 +30,26 @@ interface Props {
 
 type RunMode = "chat" | "refine" | "rerun";
 
-export function TasksRunsTab({ issueId, issue: _issue }: Props) {
-  void _issue;
+const ISSUE_TERMINAL = new Set(["completed", "failed", "cancelled", "abandoned"]);
+
+export function TasksRunsTab({ issueId, issue }: Props) {
+  const { t } = useI18n();
   const { addToast } = useToast();
+  const params = useSearchParams();
+  const initialTaskId = params.get("taskId");
   const [tasks, setTasks] = useState<CodexTask[]>([]);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialTaskId);
   const [runs, setRuns] = useState<ExecutionProcess[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [mode, setMode] = useState<RunMode>("chat");
   const [composer, setComposer] = useState("");
   const [busy, setBusy] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
+  const [streamView, setStreamView] = useState<"raw" | "assistant">("assistant");
   const [catalog, setCatalog] = useState<RuntimeCatalog | null>(null);
-  const [config, setConfig] = useState<ExecutionConfigValue>(() => getFallbackConfig(null, "codex", null, null));
+  // Initial config is intentionally minimal — once the catalog loads or a task
+  // is selected, normalizeExecutionConfig() resolves the right enabled executor id.
+  const [config, setConfig] = useState<ExecutionConfigValue>({ executor: "", provider: null, model: null });
 
   useEffect(() => {
     void getRuntimeCatalog().then(setCatalog).catch(() => setCatalog(null));
@@ -58,6 +69,15 @@ export function TasksRunsTab({ issueId, issue: _issue }: Props) {
     void loadTasks();
   }, [loadTasks]);
 
+  // Re-select task when URL ?taskId=... changes (e.g. user clicks a node in
+  // the DAG tab which routes here with the task pre-targeted).
+  useEffect(() => {
+    if (initialTaskId && initialTaskId !== selectedTaskId) {
+      setSelectedTaskId(initialTaskId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTaskId]);
+
   const loadRuns = useCallback(async (taskId: string) => {
     try {
       const list = await getExecutionProcesses(null, taskId);
@@ -75,21 +95,75 @@ export function TasksRunsTab({ issueId, issue: _issue }: Props) {
     if (selectedTaskId) void loadRuns(selectedTaskId);
   }, [selectedTaskId, loadRuns]);
 
+  // Periodic refresh while anything is live. Also covers the gap where the
+  // issue is in-progress but the scheduler hasn't created the next task yet —
+  // without checking issue.status, the poll would stop after PM completes and
+  // Architect/Engineer/QA tasks would never appear.
+  useEffect(() => {
+    const issueActive = issue != null && !ISSUE_TERMINAL.has(issue.status);
+    const hasLive =
+      issueActive ||
+      tasks.some((t) => t.status === "running" || t.status === "responding" || t.status === "pending") ||
+      runs.some((r) => r.status === "running" || r.status === "in_progress");
+    if (!hasLive) return;
+    const id = window.setInterval(() => {
+      void loadTasks();
+      if (selectedTaskId) void loadRuns(selectedTaskId);
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [issue, tasks, runs, selectedTaskId, loadTasks, loadRuns]);
+
   const selectedTask = useMemo(() => tasks.find((t) => t.id === selectedTaskId) ?? null, [tasks, selectedTaskId]);
   const selectedRun = useMemo(() => runs.find((r) => r.id === selectedRunId) ?? null, [runs, selectedRunId]);
 
+  // Re-normalize config whenever the catalog or selected task changes.
+  // normalizeExecutionConfig falls back to the first enabled executor when the
+  // task's stored executor isn't in the catalog (e.g. legacy "codex" string on
+  // a catalog that only has a "claude"-type minimax executor).
   useEffect(() => {
-    if (selectedTask) {
-      setConfig({
-        executor: selectedTask.executor ?? "codex",
-        provider: selectedTask.provider ?? null,
-        model: selectedTask.model ?? null,
-      });
-    }
-  }, [selectedTask]);
+    if (!catalog) return;
+    const seedExecutor = selectedTask?.executor ?? "";
+    const seedProvider = selectedTask?.provider ?? null;
+    const seedModel = selectedTask?.model ?? null;
+    setConfig(normalizeExecutionConfig(catalog, seedExecutor, seedProvider, seedModel));
+  }, [catalog, selectedTask]);
 
   const { logs } = useExecutionProcessLogStream(selectedRunId);
   const { messages, pendingAssistant } = useExecutionProcessMessageStream(selectedRunId);
+
+  // A task is "fresh" if it has never been executed — show a primary Run
+  // button instead of the chat/refine/rerun composer.
+  const isFreshTask = useMemo(() => {
+    if (!selectedTask) return false;
+    if (runs.length > 0) return false;
+    return (
+      selectedTask.status === "pending" ||
+      selectedTask.status === "queued" ||
+      selectedTask.status === "blocked" ||
+      selectedTask.status === "ready"
+    );
+  }, [selectedTask, runs]);
+
+  const handleRunFresh = useCallback(async () => {
+    if (!selectedTaskId) return;
+    setBusy(true);
+    try {
+      // Persist the per-task executor/provider/model first so the run picks them up.
+      await updateCodexTask(selectedTaskId, config.executor, config.provider, config.model);
+      await runCodexTask(selectedTaskId, {
+        executor: config.executor,
+        provider: config.provider,
+        model: config.model,
+      });
+      addToast({ type: "success", title: "Run dispatched" });
+      void loadTasks();
+      void loadRuns(selectedTaskId);
+    } catch (err) {
+      addToast({ type: "error", title: "Run failed", message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(false);
+    }
+  }, [selectedTaskId, config, addToast, loadTasks, loadRuns]);
 
   const send = useCallback(async () => {
     if (!selectedTaskId) return;
@@ -98,10 +172,9 @@ export function TasksRunsTab({ issueId, issue: _issue }: Props) {
     setBusy(true);
     try {
       if (mode === "rerun") {
-        const executor = (config.executor === "claude" ? "claude" : "codex") as "codex" | "claude";
-        await updateCodexTask(selectedTaskId, executor, config.provider, config.model);
+        await updateCodexTask(selectedTaskId, config.executor, config.provider, config.model);
         await rerunCodexTask(selectedTaskId, {
-          executor,
+          executor: config.executor,
           provider: config.provider,
           model: config.model,
         });
@@ -135,9 +208,17 @@ export function TasksRunsTab({ issueId, issue: _issue }: Props) {
   return (
     <div className="h-full flex flex-col">
       <div className="flex-1 min-h-0 grid grid-cols-[220px_240px_1fr] gap-px bg-border-subtle">
-        <div className="bg-surface overflow-auto">
-          <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted">Tasks</div>
-          {tasks.length === 0 && <div className="px-3 text-xs text-text-muted">No tasks</div>}
+        <div className="bg-surface overflow-auto flex flex-col">
+          <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">Tasks</div>
+          {tasks.length === 0 && (
+            <div className="flex-1 flex items-center justify-center">
+              <EmptyState
+                icon="task"
+                title="No tasks yet"
+                description="Tasks appear here when the workflow DAG starts."
+              />
+            </div>
+          )}
           {tasks.map((t) => (
             <button
               key={t.id}
@@ -159,9 +240,17 @@ export function TasksRunsTab({ issueId, issue: _issue }: Props) {
           ))}
         </div>
 
-        <div className="bg-surface overflow-auto">
-          <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted">Runs</div>
-          {runs.length === 0 && <div className="px-3 text-xs text-text-muted">No runs yet</div>}
+        <div className="bg-surface overflow-auto flex flex-col">
+          <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">Runs</div>
+          {runs.length === 0 && (
+            <div className="flex-1 flex items-center justify-center">
+              <EmptyState
+                icon="log"
+                title={selectedTaskId ? "No runs yet" : "No task selected"}
+                description={selectedTaskId ? "Click Run in the composer below to start." : "Select a task on the left."}
+              />
+            </div>
+          )}
           {runs.map((r) => (
             <button
               key={r.id}
@@ -185,66 +274,150 @@ export function TasksRunsTab({ issueId, issue: _issue }: Props) {
         </div>
 
         <div className="bg-background flex flex-col min-h-0">
+          {selectedRunId && (
+            <div className="px-4 pt-3 pb-2 flex items-center gap-2 border-b border-border-subtle">
+              <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">View</span>
+              <button
+                type="button"
+                onClick={() => setStreamView("assistant")}
+                className={cn(
+                  "px-2 py-0.5 text-[11px] font-bold rounded border",
+                  streamView === "assistant"
+                    ? "border-brand bg-brand text-background"
+                    : "border-border-subtle text-text-muted hover:text-foreground"
+                )}
+              >
+                Assistant text
+              </button>
+              <button
+                type="button"
+                onClick={() => setStreamView("raw")}
+                className={cn(
+                  "px-2 py-0.5 text-[11px] font-bold rounded border",
+                  streamView === "raw"
+                    ? "border-brand bg-brand text-background"
+                    : "border-border-subtle text-text-muted hover:text-foreground"
+                )}
+              >
+                Raw stream
+              </button>
+            </div>
+          )}
           <div className="flex-1 overflow-auto p-4 font-mono text-xs leading-relaxed">
-            {!selectedRunId && <div className="text-text-muted">Select a run to view its stream</div>}
-            {messages.map((m) => (
-              <div key={m.id} className="mb-2">
-                <div className="text-[10px] uppercase text-text-muted">{m.role}</div>
-                <div className="whitespace-pre-wrap">{m.content}</div>
-              </div>
-            ))}
-            {pendingAssistant && (
-              <div className="mb-2">
-                <div className="text-[10px] uppercase text-text-muted">assistant (live)</div>
-                <div className="whitespace-pre-wrap">{pendingAssistant.text}</div>
+            {!selectedRunId && messages.length === 0 && (
+              <div className="h-full flex items-center justify-center">
+                <EmptyState
+                  icon="message"
+                  title="No run selected"
+                  description="Pick a run on the left to watch its live log and messages."
+                />
               </div>
             )}
-            {messages.length === 0 && logs.length > 0 && (
-              <div className="text-text-muted">
-                {logs.slice(-50).map((l) => (
-                  <div key={l.id}>{l.content?.slice(0, 200)}</div>
+            {streamView === "assistant" ? (
+              <>
+                {extractAssistantText(messages, pendingAssistant).map((entry, i) => (
+                  <div key={`asst-${i}`} className="mb-3">
+                    <div className="text-[10px] uppercase text-text-muted mb-1">{entry.role}{entry.live ? " (live)" : ""}</div>
+                    <div className="whitespace-pre-wrap text-text-primary break-words">{entry.text}</div>
+                  </div>
                 ))}
-              </div>
+                {messages.length === 0 && !pendingAssistant && logs.length > 0 && (
+                  <div className="text-text-muted text-[10px]">
+                    No assistant text yet — switch to <b>Raw stream</b> to see protocol frames.
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {messages.map((m) => (
+                  <div key={m.id} className="mb-2">
+                    <div className="text-[10px] uppercase text-text-muted">{m.role}</div>
+                    <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                  </div>
+                ))}
+                {pendingAssistant && (
+                  <div className="mb-2">
+                    <div className="text-[10px] uppercase text-text-muted">assistant (live)</div>
+                    <div className="whitespace-pre-wrap break-words">{pendingAssistant.text}</div>
+                  </div>
+                )}
+                {messages.length === 0 && logs.length > 0 && (
+                  <div className="text-text-muted break-all">
+                    {logs.slice(-50).map((l) => (
+                      <div key={l.id} className="mb-1">{l.content?.slice(0, 200)}</div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
 
           <div className="border-t border-border-subtle p-3 bg-surface flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <ModeButton current={mode} value="chat" onClick={() => setMode("chat")} hint="Chat 不修改产物" />
-              <ModeButton current={mode} value="refine" onClick={() => setMode("refine")} hint="Refine 在现有产物上迭代" />
-              <ModeButton current={mode} value="rerun" onClick={() => setMode("rerun")} hint="Rerun 从原始 prompt 重跑" />
-              <button
-                type="button"
-                onClick={() => setConfigOpen((v) => !v)}
-                className="ml-auto text-[10px] font-mono text-text-muted hover:text-foreground underline"
-              >
-                {config.executor}/{config.model ?? "default"}
-              </button>
-              {selectedRun?.status === "running" && (
-                <Button variant="outline" size="sm" onClick={() => void handleTerminate()}>
-                  Terminate
-                </Button>
-              )}
-            </div>
-            {configOpen && (
-              <div className="p-2 rounded border border-border-subtle bg-surface-raised">
-                <ExecutionConfigSelector value={config} onChange={setConfig} catalog={catalog} />
-              </div>
+            {isFreshTask ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-text-muted">
+                    Task has not run yet · status: <b>{selectedTask?.status}</b>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setConfigOpen((v) => !v)}
+                    className="ml-auto text-[10px] font-mono text-text-muted hover:text-foreground underline"
+                  >
+                    {config.executor}/{config.model ?? "default"}
+                  </button>
+                </div>
+                {configOpen && (
+                  <div className="p-2 rounded border border-border-subtle bg-surface-raised">
+                    <ExecutionConfigSelector value={config} onChange={setConfig} catalog={catalog} />
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <Button onClick={() => void handleRunFresh()} disabled={busy || !selectedTaskId}>
+                    {busy ? "Starting…" : "Run"}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <ModeButton current={mode} value="chat" onClick={() => setMode("chat")} hint={t("task.runMode.chatHint")} />
+                  <ModeButton current={mode} value="refine" onClick={() => setMode("refine")} hint={t("task.runMode.refineHint")} />
+                  <ModeButton current={mode} value="rerun" onClick={() => setMode("rerun")} hint={t("task.runMode.autoHint")} />
+                  <button
+                    type="button"
+                    onClick={() => setConfigOpen((v) => !v)}
+                    className="ml-auto text-[10px] font-mono text-text-muted hover:text-foreground underline"
+                  >
+                    {config.executor}/{config.model ?? "default"}
+                  </button>
+                  {selectedRun?.status === "running" && (
+                    <Button variant="outline" size="sm" onClick={() => void handleTerminate()}>
+                      Terminate
+                    </Button>
+                  )}
+                </div>
+                {configOpen && (
+                  <div className="p-2 rounded border border-border-subtle bg-surface-raised">
+                    <ExecutionConfigSelector value={config} onChange={setConfig} catalog={catalog} />
+                  </div>
+                )}
+                {mode !== "rerun" && (
+                  <textarea
+                    value={composer}
+                    onChange={(e) => setComposer(e.target.value)}
+                    placeholder={mode === "refine" ? "Describe the changes to apply…" : "Send a message…"}
+                    rows={2}
+                    className="w-full bg-surface-input border border-border-subtle rounded-md px-3 py-2 text-sm outline-none focus:border-brand resize-y"
+                  />
+                )}
+                <div className="flex justify-end">
+                  <Button onClick={() => void send()} disabled={busy || !selectedTaskId || (mode !== "rerun" && !composer.trim())}>
+                    {busy ? "Sending…" : mode === "rerun" ? "Rerun" : mode === "refine" ? "Refine" : "Send"}
+                  </Button>
+                </div>
+              </>
             )}
-            {mode !== "rerun" && (
-              <textarea
-                value={composer}
-                onChange={(e) => setComposer(e.target.value)}
-                placeholder={mode === "refine" ? "Describe the changes to apply…" : "Send a message…"}
-                rows={2}
-                className="w-full bg-surface-input border border-border-subtle rounded-md px-3 py-2 text-sm outline-none focus:border-brand resize-y"
-              />
-            )}
-            <div className="flex justify-end">
-              <Button onClick={() => void send()} disabled={busy || !selectedTaskId || (mode !== "rerun" && !composer.trim())}>
-                {busy ? "Sending…" : mode === "rerun" ? "Rerun" : mode === "refine" ? "Refine" : "Send"}
-              </Button>
-            </div>
           </div>
         </div>
       </div>
@@ -291,4 +464,83 @@ function ModeButton({
       {value}
     </button>
   );
+}
+
+interface AssistantEntry {
+  role: string;
+  text: string;
+  live: boolean;
+}
+
+/**
+ * Pull the readable assistant prose out of a Codex/Claude SDK message log.
+ * The raw `messages` are full protocol envelopes — many of them are tool
+ * calls / tool results / streaming envelopes whose `content` is a giant
+ * JSON-RPC blob. This filter returns just the human-readable text the
+ * model produced, role-tagged, in arrival order.
+ */
+function extractAssistantText(
+  messages: CodexTaskMessage[],
+  pending: { text: string; lastSeq: number } | null,
+): AssistantEntry[] {
+  const out: AssistantEntry[] = [];
+  for (const m of messages) {
+    if (m.role !== "assistant" && m.role !== "user") continue;
+    const text = humanReadable(m.content);
+    if (text) out.push({ role: m.role, text, live: false });
+  }
+  if (pending && pending.text) {
+    out.push({ role: "assistant", text: pending.text, live: true });
+  }
+  return out;
+}
+
+/**
+ * Best-effort extraction of human text from a Codex/Claude SDK message
+ * `content` field. The field is sometimes a plain string, sometimes a JSON
+ * envelope with `{type:"assistant", message:{content:[{type:"text", text:...}]}}`.
+ * Walk the JSON if possible; otherwise return the raw string trimmed.
+ */
+function humanReadable(content: string): string {
+  if (!content) return "";
+  const trimmed = content.trim();
+  // Try JSON-envelope path.
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const obj = JSON.parse(trimmed);
+      const collected: string[] = [];
+      const walk = (n: unknown) => {
+        if (!n) return;
+        if (typeof n === "string") return;
+        if (Array.isArray(n)) {
+          n.forEach(walk);
+          return;
+        }
+        if (typeof n === "object") {
+          const node = n as Record<string, unknown>;
+          if (node.type === "text" && typeof node.text === "string") {
+            collected.push(node.text);
+          }
+          if (node.type === "thinking" && typeof node.thinking === "string") {
+            // Thinking blocks are useful to surface in "assistant text"
+            // mode for transparency; prefix so they're distinguishable.
+            collected.push(`[thinking] ${node.thinking}`);
+          }
+          if (node.type === "tool_use") {
+            const name = node.name ?? "tool";
+            collected.push(`[tool: ${String(name)}]`);
+          }
+          if (node.type === "tool_result") {
+            collected.push("[tool result]");
+          }
+          Object.values(node).forEach(walk);
+        }
+      };
+      walk(obj);
+      if (collected.length > 0) return collected.join("\n").trim();
+    } catch {
+      // fall through
+    }
+  }
+  return trimmed;
 }

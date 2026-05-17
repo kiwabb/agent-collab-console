@@ -74,7 +74,15 @@ function TabsContent({ className, children, ...props }: TabsPrimitive.Panel.Prop
   return (
     <TabsPrimitive.Panel
       data-slot="tabs-content"
-      className={cn("flex-1 text-sm outline-none", className)}
+      // keepMounted: inactive panels stay in the DOM (just hidden) instead of
+      // being unmounted. Without this, long-running work in a tab (e.g. the
+      // SSE stream in DagTab's Auto-plan) gets torn down on tab switch and
+      // the component's React state is lost on return.
+      keepMounted
+      className={cn(
+        "flex-1 min-h-0 flex flex-col text-sm outline-none data-[hidden]:hidden",
+        className
+      )}
       {...props}
     >
       <motion.div

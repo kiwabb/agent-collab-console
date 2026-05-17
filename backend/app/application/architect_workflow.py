@@ -31,6 +31,9 @@ class SystemDesignDocument(BaseModel):
     development_task_list: list[str]
     risks: list[str]
     open_questions: list[str]
+    # Set this when you cannot reasonably proceed without user input.
+    # The framework will pause the pipeline and re-run you once answered.
+    clarification_question: str | None = None
 
 
 class ReviewReportDocument(BaseModel):
@@ -94,6 +97,13 @@ class ArchitectWorkflow:
         upstream_context = self._build_upstream_context(
             requirement_text, prd_text, bugfix_text, existing_design_json, existing_impl_plan
         )
+        plan_review = getattr(task, "review_comment", None)
+        if plan_review:
+            upstream_context = (
+                f"{upstream_context}\n\n"
+                "PLAN REVIEW / APPROVAL FEEDBACK:\n"
+                f"{plan_review}"
+            )
 
         is_update = bool(existing_design_json)
 
@@ -152,7 +162,8 @@ class ArchitectWorkflow:
         canonical_issue_id = task.issue_id or task.id
 
         try:
-            payload = json.loads(task.result)
+            from app.application.tolerant_json import tolerant_json_loads
+            payload = tolerant_json_loads(task.result)
         except json.JSONDecodeError as exc:
             raise ArchitectWorkflowError(f"Architect output is not valid JSON: {exc}") from exc
 

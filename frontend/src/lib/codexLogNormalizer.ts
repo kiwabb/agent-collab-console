@@ -116,8 +116,8 @@ function normalizeNotificationEvent(
 
   if (method.startsWith("turn.")) {
     const turn = asRecord(event.turn) ?? asRecord(params.turn);
-    const status = String(turn?.status || params.status || "").toLowerCase();
-    if (status === "failed") {
+    const turnStatus = String(turn?.status || params.status || "").toLowerCase();
+    if (turnStatus === "failed") {
       const err = asRecord(turn?.error) ?? asRecord(params.error);
       return {
         id: `${keyBase}-turn`,
@@ -125,6 +125,45 @@ function normalizeNotificationEvent(
         label: "Turn Failed",
         content: (err?.message as string) || "Turn failed",
         timestamp: new Date().toISOString(),
+      };
+    }
+    const eventKind = method.replace("turn.", "");
+    return {
+      id: `${keyBase}-turn-${eventKind}`,
+      type: "status",
+      label: eventKind,
+      content: eventKind,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  if (method === "item.completed") {
+    const item = asRecord(params.item);
+    if (!item) return null;
+    const itemType = String(item.type || "").replace(/_/g, "").toLowerCase();
+    if (itemType === "agentmessage") {
+      const text = String(item.text || "");
+      if (!text) return null;
+      return {
+        id: `${keyBase}-${String(item.id || "item")}`,
+        timestamp: (item.created_at as string) || new Date().toISOString(),
+        type: "assistant",
+        label: "Assistant",
+        content: text,
+      };
+    }
+    if (itemType === "commandexecution") {
+      const output = String(item.aggregated_output ?? item.output ?? "");
+      const exitCode = item.exit_code != null ? Number(item.exit_code) : 0;
+      return {
+        id: `${keyBase}-${String(item.id || "cmd")}`,
+        timestamp: new Date().toISOString(),
+        type: "command",
+        label: "Command",
+        command: (item.command as string) || undefined,
+        output: output || undefined,
+        exitCode,
+        status: exitCode === 0 ? "success" : "failed",
       };
     }
     return null;

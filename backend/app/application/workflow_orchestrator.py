@@ -277,13 +277,38 @@ class WorkflowOrchestrator:
         raw = await self.llm_runner(prompt)
         if not raw:
             return None
-        # Tolerate leading/trailing prose and markdown code fences.
-        import re
-        m = re.search(r"\{(?:[^{}]|(?:\{[^{}]*\}))*\}", raw, re.DOTALL)
-        if not m:
+        # Tolerate leading/trailing prose and markdown code fences. Walk
+        # braces depth-aware so DAGs with nested arrays-of-objects parse.
+        start = raw.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_str = False
+        esc = False
+        end = -1
+        for i in range(start, len(raw)):
+            c = raw[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end == -1:
             return None
         try:
-            dag = json.loads(m.group(0))
+            dag = json.loads(raw[start:end])
         except json.JSONDecodeError:
             return None
         # Normalize: ensure meta + edge_type defaults exist.
@@ -428,14 +453,18 @@ def _build_llm_prompt(issue: CodexIssue, agents: list[Agent]) -> str:
     catalog = "\n".join(agent_lines) if agent_lines else "(no agents available)"
     return (
         "You are a software workflow orchestrator. Given an issue and a list of available agents, "
-        "produce a DAG describing which agents should run and in what order. Output STRICT JSON only.\n\n"
+        "produce a DAG describing which agents should run and in what order.\n\n"
+        "OUTPUT RULES (strict):\n"
+        " - Begin your response IMMEDIATELY with the opening brace `{`. No preamble, no \"Here is\", no markdown code fences, no commentary before or after.\n"
+        " - The entire response must be a single JSON object that parses with json.loads.\n"
+        " - Keep `rationale` under 200 characters. No chain-of-thought.\n\n"
         "Schema:\n"
         "{\n"
         '  "meta": { "intent": str, "rationale": str },\n'
         '  "nodes": [ { "node_key": str, "agent_id": str, "role_key": str, "title": str } ],\n'
         '  "edges": [ { "from_node_key": str, "to_node_key": str, "edge_type": "sequence"|"parallel-fanout"|"refine-loop"|"conditional" } ]\n'
         "}\n\n"
-        "Rules:\n"
+        "Content rules:\n"
         " - Use only agent_id values from the catalog below.\n"
         " - node_key should equal role_key when possible.\n"
         " - Reject cycles except for refine-loop edges (which are explicitly back-edges).\n"

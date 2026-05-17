@@ -14,11 +14,14 @@ export function BackendStatusBadge() {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-warning/10 border border-warning/30">
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-warning/10 border border-warning/30 text-warning">
             <div className="size-2 rounded-full bg-warning animate-pulse" />
+            <span className="text-[10px] font-black uppercase tracking-widest">Reconnecting</span>
           </div>
         </TooltipTrigger>
-        <TooltipContent side="bottom">Reconnecting realtime…</TooltipContent>
+        <TooltipContent side="bottom">
+          Realtime WebSocket dropped — using polling fallback. HTTP is OK.
+        </TooltipContent>
       </Tooltip>
     );
   }

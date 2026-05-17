@@ -1,4 +1,4 @@
-import type { CodexIssue, CodexTask, ExecutionProcess } from "@/lib/types";
+import type { CodexIssue, ExecutionProcess, WorkflowGraph } from "@/lib/types";
 
 type CreateCodexIssueFn = (
   workspaceId: string,
@@ -6,66 +6,33 @@ type CreateCodexIssueFn = (
   description: string,
   baseBranch?: string | null,
 ) => Promise<CodexIssue>;
-type CreateCodexTaskFn = (
-  sessionId: string,
-  title: string,
-  prompt: string,
-  parentTaskId: string | null,
-  executor: "codex" | "claude",
-  role: string,
-  issueId: string | null,
-  phase: string,
-  provider?: string | null,
-  model?: string | null,
-) => Promise<CodexTask>;
-type RunCodexTaskFn = (taskId: string, overrides?: { executor?: "codex" | "claude"; provider?: string | null; model?: string | null }) => Promise<ExecutionProcess>;
-type UpdateTaskFn = (taskId: string, executor?: "codex" | "claude", provider?: string | null, model?: string | null) => Promise<CodexTask>;
+type AutoStartIssueGraphFn = (issueId: string) => Promise<WorkflowGraph>;
+type RunCodexTaskFn = (taskId: string, overrides?: { executor?: string; provider?: string | null; model?: string | null }) => Promise<ExecutionProcess>;
+type UpdateTaskFn = (taskId: string, executor?: string, provider?: string | null, model?: string | null) => Promise<import("@/lib/types").CodexTask>;
 
 export async function createIssueAndInitialTask({
   workspaceId,
   title,
   description,
-  executor,
-  issueTitle,
   createCodexIssue,
-  createCodexTask,
-  runCodexTask,
-  provider,
-  model,
+  autoStartIssueGraph,
   baseBranch,
 }: {
   workspaceId: string;
   title: string;
   description: string;
-  executor: "codex" | "claude";
-  issueTitle: string;
   createCodexIssue: CreateCodexIssueFn;
-  createCodexTask: CreateCodexTaskFn;
-  runCodexTask: RunCodexTaskFn;
+  autoStartIssueGraph: AutoStartIssueGraphFn;
+  baseBranch?: string | null;
+  // Legacy params kept for call-site compatibility — ignored in DAG path
+  executor?: string;
+  issueTitle?: string;
   provider?: string | null;
   model?: string | null;
-  baseBranch?: string | null;
-}): Promise<{ issue: CodexIssue; initialTask: CodexTask; executionProcess: ExecutionProcess }> {
+}): Promise<{ issue: CodexIssue }> {
   const issue = await createCodexIssue(workspaceId, title, description, baseBranch ?? null);
-  const createdTask = await createCodexTask(
-    workspaceId,
-    issueTitle,
-    description || title,
-    null,
-    executor,
-    "product_manager",
-    issue.id,
-    "requirements",
-    provider,
-    model,
-  );
-  const executionProcess = await runCodexTask(createdTask.id, { executor, provider, model });
-  const initialTask = {
-    ...createdTask,
-    last_execution_process_id: executionProcess.id,
-    status: executionProcess.status.toLowerCase(),
-  };
-  return { issue, initialTask, executionProcess };
+  await autoStartIssueGraph(issue.id);
+  return { issue };
 }
 
 export async function runCodexTaskWithExecutor({
@@ -80,8 +47,8 @@ export async function runCodexTaskWithExecutor({
   runTask,
 }: {
   taskId: string;
-  selectedExecutor: "codex" | "claude";
-  currentExecutor: "codex" | "claude";
+  selectedExecutor: string;
+  currentExecutor: string;
   selectedProvider: string | null;
   currentProvider: string | null;
   selectedModel: string | null;
@@ -89,14 +56,12 @@ export async function runCodexTaskWithExecutor({
   updateTask: UpdateTaskFn;
   runTask: RunCodexTaskFn;
 }): Promise<ExecutionProcess> {
-  // Check if anything changed
   const needsUpdate =
     selectedExecutor !== currentExecutor ||
     selectedProvider !== currentProvider ||
     selectedModel !== currentModel;
 
   if (needsUpdate) {
-    // Capture previous values for rollback on failure
     const previousExecutor = currentExecutor;
     const previousProvider = currentProvider;
     const previousModel = currentModel;
@@ -104,15 +69,12 @@ export async function runCodexTaskWithExecutor({
     try {
       await updateTask(taskId, selectedExecutor, selectedProvider, selectedModel);
     } catch (updateError) {
-      // Revert to previous values if update succeeded but runTask fails
-      // The update was already persisted, but we need to revert on runTask failure
       throw updateError;
     }
 
     try {
       return await runTask(taskId, { executor: selectedExecutor, provider: selectedProvider, model: selectedModel });
     } catch (runError) {
-      // Revert executor/provider/model on runTask failure
       try {
         await updateTask(taskId, previousExecutor, previousProvider, previousModel);
       } catch (revertError) {

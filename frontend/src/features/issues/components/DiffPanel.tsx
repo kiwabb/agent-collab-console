@@ -23,14 +23,38 @@ function isGenerated(path: string): boolean {
   return GENERATED_PATTERNS.some((re) => re.test(path));
 }
 
+function shortDateTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString([], {
+      year: undefined,
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
 interface Props {
   diff: string;
   baseBranch?: string | null;
   branch?: string | null;
   stat?: DiffStat | null;
+  /** C3: when supplied, render an attribution banner above the file list
+   * showing which agent + run produced these changes. Engineer is the
+   * only role that touches code in this system, so a single banner is
+   * accurate; per-file attribution would be misleading complexity. */
+  attribution?: {
+    agentName: string;
+    runId?: string | null;
+    timestamp?: string | null;
+  } | null;
 }
 
-export function DiffPanel({ diff, baseBranch, branch, stat }: Props) {
+export function DiffPanel({ diff, baseBranch, branch, stat, attribution }: Props) {
   const { t } = useI18n();
   const [mode, setMode] = useState<"unified" | "split">("unified");
   // null = each file decides for itself; true/false = force all
@@ -77,7 +101,7 @@ export function DiffPanel({ diff, baseBranch, branch, stat }: Props) {
                 className="ml-2 text-muted-foreground/60 underline hover:text-foreground"
                 onClick={() => setShowGenerated((v) => !v)}
               >
-                {showGenerated ? `隐藏 ${hiddenCount} 个生成文件` : `+${hiddenCount} 个生成文件已隐藏`}
+                {showGenerated ? t("task.diff.hideGenerated").replace("{count}", String(hiddenCount)) : t("task.diff.showGenerated").replace("{count}", String(hiddenCount))}
               </button>
             )}
           </span>
@@ -106,6 +130,27 @@ export function DiffPanel({ diff, baseBranch, branch, stat }: Props) {
           </Button>
         </div>
       </div>
+
+      {/* C3: attribution banner — single source of truth, since only the
+          Engineer role touches code in this system. */}
+      {attribution && (
+        <div className="px-3 py-2 text-[11px] text-muted-foreground bg-muted/10 border-b border-border flex items-center gap-2 flex-wrap">
+          <span className="text-foreground/60">Changes by</span>
+          <span className="font-semibold text-foreground">{attribution.agentName}</span>
+          {attribution.runId && (
+            <>
+              <span className="text-foreground/40">·</span>
+              <span className="font-mono">run {attribution.runId.slice(0, 8)}</span>
+            </>
+          )}
+          {attribution.timestamp && (
+            <>
+              <span className="text-foreground/40">·</span>
+              <span className="tabular-nums">{shortDateTime(attribution.timestamp)}</span>
+            </>
+          )}
+        </div>
+      )}
 
       {/* File list — scrolled by parent container */}
       {files.length === 0 ? (

@@ -1,14 +1,49 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import re
+import subprocess
+import time
 
 from pydantic import BaseModel, Field, ValidationError
 
 from app.application.issue_artifact_documents import IssueArtifactDocuments
 
 
+logger = logging.getLogger(__name__)
+
+
 class QAWorkflowError(ValueError):
     pass
+
+
+# Per-command timeout when executing QA verification commands. Keep short —
+# a stuck pytest run shouldn't hold the whole pipeline.
+QA_COMMAND_TIMEOUT_S = int(os.getenv("QA_COMMAND_TIMEOUT_S", "120"))
+# Total time budget across ALL verification commands for one QA pass.
+QA_TOTAL_BUDGET_S = int(os.getenv("QA_TOTAL_BUDGET_S", "300"))
+# Whether to actually execute verification commands. Default ON in real-CLI
+# mode. Disable for offline tests / quick demos.
+QA_EXECUTE_COMMANDS = os.getenv("QA_EXECUTE_COMMANDS", os.getenv("REAL_CLI", "true")).lower() == "true"
+
+# Patterns we refuse to run even if the LLM proposes them. These are the
+# obvious foot-guns; the worktree is sandboxed-ish (per-issue branch) but
+# never bet the farm on the LLM picking safe commands.
+_REFUSED_COMMAND_PATTERNS = [
+    re.compile(r"\brm\s+-[rRf]"),
+    re.compile(r"\bsudo\b"),
+    re.compile(r"\b(curl|wget)\b[^|;]*\|\s*(sh|bash|zsh|python|node)\b"),
+    re.compile(r":\(\)\s*\{"),  # fork bomb prefix
+    re.compile(r"\bdd\s+if=.*\bof="),
+    re.compile(r"\bmkfs\b|\bfdisk\b|\bformat\b"),
+    re.compile(r"\bshutdown\b|\breboot\b|\bhalt\b|\bpoweroff\b"),
+    re.compile(r"\bgit\s+push\b"),  # the agent should NOT push; user merges.
+    re.compile(r"\bgit\s+reset\s+--hard\b"),
+    re.compile(r"\b(npm|yarn|pnpm)\s+publish\b"),
+    re.compile(r"\bpip\s+install\b.*--user"),  # force into the system env
+]
 
 
 class QAReportDocument(BaseModel):
@@ -26,6 +61,9 @@ class QAReportDocument(BaseModel):
     risks: list[str]
     test_gaps: list[str]
     final_recommendation: str
+    # Set this when you cannot reasonably proceed without user input.
+    # The framework will pause the pipeline and re-run you once answered.
+    clarification_question: str | None = None
 
 
 class QAWorkflow:
@@ -124,7 +162,8 @@ class QAWorkflow:
         canonical_issue_id = task.issue_id or task.id
 
         try:
-            payload = json.loads(task.result)
+            from app.application.tolerant_json import tolerant_json_loads
+            payload = tolerant_json_loads(task.result)
         except json.JSONDecodeError as exc:
             raise QAWorkflowError(f"QA output is not valid JSON: {exc}") from exc
 
@@ -139,13 +178,37 @@ class QAWorkflow:
         except ValidationError as exc:
             raise QAWorkflowError(f"QA output does not match schema: {exc}") from exc
 
+        # Real test execution. The LLM proposed `recommended_commands` based
+        # on what it inspected; we now actually run them and let the exit
+        # codes drive the final QA verdict instead of trusting the LLM's
+        # self-reported status.
+        execution_results = self._execute_verification_commands(
+            report.recommended_commands, task.workspace_path
+        )
+        if execution_results is not None:
+            real_status, framework_notes = self._reconcile_status_with_execution(
+                report.status, execution_results
+            )
+            if real_status != report.status:
+                report.status = real_status
+            # Replace commands_run with what we ACTUALLY ran so downstream
+            # reviewers see the truth. The LLM's claim is preserved in the
+            # raw qa_plan.json above this — we override only the UX copy.
+            report.commands_run = [
+                f"{r['command']} → exit {r['exit_code']}" for r in execution_results
+            ]
+            existing_notes = list(report.test_gaps or [])
+            report.test_gaps = framework_notes + existing_notes
+
         self._docs.ensure_issue_root(task.workspace_path, canonical_issue_id)
 
         qa_plan_path = self._docs.qa_plan_json_path(task.workspace_path, canonical_issue_id)
         qa_report_path = self._docs.qa_report_md_path(task.workspace_path, canonical_issue_id)
 
         qa_plan_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-        qa_report_path.write_text(self._render_qa_report_markdown(report), encoding="utf-8")
+        qa_report_path.write_text(
+            self._render_qa_report_markdown(report, execution_results), encoding="utf-8"
+        )
 
         task.result = (
             f"QA report generated for {report.issue_title}. "
@@ -156,7 +219,157 @@ class QAWorkflow:
             {"name": "qa/qa_plan.json", "path": str(qa_plan_path), "kind": "testing"},
             {"name": "qa/qa_report.md", "path": str(qa_report_path), "kind": "testing"},
         ])
+        # Surface execution results so the scheduler / replanner can reason
+        # about whether to dispatch an Engineer rework.
+        object.__setattr__(report, "execution_results", execution_results or [])
         return report
+
+    def _execute_verification_commands(
+        self, commands: list[str], workspace_path: str
+    ) -> list[dict] | None:
+        """Run each verification command in the worktree and capture results.
+
+        Returns:
+            List of {command, exit_code, stdout, stderr, duration_s, refused?}
+            dicts, or None if execution is disabled (mock mode / offline).
+
+        Safety:
+            - Per-command timeout (QA_COMMAND_TIMEOUT_S).
+            - Total budget (QA_TOTAL_BUDGET_S) — remaining commands are
+              recorded as `refused: budget_exhausted`.
+            - Pattern-based refuse list for obvious foot-guns.
+        """
+        if not QA_EXECUTE_COMMANDS:
+            return None
+        if not commands:
+            return []
+
+        results: list[dict] = []
+        start = time.monotonic()
+        for cmd in commands:
+            cmd = (cmd or "").strip()
+            if not cmd:
+                continue
+            elapsed = time.monotonic() - start
+            if elapsed >= QA_TOTAL_BUDGET_S:
+                results.append({
+                    "command": cmd,
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": "",
+                    "duration_s": 0.0,
+                    "refused": "budget_exhausted",
+                })
+                continue
+            refusal = self._refuse_reason(cmd)
+            if refusal:
+                results.append({
+                    "command": cmd,
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": f"refused by framework: {refusal}",
+                    "duration_s": 0.0,
+                    "refused": refusal,
+                })
+                continue
+            t0 = time.monotonic()
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    shell=True,
+                    cwd=workspace_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=QA_COMMAND_TIMEOUT_S,
+                )
+                results.append({
+                    "command": cmd,
+                    "exit_code": proc.returncode,
+                    "stdout": (proc.stdout or "")[-4000:],
+                    "stderr": (proc.stderr or "")[-4000:],
+                    "duration_s": round(time.monotonic() - t0, 2),
+                })
+            except subprocess.TimeoutExpired as exc:
+                results.append({
+                    "command": cmd,
+                    "exit_code": -1,
+                    "stdout": (exc.stdout or "")[-4000:] if isinstance(exc.stdout, str) else "",
+                    "stderr": f"timed out after {QA_COMMAND_TIMEOUT_S}s",
+                    "duration_s": round(time.monotonic() - t0, 2),
+                    "refused": "timeout",
+                })
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("QA command %r raised: %s", cmd, exc)
+                results.append({
+                    "command": cmd,
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": f"command runner error: {exc}",
+                    "duration_s": round(time.monotonic() - t0, 2),
+                    "refused": "runner_error",
+                })
+        return results
+
+    @staticmethod
+    def _refuse_reason(cmd: str) -> str | None:
+        for pat in _REFUSED_COMMAND_PATTERNS:
+            if pat.search(cmd):
+                return pat.pattern
+        return None
+
+    @staticmethod
+    def _reconcile_status_with_execution(
+        claimed_status: str, results: list[dict]
+    ) -> tuple[str, list[str]]:
+        """Override the LLM's claimed status with what actually happened.
+
+        - If any executed command exited non-zero (and wasn't refused for
+          safety reasons), the QA verdict is `failed` regardless of what the
+          LLM said.
+        - If every command was refused / timed out / errored, surface as
+          `needs_follow_up` so a human can adjudicate.
+        - Otherwise, trust the LLM's claim but bound it: a `passed` claim is
+          downgraded to `needs_follow_up` when zero commands actually ran.
+        """
+        notes: list[str] = []
+        if not results:
+            return claimed_status, notes
+
+        ran = [r for r in results if not r.get("refused")]
+        refused = [r for r in results if r.get("refused")]
+        failed = [r for r in ran if r["exit_code"] != 0]
+
+        if refused:
+            notes.append(
+                f"[framework] {len(refused)} command(s) skipped by safety filter "
+                f"or timed out: {[r['command'] for r in refused]!r}"
+            )
+
+        if failed:
+            failed_summary = ", ".join(
+                f"{r['command']!r} → exit {r['exit_code']}" for r in failed
+            )
+            notes.insert(
+                0,
+                f"[framework] Verification failed on {len(failed)} command(s): {failed_summary}. "
+                f"Status overridden to 'failed' regardless of LLM self-report ('{claimed_status}').",
+            )
+            return "failed", notes
+
+        if not ran:
+            notes.insert(
+                0,
+                "[framework] No verification command ran cleanly (all refused or timed out). "
+                "Marking 'needs_follow_up' for human review.",
+            )
+            return "needs_follow_up", notes
+
+        if claimed_status == "passed":
+            return "passed", notes
+
+        # Anything else (LLM said failed/blocked/needs_follow_up) — trust it,
+        # since the model knows context the executed commands don't.
+        return claimed_status, notes
 
     def _read_pm_artifacts(self, workspace_path: str, issue_id: str) -> dict[str, str]:
         artifacts: dict[str, str] = {}
@@ -243,7 +456,9 @@ class QAWorkflow:
             normalized[target_key] = value
         return normalized
 
-    def _render_qa_report_markdown(self, report: QAReportDocument) -> str:
+    def _render_qa_report_markdown(
+        self, report: QAReportDocument, execution_results: list[dict] | None = None
+    ) -> str:
         lines = [
             f"# QA Report: {report.issue_title}",
             "",
@@ -262,6 +477,21 @@ class QAWorkflow:
         lines.extend([f"- `{c}`" for c in report.commands_run] or ["- None"])
         lines.extend(["", "## Recommended Commands"])
         lines.extend([f"- `{c}`" for c in report.recommended_commands] or ["- None"])
+
+        if execution_results:
+            lines.extend(["", "## Verification Execution"])
+            for r in execution_results:
+                marker = "✓" if r["exit_code"] == 0 else "✗"
+                refused = r.get("refused")
+                tag = f" _(skipped: {refused})_" if refused else ""
+                lines.append(
+                    f"- {marker} `{r['command']}` → exit {r['exit_code']} ({r['duration_s']}s){tag}"
+                )
+                if r.get("stderr"):
+                    stderr = r["stderr"].rstrip()
+                    if stderr:
+                        lines.extend(["  ```", *stderr.splitlines()[-12:], "  ```"])
+
         lines.extend(["", "## Manual Scenarios"])
         lines.extend([f"- {s}" for s in report.manual_scenarios] or ["- None"])
         lines.extend(["", "## Bugs Found"])

@@ -13,6 +13,7 @@ import type { GitBranch, Project, ProjectStats, Workspace } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Plus, FolderGit2, GitBranch as GitBranchIcon } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
+import { emitDataEvent } from "@/lib/dataEvents";
 
 interface Props {
   projectId: string;
@@ -56,6 +57,7 @@ export function ProjectDashboard({ projectId }: Props) {
       const ws = await createWorkspace(title, projectId);
       setNewTitle("");
       setCreating(false);
+      emitDataEvent("workspaces:changed");
       addToast({ type: "success", title: "Workspace created" });
       router.push(`/workspaces/${ws.id}`);
     } catch (err) {

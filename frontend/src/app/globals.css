@@ -4,33 +4,55 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
   --font-mono: "SF Mono", "SFMono-Regular", "Sarasa Mono SC", "JetBrains Mono", monospace;
 
-  /* Desktop-CC-GUI Theme Tokens - Dark Mode (Default) */
-  --color-background: #0d0f14;
-  --color-foreground: #e6e7ea;
-  
-  --color-surface: #121212;
-  --color-surface-raised: #1b1b20;
-  --color-surface-input: #27272e;
-  --color-surface-hover: #212127;
-  
-  --color-brand: #7a9dcc;
-  --color-brand-muted: #2a5570;
-  
-  --color-text-primary: #e6e7ea;
-  --color-text-secondary: #b3b3b3;
-  --color-text-muted: #808080;
-  
-  --color-border-subtle: #222228;
-  --color-border-muted: #252530;
-  --color-border-strong: #353540;
-  
-  --color-success: #78ebbe;
-  --color-warning: #ffaf55;
-  --color-error: #ff6e6e;
-  
-  --color-success-bg: rgba(120, 235, 190, 0.1);
-  --color-warning-bg: rgba(255, 175, 85, 0.1);
-  --color-error-bg: rgba(255, 110, 110, 0.1);
+  /* === Console v2 Reference Theme - Dark (Default) === */
+  /* Inks (page → panel → raised → input) */
+  --color-background: #0b0b0c;
+  --color-foreground: #f4f4f5;
+
+  --color-surface: #111113;       /* panel walls (sidebar, right detail) */
+  --color-surface-raised: #161618;/* cards, popovers */
+  --color-surface-input: #1e1e21; /* inputs, kbd chips */
+  --color-surface-hover: #18181b; /* row hover */
+
+  /* Orange accent — primary CTA, brand mark, active states */
+  --color-brand: #e69552;
+  --color-brand-strong: #f0a567;
+  --color-brand-muted: rgba(230, 149, 82, 0.16);
+
+  /* Type ramp */
+  --color-text-primary: #f4f4f5;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #71717a;
+
+  /* Borders */
+  --color-border-subtle: #1f1f22;
+  --color-border-muted: #2a2a2e;
+  --color-border-strong: #3a3a40;
+
+  /* Status family — dot colors visible in reference */
+  --color-status-done: #4ade80;
+  --color-status-running: #e69552;
+  --color-status-awaiting: #eab308;
+  --color-status-queued: #71717a;
+  --color-status-failed: #ef4444;
+  --color-status-info: #60a5fa;
+
+  /* Legacy aliases mapped to status colors */
+  --color-success: var(--color-status-done);
+  --color-warning: var(--color-status-awaiting);
+  --color-error: var(--color-status-failed);
+
+  --color-success-bg: rgba(74, 222, 128, 0.10);
+  --color-warning-bg: rgba(234, 179, 8, 0.10);
+  --color-error-bg: rgba(239, 68, 68, 0.10);
+  --color-brand-bg: rgba(230, 149, 82, 0.10);
+
+  /* Log event-type colors (matches screenshot) */
+  --color-log-sys: #71717a;       /* gray */
+  --color-log-tool: #c084fc;      /* purple */
+  --color-log-out: #d4d4d8;       /* light gray */
+  --color-log-ok: #4ade80;        /* green */
+  --color-log-error: #ef4444;     /* red */
   
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
@@ -225,20 +247,33 @@
   --color-surface-raised: #fdfdfd;
   --color-surface-input: #eef1f5;
   --color-surface-hover: #e8edf3;
-  --color-brand: #315f91;
-  --color-brand-muted: #d8e7f5;
+  --color-brand: #d97a3b;
+  --color-brand-strong: #c46220;
+  --color-brand-muted: rgba(217, 122, 59, 0.12);
   --color-text-primary: #171a1f;
   --color-text-secondary: #4e5968;
   --color-text-muted: #788392;
   --color-border-subtle: #dde3eb;
   --color-border-muted: #ced7e2;
   --color-border-strong: #aeb9c7;
-  --color-success: #18794e;
-  --color-warning: #a15c00;
-  --color-error: #c43c3c;
-  --color-success-bg: rgba(24, 121, 78, 0.08);
-  --color-warning-bg: rgba(161, 92, 0, 0.08);
-  --color-error-bg: rgba(196, 60, 60, 0.08);
+  --color-status-done: #16a34a;
+  --color-status-running: #d97706;
+  --color-status-awaiting: #ca8a04;
+  --color-status-queued: #6b7280;
+  --color-status-failed: #dc2626;
+  --color-status-info: #2563eb;
+  --color-success: var(--color-status-done);
+  --color-warning: var(--color-status-awaiting);
+  --color-error: var(--color-status-failed);
+  --color-success-bg: rgba(22, 163, 74, 0.10);
+  --color-warning-bg: rgba(202, 138, 4, 0.10);
+  --color-error-bg: rgba(220, 38, 38, 0.10);
+  --color-brand-bg: rgba(217, 122, 59, 0.10);
+  --color-log-sys: #6b7280;
+  --color-log-tool: #9333ea;
+  --color-log-out: #1f2937;
+  --color-log-ok: #16a34a;
+  --color-log-error: #dc2626;
 }
 
 /* Dark mode uses the default :root variables */

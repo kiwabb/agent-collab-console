@@ -330,11 +330,11 @@ export function RunDetail({
                       disabled={!canTransitionToTesting || isTransitioningToTesting}
                       className="flex-2 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md active:scale-[0.98] disabled:opacity-50"
                     >
-                      {isTransitioningToTesting ? "流转中..." : "提交测试"}
+                      {isTransitioningToTesting ? t("issue.transition.loading") : t("run.submitTesting")}
                     </button>
                   </TooltipTrigger>
                   {!canTransitionToTesting && !isTransitioningToTesting && (
-                    <TooltipContent>请先完成所有开发任务</TooltipContent>
+                    <TooltipContent>{t("run.completeAllDevTasks")}</TooltipContent>
                   )}
                 </Tooltip>
               )}
@@ -349,7 +349,7 @@ export function RunDetail({
               {taskMeta?.phase === "development" && taskStatus !== "done" && taskStatus !== "awaiting_review" && taskStatus !== "rework" && !taskMeta?.review_comment && onSubmitForReview && (
                 <div className="flex-2 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg bg-warning/10 text-warning border border-warning/30">
                   <AlertCircle size={14} />
-                  <span>任务状态: {taskStatus.toUpperCase()} (需要 DONE 才能提交质检)</span>
+                  <span>{t("task.status.needDoneToSubmit").replace("{status}", taskStatus.toUpperCase())}</span>
                 </div>
               )}
             </>
@@ -395,7 +395,7 @@ export function RunDetail({
           <div className="mt-4 flex max-h-48 gap-3 rounded-xl border border-error/25 bg-error/10 px-4 py-3 text-error">
             <AlertCircle size={16} className="mt-0.5 shrink-0" />
             <div className="min-w-0 overflow-y-auto pr-1">
-              <p className="text-[10px] font-black uppercase tracking-[0.18em]">任务执行失败</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em]">{t("task.executionFailed")}</p>
               <p className="mt-1 text-xs leading-relaxed break-words text-error/90 whitespace-pre-wrap">{taskMeta.result}</p>
             </div>
           </div>
@@ -414,7 +414,7 @@ export function RunDetail({
               taskMeta.status === "rework" ? "text-error" : "text-success"
             )}>
               {taskMeta.status === "rework" ? <AlertCircle size={12} /> : <Check size={12} />}
-              {taskMeta.status === "rework" ? "架构师驳回：需改进" : "架构师评审：通过"}
+              {taskMeta.status === "rework" ? t("task.review.architectRejected") : t("task.review.architectApproved")}
             </h4>
             <p className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap font-medium">
               {taskMeta.review_comment}
@@ -425,7 +425,7 @@ export function RunDetail({
                 className="mt-1 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl bg-error text-background hover:bg-error/90 transition-all shadow-md active:scale-[0.98]"
               >
                 <RotateCcw size={13} />
-                按建议修订
+                t("task.review.followSuggestion")
               </button>
             )}
           </div>
@@ -509,7 +509,7 @@ export function RunDetail({
                       >
                         <div className="flex items-center gap-2.5 px-1">
                           <div className="size-1.5 rounded-full bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)] animate-pulse" />
-                          <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">assistant · 输出中</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">{t("task.assistantOutput")}</span>
                         </div>
                         <div className="p-5 rounded-2xl text-[13.5px] leading-relaxed border font-medium bg-brand/5 border-brand/20 text-foreground/90 shadow-sm">
                           <MessageMarkdown content={liveStream.pendingAssistant.text || ""} />
@@ -603,10 +603,10 @@ export function RunDetail({
         {/* Run mode chip — chat / refine / rerun */}
         <div className="flex items-center gap-2">
           {([
-            { id: "auto", label: "自动", hint: "根据内容自动判别为对话或修订" },
-            { id: "chat", label: "对话", hint: "自然语言追问，不修改产物" },
-            { id: "refine", label: "修订", hint: "基于现有产物按你的要求改写并保存" },
-          ] as { id: RunMode; label: string; hint: string }[]).map((m) => (
+            { id: "auto" as RunMode, label: t("task.runMode.auto"), hint: t("task.runMode.autoHint") },
+            { id: "chat" as RunMode, label: t("task.runMode.chat"), hint: t("task.runMode.chatHint") },
+            { id: "refine" as RunMode, label: t("task.runMode.refine"), hint: t("task.runMode.refineHint") },
+          ]).map((m) => (
             <button
               key={m.id}
               type="button"
@@ -623,9 +623,9 @@ export function RunDetail({
             </button>
           ))}
           <span className="text-[10px] text-text-muted ml-2">
-            {runMode === "auto" && "自动模式：按内容判别对话/修订"}
-            {runMode === "chat" && "对话模式：不会修改任务产物"}
-            {runMode === "refine" && "修订模式：会按指令更新产物文件"}
+            {runMode === "auto" && t("task.runMode.autoDesc")}
+            {runMode === "chat" && t("task.runMode.chatDesc")}
+            {runMode === "refine" && t("task.runMode.refineDesc")}
           </span>
           {runMode === "auto" && lastResolvedMode && (
             <span
@@ -635,9 +635,9 @@ export function RunDetail({
                   ? "bg-warning/10 text-warning border-warning/30"
                   : "bg-brand/10 text-brand border-brand/30",
               )}
-              title="自动判别结果"
+              title={t("task.runMode.autoResultTitle")}
             >
-              {lastResolvedMode === "refine" ? "上次：修订" : "上次：对话"}
+              {lastResolvedMode === "refine" ? t("task.runMode.autoResult") : t("task.runMode.autoResultChat")}
             </span>
           )}
         </div>
@@ -647,7 +647,7 @@ export function RunDetail({
               type="text"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              placeholder={runMode === "refine" ? "描述你想要的修改…" : t("run.messagePlaceholder")}
+              placeholder={runMode === "refine" ? t("run.refinePlaceholder") : t("run.messagePlaceholder")}
               className="w-full pl-5 pr-14 py-4 text-sm rounded-xl cc-input outline-none shadow-inner font-medium"
             />
             <div className="absolute right-5 top-1/2 -translate-y-1/2 opacity-0 group-focus-within:opacity-100 transition-all scale-90 group-focus-within:scale-100 pointer-events-none">
@@ -658,11 +658,11 @@ export function RunDetail({
             type="submit"
             disabled={!message.trim()}
             className="px-5 py-4 rounded-xl bg-brand text-background hover:bg-brand/90 transition-all shadow-lg shadow-brand/20 active:scale-95 border border-brand/20 group disabled:opacity-30 disabled:shadow-none flex items-center gap-2"
-            title="发送"
+            title={t("run.send")}
           >
             <Send size={20} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
             <span className="text-xs font-bold uppercase tracking-widest">
-              {runMode === "refine" ? "修订" : "对话"}
+              {runMode === "refine" ? t("run.sendLabel.refine") : t("run.sendLabel.chat")}
             </span>
           </button>
         </form>
@@ -672,7 +672,7 @@ export function RunDetail({
         open={showRerunConfirm}
         onOpenChange={setShowRerunConfirm}
         title={t("run.rerun")}
-        description="重跑会基于原始 prompt 重新生成并覆盖现有产物（如 prd.md / system_design.json）。确认继续？"
+        description={t("run.rerunConfirm")}
         confirmText={t("run.rerun")}
         onConfirm={() => {
           setShowRerunConfirm(false);
@@ -691,11 +691,12 @@ function QaReportBadge({
   status: "passed" | "failed" | "blocked" | "needs_follow_up";
   onView?: () => void;
 }) {
+  const { t } = useI18n();
   const styles: Record<string, { cls: string; label: string }> = {
-    passed: { cls: "bg-success/10 text-success border-success/30", label: "测试通过" },
-    failed: { cls: "bg-error/10 text-error border-error/30", label: "测试失败" },
-    blocked: { cls: "bg-warning/10 text-warning border-warning/30", label: "测试阻塞" },
-    needs_follow_up: { cls: "bg-warning/10 text-warning border-warning/30", label: "需要跟进" },
+    passed: { cls: "bg-success/10 text-success border-success/30", label: t("qa.status.passed") },
+    failed: { cls: "bg-error/10 text-error border-error/30", label: t("qa.status.failed") },
+    blocked: { cls: "bg-warning/10 text-warning border-warning/30", label: t("qa.status.blocked") },
+    needs_follow_up: { cls: "bg-warning/10 text-warning border-warning/30", label: t("qa.status.needs_follow_up") },
   };
   const entry = styles[status];
   return (
@@ -707,7 +708,7 @@ function QaReportBadge({
         entry.cls,
         onView ? "hover:opacity-80 cursor-pointer" : "cursor-default",
       )}
-      title={onView ? "查看测试报告" : undefined}
+      title={onView ? t("qa.viewReport") : undefined}
       disabled={!onView}
     >
       {entry.label}

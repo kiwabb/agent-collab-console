@@ -64,13 +64,13 @@ export function WorkspaceGrid({
     setIsSubmitting(true);
     try {
       await onCreate(newTitle.trim());
-      addToast({ type: "success", title: "Workspace created" });
+      addToast({ type: "success", title: t("workspace.toast.created") });
       setNewTitle("");
       setIsFormOpen(false);
     } catch (err) {
       addToast({
         type: "error",
-        title: "Failed to create workspace",
+        title: t("workspace.toast.createFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
@@ -105,20 +105,20 @@ export function WorkspaceGrid({
     
     try {
       await onDelete(deleteTarget.id);
-      addToast({ type: "success", title: "Workspace deleted" });
+      addToast({ type: "success", title: t("workspace.toast.deleted") });
       setDeleteTarget(null);
     } catch (err) {
       // Rollback - re-add to optimistic list
       setOptimisticWorkspaces((prev) => [...(prev ?? workspaces), deleteTarget]);
       addToast({
         type: "error",
-        title: "Failed to delete workspace",
+        title: t("workspace.toast.deleteFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setIsDeleting(false);
     }
-  }, [deleteTarget, onDelete, addToast]);
+  }, [deleteTarget, onDelete, addToast, t, workspaces]);
 
   return (
     <div className="p-8 max-w-7xl mx-auto w-full">
@@ -288,7 +288,7 @@ export function WorkspaceGrid({
             <EmptyState
               icon="workspace"
               title={t("workspace.empty")}
-              description="Create your first workspace to get started"
+              description={t("workspace.emptyCreatePrompt")}
               action={
                 <Button
                   onClick={() => setIsFormOpen(true)}
@@ -307,9 +307,9 @@ export function WorkspaceGrid({
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
-        title={t("workspace.delete")}
-        description={deleteTarget ? `Are you sure you want to delete "${deleteTarget.title}"? This action cannot be undone.` : undefined}
-        confirmText={t("workspace.delete")}
+        title={t("workspace.dialog.deleteSingleTitle")}
+        description={deleteTarget ? t("workspace.dialog.deleteSingleDescription", { name: deleteTarget.title }) : undefined}
+        confirmText={t("workspace.action.delete")}
         onConfirm={handleDeleteConfirm}
         isLoading={isDeleting}
         variant="destructive"

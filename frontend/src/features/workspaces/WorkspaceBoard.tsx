@@ -15,6 +15,7 @@ import {
 import type { CodexIssue, Project, RuntimeCatalog, Workspace } from "@/lib/types";
 import { IssueGrid } from "@/features/issues/IssueGrid";
 import { useToast } from "@/components/ui/toast";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface Props {
   workspaceId: string;
@@ -23,6 +24,7 @@ interface Props {
 export function WorkspaceBoard({ workspaceId }: Props) {
   const router = useRouter();
   const { addToast } = useToast();
+  const { t } = useI18n();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [issues, setIssues] = useState<CodexIssue[]>([]);
@@ -41,11 +43,15 @@ export function WorkspaceBoard({ workspaceId }: Props) {
       const cat = await getRuntimeCatalog().catch(() => null);
       setCatalog(cat);
     } catch (err) {
-      addToast({ type: "error", title: "Failed to load workspace", message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("workspace.toast.loadFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setIsLoading(false);
     }
-  }, [workspaceId, addToast]);
+  }, [workspaceId, addToast, t]);
 
   useEffect(() => {
     void load();
@@ -63,12 +69,16 @@ export function WorkspaceBoard({ workspaceId }: Props) {
       try {
         const issue = await createCodexIssue(workspaceId, title, description, baseBranch ?? null);
         setIssues((prev) => [issue, ...prev]);
-        addToast({ type: "success", title: "Issue created" });
+        addToast({ type: "success", title: t("toast.success.title") });
       } catch (err) {
-        addToast({ type: "error", title: "Failed to create issue", message: err instanceof Error ? err.message : String(err) });
+        addToast({
+          type: "error",
+          title: t("toast.error.title"),
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     },
-    [workspaceId, addToast]
+    [workspaceId, addToast, t]
   );
 
   const handleDelete = useCallback(
@@ -76,12 +86,16 @@ export function WorkspaceBoard({ workspaceId }: Props) {
       try {
         await deleteCodexIssue(issueId);
         setIssues((prev) => prev.filter((i) => i.id !== issueId));
-        addToast({ type: "success", title: "Issue deleted" });
+        addToast({ type: "success", title: t("toast.success.title") });
       } catch (err) {
-        addToast({ type: "error", title: "Failed to delete issue", message: err instanceof Error ? err.message : String(err) });
+        addToast({
+          type: "error",
+          title: t("toast.error.title"),
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     },
-    [addToast]
+    [addToast, t]
   );
 
   const handleExport = useCallback(async () => {
@@ -95,9 +109,13 @@ export function WorkspaceBoard({ workspaceId }: Props) {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      addToast({ type: "error", title: "Export failed", message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("workspace.toast.exportFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
-  }, [workspaceId, workspace, addToast]);
+  }, [workspaceId, workspace, addToast, t]);
 
   const handleImport = useCallback(() => {
     const input = document.createElement("input");
@@ -109,20 +127,27 @@ export function WorkspaceBoard({ workspaceId }: Props) {
       try {
         const text = await file.text();
         const imported = await importCodexIssues(workspaceId, text, "json");
-        addToast({ type: "success", title: `Imported ${imported.length} issues` });
+        addToast({
+          type: "success",
+          title: t("workspace.toast.imported", { count: imported.length }),
+        });
         await load();
       } catch (err) {
-        addToast({ type: "error", title: "Import failed", message: err instanceof Error ? err.message : String(err) });
+        addToast({
+          type: "error",
+          title: t("workspace.toast.importFailed"),
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     };
     input.click();
-  }, [workspaceId, addToast, load]);
+  }, [workspaceId, addToast, load, t]);
 
   return (
     <div className="px-8 py-6">
       <div className="mb-6 flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">{workspace?.title ?? "Workspace"}</h1>
+          <h1 className="text-2xl font-black tracking-tight">{workspace?.title ?? t("workspace.title")}</h1>
           {project && (
             <p className="text-xs text-text-muted mt-1">
               {project.name} · {project.repo_path}
@@ -135,14 +160,14 @@ export function WorkspaceBoard({ workspaceId }: Props) {
             onClick={() => void handleExport()}
             className="px-3 py-1.5 rounded border border-border-subtle hover:bg-surface-hover"
           >
-            Export
+            {t("workspace.export")}
           </button>
           <button
             type="button"
             onClick={handleImport}
             className="px-3 py-1.5 rounded border border-border-subtle hover:bg-surface-hover"
           >
-            Import
+            {t("workspace.import")}
           </button>
         </div>
       </div>

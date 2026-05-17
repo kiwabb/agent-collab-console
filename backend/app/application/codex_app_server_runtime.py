@@ -1,12 +1,28 @@
 import asyncio
 import json
+import logging
 import os
 import shlex
 import subprocess
+import time
 from datetime import datetime
 
 from app.application.json_rpc_client import AppServerClient, AsyncJsonRpcPeer, JsonRpcCallbacks
 from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime, is_agent_message_item_type
+
+
+logger = logging.getLogger(__name__)
+
+
+# Total turn budget. Even a healthy Engineer/QA pass should fit comfortably
+# in this. Bumped 600 → 480 to fail faster than the absurd default; keep
+# overridable via env for slow runners.
+CODEX_TURN_TIMEOUT_S = int(os.getenv("CODEX_TURN_TIMEOUT_S", "480"))
+# Idle (stdout-silence) timeout. Catches the failure mode where the Codex
+# app server stops streaming after a tool_use but never feeds the tool
+# result back into the model — the total-turn timeout alone would let the
+# graph wait the full budget for nothing.
+CODEX_IDLE_TIMEOUT_S = int(os.getenv("CODEX_IDLE_TIMEOUT_S", "180"))
 
 
 class CodexAppServerRuntime(BaseProcessRuntime):
@@ -108,14 +124,69 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         )
 
         await self._append_log(workspace_id, "stdin", prompt_text, task_id)
+        # Seed the idle clock so the watchdog has a starting reference.
+        entry.last_event_at = time.monotonic()
+
         if wait and evt:
+            # Total-turn deadline + idle-stdout deadline. Whichever trips first
+            # aborts the task, so a stuck tool-result loop fails in 3 min
+            # instead of hanging the full 8-min budget.
             try:
-                await asyncio.wait_for(evt.wait(), timeout=600)
+                await asyncio.wait_for(
+                    self._wait_with_idle_watchdog(evt, entry),
+                    timeout=CODEX_TURN_TIMEOUT_S,
+                )
             except asyncio.TimeoutError:
+                logger.warning(
+                    "codex turn exceeded total budget %ss for task=%s",
+                    CODEX_TURN_TIMEOUT_S, task_id,
+                )
+                await self._abort_for_timeout(task_id, entry, reason="turn_timeout")
                 return "timeout"
+            if entry.had_error:
+                return "timeout" if getattr(entry, "_timeout_reason", None) else "failed"
             return "done"
 
         return "responding"
+
+    async def _wait_with_idle_watchdog(self, evt: asyncio.Event, entry: AsyncProcessEntry) -> None:
+        """Resolve when the turn completes OR when stdout has been silent
+        for CODEX_IDLE_TIMEOUT_S — whichever first."""
+        while not evt.is_set():
+            try:
+                await asyncio.wait_for(evt.wait(), timeout=15)
+                return
+            except asyncio.TimeoutError:
+                idle_for = time.monotonic() - (entry.last_event_at or time.monotonic())
+                if idle_for >= CODEX_IDLE_TIMEOUT_S:
+                    logger.warning(
+                        "codex turn idle %.0fs (threshold %ss) — aborting",
+                        idle_for, CODEX_IDLE_TIMEOUT_S,
+                    )
+                    return  # caller will see evt not set + had_error set
+            # else: loop and re-check both signals
+
+    async def _abort_for_timeout(self, task_id: str | None, entry: AsyncProcessEntry, *, reason: str) -> None:
+        """Mark the task failed and kill the subprocess so downstream
+        rework / replan logic fires immediately."""
+        entry.had_error = True
+        entry._timeout_reason = reason
+        msg = (
+            "Codex turn aborted by framework: "
+            f"{reason} (idle threshold {CODEX_IDLE_TIMEOUT_S}s, total budget {CODEX_TURN_TIMEOUT_S}s). "
+            "The CLI stopped streaming events — most likely the tool-result loop hung."
+        )
+        if not entry.result_text:
+            entry.result_text = msg
+        try:
+            await self._mark_task_failed(task_id, entry)
+        except Exception:  # noqa: BLE001
+            pass
+        # Drop the subprocess so the next dispatch can spawn a fresh one.
+        try:
+            await self.terminate_task(task_id) if task_id else None
+        except Exception:  # noqa: BLE001
+            pass
 
     async def terminate_task(self, task_id: str):
         # Clean up specific client map
@@ -325,6 +396,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         return entry
 
     async def _on_raw_line(self, workspace_id: str, line: str, entry, task_id: str | None):
+        # Update idle-watchdog clock: every raw line counts as activity, so
+        # a healthy stream of tool_use / delta / item events keeps the task
+        # alive even on a long generation; only true stdout silence trips.
+        entry.last_event_at = time.monotonic()
         await self._append_log(workspace_id, "stdout", line, task_id)
         if entry.alive:
             await self._capture_on_reader(workspace_id, line, entry, task_id)

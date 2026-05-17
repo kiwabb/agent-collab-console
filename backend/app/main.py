@@ -1,5 +1,4 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 import logging
@@ -18,9 +17,6 @@ from app.interfaces.api import router as api_router
 from app.interfaces.codex_ws import router as codex_ws_router
 from app.interfaces.sse import router as sse_router
 
-# Capture startup time once at module load — used by /api/codex/version
-_started_at = datetime.now(timezone.utc).isoformat()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -28,6 +24,43 @@ async def lifespan(app: FastAPI):
     import asyncio
     from app.application.event_bus import event_bus
     event_bus.set_loop(asyncio.get_running_loop())
+
+    # Recover orphan execution_processes left over from a previous backend
+    # process. Under `uvicorn --reload` the parent gets SIGKILLed mid-stream
+    # and child SDK subprocesses die — the DB rows stay `status=Running`
+    # forever, blocking the task from progressing. On boot, mark any such
+    # row as `Failed` (with a recovery note) and propagate to the parent
+    # task so the UI shows the failure and Retry becomes available.
+    try:
+        from app.bootstrap import async_store
+        from datetime import datetime
+        if async_store is not None:
+            orphans = await async_store.list_execution_processes()
+            recovered = 0
+            for proc in orphans:
+                if str(proc.status).lower() != "running":
+                    continue
+                await async_store.update_execution_process_status(
+                    proc.id, status="Failed", exit_code=-1, completed_at=datetime.now(),
+                )
+                # Mark the parent task so the UI surfaces a terminal state.
+                if proc.task_id:
+                    task = await async_store.load_codex_task(proc.task_id)
+                    if task is not None and task.status in ("responding", "running"):
+                        task.status = "failed"
+                        task.result = (
+                            (task.result or "")
+                            + "\n\n[recovery] Backend was restarted while this task was running; "
+                            + "the subprocess was killed and this task was marked failed on boot."
+                        ).strip()
+                        task.updated_at = datetime.now()
+                        await async_store.save_codex_task(task)
+                recovered += 1
+            if recovered:
+                logger.info("Recovered %d orphan execution processes from previous run", recovered)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Orphan recovery failed: %s", exc)
+
     # Seed built-in workflow agents (idempotent — only creates missing rows).
     try:
         from app.bootstrap import async_store, WORKFLOW_DAG_ENABLED
@@ -68,11 +101,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Agent Collaboration Console", lifespan=lifespan)
-
-# Initialize app.state.started_at as early as possible so it is available even
-# when the app is instantiated directly (e.g., in TestClient session fixtures
-# that do not explicitly enter the lifespan context).
-app.state.started_at = _started_at
 
 
 # FastAPI / Starlette already provide good defaults for HTTPException and

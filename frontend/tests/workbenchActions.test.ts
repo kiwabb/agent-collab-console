@@ -5,15 +5,13 @@ import { createIssueAndInitialTask, runCodexTaskWithExecutor } from "../src/feat
 import { updateCodexTaskExecutor, chatCodexTask, refineCodexTask, rerunCodexTask, sendCodexTask } from "../src/lib/api";
 import type { CodexTask } from "@/lib/types";
 
-test("createIssueAndInitialTask runs the initial task after creating it", async () => {
+test("createIssueAndInitialTask creates issue then auto-starts the DAG graph", async () => {
   const calls: string[] = [];
 
   const result = await createIssueAndInitialTask({
     workspaceId: "ws-1",
     title: "Add delete button",
     description: "Please add a delete action",
-    executor: "codex",
-    issueTitle: "Requirements - Add delete button",
     createCodexIssue: async (workspaceId, title, description) => {
       calls.push(`issue:${workspaceId}:${title}:${description}`);
       return {
@@ -33,48 +31,18 @@ test("createIssueAndInitialTask runs the initial task after creating it", async 
         updated_at: null,
       };
     },
-    createCodexTask: async (workspaceId, title, prompt, parentTaskId, executor, role, issueId, phase, provider, model) => {
-      calls.push(`task:${workspaceId}:${title}:${prompt}:${parentTaskId}:${executor}:${role}:${issueId}:${phase}`);
+    autoStartIssueGraph: async (issueId) => {
+      calls.push(`autoStart:${issueId}`);
       return {
-        id: "task-1",
-        session_id: workspaceId,
-        project_id: null,
+        id: "graph-1",
         issue_id: issueId,
-        phase,
-        title,
-        prompt,
-        role,
-        executor,
-        provider,
-        model,
-        status: "pending",
-        result: null,
-        parent_task_id: parentTaskId,
-        task_kind: "normal",
-        blocked_by_help_id: null,
-        workspace_path: null,
-        git_branch: null,
-        git_base_branch: null,
-        git_worktree_path: null,
-        git_merge_status: "open",
-        git_last_commit_sha: null,
-        resume_session_id: null,
-        resume_message_id: null,
-        last_execution_process_id: null,
-        created_at: null,
-        updated_at: null,
-      };
-    },
-    runCodexTask: async (taskId) => {
-      calls.push(`run:${taskId}`);
-      return {
-        id: "process-1",
-        task_id: taskId,
-        session_id: "ws-1",
-        status: "Running",
-        exit_code: null,
-        started_at: null,
-        completed_at: null,
+        preset_id: null,
+        status: "running",
+        dag_json: "{}",
+        created_by: "console",
+        locked_at: null,
+        nodes: [],
+        edges: [],
         created_at: null,
         updated_at: null,
       };
@@ -82,13 +50,9 @@ test("createIssueAndInitialTask runs the initial task after creating it", async 
   });
 
   assert.equal(result.issue.id, "issue-1");
-  assert.equal(result.initialTask.id, "task-1");
-  assert.equal(result.initialTask.last_execution_process_id, "process-1");
-  assert.equal(result.executionProcess.id, "process-1");
   assert.deepEqual(calls, [
     "issue:ws-1:Add delete button:Please add a delete action",
-    "task:ws-1:Requirements - Add delete button:Please add a delete action:null:codex:product_manager:issue-1:requirements",
-    "run:task-1",
+    "autoStart:issue-1",
   ]);
 });
 

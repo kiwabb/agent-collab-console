@@ -130,12 +130,28 @@ class RuntimeCatalogService:
 
         Raises RuntimeCatalogValidationError if configuration is invalid.
         """
-        # Validate executor exists and is enabled
+        # Validate executor exists and is enabled. If the requested executor
+        # is missing or disabled but the catalog has *some* enabled executor,
+        # fall back to it. This lets DAG-spawned tasks that inherit legacy
+        # `agent.default_executor = "codex"` still run on a catalog that only
+        # has e.g. a `claude`-type minimax executor configured.
         executor_config = self._find_executor(catalog, executor)
-        if executor_config is None:
-            raise RuntimeCatalogValidationError(f"Unknown executor: {executor}")
-        if not executor_config.enabled:
-            raise RuntimeCatalogValidationError(f"Executor '{executor}' is disabled")
+        if executor_config is None or not executor_config.enabled:
+            fallback = next((e for e in catalog.executors if e.enabled), None)
+            if fallback is None:
+                if executor_config is None:
+                    raise RuntimeCatalogValidationError(f"Unknown executor: {executor}")
+                raise RuntimeCatalogValidationError(f"Executor '{executor}' is disabled")
+            import logging
+            logging.getLogger(__name__).info(
+                "Runtime catalog: requested executor %r not available; falling back to %r",
+                executor, fallback.id,
+            )
+            executor_config = fallback
+            executor = fallback.id
+            # Reset provider/model so they're re-resolved against the fallback.
+            provider = None
+            model = None
 
         # Resolve provider
         if provider == "None" or provider == "":

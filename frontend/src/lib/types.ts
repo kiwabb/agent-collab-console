@@ -94,6 +94,9 @@ export interface CodexSession {
   log_path: string | null;
   thread_id: string | null;
   claude_thread_id: string | null;
+  settings: {
+    plan_first_pm?: boolean;
+  };
   messages: CodexMessage[];
 }
 
@@ -128,6 +131,7 @@ export interface CodexIssue {
   description: string | null;
   current_phase: string;
   status: string;
+  review_comment?: string | null;
   is_pinned?: boolean;
   milestone?: string | null;
   git_branch: string | null;
@@ -135,6 +139,10 @@ export interface CodexIssue {
   git_worktree_path: string | null;
   git_merge_status: GitMergeStatus;
   git_last_commit_sha: string | null;
+  /** S2-PR — `gh pr create` URL once a PR is opened for this issue. */
+  github_pr_url?: string | null;
+  /** Mirror of `gh pr view --json state,reviewDecision` → "STATE:DECISION". */
+  github_pr_state?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -433,7 +441,9 @@ export interface ResolveApprovalRequest {
 }
 
 export interface UpdateCodexTaskRequest {
-  executor?: "codex" | "claude";
+  // Catalog executor id (or legacy "codex"/"claude" type string).
+  // Backend `UpdateCodexTaskRequest.executor: str | None` accepts any string.
+  executor?: string | null;
   provider?: string | null;
   model?: string | null;
 }

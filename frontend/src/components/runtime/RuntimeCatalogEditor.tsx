@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import type {
   RuntimeCatalog,
@@ -20,6 +21,19 @@ interface RuntimeCatalogEditorProps {
   onSave?: (catalog: RuntimeCatalog) => Promise<void>;
   className?: string;
 }
+
+const EXECUTOR_DEFAULTS: Record<"claude" | "codex", { label: string; api_endpoint: string; default_model: string }> = {
+  claude: {
+    label: "Claude",
+    api_endpoint: "https://api.anthropic.com",
+    default_model: "claude-sonnet-4-6",
+  },
+  codex: {
+    label: "Codex",
+    api_endpoint: "https://api.openai.com/v1",
+    default_model: "gpt-5-codex",
+  },
+};
 
 function normalizeCatalog(catalog: RuntimeCatalog): RuntimeCatalog {
   return {
@@ -39,13 +53,29 @@ export function RuntimeCatalogEditor({
   className,
 }: RuntimeCatalogEditorProps) {
   const { t } = useI18n();
+  const { addToast } = useToast();
   const [localCatalog, setLocalCatalog] = useState<RuntimeCatalog>(() => normalizeCatalog(catalog));
   const [addingNew, setAddingNew] = useState(false);
-  const [newExecutorLabel, setNewExecutorLabel] = useState("");
+  const [newExecutorLabel, setNewExecutorLabel] = useState(EXECUTOR_DEFAULTS.claude.label);
   const [newExecutorType, setNewExecutorType] = useState<"claude" | "codex">("claude");
-  const [newApiEndpoint, setNewApiEndpoint] = useState("");
+  const [newApiEndpoint, setNewApiEndpoint] = useState(EXECUTOR_DEFAULTS.claude.api_endpoint);
   const [newApiKey, setNewApiKey] = useState("");
-  const [newDefaultModel, setNewDefaultModel] = useState("");
+  const [newDefaultModel, setNewDefaultModel] = useState(EXECUTOR_DEFAULTS.claude.default_model);
+
+  const handleExecutorTypeChange = (nextType: "claude" | "codex") => {
+    const prevDefaults = EXECUTOR_DEFAULTS[newExecutorType];
+    const nextDefaults = EXECUTOR_DEFAULTS[nextType];
+    setNewExecutorType(nextType);
+    if (!newExecutorLabel.trim() || newExecutorLabel === prevDefaults.label) {
+      setNewExecutorLabel(nextDefaults.label);
+    }
+    if (!newApiEndpoint.trim() || newApiEndpoint === prevDefaults.api_endpoint) {
+      setNewApiEndpoint(nextDefaults.api_endpoint);
+    }
+    if (!newDefaultModel.trim() || newDefaultModel === prevDefaults.default_model) {
+      setNewDefaultModel(nextDefaults.default_model);
+    }
+  };
 
   useEffect(() => {
     setLocalCatalog(normalizeCatalog(catalog));
@@ -82,11 +112,11 @@ export function RuntimeCatalogEditor({
   };
 
   const handleAddExecutor = () => {
-    if (!newExecutorLabel.trim()) return;
+    const label = newExecutorLabel.trim() || EXECUTOR_DEFAULTS[newExecutorType].label;
 
     const newExecutor: RuntimeExecutorConfig = {
       id: crypto.randomUUID(),
-      label: newExecutorLabel.trim(),
+      label,
       enabled: true,
       executor_type: newExecutorType,
       api_endpoint: newApiEndpoint.trim() || null,
@@ -103,20 +133,20 @@ export function RuntimeCatalogEditor({
     handleChange(updatedCatalog);
 
     // Reset form
-    setNewExecutorLabel("");
+    setNewExecutorLabel(EXECUTOR_DEFAULTS.claude.label);
     setNewExecutorType("claude");
-    setNewApiEndpoint("");
+    setNewApiEndpoint(EXECUTOR_DEFAULTS.claude.api_endpoint);
     setNewApiKey("");
-    setNewDefaultModel("");
+    setNewDefaultModel(EXECUTOR_DEFAULTS.claude.default_model);
     setAddingNew(false);
   };
 
   const cancelAddExecutor = () => {
-    setNewExecutorLabel("");
+    setNewExecutorLabel(EXECUTOR_DEFAULTS.claude.label);
     setNewExecutorType("claude");
-    setNewApiEndpoint("");
+    setNewApiEndpoint(EXECUTOR_DEFAULTS.claude.api_endpoint);
     setNewApiKey("");
-    setNewDefaultModel("");
+    setNewDefaultModel(EXECUTOR_DEFAULTS.claude.default_model);
     setAddingNew(false);
   };
 
@@ -135,12 +165,20 @@ export function RuntimeCatalogEditor({
             try {
               const result = await validateRuntimeCatalog(localCatalog);
               if (result.valid) {
-                alert("Catalog is valid.");
+                addToast({ type: "success", title: "Catalog is valid" });
               } else {
-                alert("Validation failed: " + (result.error ?? "Unknown error"));
+                addToast({
+                  type: "error",
+                  title: "Validation failed",
+                  message: result.error ?? "Unknown error",
+                });
               }
             } catch (err) {
-              alert("Validation failed: " + (err instanceof Error ? err.message : String(err)));
+              addToast({
+                type: "error",
+                title: "Validation failed",
+                message: err instanceof Error ? err.message : String(err),
+              });
             }
           }}
           className="text-xs font-bold uppercase tracking-widest text-text-muted hover:text-foreground border border-border-subtle rounded-md px-3 py-1.5"
@@ -194,7 +232,7 @@ export function RuntimeCatalogEditor({
                         name="newExecutorType"
                         value="claude"
                         checked={newExecutorType === "claude"}
-                        onChange={() => setNewExecutorType("claude")}
+                        onChange={() => handleExecutorTypeChange("claude")}
                       />
                       {t("runtime.executor.claudeCli")}
                     </label>
@@ -204,7 +242,7 @@ export function RuntimeCatalogEditor({
                         name="newExecutorType"
                         value="codex"
                         checked={newExecutorType === "codex"}
-                        onChange={() => setNewExecutorType("codex")}
+                        onChange={() => handleExecutorTypeChange("codex")}
                       />
                       {t("runtime.executor.codexCli")}
                     </label>
@@ -333,12 +371,8 @@ function ExecutorCard({
                 "Test"
               )}
             </Button>
-            {testResult && (
-              <span className={cn("text-xs", testResult.success ? "text-green-500" : "text-destructive")}>
-                {testResult.success
-                  ? `${testResult.latency_ms}ms`
-                  : testResult.error?.slice(0, 50)}
-              </span>
+            {testResult?.success && (
+              <span className="text-xs text-green-500">{testResult.latency_ms}ms</span>
             )}
             <Button
               variant="ghost"
@@ -350,6 +384,11 @@ function ExecutorCard({
             </Button>
           </div>
         </div>
+        {testResult && !testResult.success && (
+          <p className="mt-2 break-words text-xs text-destructive" title={testResult.error}>
+            {testResult.error}
+          </p>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

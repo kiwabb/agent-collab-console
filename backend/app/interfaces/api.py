@@ -7,8 +7,9 @@ import shutil
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 import json
+import os
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Literal
 import subprocess
 
@@ -257,7 +258,25 @@ async def _refresh_task_result(task):
     if task.status == "done" and task.result:
         workspace = await codex_store.load_codex_workspace(task.session_id)
         workspace_title = workspace.title if workspace is not None else None
-        artifact = await role_workflow_service.persist_result(task, workspace_title=workspace_title)
+        # Persist artifacts but never let a persist failure poison the task's
+        # "done" state — the LLM produced output, the failure is a framework
+        # bug (schema mismatch, fs write, etc.) that the user should see but
+        # shouldn't roll back the run. Log to the project audit + tag the
+        # task result so the issue UI can render a warning chip.
+        try:
+            artifact = await role_workflow_service.persist_result(task, workspace_title=workspace_title)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("persist_result failed for task %s (role=%s)", task.id, getattr(task, "role", None))
+            try:
+                await codex_store.append_project_audit(
+                    project_id=getattr(task, "project_id", None),
+                    issue_id=task.issue_id,
+                    event=f"persist_failed:{type(exc).__name__}",
+                    base_branch=None,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return None
 
         # Automated Code Review Logic
         if task.role == "architect" and getattr(task, "task_kind", "normal") == "review" and task.parent_task_id:
@@ -433,12 +452,6 @@ def _get_task_runner():
 async def health_check():
     """Health check endpoint to verify this is the correct backend."""
     return {"service": "agent-collab-console", "version": "1.0"}
-
-
-@router.get("/browser-smoke")
-async def browser_smoke():
-    """Minimal smoke endpoint for browser health checks."""
-    return {"ok": True}
 
 
 @router.get("/utils/select-directory")
@@ -847,6 +860,231 @@ async def get_codex_stats():
     }
 
 
+@router.get("/codex/issues/{issue_id}/checklist")
+async def get_issue_checklist(issue_id: str):
+    """Per-issue acceptance checklist.
+
+    Reads PM's `acceptance_criteria` and matches them against QA's
+    `acceptance_coverage`, plus the engineer's `completed_tasks`. Items
+    are marked covered when QA explicitly mentions them OR the engineer
+    flagged them done.
+
+    Returns:
+        {
+          criteria: [{text, covered: bool, source: str | null}],
+          qa_status: str | null,
+          engineer_status: str | null
+        }
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    import json as _json
+    from pathlib import Path
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    worktree = issue.git_worktree_path
+    if not worktree:
+        return {"criteria": [], "qa_status": None, "engineer_status": None}
+
+    def _read_json(rel: str) -> dict | None:
+        p = Path(worktree) / "issues" / issue_id / rel
+        if not p.exists():
+            return None
+        try:
+            return _json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    prd = _read_json("pm/prd.json") or {}
+    qa = _read_json("qa/qa_plan.json") or {}
+    eng = None
+    eng_dir = Path(worktree) / "issues" / issue_id / "engineer"
+    if eng_dir.exists():
+        for impl in sorted(eng_dir.glob("implementation-*.md")):
+            try:
+                txt = impl.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            eng = (eng or "") + "\n" + txt
+
+    criteria = prd.get("acceptance_criteria") or []
+    if not isinstance(criteria, list):
+        criteria = []
+    qa_cov = " || ".join(map(str, qa.get("acceptance_coverage") or [])).lower()
+    qa_status = qa.get("status") if isinstance(qa, dict) else None
+
+    out = []
+    for c in criteria:
+        text = str(c).strip()
+        if not text:
+            continue
+        # A criterion is "covered" if QA's acceptance_coverage list mentions
+        # any substantial slice of it (≥6 chars overlap). Cheap but works
+        # well for human-written criteria + LLM-written coverage notes.
+        snippet = " ".join(text.lower().split())
+        covered = False
+        source = None
+        if qa_cov:
+            for token in snippet.split():
+                if len(token) >= 6 and token in qa_cov:
+                    covered = True
+                    source = "qa"
+                    break
+        if not covered and eng:
+            eng_lower = eng.lower()
+            for token in snippet.split():
+                if len(token) >= 6 and token in eng_lower:
+                    covered = True
+                    source = "engineer"
+                    break
+        out.append({"text": text, "covered": covered, "source": source})
+
+    return {
+        "criteria": out,
+        "qa_status": qa_status,
+        "engineer_status": (
+            (prd.get("status") if isinstance(prd, dict) else None) or None
+        ),
+    }
+
+
+@router.get("/codex/cost-stats")
+async def get_codex_cost_stats(
+    issue_id: str | None = None,
+    workspace_id: str | None = None,
+    limit_per_scope: int = 5000,
+):
+    """Aggregate token usage from log events to give the UI a real-time
+    cost meter.
+
+    The Codex app server emits stream events that include a
+    `usage: {input_tokens, output_tokens, cache_creation_input_tokens,
+    cache_read_input_tokens}` field. We scan the raw stdout JSON,
+    extract the latest usage per assistant message and sum them.
+
+    Args:
+        issue_id: scope to one issue (preferred for issue-level meter)
+        workspace_id: scope to one workspace (preferred for session-level)
+        limit_per_scope: cap how many log rows we inspect to stay fast
+
+    Returns:
+        {input_tokens, output_tokens, cache_read_tokens, est_cost_usd, sample_size}
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    import json as _json
+    # Pricing knobs — overridable so the UI doesn't lie when you switch model.
+    # Defaults track gpt-5-mini-ish: $0.30 / 1M input, $1.20 / 1M output, free cache reads.
+    input_per_m = float(os.getenv("COST_USD_PER_M_INPUT", "0.30"))
+    output_per_m = float(os.getenv("COST_USD_PER_M_OUTPUT", "1.20"))
+    cache_per_m = float(os.getenv("COST_USD_PER_M_CACHE_READ", "0.075"))
+
+    target_session_ids: list[str] = []
+    target_task_ids: list[str] = []
+    if issue_id:
+        tasks_in_issue = await codex_store.list_codex_tasks(issue_id=issue_id)
+        # list_codex_tasks returns dicts, not models.
+        target_task_ids = [t["id"] for t in tasks_in_issue if t.get("id")]
+        if tasks_in_issue:
+            session_ids = {t.get("session_id") for t in tasks_in_issue if t.get("session_id")}
+            target_session_ids = list(session_ids)
+    elif workspace_id:
+        target_session_ids = [workspace_id]
+    else:
+        sessions = await codex_store.list_codex_sessions(project_id=None)
+        target_session_ids = [s.get("id") for s in sessions if s.get("id")]
+
+    input_tokens = 0
+    output_tokens = 0
+    cache_read_tokens = 0
+    sample_size = 0
+    seen_message_ids: set[str] = set()  # dedup re-emitted assistant messages
+
+    for sid in target_session_ids:
+        rows = []
+        if target_task_ids:
+            for tid in target_task_ids:
+                rows.extend(
+                    await codex_store.load_log_events(
+                        session_id=sid, task_id=tid, limit=limit_per_scope
+                    )
+                )
+        else:
+            rows = await codex_store.load_log_events(
+                session_id=sid, limit=limit_per_scope
+            )
+        for ev in rows:
+            content = ev.content or ""
+            if "usage" not in content or "input_tokens" not in content:
+                continue
+            try:
+                obj = _json.loads(content)
+            except (ValueError, TypeError):
+                continue
+            sample_size += 1
+            usage = _extract_usage(obj)
+            if not usage:
+                continue
+            msg_id = _extract_message_id(obj)
+            if msg_id and msg_id in seen_message_ids:
+                continue
+            if msg_id:
+                seen_message_ids.add(msg_id)
+            input_tokens += int(usage.get("input_tokens") or 0)
+            output_tokens += int(usage.get("output_tokens") or 0)
+            cache_read_tokens += int(usage.get("cache_read_input_tokens") or 0)
+
+    est_cost = (
+        input_tokens * input_per_m / 1_000_000
+        + output_tokens * output_per_m / 1_000_000
+        + cache_read_tokens * cache_per_m / 1_000_000
+    )
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "est_cost_usd": round(est_cost, 4),
+        "sample_size": sample_size,
+        "pricing": {
+            "input_per_m": input_per_m,
+            "output_per_m": output_per_m,
+            "cache_per_m": cache_per_m,
+        },
+    }
+
+
+def _extract_usage(obj):
+    """Pull the usage dict out of a Codex / Claude stream event payload.
+
+    Codex app server emits shapes like:
+      {"type":"assistant","message":{...,"usage":{...}}}
+      {"type":"stream_event","event":{"type":"message_delta","usage":{...}}}
+    """
+    if not isinstance(obj, dict):
+        return None
+    if isinstance(obj.get("usage"), dict):
+        return obj["usage"]
+    msg = obj.get("message")
+    if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
+        return msg["usage"]
+    event = obj.get("event")
+    if isinstance(event, dict) and isinstance(event.get("usage"), dict):
+        return event["usage"]
+    return None
+
+
+def _extract_message_id(obj):
+    if not isinstance(obj, dict):
+        return None
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        mid = msg.get("id")
+        if isinstance(mid, str):
+            return mid
+    return None
+
+
 @router.get("/projects/{project_id}/audit")
 async def get_project_audit(project_id: str, limit: int = 50, since: str | None = None):
     """Recent project events (most recent first).
@@ -932,18 +1170,21 @@ async def repair_project(project_id: str):
 
 
 class CreateCodexSessionRequest(BaseModel):
-    title: str
+    # Title must be at least 3 chars to avoid the historical "1"/"2" anonymous
+    # workspaces that are indistinguishable in the sidebar. The UI shows a
+    # generated fallback for legacy rows; new rows are required to pick a
+    # real name.
+    title: str = Field(min_length=3)
     project_id: str
     cwd: str = ""
 
 
-@router.get("/codex/version")
-async def get_codex_version(request: Request):
-    """Return Codex service version and startup time."""
-    return {
-        "version": "0.1.0",
-        "started_at": request.app.state.started_at,
-    }
+class UpdateCodexWorkspaceRequest(BaseModel):
+    # PATCH validation: when title is provided it must be ≥3 chars; omitting
+    # the field entirely is still valid (you might only be updating cwd).
+    title: str | None = Field(default=None, min_length=3)
+    cwd: str | None = None
+    plan_first_pm: bool | None = None
 
 
 @router.get("/codex/status")
@@ -1315,6 +1556,44 @@ async def delete_all_codex_workspaces():
 delete_all_codex_sessions = delete_all_codex_workspaces
 
 
+@router.patch("/codex/workspaces/{workspace_id}")
+@router.patch("/codex/sessions/{workspace_id}")
+async def update_codex_workspace(workspace_id: str, request: UpdateCodexWorkspaceRequest):
+    """Update workspace title and/or cwd. Only provided fields are changed."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    workspace = await codex_store.load_codex_workspace(workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
+    if request.title is not None:
+        title = request.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="title cannot be empty")
+        workspace.title = title
+    if request.cwd is not None:
+        workspace.cwd = request.cwd
+    if request.plan_first_pm is not None:
+        settings = dict(getattr(workspace, "settings", {}) or {})
+        settings["plan_first_pm"] = bool(request.plan_first_pm)
+        workspace.settings = settings
+    from datetime import datetime
+    workspace.last_active_at = datetime.now()
+    await codex_store.save_codex_workspace(workspace)
+    await event_bus.append({
+        "type": "session_updated",
+        "session": {
+            "id": workspace.id,
+            "title": workspace.title,
+            "project_id": workspace.project_id,
+            "status": workspace.status,
+        },
+    })
+    return workspace
+
+
+update_codex_session = update_codex_workspace
+
+
 @router.delete("/codex/workspaces/{workspace_id}")
 @router.delete("/codex/sessions/{workspace_id}")
 async def delete_codex_workspace(workspace_id: str):
@@ -1374,6 +1653,10 @@ class UpdateIssuePhaseRequest(BaseModel):
 
 class UpdateIssuePinRequest(BaseModel):
     is_pinned: bool
+
+
+class ApprovePlanRequest(BaseModel):
+    review_comment: str | None = None
 
 
 @router.post("/codex/issues", status_code=201)
@@ -1468,19 +1751,65 @@ async def update_codex_issue_pin(issue_id: str, request: UpdateIssuePinRequest):
     return issue
 
 
+@router.post("/codex/issues/{issue_id}/approve-plan")
+async def approve_codex_issue_plan(issue_id: str, request: ApprovePlanRequest):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
+    if issue.status != "awaiting_approval":
+        raise HTTPException(status_code=409, detail="Issue is not awaiting plan approval")
+
+    review_comment = (request.review_comment or "").strip()
+    if review_comment:
+        issue.review_comment = review_comment
+    elif not (issue.review_comment or "").strip():
+        raise HTTPException(status_code=400, detail="review_comment cannot be empty")
+
+    issue.status = "in_progress"
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+
+    graph = await codex_store.load_workflow_graph_for_issue(issue_id)
+    if graph is None:
+        # Approval can still be recorded even if the graph was removed, but
+        # the scheduler can't resume without one.
+        return issue
+
+    from app.application.workflow_scheduler import WorkflowScheduler
+    from app.application.event_bus import _workflow_task_dispatcher
+
+    scheduler = WorkflowScheduler(store=codex_store, task_dispatcher=_workflow_task_dispatcher)
+    await scheduler.settle(graph.id)
+    return issue
+
+
 @router.post("/codex/issues/{issue_id}/duplicate", response_model=CodexIssue, status_code=201)
-async def duplicate_codex_issue(issue_id: str):
+async def duplicate_codex_issue(issue_id: str, from_current: bool = False):
+    """Create a sibling issue.
+
+    Default behaviour ("duplicate"): branches off the project's default
+    branch — useful for retrying the same goal from scratch.
+
+    `from_current=true` (Fork): branches off the source issue's current
+    branch instead, so the new issue inherits all of the original's
+    in-progress changes. This is the Devin-style "fork what I have and
+    try a different direction" — pair with a steer note to push the
+    fork in a new direction.
+    """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
     import uuid
+    suffix = " (fork)" if from_current else " (copy)"
     new_issue = CodexIssue(
         id=str(uuid.uuid4()),
         session_id=issue.session_id,
         project_id=issue.project_id,
-        title=f"{issue.title} (copy)",
+        title=f"{issue.title}{suffix}",
         description=issue.description,
         current_phase="requirements",
         status="open",
@@ -1492,6 +1821,10 @@ async def duplicate_codex_issue(issue_id: str):
         project = await codex_store.load_project(new_issue.project_id)
         if project is not None:
             try:
+                # When forking from current state, override the base branch
+                # so the new worktree inherits the source issue's commits.
+                if from_current and issue.git_branch:
+                    new_issue.git_base_branch = issue.git_branch
                 branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(project, new_issue)
                 new_issue.git_branch = branch
                 new_issue.git_worktree_path = worktree_path
@@ -1514,12 +1847,23 @@ async def get_codex_issue_artifacts(issue_id: str):
     if workspace is None:
         return []
 
-    # Load artifacts from DB
-    rows = await codex_store.list_artifacts(issue_id)
-
-    # If no DB records exist, fall back to disk scanning and backfill DB
-    if not rows:
-        rows = await _scan_and_backfill_artifacts(issue_id, issue.session_id, codex_store)
+    # Always scan disk + backfill DB. The previous "only scan if DB is empty"
+    # short-circuit caused a real bug: once PM's artifacts seeded the DB,
+    # subsequent Architect/Engineer/QA artifacts that landed on disk later
+    # never got picked up. The scan is bounded (≤4 dirs * small file counts)
+    # and only writes new rows.
+    disk_rows = await _scan_and_backfill_artifacts(issue_id, issue.session_id, codex_store)
+    db_rows = await codex_store.list_artifacts(issue_id)
+    # Union, preferring the freshest disk scan when there's a name collision.
+    by_name: dict[str, dict] = {row["name"]: row for row in db_rows}
+    for row in disk_rows:
+        by_name[row["name"]] = row
+    # Filter framework control files even when they were previously persisted
+    # to the artifacts table (legacy rows). Matches the scanner's blocklist.
+    def _is_user_artifact(name: str) -> bool:
+        base = name.rsplit("/", 1)[-1]
+        return not (base.startswith("_") or base.startswith("."))
+    rows = [r for r in by_name.values() if _is_user_artifact(r["name"])]
 
     MAX_FILE_SIZE = 1024 * 1024
     result = []
@@ -1570,27 +1914,60 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
     if str(fallback_root) not in {str(r) for r in issue_roots}:
         issue_roots.append(fallback_root)
 
-    # PM backfill: for each done pm task, check its own worktree for prd files
-    # and trigger persist_result if missing.
+    # Backfill missing artifacts for *all* managed roles. For each done
+    # task, if its expected artifact dir is empty, ask the role workflow
+    # service to persist again (it parses task.result and writes to disk).
+    # Without this, Architect/Engineer/QA artifacts only appear when their
+    # task is individually fetched by the UI — the Artifacts tab gets blank.
+    role_to_subdir = {
+        "product_manager": "pm",
+        "architect": "architect",
+        "engineer": "engineer",
+        "qa": "qa",
+    }
+    # Canonical output file each role MUST produce. The backfill check below
+    # uses these instead of "any file in the subdir" — the prior heuristic
+    # was tricked by PM's auto-created `pm/requirement.md` stub into
+    # believing the PRD was already on disk, so prd.json was never written.
+    role_canonical_file = {
+        "product_manager": ["pm/prd.json", "pm/bugfix.md"],
+        "architect": ["architect/system_design.json"],
+        "engineer": [None],  # engineer file name embeds task id → checked below
+        "qa": ["qa/qa_plan.json"],
+    }
     for task_row in sorted_tasks:
-        if task_row.get("role") != "product_manager":
+        role = task_row.get("role")
+        subdir = role_to_subdir.get(role)
+        if not subdir:
             continue
         if str(task_row.get("status") or "").lower() != "done":
             continue
         workspace_path = task_row.get("workspace_path")
         if not workspace_path:
             continue
-        pm_dir = Path(workspace_path) / "issues" / issue_id / "pm"
-        if not ((pm_dir / "prd.json").exists() and (pm_dir / "prd.md").exists()):
+        artifact_dir = Path(workspace_path) / "issues" / issue_id / subdir
+        # Did the role actually produce its canonical artifact?
+        if role == "engineer":
+            persisted = artifact_dir.exists() and any(artifact_dir.glob("implementation-*.md"))
+        else:
+            wanted = role_canonical_file.get(role, [])
+            persisted = any(
+                (Path(workspace_path) / "issues" / issue_id / name).exists()
+                for name in wanted
+                if name
+            )
+        if not persisted:
             task = await store.load_codex_task(task_row.get("id"))
             if task is not None and getattr(task, "result", None):
                 ws = await store.load_codex_workspace(task.session_id)
                 try:
                     await role_workflow_service.persist_result(task, workspace_title=ws.title if ws else None)
-                except ProductManagerArtifactError:
-                    pass
-        if (pm_dir / "prd.json").exists() and (pm_dir / "prd.md").exists():
-            break
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Artifacts backfill: persist_result failed for %s task %s: %s",
+                        role, task.id, exc,
+                    )
 
     artifact_map: dict[str, dict] = {}
 
@@ -1608,6 +1985,10 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
             if not target_dir.exists() or not target_dir.is_dir():
                 return
             for item in sorted(target_dir.iterdir()):
+                # Skip framework control files (steer, future ones). These
+                # live alongside artifacts but aren't user-facing outputs.
+                if item.name.startswith("_") or item.name.startswith("."):
+                    continue
                 if item.is_dir():
                     _walk(item)
                 elif item.is_file() and item.name != ".DS_Store":
@@ -1731,10 +2112,13 @@ class MergeIssueRequest(BaseModel):
 
 @router.post("/codex/issues/{issue_id}/abandon")
 async def abandon_codex_issue(issue_id: str):
-    """Mark an issue's branch as abandoned and clean up its worktree.
+    """Soft-abandon an issue: flip status to abandoned but keep the worktree
+    on disk. The frontend shows a 60s undo countdown; if the user clicks
+    Undo we just restore the status. To actually drop the worktree the
+    frontend POSTs to /abandon/finalize once the countdown expires.
 
-    The DB record stays; only the on-disk worktree + branch state is dropped so
-    the user can keep the issue around as history without it counting as open.
+    This decouples the destructive cleanup from the user-facing "abandon"
+    action so accidents are recoverable.
     """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
@@ -1743,15 +2127,7 @@ async def abandon_codex_issue(issue_id: str):
         raise HTTPException(status_code=404, detail="Issue not found")
     if issue.git_merge_status == "merged":
         raise HTTPException(status_code=409, detail="cannot abandon a merged issue")
-    if issue.project_id:
-        project = await codex_store.load_project(issue.project_id)
-        if project is not None:
-            try:
-                await worktree_manager.cleanup_issue_worktree(project, issue)
-            except Exception:
-                pass
     issue.git_merge_status = "abandoned"
-    issue.git_worktree_path = None
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
     await codex_store.append_project_audit(
@@ -1764,6 +2140,363 @@ async def abandon_codex_issue(issue_id: str):
         "type": "issue_abandoned",
         "issue_id": issue.id,
     })
+    return issue
+
+
+@router.get("/codex/workflow-templates")
+async def list_workflow_templates():
+    """List the pre-baked workflow templates the UI can offer at issue
+    creation. Each template skips/adds phases for common intents
+    (feature/bug/hotfix/refactor/docs)."""
+    from app.application.workflow_templates import list_template_summaries
+    return {"templates": list_template_summaries()}
+
+
+class ApplyTemplateRequest(BaseModel):
+    template_id: str
+
+
+@router.post("/codex/issues/{issue_id}/apply-template")
+async def apply_workflow_template(issue_id: str, request: ApplyTemplateRequest):
+    """Materialize a template's DAG for the given issue. Replaces any
+    existing graph for this issue."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    from app.application.workflow_templates import get_template, template_to_dag
+    from app.application.workflow_scheduler import materialize_graph_from_dag
+
+    template = get_template(request.template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail=f"Template '{request.template_id}' not found")
+
+    agents = await codex_store.list_agents(workspace_id=None)
+    dag = template_to_dag(template, agents)
+    if dag is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Template references a role that isn't registered as an agent",
+        )
+    graph = await materialize_graph_from_dag(
+        codex_store, issue_id, dag, created_by=f"template:{template.id}"
+    )
+    return {
+        "graph_id": graph.id,
+        "template_id": template.id,
+        "nodes": len(dag["nodes"]),
+        "edges": len(dag["edges"]),
+    }
+
+
+class CreatePRRequest(BaseModel):
+    title: str | None = None
+    body: str | None = None
+    draft: bool = False
+
+
+@router.post("/codex/issues/{issue_id}/pr/create")
+async def create_github_pr(issue_id: str, request: CreatePRRequest):
+    """Push the issue's worktree branch to origin and open a GitHub PR via
+    `gh pr create`. This is the Devin-killer differentiator — Devin can
+    plan & code but can't open a PR against your private remote because
+    it's a cloud service. We do it from your local gh CLI.
+
+    Requires:
+      * `gh` in PATH and authenticated (`gh auth status`)
+      * The project repo has an `origin` remote pointing at GitHub
+      * The issue has an active worktree
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if not issue.git_worktree_path:
+        raise HTTPException(status_code=409, detail="Issue has no active worktree")
+    if not issue.git_branch:
+        raise HTTPException(status_code=409, detail="Issue has no git branch")
+    if issue.github_pr_url:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Issue already has a PR: {issue.github_pr_url}",
+        )
+
+    import shutil
+    if not shutil.which("gh"):
+        raise HTTPException(
+            status_code=412,
+            detail="gh CLI is not installed. Install from https://cli.github.com/ first.",
+        )
+
+    title = (request.title or issue.title or "").strip()
+    body = (request.body or _build_default_pr_body(issue) or "").strip()
+
+    base_branch = issue.git_base_branch or "main"
+    head_branch = issue.git_branch
+
+    # 1. Push the branch. -u sets upstream so future fetches work.
+    push = await _run_subprocess(
+        ["git", "push", "-u", "origin", head_branch],
+        cwd=issue.git_worktree_path,
+        timeout_s=60,
+    )
+    if push.returncode != 0:
+        raise HTTPException(
+            status_code=502,
+            detail=f"git push failed: {push.stderr.strip()[:500]}",
+        )
+
+    # 2. Open the PR.
+    args = ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
+            "--title", title, "--body", body]
+    if request.draft:
+        args.append("--draft")
+    create = await _run_subprocess(args, cwd=issue.git_worktree_path, timeout_s=60)
+    if create.returncode != 0:
+        raise HTTPException(
+            status_code=502,
+            detail=f"gh pr create failed: {create.stderr.strip()[:500]}",
+        )
+
+    pr_url = create.stdout.strip().splitlines()[-1] if create.stdout.strip() else ""
+    issue.github_pr_url = pr_url
+    issue.github_pr_state = "OPEN:REVIEW_REQUIRED"
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+    await codex_store.append_project_audit(
+        project_id=issue.project_id,
+        issue_id=issue.id,
+        event="github_pr_created",
+        base_branch=base_branch,
+    )
+    await event_bus.append({
+        "type": "issue_pr_created",
+        "issue_id": issue.id,
+        "pr_url": pr_url,
+    })
+    return issue
+
+
+@router.post("/codex/issues/{issue_id}/pr/refresh")
+async def refresh_github_pr(issue_id: str):
+    """Poll `gh pr view` for the issue's PR and update local state. If the
+    PR has merged, also flip `git_merge_status` to "merged". If reviewers
+    requested changes, the latest review body is stuffed into the most
+    recent task's `review_comment` so the existing rework loop fires."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if not issue.github_pr_url:
+        raise HTTPException(status_code=409, detail="Issue has no PR yet")
+    import shutil
+    if not shutil.which("gh"):
+        raise HTTPException(status_code=412, detail="gh CLI is not installed")
+
+    cwd = issue.git_worktree_path or "."
+    view = await _run_subprocess(
+        ["gh", "pr", "view", issue.github_pr_url, "--json",
+         "state,reviewDecision,reviews,mergeStateStatus"],
+        cwd=cwd,
+        timeout_s=30,
+    )
+    if view.returncode != 0:
+        raise HTTPException(
+            status_code=502,
+            detail=f"gh pr view failed: {view.stderr.strip()[:500]}",
+        )
+    try:
+        data = json.loads(view.stdout)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="gh pr view returned non-JSON")
+
+    state = data.get("state") or "OPEN"
+    decision = data.get("reviewDecision") or ""
+    issue.github_pr_state = f"{state}:{decision}"
+
+    # Flip merge state if PR was merged remotely.
+    if state == "MERGED" and issue.git_merge_status != "merged":
+        issue.git_merge_status = "merged"
+
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+
+    # If reviewers requested changes, surface the most recent review body
+    # back into the engineer's review_comment so the agent re-runs.
+    if decision == "CHANGES_REQUESTED":
+        reviews = data.get("reviews") or []
+        latest_review_body = ""
+        if reviews:
+            latest_review_body = (reviews[-1] or {}).get("body") or ""
+        if latest_review_body:
+            tasks = await codex_store.list_codex_tasks(issue_id=issue.id)
+            engineer_tasks = [t for t in tasks if t.get("role") == "engineer"]
+            if engineer_tasks:
+                eng = await codex_store.load_codex_task(engineer_tasks[-1]["id"])
+                if eng:
+                    eng.status = "pending"
+                    eng.review_comment = (
+                        "GitHub PR review requested changes. Address the feedback below "
+                        "before re-submitting.\n\n" + latest_review_body
+                    )
+                    eng.updated_at = datetime.now()
+                    await codex_store.save_codex_task(eng)
+                    await event_bus.append({
+                        "type": "task_status",
+                        "task_id": eng.id,
+                        "session_id": eng.session_id,
+                        "status": "pending",
+                    })
+
+    return issue
+
+
+def _build_default_pr_body(issue) -> str:
+    parts = [
+        f"_Automated PR opened by agent-collab-console for issue `{issue.id}`._",
+        "",
+        "## Description",
+        issue.description or "(no description)",
+        "",
+        "## Branch",
+        f"- base: `{issue.git_base_branch or 'main'}`",
+        f"- head: `{issue.git_branch}`",
+    ]
+    return "\n".join(parts)
+
+
+async def _run_subprocess(args, *, cwd: str, timeout_s: int = 30):
+    """Async wrapper around subprocess that captures stdout/stderr with a
+    timeout. Returns a CompletedProcess-like object with .returncode,
+    .stdout, .stderr. Used for git/gh shell-outs from the API layer."""
+    import asyncio as _asyncio
+    import subprocess as _subprocess
+
+    def _run():
+        return _subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+
+    return await _asyncio.get_running_loop().run_in_executor(None, _run)
+
+
+class SteerRequest(BaseModel):
+    message: str
+
+
+@router.post("/codex/issues/{issue_id}/steer")
+async def steer_codex_issue(issue_id: str, request: SteerRequest):
+    """Inject a mid-run hint into the issue's worktree. The next time any
+    role agent runs for this issue, its prompt picks up `_steer.md` and
+    threads the user's note into the run.
+
+    Devin-style "💬 wait, use SHA-256 not MD5" message: you don't have to
+    wait for the current turn to finish; the hint lands on disk now and
+    sticks until cleared.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    msg = (request.message or "").strip()
+    if not msg:
+        raise HTTPException(status_code=400, detail="message cannot be empty")
+    if not issue.git_worktree_path:
+        raise HTTPException(status_code=409, detail="Issue has no active worktree")
+    from pathlib import Path
+    steer_path = Path(issue.git_worktree_path) / "issues" / issue.id / "_steer.md"
+    steer_path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    block = f"\n## {timestamp}\n{msg}\n"
+    existing = ""
+    if steer_path.exists():
+        try:
+            existing = steer_path.read_text(encoding="utf-8")
+        except OSError:
+            existing = ""
+    header = (
+        "# Steer notes — read these BEFORE acting\n"
+        "These are mid-run hints from the user. Apply them on top of the PRD / design / "
+        "implementation_plan whenever they're relevant. Most recent first.\n"
+    )
+    if header.split("\n", 1)[0] not in existing:
+        existing = header + existing
+    steer_path.write_text(existing.rstrip() + block, encoding="utf-8")
+    await event_bus.append({
+        "type": "issue_steered",
+        "issue_id": issue.id,
+        "message": msg,
+    })
+    return {"ok": True, "steer_path": str(steer_path)}
+
+
+@router.post("/codex/issues/{issue_id}/restore")
+async def restore_codex_issue(issue_id: str):
+    """Undo an abandon. Only valid while the worktree is still on disk —
+    a finalized abandon (worktree gone) cannot be restored, so the
+    frontend's 60s countdown is the user-facing safety window."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if issue.git_merge_status != "abandoned":
+        raise HTTPException(status_code=409, detail="Issue is not in abandoned state")
+    if not issue.git_worktree_path:
+        raise HTTPException(
+            status_code=410,
+            detail="Worktree has been finalized; this abandon cannot be undone",
+        )
+    issue.git_merge_status = "open"
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+    await codex_store.append_project_audit(
+        project_id=issue.project_id,
+        issue_id=issue.id,
+        event="restored",
+        base_branch=issue.git_base_branch,
+    )
+    await event_bus.append({
+        "type": "issue_restored",
+        "issue_id": issue.id,
+    })
+    return issue
+
+
+@router.post("/codex/issues/{issue_id}/abandon/finalize")
+async def finalize_abandoned_issue(issue_id: str):
+    """Actually delete the worktree of an issue that's already in the
+    abandoned soft state. Idempotent — safe to call twice.
+
+    Called by the frontend once the 60s undo countdown expires."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if issue.git_merge_status != "abandoned":
+        raise HTTPException(status_code=409, detail="Issue must be abandoned before finalize")
+    if not issue.git_worktree_path:
+        return issue  # already finalized
+    if issue.project_id:
+        project = await codex_store.load_project(issue.project_id)
+        if project is not None:
+            try:
+                await worktree_manager.cleanup_issue_worktree(project, issue)
+            except Exception:
+                pass
+    issue.git_worktree_path = None
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
     return issue
 
 
@@ -2452,6 +3185,66 @@ async def review_codex_task(task_id: str, request: TaskReviewRequest):
     return task
 
 
+class AnswerClarificationRequest(BaseModel):
+    answer: str
+
+
+@router.post("/codex/tasks/{task_id}/answer")
+async def answer_codex_task_clarification(task_id: str, request: AnswerClarificationRequest):
+    """Resolve a task that paused waiting for a clarification.
+
+    The task's prior review_comment carries `[CLARIFY] <question>`. We:
+      1. Replace it with `REWORK REQUIRED: ...` containing both the original
+         question and the user's answer.
+      2. Reset task.status to `pending` and re-dispatch via the task runner,
+         so the role re-runs with the answer threaded through its
+         REWORK-REQUIRED branch (engineer_workflow already supports this).
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    task = await codex_store.load_codex_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    from app.application.clarification import question_text
+    question = question_text(task)
+    if not question:
+        raise HTTPException(status_code=409, detail="Task has no pending clarification")
+
+    answer = (request.answer or "").strip()
+    if not answer:
+        raise HTTPException(status_code=400, detail="answer cannot be empty")
+
+    task.review_comment = (
+        f"You previously asked: {question}\n"
+        f"User answer: {answer}\n\n"
+        "Use this answer to complete the task. Do NOT ask the same "
+        "clarification_question again — only escalate a different question "
+        "if a truly new ambiguity comes up."
+    )
+    task.status = "pending"
+    task.updated_at = datetime.now()
+    await codex_store.save_codex_task(task)
+
+    await event_bus.append({
+        "type": "task_status",
+        "task_id": task.id,
+        "session_id": task.session_id,
+        "status": "pending",
+        "review_comment": task.review_comment,
+    })
+
+    try:
+        await run_codex_task(task_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to re-run task: {exc}")
+
+    refreshed = await codex_store.load_codex_task(task_id)
+    return refreshed or task
+
+
 @router.delete("/codex/tasks/{task_id}")
 async def delete_codex_task(task_id: str):
     """Delete a task."""
@@ -2597,6 +3390,7 @@ async def test_runtime_executor(request: TestExecutorRequest):
 
     Returns {"success": true, "latency_ms": ...} or {"success": false, "error": "..."}
     """
+    import os
     import time
     import httpx
 
@@ -2625,7 +3419,7 @@ async def test_runtime_executor(request: TestExecutorRequest):
         model_id = executor.default_model or (provider.default_model_id if provider else None)
     if model_id == "None":
         model_id = None
-        
+
     if model_id is None:
         raise HTTPException(status_code=400, detail=f"No model specified for executor '{request.executor_id}'")
 
@@ -2634,30 +3428,63 @@ async def test_runtime_executor(request: TestExecutorRequest):
         if model is None:
             raise HTTPException(status_code=400, detail=f"Model '{model_id}' not found in provider '{provider_id}'")
 
-    # Determine endpoint and key (use request overrides or executor defaults)
-    endpoint = request.api_endpoint or executor.api_endpoint
-    api_key = request.api_key or executor.api_key
+    # Resolve endpoint + key with env-var fallback (UI placeholder promises this).
+    executor_type = executor.executor_type
+    if executor_type == "codex":
+        endpoint = (
+            request.api_endpoint
+            or executor.api_endpoint
+            or os.getenv("OPENAI_BASE_URL")
+            or "https://api.openai.com/v1"
+        )
+        api_key = request.api_key or executor.api_key or os.getenv("OPENAI_API_KEY")
+        env_var_name = "OPENAI_API_KEY"
+    else:
+        endpoint = (
+            request.api_endpoint
+            or executor.api_endpoint
+            or os.getenv("ANTHROPIC_BASE_URL")
+            or "https://api.anthropic.com"
+        )
+        api_key = request.api_key or executor.api_key or os.getenv("ANTHROPIC_API_KEY")
+        env_var_name = "ANTHROPIC_API_KEY"
 
-    if not endpoint or not api_key:
-        raise HTTPException(status_code=400, detail="api_endpoint and api_key are required")
+    if not api_key:
+        return {
+            "success": False,
+            "error": f"No API key: fill the field or set {env_var_name} in the backend env.",
+        }
 
-    # Build the request
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"{endpoint.rstrip('/')}/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": model_id,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "ping"}],
-                },
-            )
+            if executor_type == "codex":
+                response = await client.post(
+                    f"{endpoint.rstrip('/')}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": model_id,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "ping"}],
+                    },
+                )
+            else:
+                response = await client.post(
+                    f"{endpoint.rstrip('/')}/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": model_id,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "ping"}],
+                    },
+                )
         latency_ms = (time.monotonic() - start) * 1000
 
         if response.status_code == 200:
@@ -2813,6 +3640,280 @@ async def delete_agent(agent_id: str):
 # --- Workflow plan endpoint (PR2) ---
 
 
+async def _persist_failed_orchestrator_output(issue, raw_text: str, *, reason: str) -> None:
+    """Write the LLM's raw response to the issue worktree on parse failure
+    so a human can see exactly what the model produced. Best-effort — never
+    raises."""
+    if not issue.git_worktree_path or not raw_text:
+        return
+    try:
+        from pathlib import Path as _Path
+        out = _Path(issue.git_worktree_path) / "issues" / issue.id / "_orchestrator_failure.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            f"# Orchestrator LLM output that failed to parse\n"
+            f"reason: {reason}\n"
+            f"timestamp: {datetime.now().isoformat()}\n"
+            f"chars: {len(raw_text)}\n\n---\n\n"
+        )
+        out.write_text(header + raw_text, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass  # Best-effort — don't escalate file-write errors.
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    """Find the first complete top-level `{...}` via proper brace balancing.
+
+    Tolerates wrapping markdown code fences (```json ... ```), leading prose,
+    and trailing prose. The walker is depth-aware and string-aware so it
+    skips braces inside string literals.
+    """
+    if not text:
+        return None
+    # Strip ```json / ``` fences if present — Codex/Claude with weak
+    # instruction-following sometimes wrap output anyway.
+    fence_start = text.find("```")
+    if fence_start != -1:
+        after = text[fence_start + 3 :]
+        # Drop the optional language tag on the same line.
+        nl = after.find("\n")
+        if nl != -1:
+            after = after[nl + 1 :]
+        fence_end = after.rfind("```")
+        if fence_end != -1:
+            text = after[:fence_end]
+
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _stream_extract_complete_objects(text: str, key: str, already_emitted: set[str]) -> list[dict]:
+    """Best-effort: find complete JSON objects inside the array assigned to
+    `"<key>"` in the accumulating LLM text. Each object is matched by
+    brace-balancing forward from a `{`. Returns the newly-parseable ones
+    (de-duped by their JSON-serialized form).
+    """
+    import json
+    out: list[dict] = []
+    # Find the start of the array for this key.
+    needle = f'"{key}"'
+    idx = text.find(needle)
+    if idx == -1:
+        return out
+    bracket = text.find("[", idx)
+    if bracket == -1:
+        return out
+    i = bracket + 1
+    n = len(text)
+    while i < n:
+        # Skip whitespace, commas.
+        while i < n and text[i] in " \t\r\n,":
+            i += 1
+        if i >= n:
+            break
+        if text[i] == "]":
+            break
+        if text[i] != "{":
+            i += 1
+            continue
+        # Brace-balance forward.
+        depth = 0
+        in_str = False
+        esc = False
+        j = i
+        while j < n:
+            c = text[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            else:
+                if c == '"':
+                    in_str = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+            j += 1
+        else:
+            return out  # ran out of text mid-object; wait for more
+        chunk = text[i:j]
+        try:
+            obj = json.loads(chunk)
+            sig = json.dumps(obj, sort_keys=True)
+            if sig not in already_emitted:
+                already_emitted.add(sig)
+                out.append(obj)
+        except Exception:
+            pass
+        i = j
+    return out
+
+
+@router.post("/codex/issues/{issue_id}/plan/stream")
+async def propose_issue_plan_stream(issue_id: str):
+    """Stream the orchestrator. Emits SSE events:
+
+      event: meta        — {"executor","model"}; or {"executor":null,"reason":...} when no LLM is configured
+      event: log         — informational status string
+      event: chunk       — {"text": "..."} raw LLM text delta
+      event: node        — node object as it becomes parseable in the JSON
+      event: edge        — edge object as it becomes parseable
+      event: done        — full validated DAG (created_by: orchestrator_llm)
+      event: error       — {"message"} terminal failure — no DAG, caller must retry / fix config
+
+    Heuristic fallback is intentionally **not** wired here: the user wants to see
+    real LLM output or a clear failure, not a silently substituted template.
+    """
+    import asyncio
+    import json
+    import os
+    from fastapi.responses import StreamingResponse
+    from app.application.workflow_orchestrator import _build_llm_prompt, validate_dag
+    from app.application.llm_runner import resolve_streaming_context, stream_llm
+
+    store = _require_agent_store()
+    issue = await store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+    agents = await store.list_agents(workspace_id=None)
+    if not agents:
+        raise HTTPException(status_code=400, detail="no agents available")
+
+    async def emit(event: str, payload) -> str:
+        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    async def gen():
+        llm_disabled = os.getenv("WORKFLOW_ORCHESTRATOR_LLM", "").lower() == "false"
+        catalog = await _get_runtime_catalog_service().load_catalog()
+        ctx = None if llm_disabled else resolve_streaming_context(catalog)
+
+        if ctx is None:
+            yield await emit(
+                "meta",
+                {"executor": None, "model": None, "reason": "no usable LLM executor"},
+            )
+            yield await emit(
+                "error",
+                {"message": "No LLM is configured. Add an executor with api_endpoint + api_key in Settings → Runtime Config."},
+            )
+            return
+
+        yield await emit("meta", {"executor": ctx.executor_label, "model": ctx.model})
+        yield await emit("log", "Sending prompt to LLM…")
+
+        prompt = _build_llm_prompt(issue, agents)
+        accumulated = ""
+        emitted_nodes: set[str] = set()
+        emitted_edges: set[str] = set()
+        try:
+            async for delta in stream_llm(prompt, ctx):
+                accumulated += delta
+                yield await emit("chunk", {"text": delta})
+                for n in _stream_extract_complete_objects(accumulated, "nodes", emitted_nodes):
+                    yield await emit("node", n)
+                for e in _stream_extract_complete_objects(accumulated, "edges", emitted_edges):
+                    yield await emit("edge", e)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            yield await emit("error", {"message": f"LLM call failed: {exc}"})
+            return
+
+        # Log the raw LLM output so it's visible in the uvicorn console for
+        # debugging. Truncates very long bodies to keep logs reasonable.
+        import logging
+        _log = logging.getLogger("workflow_orchestrator.stream")
+        _log.info(
+            "LLM raw output (%d chars) for issue=%s:\n%s",
+            len(accumulated),
+            issue_id,
+            accumulated if len(accumulated) <= 4000 else accumulated[:2000] + "\n…[truncated]…\n" + accumulated[-2000:],
+        )
+
+        # Final parse from accumulated text. Compensate for gateways that
+        # honor the assistant-prefill "{" (Anthropic native) by prepending
+        # one if the stream began without it. Gateways that re-emit "{"
+        # themselves (MiniMax) already start with "{" so this is a no-op
+        # for them.
+        if not accumulated.lstrip().startswith("{") and not accumulated.lstrip().startswith("```"):
+            accumulated = "{" + accumulated
+        raw_json = _extract_first_json_object(accumulated)
+        # Fallback: tolerant_json_loads handles trailing commas + unquoted
+        # keys, things models sometimes do despite strict instructions.
+        if not raw_json:
+            try:
+                from app.application.tolerant_json import tolerant_json_loads
+                dag_attempt = tolerant_json_loads(accumulated)
+                if isinstance(dag_attempt, dict):
+                    raw_json = json.dumps(dag_attempt)
+            except Exception:  # noqa: BLE001
+                raw_json = None
+        if not raw_json:
+            # Persist the raw LLM output to the worktree for postmortem.
+            await _persist_failed_orchestrator_output(issue, accumulated, reason="no_json_object")
+            yield await emit(
+                "error",
+                {"message": "LLM finished without producing a JSON object — try Auto-plan again, or raise WORKFLOW_ORCHESTRATOR_MAX_TOKENS if the response was truncated. Raw output saved to issues/<id>/_orchestrator_failure.txt."},
+            )
+            return
+        try:
+            dag = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            await _persist_failed_orchestrator_output(issue, accumulated, reason=f"json_decode: {exc}")
+            yield await emit("error", {"message": f"LLM output was not valid JSON: {exc} (raw saved to issues/<id>/_orchestrator_failure.txt)"})
+            return
+        dag.setdefault("meta", {})
+        dag["meta"].setdefault("created_by", "orchestrator_llm")
+        for edge in dag.get("edges", []):
+            edge.setdefault("edge_type", "sequence")
+        try:
+            validate_dag(dag, {a.id for a in agents})
+        except ValueError as exc:
+            yield await emit("error", {"message": f"LLM produced an invalid DAG: {exc}"})
+            return
+        yield await emit("done", {"dag": dag})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/codex/issues/{issue_id}/plan")
 async def propose_issue_plan(issue_id: str):
     """Run the orchestrator and return a proposed DAG. Does NOT persist.
@@ -2899,6 +4000,48 @@ async def start_issue_graph(issue_id: str):
         raise HTTPException(status_code=404, detail="No workflow graph exists for this issue")
     from app.application.workflow_scheduler import WorkflowScheduler
     from app.application.event_bus import _workflow_task_dispatcher
+    scheduler = WorkflowScheduler(store=store, task_dispatcher=_workflow_task_dispatcher)
+    graph = await scheduler.start_graph(graph.id)
+    return _graph_to_dict(graph)
+
+
+@router.post("/codex/issues/{issue_id}/graph/auto-start", status_code=201)
+async def auto_start_issue_graph(issue_id: str):
+    """Propose a default DAG (heuristic, no LLM), persist, and start execution.
+
+    Used by the workspace console for instant issue creation without a manual
+    DAG-review step. Ensures all tasks get workflow_node_id so the scheduler
+    can run plan-first gate, QA rework loop, and downstream dispatch.
+    """
+    store = _require_agent_store()
+    issue = await store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+    agents = await store.list_agents(workspace_id=None)
+    if not agents:
+        raise HTTPException(status_code=500, detail="No agents available — built-in agents may not be seeded")
+
+    # Create git worktree for the issue if the project is configured and the
+    # issue doesn't have one yet. Without this, tasks dispatched by the scheduler
+    # would have workspace_path=None and fail to persist role artifacts.
+    if issue.project_id and not issue.git_worktree_path and project_service is not None:
+        project = await project_service.get_project(issue.project_id)
+        if project is not None:
+            try:
+                branch, wt_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+                issue.git_branch = branch
+                issue.git_worktree_path = wt_path
+                issue.git_base_branch = base
+                await store.save_codex_issue(issue)
+            except (GitError, WorktreeError):
+                pass  # No git project — run without worktree (tests, demo mode)
+
+    from app.application.workflow_orchestrator import WorkflowOrchestrator
+    orchestrator = WorkflowOrchestrator(store=store)
+    dag = await orchestrator.propose_graph(issue, agents, use_llm=False)
+    from app.application.workflow_scheduler import materialize_graph_from_dag, WorkflowScheduler
+    from app.application.event_bus import _workflow_task_dispatcher
+    graph = await materialize_graph_from_dag(store, issue_id, dag, created_by="console")
     scheduler = WorkflowScheduler(store=store, task_dispatcher=_workflow_task_dispatcher)
     graph = await scheduler.start_graph(graph.id)
     return _graph_to_dict(graph)

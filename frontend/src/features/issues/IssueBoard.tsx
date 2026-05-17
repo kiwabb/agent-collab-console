@@ -174,21 +174,21 @@ export function IssueBoard({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!newTitle.trim()) {
-      setTitleError("Title is required");
+      setTitleError(t("issue.validation.titleRequired"));
       return;
     }
     setTitleError("");
     setIsCreating(true);
     try {
       await onCreateIssue(newTitle.trim(), newDesc.trim());
-      addToast({ type: "success", title: "Issue created" });
+      addToast({ type: "success", title: t("issue.toast.created") });
       setNewTitle("");
       setNewDesc("");
       setShowForm(false);
     } catch (err) {
       addToast({
         type: "error",
-        title: "Failed to create issue",
+        title: t("issue.toast.createFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
@@ -260,7 +260,7 @@ export function IssueBoard({
                 if (bulkEditMode) setSelectedIssueIds(new Set());
               }}
               className={cn("p-2 rounded-lg transition-all", bulkEditMode ? "bg-brand/10 text-brand" : "hover:bg-surface-hover text-text-muted hover:text-brand")}
-              title="Bulk Edit"
+              title={t("issue.bulkEdit")}
             >
               <CheckSquare size={16} />
             </button>
@@ -269,7 +269,7 @@ export function IssueBoard({
             <button
               onClick={() => setShowColumnConfig(!showColumnConfig)}
               className="p-2 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all"
-              title="Column Config"
+              title={t("issue.columnConfig")}
             >
               <Columns size={16} />
             </button>
@@ -280,7 +280,7 @@ export function IssueBoard({
               onChange={(e) => setAssigneeFilter(e.target.value)}
               className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-raised border border-border-subtle text-text-secondary hover:bg-surface-hover transition-all cursor-pointer outline-none"
             >
-              <option value="all">All Assignees</option>
+              <option value="all">{t("issue.assignee.all")}</option>
               {assignees.map(a => (
                 <option key={a} value={a}>{a.split('_').pop()?.toUpperCase()}</option>
               ))}
@@ -290,45 +290,45 @@ export function IssueBoard({
             <button
               onClick={expandAll}
               className="text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-brand transition-colors px-2 py-0.5 rounded hover:bg-surface-hover"
-              title="Expand all"
+              title={t("issue.expandAll")}
             >
-              Expand
+              {t("issue.expand")}
             </button>
             <span className="text-text-muted/30">/</span>
             <button
               onClick={collapseAll}
               className="text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-brand transition-colors px-2 py-0.5 rounded hover:bg-surface-hover"
-              title="Collapse all"
+              title={t("issue.collapseAll")}
             >
-              Collapse
+              {t("issue.collapse")}
             </button>
           </div>
           {bulkEditMode && selectedIssueIds.size > 0 && onBulkUpdate && (
             <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-brand">{selectedIssueIds.size} selected</span>
+              <span className="text-xs font-bold text-brand">{t("issue.bulk.selected", { count: selectedIssueIds.size })}</span>
               <select
                 onChange={(e) => {
                   if (e.target.value) {
                     onBulkUpdate(Array.from(selectedIssueIds), { current_phase: e.target.value });
-                    addToast({ type: "success", title: `${selectedIssueIds.size} issues moved` });
+                    addToast({ type: "success", title: t("issue.bulk.moved", { count: selectedIssueIds.size }) });
                     setSelectedIssueIds(new Set());
                     setBulkEditMode(false);
                   }
                 }}
                 className="px-3 py-1.5 text-xs font-bold rounded-lg bg-brand text-background border-0 cursor-pointer"
               >
-                <option value="">Move to...</option>
-                <option value="requirements">Requirements</option>
-                <option value="architecture">Architecture</option>
-                <option value="development">Development</option>
-                <option value="testing">Testing</option>
+                <option value="">{t("issue.bulk.moveTo")}</option>
+                <option value="requirements">{t("phase.requirements")}</option>
+                <option value="architecture">{t("phase.architecture")}</option>
+                <option value="development">{t("phase.development")}</option>
+                <option value="testing">{t("phase.testing")}</option>
               </select>
               {onBulkDelete && (
                 <button
                   onClick={() => setBulkDeleteConfirmOpen(true)}
                   className="px-3 py-1.5 text-xs font-bold rounded-lg bg-error/20 text-error hover:bg-error/30 transition-all"
                 >
-                  Delete
+                  {t("issue.bulkDelete.confirm")}
                 </button>
               )}
             </div>
@@ -346,7 +346,7 @@ export function IssueBoard({
 
       {showColumnConfig && onColumnConfigChange && (
         <div className="p-4 border-b border-border-subtle bg-surface-raised/30 flex items-center gap-4">
-          <span className="text-xs font-black uppercase tracking-widest text-text-muted">Visible Columns:</span>
+          <span className="text-xs font-black uppercase tracking-widest text-text-muted">{t("issue.visibleColumns")}</span>
           {(["requirements", "architecture", "development", "testing"] as Phase[]).map(phase => (
             <label key={phase} className="flex items-center gap-2 cursor-pointer">
               <input
@@ -546,9 +546,9 @@ export function IssueBoard({
       {showImportDialog && onImport && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-8">
           <div className="bg-surface rounded-2xl border border-border-subtle shadow-2xl max-w-lg w-full p-8">
-            <h3 className="text-lg font-black tracking-tighter mb-6">Import Issues</h3>
+            <h3 className="text-lg font-black tracking-tighter mb-6">{t("issue.import.title")}</h3>
             <div className="mb-6">
-              <label className="block text-xs font-black uppercase tracking-widest text-text-muted mb-2">Import Format</label>
+              <label className="block text-xs font-black uppercase tracking-widest text-text-muted mb-2">{t("issue.import.format")}</label>
               <div className="flex gap-4">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="radio" name="importFormat" value="json" defaultChecked className="accent-brand" />
@@ -562,7 +562,7 @@ export function IssueBoard({
             </div>
             <textarea
               id="importData"
-              placeholder="Paste JSON or CSV data here..."
+              placeholder={t("issue.import.placeholder")}
               rows={10}
               className="w-full px-4 py-3 text-sm rounded-xl cc-input outline-none mb-6 resize-none font-mono text-xs"
             />
@@ -571,7 +571,7 @@ export function IssueBoard({
                 onClick={() => setShowImportDialog(false)}
                 className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg border border-border-subtle hover:bg-surface-hover transition-all"
               >
-                Cancel
+                {t("issue.cancel")}
               </button>
               <button
                 onClick={() => {
@@ -584,7 +584,7 @@ export function IssueBoard({
                 }}
                 className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all"
               >
-                Import
+                {t("issue.import.confirm")}
               </button>
             </div>
           </div>
@@ -593,13 +593,13 @@ export function IssueBoard({
       <ConfirmDialog
         open={bulkDeleteConfirmOpen}
         onOpenChange={setBulkDeleteConfirmOpen}
-        title="Delete Issues"
-        description={`Are you sure you want to delete ${selectedIssueIds.size} issues? This action cannot be undone.`}
-        confirmText="Delete"
+        title={t("issue.bulkDelete.title")}
+        description={t("issue.bulkDelete.description", { count: selectedIssueIds.size })}
+        confirmText={t("issue.bulkDelete.confirm")}
         onConfirm={() => {
           if (!onBulkDelete) return;
           onBulkDelete(Array.from(selectedIssueIds));
-          addToast({ type: "success", title: `${selectedIssueIds.size} issues deleted` });
+          addToast({ type: "success", title: t("issue.bulkDelete.success", { count: selectedIssueIds.size }) });
           setSelectedIssueIds(new Set());
           setBulkEditMode(false);
           setBulkDeleteConfirmOpen(false);
