@@ -207,7 +207,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex-1 min-h-0 grid grid-cols-[220px_240px_1fr] gap-px bg-border-subtle">
+      <div className="flex-1 min-h-0 grid grid-cols-[220px_240px_1fr] gap-px bg-border-subtle h-[600px] lg:h-[calc(100vh-380px)]">
         <div className="bg-surface overflow-auto flex flex-col">
           <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">Tasks</div>
           {tasks.length === 0 && (

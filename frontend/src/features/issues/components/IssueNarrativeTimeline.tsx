@@ -75,7 +75,7 @@ export function IssueNarrativeTimeline({ issueId, reloadKey }: Props) {
   if (entries.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1 mt-6 px-8 max-w-6xl mx-auto w-full overflow-x-auto pb-2 scrollbar-none">
+    <div className="flex items-center gap-1 mt-6 px-8 max-w-6xl mx-auto w-full overflow-x-auto pb-2 scrollbar-none shrink-0">
       {entries.map((e, i) => (
         <div key={e.role} className="flex items-center shrink-0">
           <div

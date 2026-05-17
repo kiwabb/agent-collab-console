@@ -162,7 +162,7 @@ function AgentDagNodeImpl({ data }: NodeProps<AgentDagNodeData>) {
             )}
             style={isActive ? { color: persona.color } : undefined}
           >
-            {status.text || "Pending"}
+            {status.detail || status.text || "Pending"}
           </div>
         </div>
       </div>
