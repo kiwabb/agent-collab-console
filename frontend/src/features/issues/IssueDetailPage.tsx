@@ -216,7 +216,7 @@ export function IssueDetailPage({ issueId }: Props) {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="px-8 pt-6 pb-5 border-b border-border-subtle bg-surface z-10 relative shadow-sm">
+      <div className="px-8 py-3.5 border-b border-border-subtle bg-surface z-10 relative shadow-sm">
         <div className="flex flex-col gap-3 max-w-6xl w-full mx-auto">
           {/* Top Row: Meta */}
           <div className="flex items-center gap-2 text-[12px] font-mono text-text-muted">
@@ -249,7 +249,7 @@ export function IssueDetailPage({ issueId }: Props) {
           </div>
 
           {/* Bottom Row: Title and Actions */}
-          <div className="flex items-center justify-between gap-4 mt-2">
+          <div className="flex items-center justify-between gap-4 mt-1">
             <h1 className="text-2xl font-bold tracking-tight truncate text-foreground leading-tight">
               {issue?.title ?? t("issue.titleFallback")}
             </h1>
@@ -287,7 +287,7 @@ export function IssueDetailPage({ issueId }: Props) {
           const hasUncovered = checklist.criteria.some(c => !c.covered);
           const isChecklistExpanded = checklistExpanded !== null ? checklistExpanded : hasUncovered;
           return (
-            <div className="px-8 mt-6">
+            <div className="px-8 mt-3">
               <div className="max-w-6xl mx-auto w-full">
                 <div className="rounded-xl border border-border-subtle bg-surface shadow-sm overflow-hidden">
                   <div 
@@ -435,7 +435,7 @@ export function IssueDetailPage({ issueId }: Props) {
       </Dialog>
 
       {/* Tabs */}
-      <Tabs value={tab} onValueChange={onTabChange} className="flex flex-col flex-1 min-h-0 mt-4">
+      <Tabs value={tab} onValueChange={onTabChange} className="flex flex-col flex-1 min-h-0 mt-2">
         <TabsList
           variant="line"
           className="px-6 pt-2 self-stretch border-b border-border-subtle gap-6 shrink-0"

@@ -75,12 +75,12 @@ export function IssueNarrativeTimeline({ issueId, reloadKey }: Props) {
   if (entries.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1 mt-6 px-8 max-w-6xl mx-auto w-full overflow-x-auto pb-2 scrollbar-none shrink-0">
+    <div className="flex items-center gap-1 mt-3 px-8 max-w-6xl mx-auto w-full overflow-x-auto pb-1 scrollbar-none shrink-0">
       {entries.map((e, i) => (
         <div key={e.role} className="flex items-center shrink-0">
           <div
             className={cn(
-              "min-w-[180px] max-w-[220px] flex flex-col gap-1.5 px-3.5 py-2.5 rounded-xl border transition-all duration-300",
+              "min-w-[180px] max-w-[220px] flex flex-col gap-0.5 px-3.5 py-1.5 rounded-xl border transition-all duration-300",
               e.status === "done"
                 ? "border-success/30 bg-success/5 shadow-sm"
                 : e.status === "failed"
