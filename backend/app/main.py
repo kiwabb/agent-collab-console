@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 import logging
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 from app.interfaces.api import router as api_router
 from app.interfaces.codex_ws import router as codex_ws_router
 from app.interfaces.sse import router as sse_router
+
+# Capture startup time once at module load — used by /api/codex/version
+_started_at = datetime.now(timezone.utc).isoformat()
 
 
 @asynccontextmanager
@@ -64,6 +68,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Agent Collaboration Console", lifespan=lifespan)
+
+# Initialize app.state.started_at as early as possible so it is available even
+# when the app is instantiated directly (e.g., in TestClient session fixtures
+# that do not explicitly enter the lifespan context).
+app.state.started_at = _started_at
 
 
 # FastAPI / Starlette already provide good defaults for HTTPException and

@@ -937,6 +937,15 @@ class CreateCodexSessionRequest(BaseModel):
     cwd: str = ""
 
 
+@router.get("/codex/version")
+async def get_codex_version(request: Request):
+    """Return Codex service version and startup time."""
+    return {
+        "version": "0.1.0",
+        "started_at": request.app.state.started_at,
+    }
+
+
 @router.get("/codex/status")
 async def codex_status():
     """Check if local codex CLI is available."""
