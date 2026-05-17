@@ -213,7 +213,7 @@ export function IssueDetailPage({ issueId }: Props) {
     : "—";
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto overflow-x-hidden">
+    <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-8 pt-6 pb-5 border-b border-border-subtle bg-surface z-10 relative shadow-sm">
         <div className="flex flex-col gap-3 max-w-6xl w-full mx-auto">
@@ -421,7 +421,7 @@ export function IssueDetailPage({ issueId }: Props) {
       </Dialog>
 
       {/* Tabs */}
-      <Tabs value={tab} onValueChange={onTabChange} className="flex flex-col mt-4 pb-12">
+      <Tabs value={tab} onValueChange={onTabChange} className="flex flex-col flex-1 min-h-0 mt-4">
         <TabsList
           variant="line"
           className="px-6 pt-2 self-stretch border-b border-border-subtle gap-6 shrink-0"
@@ -431,17 +431,17 @@ export function IssueDetailPage({ issueId }: Props) {
           <UnderlineTab value="artifacts" label={t("console.artifacts")} />
           <UnderlineTab value="diff" label={t("issue.tab.diffMerge")} />
         </TabsList>
-        <div className="flex flex-col flex-1 min-h-[600px] lg:min-h-[calc(100vh-380px)]">
-          <TabsContent value="dag" className="m-0 h-full flex flex-col">
+        <div className="flex flex-col flex-1 min-h-0">
+          <TabsContent value="dag" className="m-0 h-full flex flex-col min-h-0 flex-1">
             <DagTab issueId={issueId} />
           </TabsContent>
-          <TabsContent value="tasks" className="m-0 h-full flex flex-col">
+          <TabsContent value="tasks" className="m-0 h-full flex flex-col min-h-0 flex-1">
             <TasksRunsTab issueId={issueId} issue={issue} />
           </TabsContent>
-          <TabsContent value="artifacts" className="m-0 h-full flex flex-col">
+          <TabsContent value="artifacts" className="m-0 h-full flex flex-col min-h-0 flex-1">
             <ArtifactsTab issueId={issueId} active={tab === "artifacts"} issue={issue} />
           </TabsContent>
-          <TabsContent value="diff" className="m-0 h-full flex flex-col">
+          <TabsContent value="diff" className="m-0 h-full flex flex-col min-h-0 flex-1 overflow-y-auto">
             <DiffMergeTab issueId={issueId} issue={issue} active={tab === "diff"} />
           </TabsContent>
         </div>

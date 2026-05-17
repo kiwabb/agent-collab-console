@@ -22,6 +22,7 @@ import { useI18n } from "@/providers/I18nProvider";
 import { ExecutionConfigSelector, normalizeExecutionConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
+import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
 
 interface Props {
   issueId: string;
@@ -45,7 +46,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
   const [composer, setComposer] = useState("");
   const [busy, setBusy] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
-  const [streamView, setStreamView] = useState<"raw" | "assistant">("assistant");
+  const [streamView, setStreamView] = useState<"live" | "raw" | "assistant">("live");
   const [catalog, setCatalog] = useState<RuntimeCatalog | null>(null);
   // Initial config is intentionally minimal — once the catalog loads or a task
   // is selected, normalizeExecutionConfig() resolves the right enabled executor id.
@@ -206,8 +207,8 @@ export function TasksRunsTab({ issueId, issue }: Props) {
   }, [selectedTaskId, loadRuns, addToast]);
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex-1 min-h-0 grid grid-cols-[220px_240px_1fr] gap-px bg-border-subtle h-[600px] lg:h-[calc(100vh-380px)]">
+    <div className="h-full flex flex-col min-h-0 flex-1">
+      <div className="flex-1 min-h-0 grid grid-cols-[220px_240px_1fr] gap-px bg-border-subtle">
         <div className="bg-surface overflow-auto flex flex-col">
           <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">Tasks</div>
           {tasks.length === 0 && (
@@ -279,6 +280,18 @@ export function TasksRunsTab({ issueId, issue }: Props) {
               <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">View</span>
               <button
                 type="button"
+                onClick={() => setStreamView("live")}
+                className={cn(
+                  "px-2 py-0.5 text-[11px] font-bold rounded border",
+                  streamView === "live"
+                    ? "border-brand bg-brand text-background"
+                    : "border-border-subtle text-text-muted hover:text-foreground"
+                )}
+              >
+                Live
+              </button>
+              <button
+                type="button"
                 onClick={() => setStreamView("assistant")}
                 className={cn(
                   "px-2 py-0.5 text-[11px] font-bold rounded border",
@@ -313,7 +326,54 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                 />
               </div>
             )}
-            {streamView === "assistant" ? (
+            {streamView === "live" ? (
+              <AgentLiveTimeline
+                executionProcessId={selectedRunId}
+                taskStartedAt={selectedRun?.started_at ?? null}
+                taskStatus={selectedTask?.status ?? null}
+                reviewComment={selectedTask?.review_comment ?? null}
+                taskResult={selectedTask?.result ?? null}
+                taskRole={selectedTask?.role ?? null}
+                onRerun={
+                  selectedTaskId
+                    ? async () => {
+                        try {
+                          await rerunCodexTask(selectedTaskId);
+                          addToast({ type: "success", title: t("agentLive.rerunOk") });
+                          void loadTasks();
+                          void loadRuns(selectedTaskId);
+                        } catch (err) {
+                          addToast({
+                            type: "error",
+                            title: t("agentLive.rerunErr"),
+                            message: err instanceof Error ? err.message : String(err),
+                          });
+                        }
+                      }
+                    : undefined
+                }
+                onStop={
+                  selectedTaskId
+                    ? async () => {
+                        if (!window.confirm(t("agentLive.stopConfirm"))) return;
+                        try {
+                          await terminateCodexTask(selectedTaskId);
+                          addToast({ type: "success", title: t("agentLive.stopOk") });
+                          void loadTasks();
+                          void loadRuns(selectedTaskId);
+                        } catch (err) {
+                          addToast({
+                            type: "error",
+                            title: t("agentLive.stopErr"),
+                            message: err instanceof Error ? err.message : String(err),
+                          });
+                        }
+                      }
+                    : undefined
+                }
+                className="h-full"
+              />
+            ) : streamView === "assistant" ? (
               <>
                 {extractAssistantText(messages, pendingAssistant).map((entry, i) => (
                   <div key={`asst-${i}`} className="mb-3">

@@ -181,10 +181,14 @@ export function DagTab({ issueId }: Props) {
         setExplainTaskId(payload.task_id);
         return;
       }
-      // Failed node: offer immediate Retry via a proper dialog instead of
-      // jumping to the run console.
+      // Failed QA node: open the explain drawer so the user can read bugs/risks
+      // before deciding to retry. Other failed nodes keep the retry dialog.
       if (payload.status === "failed") {
-        setRetryTarget(payload);
+        if (payload.node_key === "qa") {
+          setExplainTaskId(payload.task_id);
+        } else {
+          setRetryTarget(payload);
+        }
         return;
       }
       router.push(`/issues/${issueId}?tab=tasks&taskId=${payload.task_id}`);
@@ -530,7 +534,7 @@ export function DagTab({ issueId }: Props) {
           
           <WorkflowGraphView
             graph={graph}
-            className="flex-1 min-h-[600px] lg:min-h-[calc(100vh-380px)] bg-background/50 border-0 rounded-none shadow-none"
+            className="flex-1 min-h-0 bg-background/50 border-0 rounded-none shadow-none"
             onNodeClick={handleNodeClick}
           />
         </div>
