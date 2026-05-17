@@ -214,7 +214,7 @@ export function IssueDetailPage({ issueId }: Props) {
     : "—";
 
   return (
-    <div className="flex flex-col min-h-full">
+    <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-8 pt-6 pb-5 border-b border-border-subtle bg-surface z-10 relative shadow-sm">
         <div className="flex flex-col gap-3 max-w-6xl w-full mx-auto">

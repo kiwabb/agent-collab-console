@@ -534,7 +534,7 @@ export function DagTab({ issueId }: Props) {
           
           <WorkflowGraphView
             graph={graph}
-            className="flex-1 min-h-[500px] h-[650px] lg:h-[calc(100vh-320px)] bg-background/50 border-0 rounded-none shadow-none"
+            className="flex-1 min-h-0 bg-background/50 border-0 rounded-none shadow-none"
             onNodeClick={handleNodeClick}
           />
         </div>
