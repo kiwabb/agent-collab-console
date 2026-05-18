@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 
 const CLARIFY_PREFIX = "[CLARIFY] ";
 
-type Tab = "all" | "issues" | "reviews" | "questions" | "tools";
+type Tab = "all" | "issues" | "reviews" | "questions" | "qa_passed" | "tools";
 
 interface RowAction {
   approve?: () => Promise<void>;
@@ -109,17 +109,24 @@ export function ApprovalsPage() {
     [allAwaitingReview],
   );
 
+  const qaPassedIssues = useMemo(
+    () => issues.filter((i) => i.status === "awaiting_review"),
+    [issues],
+  );
+
   const totals = {
     issues: issueApprovals.length,
     reviews: taskReviews.length,
     questions: clarificationTasks.length,
+    qa_passed: qaPassedIssues.length,
     tools: tools.length,
   };
-  const total = totals.issues + totals.reviews + totals.questions + totals.tools;
+  const total = totals.issues + totals.reviews + totals.questions + totals.qa_passed + totals.tools;
 
   const visible = tab === "all" || tab === "issues" ? issueApprovals : [];
   const visibleReviews = tab === "all" || tab === "reviews" ? taskReviews : [];
   const visibleQuestions = tab === "all" || tab === "questions" ? clarificationTasks : [];
+  const visibleQaPassed = tab === "all" || tab === "qa_passed" ? qaPassedIssues : [];
   const visibleTools = tab === "all" || tab === "tools" ? tools : [];
 
   const handleReviewTask = useCallback(
@@ -252,6 +259,9 @@ export function ApprovalsPage() {
           <TabBtn active={tab === "questions"} onClick={() => setTab("questions")}>
             Agent questions <Pill>{totals.questions}</Pill>
           </TabBtn>
+          <TabBtn active={tab === "qa_passed"} onClick={() => setTab("qa_passed")}>
+            QA passed <Pill>{totals.qa_passed}</Pill>
+          </TabBtn>
           <TabBtn active={tab === "tools"} onClick={() => setTab("tools")}>
             Tool calls <Pill>{totals.tools}</Pill>
           </TabBtn>
@@ -354,6 +364,33 @@ export function ApprovalsPage() {
                           : undefined,
                         approve: () => handleReviewTask(task, "approve"),
                         reject: () => handleReviewTask(task, "reject"),
+                      }}
+                    />
+                  ))}
+                </ul>
+              </Section>
+            )}
+
+            {visibleQaPassed.length > 0 && (
+              <Section title="QA passed" count={visibleQaPassed.length}>
+                <ul className="divide-y divide-border-subtle rounded-xl border border-border-subtle overflow-hidden">
+                  {visibleQaPassed.map((issue) => (
+                    <RowCard
+                      key={issue.id}
+                      title={issue.title || issue.id.slice(0, 8)}
+                      subtitle={`Issue · phase ${issue.current_phase ?? "—"}`}
+                      kindLabel={(issue.status ?? "—").replace(/_/g, " ")}
+                      kind={inferStatusKind(issue.status)}
+                      meta={
+                        issue.git_branch ? (
+                          <span className="font-mono text-[11px] text-text-muted truncate">
+                            {issue.git_branch}
+                          </span>
+                        ) : null
+                      }
+                      busy={busyId === issue.id}
+                      action={{
+                        open: () => router.push(`/issues/${issue.id}`),
                       }}
                     />
                   ))}
