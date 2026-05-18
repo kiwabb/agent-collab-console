@@ -28,6 +28,7 @@ import { AgentStatusProvider } from "@/features/agents/dock/AgentStatusProvider"
 import { AgentTimelinePanel } from "@/features/agents/dock/AgentTimelinePanel";
 import { useAgentStatusContext } from "@/features/agents/dock/AgentStatusProvider";
 import { AgentDecisionDrawer } from "@/features/issues/components/AgentDecisionDrawer";
+import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
   issueId: string;
@@ -145,15 +146,34 @@ export function DagTab({ issueId }: Props) {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  // Auto-refresh the saved graph while it's running so node statuses move
-  // pending → running → done in the UI without a manual reload.
+  // Event-driven graph refresh. workflow_node_updated fires on every node
+  // transition; task_status fires terminal events. We refetch in either case
+  // so the UI flips state in the same tick the scheduler updates the DB.
+  const refreshGraph = useCallback(() => {
+    if (view !== "saved") return;
+    getIssueGraph(issueId)
+      .then((g) => g && setGraph(g))
+      .catch(() => {});
+  }, [issueId, view]);
+
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("workflow_node_updated", "task_status", "task_created"),
+    ),
+    onEvent: refreshGraph,
+    throttleMs: 300,
+    enabled: view === "saved",
+  });
+
+  // Fallback poll while the graph is actively running, in case events drop.
   useEffect(() => {
     if (view !== "saved" || graph?.status !== "running") return;
     const id = window.setInterval(() => {
       getIssueGraph(issueId)
         .then((g) => g && setGraph(g))
         .catch(() => {});
-    }, 3000);
+    }, 20000);
     return () => window.clearInterval(id);
   }, [view, graph?.status, issueId]);
 

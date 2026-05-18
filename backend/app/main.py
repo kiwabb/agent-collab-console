@@ -82,9 +82,32 @@ async def lifespan(app: FastAPI):
                 logger.info("Backfilled %d legacy issues with 4-phase preset graph", migrated)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to seed built-in agents: %s", exc)
+
+    # Spawn the stall watchdog: nudges agents that go silent past the
+    # threshold. Gated by CODEX_STALL_WATCHDOG (default on); the watchdog
+    # itself exits cleanly if the env disables it.
+    watchdog_task: asyncio.Task | None = None
+    try:
+        from app.bootstrap import async_store, get_codex_process_manager
+        from app.application.stall_watchdog import run as _run_watchdog
+        from app.interfaces.api import _run_task_with_user_content
+        if async_store is not None:
+            watchdog_task = asyncio.create_task(
+                _run_watchdog(async_store, get_codex_process_manager, _run_task_with_user_content),
+                name="stall-watchdog",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to start stall watchdog: %s", exc)
+
     yield
     # Shutdown: terminate all running Codex processes via formal terminate_all() interface
     # This avoids orphan child processes when the backend exits
+    if watchdog_task is not None:
+        watchdog_task.cancel()
+        try:
+            await watchdog_task
+        except (asyncio.CancelledError, Exception):
+            pass
     try:
         from app.bootstrap import codex_process_manager
         if codex_process_manager is not None:

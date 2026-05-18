@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Loader2, XCircle, Clock, Pause, ChevronRight } from "lucide-react";
 import { getCodexTasks } from "@/lib/api";
 import type { CodexTask } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
   issueId: string;
@@ -43,17 +44,29 @@ const ROLE_LABEL: Record<string, string> = {
 export function IssueNarrativeTimeline({ issueId, reloadKey }: Props) {
   const [tasks, setTasks] = useState<CodexTask[]>([]);
 
+  const refresh = useCallback(async () => {
+    try {
+      const ts = await getCodexTasks(null, issueId);
+      setTasks(ts);
+    } catch {
+      // best-effort
+    }
+  }, [issueId]);
+
   useEffect(() => {
-    let cancelled = false;
-    void getCodexTasks(null, issueId)
-      .then((ts) => {
-        if (!cancelled) setTasks(ts);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [issueId, reloadKey]);
+    void refresh();
+  }, [refresh, reloadKey]);
+
+  // Direct event subscription so the timeline doesn't wait on the parent's
+  // issue.updated_at poll to bubble down. Refreshes on task lifecycle.
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("task_status", "task_created", "workflow_node_updated"),
+    ),
+    onEvent: () => { void refresh(); },
+    throttleMs: 500,
+  });
 
   const entries: Entry[] = useMemo(() => {
     const byRole: Record<string, CodexTask | undefined> = {};

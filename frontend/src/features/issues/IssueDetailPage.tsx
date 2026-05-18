@@ -9,6 +9,7 @@ import {
   approveCodexIssuePlan,
   getCodexIssue,
   getCodexIssueChecklist,
+  qaReviewCodexIssue,
   steerCodexIssue,
   type IssueChecklist,
 } from "@/lib/api";
@@ -31,6 +32,7 @@ import { TasksRunsTab } from "./tabs/TasksRunsTab";
 import { ArtifactsTab } from "./tabs/ArtifactsTab";
 import { DiffMergeTab } from "./tabs/DiffMergeTab";
 import { IssueNarrativeTimeline } from "./components/IssueNarrativeTimeline";
+import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
   issueId: string;
@@ -49,6 +51,8 @@ const STATUS_LABEL: Record<string, string> = {
   completed: "Done",
   failed: "Failed",
   awaiting_approval: "Awaiting approval",
+  awaiting_review: "Awaiting review",
+  awaiting_merge: "Awaiting merge",
   cancelled: "Cancelled",
 };
 
@@ -69,6 +73,15 @@ export function IssueDetailPage({ issueId }: Props) {
   const [planDraft, setPlanDraft] = useState("");
   const [approvingPlan, setApprovingPlan] = useState(false);
   const [checklistExpanded, setChecklistExpanded] = useState<boolean | null>(null);
+  const [qaRejectDraft, setQaRejectDraft] = useState("");
+  const [qaReviewBusy, setQaReviewBusy] = useState<"approve" | "reject" | null>(null);
+  const [conductorDecision, setConductorDecision] = useState<{
+    action: string;
+    reason?: string;
+    note?: string | null;
+    role?: string;
+    receivedAt: number;
+  } | null>(null);
 
   const handleFork = useCallback(async () => {
     setForking(true);
@@ -125,37 +138,91 @@ export function IssueDetailPage({ issueId }: Props) {
   }, [issueId]);
 
   useEffect(() => {
+    setConductorDecision(null);
     void loadIssue();
   }, [loadIssue]);
 
-  // Poll issue status while not in a terminal state so the header, approval
-  // card, and checklist update without a page reload.
+  // Event-driven refresh: react to backend mutations on this issue. The
+  // workspace-scoped WS (set up by /issues/[id]/page.tsx via WorkbenchShell)
+  // delivers issue_updated/task_status/workflow_node_updated/issue_steered.
+  // Polling below remains as a 15s fallback for the case where the WS dropped
+  // or the page is opened without a workspace context.
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn(
+        "issue_updated",
+        "issue_steered",
+        "issue_restored",
+        "task_status",
+        "workflow_node_updated",
+      ),
+    ),
+    onEvent: () => { void loadIssue(); },
+    throttleMs: 300,
+  });
+
+  // Slow fallback poll for cases where events don't reach us (no WS scope,
+  // closed tab, dropped connection). Stops once the issue lands terminal.
   useEffect(() => {
     const terminal = new Set(["completed", "failed", "cancelled", "abandoned"]);
     if (terminal.has(issue?.status ?? "")) return;
-    const id = window.setInterval(() => { void loadIssue(); }, 3000);
+    const id = window.setInterval(() => { void loadIssue(); }, 15000);
     return () => window.clearInterval(id);
   }, [issue?.status, loadIssue]);
 
-  // A3: poll the acceptance checklist while phases progress so completed
-  // items tick off live.
-  useEffect(() => {
-    let cancelled = false;
-    async function tick() {
-      try {
-        const c = await getCodexIssueChecklist(issueId);
-        if (!cancelled) setChecklist(c);
-      } catch {
-        // silent — endpoint absent → no checklist
-      }
+  // A3: refresh acceptance checklist when this issue or any of its tasks
+  // change state. The interval here is just a safety net (30s) — most
+  // updates flow through the bus event above.
+  const refreshChecklist = useCallback(async () => {
+    try {
+      const c = await getCodexIssueChecklist(issueId);
+      setChecklist(c);
+    } catch {
+      // silent — endpoint absent → no checklist
     }
-    void tick();
-    const id = window.setInterval(tick, 8000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
   }, [issueId]);
+
+  useEffect(() => {
+    void refreshChecklist();
+    const id = window.setInterval(() => { void refreshChecklist(); }, 30000);
+    return () => window.clearInterval(id);
+  }, [refreshChecklist]);
+
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("task_status", "workflow_node_updated", "issue_updated"),
+    ),
+    onEvent: () => { void refreshChecklist(); },
+    throttleMs: 500,
+  });
+
+  // Conductor observes every task completion. Capture the latest decision so
+  // the user gets visible feedback that the workflow's "5th agent" is alive.
+  // For non-proceed actions we also pop a toast.
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("conductor_decision"),
+    ),
+    onEvent: (evt) => {
+      const e = evt as { action?: string; reason?: string; note?: string | null; role?: string };
+      const action = e.action ?? "proceed";
+      setConductorDecision({
+        action,
+        reason: e.reason,
+        note: e.note ?? null,
+        role: e.role,
+        receivedAt: Date.now(),
+      });
+      if (action === "note") {
+        addToast({ type: "info", title: t("conductor.toastNote"), message: e.note ?? "" });
+      } else if (action === "escalate") {
+        addToast({ type: "warning", title: t("conductor.toastEscalate"), message: e.reason ?? "" });
+      }
+    },
+  });
 
   useEffect(() => {
     if (isTab(urlTab) && urlTab !== tab) setTab(urlTab);
@@ -199,6 +266,30 @@ export function IssueDetailPage({ issueId }: Props) {
       setApprovingPlan(false);
     }
   }, [planDraft, issue?.review_comment, issueId, addToast, loadIssue, t]);
+
+  const handleQaReview = useCallback(
+    async (decision: "approve" | "reject") => {
+      setQaReviewBusy(decision);
+      try {
+        await qaReviewCodexIssue(issueId, decision, decision === "reject" ? qaRejectDraft.trim() || null : null);
+        addToast({
+          type: "success",
+          title: decision === "approve" ? t("issue.qaReview.approved") : t("issue.qaReview.rejected"),
+        });
+        if (decision === "reject") setQaRejectDraft("");
+        await loadIssue();
+      } catch (err) {
+        addToast({
+          type: "error",
+          title: t("issue.qaReview.failed"),
+          message: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        setQaReviewBusy(null);
+      }
+    },
+    [issueId, qaRejectDraft, addToast, loadIssue, t],
+  );
 
   // Bug-fix: when the orchestration has marched the issue's `current_phase`
   // all the way to `done` but the bookkeeping `status` field hasn't been
@@ -280,6 +371,35 @@ export function IssueDetailPage({ issueId }: Props) {
         </div>
       </div>
 
+        {/* Conductor banner — only when there's a recent (< 60s) non-proceed
+            decision. We avoid showing "proceed" to keep it from being noise. */}
+        {conductorDecision && Date.now() - conductorDecision.receivedAt < 60000 && conductorDecision.action !== "proceed" && (
+          <div className={cn(
+            "mx-8 mt-3 rounded-lg border px-3 py-2 text-[12px] flex items-start gap-2",
+            conductorDecision.action === "escalate"
+              ? "border-warning/40 bg-warning/10 text-warning"
+              : "border-info/30 bg-info/[0.06] text-foreground",
+          )}>
+            <span aria-hidden className="font-mono text-base leading-none">🎙️</span>
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold">
+                {conductorDecision.action === "escalate" ? t("conductor.bannerEscalate") : t("conductor.bannerNote")}
+              </div>
+              <div className="text-text-muted">
+                {conductorDecision.note || conductorDecision.reason}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setConductorDecision(null)}
+              aria-label="dismiss"
+              className="shrink-0 text-text-muted hover:text-foreground"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* A4: narrative timeline distilled from each role's task.result */}
         <IssueNarrativeTimeline issueId={issueId} reloadKey={issue?.updated_at ?? undefined} />
 
@@ -288,7 +408,7 @@ export function IssueDetailPage({ issueId }: Props) {
           const isChecklistExpanded = checklistExpanded !== null ? checklistExpanded : hasUncovered;
           return (
             <div className="px-8 mt-3">
-              <div className="max-w-6xl mx-auto w-full">
+              <div className="w-full">
                 <div className="rounded-xl border border-border-subtle bg-surface shadow-sm overflow-hidden">
                   <div 
                     role="button"
@@ -350,6 +470,62 @@ export function IssueDetailPage({ issueId }: Props) {
             </div>
           );
         })()}
+
+        {issue?.status === "awaiting_review" && (
+          <div className="mt-4 mx-8 rounded-xl border border-success/40 bg-success/[0.04] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-success">
+                  {t("issue.qaReview.title")}
+                </h2>
+                <p className="text-[12px] text-text-muted mt-0.5">
+                  {t("issue.qaReview.description")}
+                </p>
+              </div>
+              <StatusBadge kind="awaiting" label={t("issue.status.awaitingReview")} />
+            </div>
+            <textarea
+              value={qaRejectDraft}
+              onChange={(e) => setQaRejectDraft(e.target.value)}
+              rows={4}
+              placeholder={t("issue.qaReview.rejectPlaceholder")}
+              className="mt-3 w-full rounded-md border border-border-subtle bg-background px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-success/40"
+            />
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void handleQaReview("reject")}
+                disabled={qaReviewBusy !== null}
+                className="gap-1.5"
+              >
+                {qaReviewBusy === "reject" ? (
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 size={12} className="animate-spin" />
+                    {t("issue.qaReview.rejectBusy")}
+                  </span>
+                ) : (
+                  t("issue.qaReview.reject")
+                )}
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => void handleQaReview("approve")}
+                disabled={qaReviewBusy !== null}
+                className="gap-1.5 bg-success text-black hover:bg-success/90 font-semibold"
+              >
+                {qaReviewBusy === "approve" ? (
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 size={12} className="animate-spin" />
+                    {t("issue.qaReview.approveBusy")}
+                  </span>
+                ) : (
+                  t("issue.qaReview.approve")
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
 
         {issue?.status === "awaiting_approval" && (
           <div className="mt-4 max-w-3xl rounded-xl border border-brand/40 bg-brand/[0.04] p-4">

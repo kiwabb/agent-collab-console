@@ -182,3 +182,81 @@ def test_clarification_question_optional(workflow, workspace, valid_qa_payload):
     with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", False):
         doc = workflow.persist_result(task)
     assert doc.clarification_question is None
+
+
+# --- verdict → task state bridge ----------------------------------------
+
+
+def test_failed_verdict_sets_task_status_and_review_comment(workflow, workspace, valid_qa_payload):
+    """When QA verdict is failed, persist_result must set task.status='failed'
+    and populate task.review_comment with a non-empty narrative."""
+    valid_qa_payload["status"] = "failed"
+    valid_qa_payload["bugs_found"] = ["login returns 500"]
+    valid_qa_payload["final_recommendation"] = "Fix the auth endpoint"
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", False):
+        workflow.persist_result(task)
+
+    assert getattr(task, "status", None) == "failed"
+    rc = getattr(task, "review_comment", None)
+    assert rc is not None and "login returns 500" in rc
+
+
+def test_failed_verdict_task_result_is_json(workflow, workspace, valid_qa_payload):
+    """task.result must be the full JSON report so AgentDecisionDrawer can parse it."""
+    valid_qa_payload["status"] = "failed"
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", False):
+        workflow.persist_result(task)
+
+    parsed = json.loads(task.result)
+    assert "bugs_found" in parsed
+    assert parsed["status"] == "failed"
+
+
+def test_passed_verdict_leaves_task_status_untouched(workflow, workspace, valid_qa_payload):
+    """A passing QA run must not touch task.status so the runner's 'done' wins."""
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", False):
+        workflow.persist_result(task)
+
+    # status should remain unset on the FakeTask (not "failed")
+    assert getattr(task, "status", None) != "failed"
+    assert getattr(task, "review_comment", None) is None
+
+
+def test_blocked_verdict_sets_review_comment_no_task_status_failed(workflow, workspace, valid_qa_payload):
+    """blocked verdict surfaces a review_comment but does NOT mark task.status='failed'."""
+    valid_qa_payload["status"] = "blocked"
+    valid_qa_payload["bugs_found"] = ["missing dep"]
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", False):
+        workflow.persist_result(task)
+
+    assert getattr(task, "status", None) != "failed"
+    rc = getattr(task, "review_comment", None)
+    assert rc is not None and rc.startswith("[BLOCKED]")
+
+
+def test_needs_follow_up_verdict_sets_review_comment(workflow, workspace, valid_qa_payload):
+    """needs_follow_up verdict surfaces a review_comment prefixed with [NEEDS_FOLLOW_UP]."""
+    valid_qa_payload["status"] = "needs_follow_up"
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", False):
+        workflow.persist_result(task)
+
+    assert getattr(task, "status", None) != "failed"
+    rc = getattr(task, "review_comment", None)
+    assert rc is not None and rc.startswith("[NEEDS_FOLLOW_UP]")
+
+
+def test_execution_failed_command_sets_task_status_failed(workflow, workspace, valid_qa_payload):
+    """P0: when a command exits non-zero, task.status must become 'failed' (not 'done')."""
+    valid_qa_payload["recommended_commands"] = ["false"]  # always exits 1
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True):
+        workflow.persist_result(task)
+
+    assert getattr(task, "status", None) == "failed"
+    rc = getattr(task, "review_comment", None)
+    assert rc is not None

@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
+import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 const CLARIFY_PREFIX = "[CLARIFY] ";
 
@@ -76,9 +77,29 @@ export function ApprovalsPage() {
 
   useEffect(() => {
     void load("initial");
-    const id = window.setInterval(() => void load("refresh"), 8000);
+    // Fallback poll, lengthened now that events do most of the heavy lifting.
+    const id = window.setInterval(() => void load("refresh"), 30000);
     return () => window.clearInterval(id);
   }, [load]);
+
+  // Event-driven refresh. Approvals page has no workspace scope, so
+  // ExecutionProcessesProvider falls back to the global SSE stream
+  // (/api/events) which surfaces every event_bus event. Refetch whenever
+  // anything that could land in our inbox happens.
+  useBusEventEffect({
+    match: busEventMatchers.typeIn(
+      "task_status",
+      "task_created",
+      "approval_required",
+      "approval_resolved",
+      "issue_updated",
+      "issue_created",
+      "issue_merged",
+      "issue_abandoned",
+    ),
+    onEvent: () => { void load("refresh"); },
+    throttleMs: 800,
+  });
 
   const issueApprovals = useMemo(
     () =>

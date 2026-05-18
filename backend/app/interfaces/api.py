@@ -107,28 +107,7 @@ async def _resolve_task_runtime_config(task) -> tuple[str, str, str, dict[str, s
     return await _resolve_runtime_config(task.executor, task.provider, task.model)
 
 
-def _serialize_task_payload(task) -> dict:
-    return {
-        "id": task.id,
-        "session_id": task.session_id,
-        "issue_id": task.issue_id,
-        "phase": task.phase,
-        "title": task.title,
-        "prompt": task.prompt,
-        "role": task.role,
-        "status": task.status,
-        "result": task.result,
-        "executor": task.executor,
-        "provider": task.provider,
-        "model": task.model,
-        "parent_task_id": task.parent_task_id,
-        "task_kind": task.task_kind,
-        "blocked_by_help_id": task.blocked_by_help_id,
-        "resume_session_id": task.resume_session_id,
-        "workspace_path": task.workspace_path,
-        "created_at": task.created_at.isoformat() if task.created_at else None,
-        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
-    }
+from app.application.task_serialization import serialize_task_payload as _serialize_task_payload
 
 
 async def _list_task_messages(task_id: str, execution_process_id: str | None = None):
@@ -322,6 +301,27 @@ async def _refresh_task_result(task):
                         })
                     except Exception:
                         pass
+
+        # QA verdict bridge: push failure reason to the WebSocket so the UI can
+        # render the review_comment banner without polling.
+        if task.role == "qa" and task.status in {"failed"} and task.review_comment:
+            await event_bus.append({
+                "type": "task_status",
+                "task_id": task.id,
+                "session_id": task.session_id,
+                "status": task.status,
+                "review_comment": task.review_comment,
+            })
+            try:
+                from app.interfaces.codex_ws import stream_manager
+                stream_manager.buffer_pending(task.session_id, {
+                    "type": "task_status",
+                    "task_id": task.id,
+                    "status": task.status,
+                    "review_comment": task.review_comment,
+                })
+            except Exception:
+                pass
 
 
 async def _latest_assistant_message_content(task_id: str) -> str | None:
@@ -1235,6 +1235,7 @@ async def create_codex_workspace(request: CreateCodexSessionRequest):
     # Broadcast new workspace
     await event_bus.append({
         "type": "session_created",
+        "session_id": workspace.id,
         "session": {"id": workspace.id, "title": workspace.title, "project_id": workspace.project_id, "status": workspace.status}
     })
     logger.info(f"Workspace created and broadcasted: {workspace_id}")
@@ -1581,6 +1582,7 @@ async def update_codex_workspace(workspace_id: str, request: UpdateCodexWorkspac
     await codex_store.save_codex_workspace(workspace)
     await event_bus.append({
         "type": "session_updated",
+        "session_id": workspace.id,
         "session": {
             "id": workspace.id,
             "title": workspace.title,
@@ -1702,6 +1704,12 @@ async def create_codex_issue(request: CreateIssueRequest):
         event="created",
         base_branch=base,
     )
+    await event_bus.append({
+        "type": "issue_created",
+        "issue_id": issue.id,
+        "session_id": issue.session_id,
+        "issue": issue.model_dump(mode="json") if hasattr(issue, "model_dump") else None,
+    })
     return issue
 
 
@@ -1735,6 +1743,12 @@ async def update_codex_issue_phase(issue_id: str, request: UpdateIssuePhaseReque
     issue.current_phase = request.current_phase
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
+    await event_bus.append({
+        "type": "issue_updated",
+        "issue_id": issue.id,
+        "session_id": issue.session_id,
+        "current_phase": issue.current_phase,
+    })
     return issue
 
 
@@ -1748,6 +1762,12 @@ async def update_codex_issue_pin(issue_id: str, request: UpdateIssuePinRequest):
     issue.is_pinned = request.is_pinned
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
+    await event_bus.append({
+        "type": "issue_updated",
+        "issue_id": issue.id,
+        "session_id": issue.session_id,
+        "is_pinned": issue.is_pinned,
+    })
     return issue
 
 
@@ -1770,6 +1790,13 @@ async def approve_codex_issue_plan(issue_id: str, request: ApprovePlanRequest):
     issue.status = "in_progress"
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
+    await event_bus.append({
+        "type": "issue_updated",
+        "issue_id": issue.id,
+        "session_id": issue.session_id,
+        "status": issue.status,
+        "review_comment": issue.review_comment,
+    })
 
     graph = await codex_store.load_workflow_graph_for_issue(issue_id)
     if graph is None:
@@ -1780,7 +1807,100 @@ async def approve_codex_issue_plan(issue_id: str, request: ApprovePlanRequest):
     from app.application.workflow_scheduler import WorkflowScheduler
     from app.application.event_bus import _workflow_task_dispatcher
 
-    scheduler = WorkflowScheduler(store=codex_store, task_dispatcher=_workflow_task_dispatcher)
+    scheduler = WorkflowScheduler(
+        store=codex_store,
+        task_dispatcher=_workflow_task_dispatcher,
+        event_bus=event_bus,
+    )
+    await scheduler.settle(graph.id)
+    return issue
+
+
+class QaReviewRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+    comment: str | None = None
+
+
+@router.post("/codex/issues/{issue_id}/qa-review")
+async def qa_review_codex_issue(issue_id: str, request: QaReviewRequest):
+    """Human verdict on a QA-passed issue.
+
+    approve → status flips to `awaiting_merge`; user finishes via Merge Back.
+    reject  → reset the engineer + qa workflow nodes so the scheduler reruns
+              engineer with the user's feedback, exactly like the auto QA-fail
+              rework path. Bounded by engineer.max_retries.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
+    if issue.status != "awaiting_review":
+        raise HTTPException(status_code=409, detail="Issue is not awaiting human QA review")
+
+    comment = (request.comment or "").strip()
+
+    if request.decision == "approve":
+        issue.status = "awaiting_merge"
+        issue.updated_at = datetime.now()
+        await codex_store.save_codex_issue(issue)
+        await event_bus.append({
+            "type": "issue_updated",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "status": issue.status,
+        })
+        return issue
+
+    # decision == "reject": route through engineer rework.
+    graph = await codex_store.load_workflow_graph_for_issue(issue_id)
+    if graph is None:
+        raise HTTPException(status_code=409, detail="No workflow graph found for issue")
+    engineer_node = next((n for n in graph.nodes if n.node_key == "engineer"), None)
+    qa_node = next((n for n in graph.nodes if n.node_key == "qa"), None)
+    if engineer_node is None or qa_node is None:
+        raise HTTPException(status_code=409, detail="Graph missing engineer or qa node")
+    if engineer_node.retries >= max(engineer_node.max_retries, 1):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Engineer rework budget exhausted ({engineer_node.retries}/{engineer_node.max_retries})",
+        )
+
+    # Stash the human's feedback into review_comment so engineer's REWORK
+    # branch picks it up the same way QA-failure narratives do.
+    if comment:
+        issue.review_comment = f"[HUMAN-REJECTED] {comment}"
+    issue.status = "in_progress"
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+
+    await codex_store.update_workflow_node(
+        engineer_node.id,
+        status="pending",
+        retries=engineer_node.retries + 1,
+        completed_at=None,
+    )
+    await codex_store.update_workflow_node(
+        qa_node.id,
+        status="pending",
+        completed_at=None,
+    )
+
+    await event_bus.append({
+        "type": "issue_updated",
+        "issue_id": issue.id,
+        "session_id": issue.session_id,
+        "status": issue.status,
+        "review_comment": issue.review_comment,
+    })
+
+    from app.application.workflow_scheduler import WorkflowScheduler
+    from app.application.event_bus import _workflow_task_dispatcher
+    scheduler = WorkflowScheduler(
+        store=codex_store,
+        task_dispatcher=_workflow_task_dispatcher,
+        event_bus=event_bus,
+    )
     await scheduler.settle(graph.id)
     return issue
 
@@ -1832,6 +1952,13 @@ async def duplicate_codex_issue(issue_id: str, from_current: bool = False):
             except (GitError, WorktreeError) as exc:
                 raise HTTPException(status_code=500, detail=f"failed to create issue worktree: {exc}")
     await codex_store.save_codex_issue(new_issue)
+    await event_bus.append({
+        "type": "issue_created",
+        "issue_id": new_issue.id,
+        "session_id": new_issue.session_id,
+        "issue": new_issue.model_dump(mode="json") if hasattr(new_issue, "model_dump") else None,
+        "forked_from": issue.id,
+    })
     return new_issue
 
 
@@ -2139,6 +2266,7 @@ async def abandon_codex_issue(issue_id: str):
     await event_bus.append({
         "type": "issue_abandoned",
         "issue_id": issue.id,
+        "session_id": issue.session_id,
     })
     return issue
 
@@ -2434,6 +2562,7 @@ async def steer_codex_issue(issue_id: str, request: SteerRequest):
     await event_bus.append({
         "type": "issue_steered",
         "issue_id": issue.id,
+        "session_id": issue.session_id,
         "message": msg,
     })
     return {"ok": True, "steer_path": str(steer_path)}
@@ -2468,6 +2597,7 @@ async def restore_codex_issue(issue_id: str):
     await event_bus.append({
         "type": "issue_restored",
         "issue_id": issue.id,
+        "session_id": issue.session_id,
     })
     return issue
 
@@ -2497,6 +2627,12 @@ async def finalize_abandoned_issue(issue_id: str):
     issue.git_worktree_path = None
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
+    await event_bus.append({
+        "type": "issue_updated",
+        "issue_id": issue.id,
+        "session_id": issue.session_id,
+        "git_worktree_path": None,
+    })
     return issue
 
 
@@ -2536,6 +2672,11 @@ async def merge_codex_issue(issue_id: str, request: MergeIssueRequest):
         result = await worktree_manager.merge_issue(project, issue, message=request.message)
     except (GitError, WorktreeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # Close the loop: merging is the last user-visible step, so flip the
+    # issue's lifecycle status to completed alongside git_merge_status=merged.
+    if issue.status != "completed":
+        issue.status = "completed"
+    issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
     await codex_store.append_project_audit(
         project_id=project.id,
@@ -2547,8 +2688,15 @@ async def merge_codex_issue(issue_id: str, request: MergeIssueRequest):
     await event_bus.append({
         "type": "issue_merged",
         "issue_id": issue.id,
+        "session_id": issue.session_id,
         "sha": result["sha"],
         "base_branch": result["base_branch"],
+    })
+    await event_bus.append({
+        "type": "issue_updated",
+        "issue_id": issue.id,
+        "session_id": issue.session_id,
+        "status": issue.status,
     })
     return {**result, "issue": issue}
 
@@ -4042,7 +4190,11 @@ async def auto_start_issue_graph(issue_id: str):
     from app.application.workflow_scheduler import materialize_graph_from_dag, WorkflowScheduler
     from app.application.event_bus import _workflow_task_dispatcher
     graph = await materialize_graph_from_dag(store, issue_id, dag, created_by="console")
-    scheduler = WorkflowScheduler(store=store, task_dispatcher=_workflow_task_dispatcher)
+    scheduler = WorkflowScheduler(
+        store=store,
+        task_dispatcher=_workflow_task_dispatcher,
+        event_bus=event_bus,
+    )
     graph = await scheduler.start_graph(graph.id)
     return _graph_to_dict(graph)
 
@@ -4076,7 +4228,12 @@ async def list_replan_pending(issue_id: str):
 async def confirm_replan(issue_id: str, replan_id: str):
     store = _require_agent_store()
     from app.application.workflow_scheduler import WorkflowScheduler, WorkflowSchedulerError
-    scheduler = WorkflowScheduler(store=store, task_dispatcher=None)
+    from app.application.event_bus import _workflow_task_dispatcher
+    scheduler = WorkflowScheduler(
+        store=store,
+        task_dispatcher=_workflow_task_dispatcher,
+        event_bus=event_bus,
+    )
     try:
         graph = await scheduler.apply_replan(replan_id, "confirmed")
     except (ValueError, WorkflowSchedulerError) as exc:
@@ -4088,7 +4245,12 @@ async def confirm_replan(issue_id: str, replan_id: str):
 async def reject_replan(issue_id: str, replan_id: str):
     store = _require_agent_store()
     from app.application.workflow_scheduler import WorkflowScheduler, WorkflowSchedulerError
-    scheduler = WorkflowScheduler(store=store, task_dispatcher=None)
+    from app.application.event_bus import _workflow_task_dispatcher
+    scheduler = WorkflowScheduler(
+        store=store,
+        task_dispatcher=_workflow_task_dispatcher,
+        event_bus=event_bus,
+    )
     try:
         graph = await scheduler.apply_replan(replan_id, "rejected")
     except (ValueError, WorkflowSchedulerError) as exc:

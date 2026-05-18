@@ -21,8 +21,10 @@ import { DiffPanel } from "@/features/issues/components/DiffPanel";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { useI18n } from "@/providers/I18nProvider";
 import { UndoBar } from "@/components/ui/undo-bar";
 import { cn } from "@/lib/utils";
+import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
   issueId: string;
@@ -35,9 +37,19 @@ const ACTIVE_STATUSES = new Set(["open", "in_progress"]);
 
 type BusyKind = "submit" | "review-approve" | "review-reject" | "merge" | "abandon" | "pr-create" | "pr-refresh" | null;
 type ConfirmKind = "merge" | "merge-force" | "abandon" | "reject" | null;
+type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
+
+function formatTimeAgo(ts: number, t: TranslateFn): string {
+  const delta = Date.now() - ts;
+  if (delta < 1500) return t("task.diffMerge.timeAgo.justNow");
+  if (delta < 60_000) return t("task.diffMerge.timeAgo.secondsAgo", { count: Math.floor(delta / 1000) });
+  if (delta < 3_600_000) return t("task.diffMerge.timeAgo.minutesAgo", { count: Math.floor(delta / 60_000) });
+  return t("task.diffMerge.timeAgo.hoursAgo", { count: Math.floor(delta / 3_600_000) });
+}
 
 export function DiffMergeTab({ issueId, issue, active }: Props) {
   const { addToast } = useToast();
+  const { t } = useI18n();
   const router = useRouter();
   const [diff, setDiff] = useState<IssueDiffResult | null>(null);
   const [tasks, setTasks] = useState<CodexTask[]>([]);
@@ -68,7 +80,7 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         if (mode !== "poll") {
           addToast({
             type: "error",
-            title: "Failed to load diff",
+            title: t("task.diffMerge.loadFailed"),
             message: err instanceof Error ? err.message : String(err),
           });
         }
@@ -77,7 +89,7 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         inFlight.current = false;
       }
     },
-    [issueId, addToast],
+    [issueId, addToast, t],
   );
 
   useEffect(() => {
@@ -86,15 +98,33 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, issueId]);
 
+  // Event-driven refresh: engineer writes → worktree_dirty fires (5s throttle
+  // server-side); also refetch on task_status changes for the tasks list.
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("worktree_dirty", "task_status", "task_created"),
+    ),
+    onEvent: () => { void load("poll"); },
+    throttleMs: 1500,
+    enabled: active,
+  });
+
+  // Fallback poll while in flight at a relaxed 15s interval.
   useEffect(() => {
     if (!active) return;
     if (!issue || !ACTIVE_STATUSES.has(issue.status ?? "")) return;
-    const id = window.setInterval(() => void load("poll"), 5000);
+    const id = window.setInterval(() => void load("poll"), 15000);
     return () => window.clearInterval(id);
   }, [active, issue, load]);
 
-  const reviewableTask = tasks.find((t) => t.status === "awaiting_review");
-  const doneTaskForSubmit = tasks.find((t) => t.status === "done");
+  // Skip auto-spawned architect-review child tasks. They share the same
+  // task list but are not the "main" engineer/QA work — counting them here
+  // makes the Approve/Reject and "提交评审" buttons reappear after the user
+  // already moved past that step.
+  const mainTasks = tasks.filter((t) => t.task_kind !== "review");
+  const reviewableTask = mainTasks.find((t) => t.status === "awaiting_review");
+  const doneTaskForSubmit = mainTasks.find((t) => t.status === "done");
   const isAbandoned = issue?.status === "cancelled";
   // C3: which Engineer run produced these changes. Only Engineer touches
   // code in this system, so a single attribution covers the whole diff.
@@ -103,7 +133,7 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
     if (engs.length === 0) return null;
     const latest = engs[engs.length - 1];
     return {
-      agentName: "Engineer",
+      agentName: t("task.diffMerge.engineer"),
       runId: latest.last_execution_process_id ?? latest.id,
       timestamp: latest.updated_at ?? null,
     };
@@ -114,36 +144,36 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
     setBusy("submit");
     try {
       await submitCodexTask(doneTaskForSubmit.id);
-      addToast({ type: "success", title: "Submitted for review" });
+      addToast({ type: "success", title: t("task.review.submitted") });
       await load("refresh");
     } catch (err) {
       addToast({
         type: "error",
-        title: "Submit failed",
+        title: t("task.review.submitFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setBusy(null);
     }
-  }, [doneTaskForSubmit, addToast, load]);
+  }, [doneTaskForSubmit, addToast, load, t]);
 
   const handleApprove = useCallback(async () => {
     if (!reviewableTask) return;
     setBusy("review-approve");
     try {
       await reviewCodexTask(reviewableTask.id, "approve", null);
-      addToast({ type: "success", title: "Approved" });
+      addToast({ type: "success", title: t("task.review.approved") });
       await load("refresh");
     } catch (err) {
       addToast({
         type: "error",
-        title: "Review failed",
+        title: t("task.review.failed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setBusy(null);
     }
-  }, [reviewableTask, addToast, load]);
+  }, [reviewableTask, addToast, load, t]);
 
   const handleRejectConfirm = useCallback(async () => {
     if (!reviewableTask) return;
@@ -151,19 +181,19 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
     setConfirmKind(null);
     try {
       await reviewCodexTask(reviewableTask.id, "reject", rejectReason || null);
-      addToast({ type: "success", title: "Sent back for rework" });
+      addToast({ type: "success", title: t("task.review.sentBackForRework") });
       setRejectReason("");
       await load("refresh");
     } catch (err) {
       addToast({
         type: "error",
-        title: "Review failed",
+        title: t("task.review.failed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setBusy(null);
     }
-  }, [reviewableTask, rejectReason, addToast, load]);
+  }, [reviewableTask, rejectReason, addToast, load, t]);
 
   const performMerge = useCallback(
     async (force: boolean) => {
@@ -185,9 +215,11 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           .catch(() => null);
         addToast({
           type: "success",
-          title: force ? "Merged (forced over diverged base)" : "Merged",
+          title: force ? t("task.diffMerge.mergedForced") : t("task.mergeSuccess"),
           message: weekly !== null
-            ? `${weekly} ${weekly === 1 ? "issue" : "issues"} merged this week.`
+            ? weekly === 1
+              ? t("task.diffMerge.weeklyMergedOne")
+              : t("task.diffMerge.weeklyMergedMany", { count: weekly })
             : undefined,
         });
         // Land back on the Inbox so the user can immediately pick up the
@@ -200,12 +232,12 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           setConfirmKind("merge-force");
           return;
         }
-        addToast({ type: "error", title: "Merge failed", message: msg });
+        addToast({ type: "error", title: t("task.diffMerge.mergeFailed"), message: msg });
       } finally {
         setBusy(null);
       }
     },
-    [issueId, addToast, load],
+    [issueId, addToast, load, t],
   );
 
   const handleCreatePR = useCallback(async () => {
@@ -214,37 +246,37 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
       const updated = await createGithubPR(issueId, {});
       addToast({
         type: "success",
-        title: "GitHub PR opened",
+        title: t("task.diffMerge.prOpened"),
         message: updated.github_pr_url ?? undefined,
       });
       await load("refresh");
     } catch (err) {
       addToast({
         type: "error",
-        title: "Create PR failed",
+        title: t("task.diffMerge.createPrFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setBusy(null);
     }
-  }, [issueId, addToast, load]);
+  }, [issueId, addToast, load, t]);
 
   const handleRefreshPR = useCallback(async () => {
     setBusy("pr-refresh");
     try {
       await refreshGithubPR(issueId);
-      addToast({ type: "success", title: "PR state refreshed" });
+      addToast({ type: "success", title: t("task.diffMerge.prRefreshed") });
       await load("refresh");
     } catch (err) {
       addToast({
         type: "error",
-        title: "Refresh PR failed",
+        title: t("task.diffMerge.refreshPrFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setBusy(null);
     }
-  }, [issueId, addToast, load]);
+  }, [issueId, addToast, load, t]);
 
   const handleAbandon = useCallback(async () => {
     setBusy("abandon");
@@ -259,30 +291,30 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
     } catch (err) {
       addToast({
         type: "error",
-        title: "Abandon failed",
+        title: t("task.diffMerge.abandonFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setBusy(null);
     }
-  }, [issueId, issue?.title, addToast, load]);
+  }, [issueId, issue?.title, addToast, load, t]);
 
   const handleAbandonUndo = useCallback(async () => {
     if (!pendingAbandon) return;
     try {
       await restoreCodexIssue(pendingAbandon.issueId);
-      addToast({ type: "success", title: "Restored" });
+      addToast({ type: "success", title: t("task.diffMerge.restored") });
     } catch (err) {
       addToast({
         type: "error",
-        title: "Restore failed",
+        title: t("task.diffMerge.restoreFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setPendingAbandon(null);
       await load("refresh");
     }
-  }, [pendingAbandon, addToast, load]);
+  }, [pendingAbandon, addToast, load, t]);
 
   const handleAbandonExpire = useCallback(async () => {
     if (!pendingAbandon) return;
@@ -291,17 +323,17 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
     } catch {
       // Silent — the issue is already in abandoned state; finalize is just
       // a worktree-cleanup hint. Surface in toast as a soft warning.
-      addToast({ type: "info", title: "Worktree cleanup deferred — retry from issue menu if needed" });
+      addToast({ type: "info", title: t("task.diffMerge.worktreeCleanupDeferred") });
     } finally {
       setPendingAbandon(null);
     }
-  }, [pendingAbandon, addToast]);
+  }, [pendingAbandon, addToast, t]);
 
   return (
     <div className="p-6 flex flex-col gap-6">
       <div className="flex items-center justify-between -mt-2">
         <div className="text-[11px] text-text-muted">
-          {lastFetched ? <>Last refreshed {timeAgo(lastFetched)}</> : "—"}
+          {lastFetched ? <>{t("task.diffMerge.lastRefreshed", { time: formatTimeAgo(lastFetched, t) })}</> : "—"}
         </div>
         <Button
           size="sm"
@@ -310,16 +342,16 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           onClick={() => void load("refresh")}
         >
           <RefreshCw size={12} className={cn("mr-1.5", isRefreshing && "animate-spin")} />
-          Refresh
+          {t("task.diffMerge.refresh")}
         </Button>
       </div>
 
       <section className="rounded-lg border border-border-subtle p-4">
-        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">Review</h3>
+        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">{t("task.review.title")}</h3>
         {reviewableTask ? (
           <div className="flex flex-col gap-3">
             <div className="text-sm">
-              Task <b>{reviewableTask.title}</b> is awaiting architect review.
+              {t("task.diffMerge.awaitingArchitectReview", { title: reviewableTask.title })}
             </div>
             <div className="flex gap-2">
               <Button
@@ -328,10 +360,10 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
               >
                 {busy === "review-approve" ? (
                   <span className="flex items-center gap-1.5">
-                    <Loader2 size={12} className="animate-spin" /> Approving…
+                    <Loader2 size={12} className="animate-spin" /> {t("task.review.approving")}
                   </span>
                 ) : (
-                  "Approve"
+                  t("task.review.approve")
                 )}
               </Button>
               <Button
@@ -342,7 +374,7 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
                   setConfirmKind("reject");
                 }}
               >
-                Reject
+                {t("task.review.reject")}
               </Button>
             </div>
           </div>
@@ -350,21 +382,21 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           <Button disabled={!!busy} onClick={() => void handleSubmit()}>
             {busy === "submit" ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> Submitting…
+                <Loader2 size={12} className="animate-spin" /> {t("task.review.submitting")}
               </span>
             ) : (
-              "Submit for review"
+              t("task.submitForReview")
             )}
           </Button>
         ) : (
-          <div className="text-sm text-text-muted">No tasks are ready to submit yet.</div>
+          <div className="text-sm text-text-muted">{t("task.diffMerge.noReadyTask")}</div>
         )}
       </section>
 
       <section className="rounded-lg border border-border-subtle p-4 flex flex-col gap-3">
-        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted">Branch operations</h3>
+        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted">{t("task.diffMerge.branchOperations")}</h3>
         <div className="text-xs text-text-muted">
-          Branch: <code className="font-mono">{issue?.git_branch ?? "—"}</code> → base: <code className="font-mono">{diff?.base_branch ?? "—"}</code>
+          {t("task.branch")}: <code className="font-mono">{issue?.git_branch ?? "—"}</code> → {t("task.base")}: <code className="font-mono">{diff?.base_branch ?? "—"}</code>
         </div>
         {issue?.git_worktree_path && (
           <div className="flex items-center gap-2 text-[11px] text-text-muted bg-surface-input/40 rounded-md px-3 py-1.5 border border-border-subtle">
@@ -372,20 +404,24 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
             <code className="font-mono truncate flex-1">{issue.git_worktree_path}</code>
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 const cmd = `cd "${issue.git_worktree_path}" && code .`;
-                void navigator.clipboard.writeText(cmd);
-                addToast({
-                  type: "success",
-                  title: "Copied to clipboard",
-                  message: `Paste in terminal to take over locally`,
-                });
+                try {
+                  await navigator.clipboard.writeText(cmd);
+                  addToast({
+                    type: "success",
+                    title: t("task.diffMerge.copiedToClipboard"),
+                    message: t("task.diffMerge.takeOverHint"),
+                  });
+                } catch {
+                  addToast({ type: "error", title: t("task.diffMerge.clipboardUnavailable") });
+                }
               }}
               className="flex items-center gap-1 px-2 py-1 rounded text-[11px] hover:bg-surface-hover text-foreground transition-colors"
-              title="Copy cd + code . to clipboard so you can take over manually"
+              title={t("task.diffMerge.copyWorktreeHint")}
             >
               <Copy size={11} />
-              Take over locally
+              {t("task.diffMerge.takeOverLocally")}
             </button>
           </div>
         )}
@@ -413,14 +449,14 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
               disabled={!!busy}
               onClick={() => void handleRefreshPR()}
               className="ml-auto"
-              title="Re-poll gh pr view; if reviewers requested changes the engineer is auto-re-dispatched"
+              title={t("task.diffMerge.refreshPrHint")}
             >
               {busy === "pr-refresh" ? (
                 <Loader2 size={12} className="animate-spin" />
               ) : (
                 <RefreshCw size={12} />
               )}
-              <span className="ml-1">Refresh PR</span>
+              <span className="ml-1">{t("task.diffMerge.refreshPrButton")}</span>
             </Button>
           </div>
         ) : null}
@@ -431,20 +467,20 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
               onClick={() => void handleCreatePR()}
               title={
                 isAbandoned
-                  ? "Issue is abandoned"
+                  ? t("task.diffMerge.issueAbandoned")
                   : diff && diff.diff.length === 0
-                    ? "Nothing to open a PR for"
-                    : "git push + gh pr create"
+                    ? t("task.diffMerge.nothingToOpenPr")
+                    : t("task.diffMerge.createPrHint")
               }
               className="bg-foreground text-background hover:bg-foreground/90"
             >
               {busy === "pr-create" ? (
                 <span className="flex items-center gap-1.5">
-                  <Loader2 size={12} className="animate-spin" /> Opening PR…
+                  <Loader2 size={12} className="animate-spin" /> {t("task.diffMerge.openingPr")}
                 </span>
               ) : (
                 <span className="flex items-center gap-1.5">
-                  <GitPullRequest size={12} /> Open GitHub PR
+                  <GitPullRequest size={12} /> {t("task.diffMerge.openGitHubPr")}
                 </span>
               )}
             </Button>
@@ -455,18 +491,18 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
             variant="outline"
             title={
               isAbandoned
-                ? "Issue is abandoned"
+                ? t("task.diffMerge.issueAbandoned")
                 : diff && diff.diff.length === 0
-                  ? "Nothing to merge"
-                  : "Squash-merge locally without going through GitHub"
+                  ? t("task.diffMerge.nothingToMerge")
+                  : t("task.diffMerge.mergeHint")
             }
           >
             {busy === "merge" ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> Merging…
+                <Loader2 size={12} className="animate-spin" /> {t("task.diffMerge.merging")}
               </span>
             ) : (
-              "Squash-merge"
+              t("task.mergeBack")
             )}
           </Button>
           <Button
@@ -476,23 +512,23 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           >
             {busy === "abandon" ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> Abandoning…
+                <Loader2 size={12} className="animate-spin" /> {t("task.diffMerge.abandoning")}
               </span>
             ) : isAbandoned ? (
-              "Abandoned"
+              t("task.mergeStatus.abandoned")
             ) : (
-              "Abandon"
+              t("task.abandon")
             )}
           </Button>
         </div>
       </section>
 
       <section className="rounded-lg border border-border-subtle p-4">
-        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">Diff</h3>
+        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">{t("task.diffMerge.diff")}</h3>
         {!diff ? (
-          <div className="text-sm text-text-muted">Loading…</div>
+          <div className="text-sm text-text-muted">{t("task.diffMerge.loading")}</div>
         ) : diff.diff.length === 0 ? (
-          <div className="text-sm text-text-muted">No changes vs base.</div>
+          <div className="text-sm text-text-muted">{t("task.diffMerge.noChanges")}</div>
         ) : (
           <DiffPanel
             diff={diff.diff}
@@ -507,9 +543,12 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
       <ConfirmDialog
         open={confirmKind === "merge"}
         onOpenChange={(o) => !o && setConfirmKind(null)}
-        title="Squash-merge this issue?"
-        description={`This squashes "${issue?.title ?? "issue"}" onto ${diff?.base_branch ?? "the base branch"} and discards the worktree.`}
-        confirmText="Squash-merge"
+        title={t("task.mergeConfirmTitle")}
+        description={t("task.diffMerge.mergeConfirmBody", {
+          title: issue?.title ?? t("task.diffMerge.issueFallback"),
+          base: diff?.base_branch ?? t("task.diffMerge.baseBranchFallback"),
+        })}
+        confirmText={t("task.mergeBack")}
         variant="default"
         isLoading={busy === "merge"}
         onConfirm={() => void performMerge(false)}
@@ -523,13 +562,13 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
             setMergeForceMessage(null);
           }
         }}
-        title="Base has advanced — force merge?"
+        title={t("task.diffMerge.forceMergeTitle")}
         description={
           mergeForceMessage
-            ? `${mergeForceMessage}\n\nForce-merge anyway (your changes will be squashed on top of the new base).`
-            : "Force-merge anyway?"
+            ? `${mergeForceMessage}\n\n${t("task.diffMerge.forceMergeAnyway")}`
+            : t("task.diffMerge.forceMergePrompt")
         }
-        confirmText="Force-merge"
+        confirmText={t("task.diffMerge.forceMerge")}
         variant="warning"
         isLoading={busy === "merge"}
         onConfirm={() => void performMerge(true)}
@@ -538,9 +577,9 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
       <ConfirmDialog
         open={confirmKind === "abandon"}
         onOpenChange={(o) => !o && setConfirmKind(null)}
-        title="Abandon this issue?"
-        description="The worktree will be removed and the issue marked cancelled. This cannot be undone."
-        confirmText="Abandon"
+        title={t("task.abandonConfirmTitle")}
+        description={t("task.abandonConfirmBody").replace("{branch}", issue?.git_branch ?? t("task.diffMerge.branchFallback"))}
+        confirmText={t("task.abandon")}
         variant="destructive"
         isLoading={busy === "abandon"}
         onConfirm={() => void handleAbandon()}
@@ -557,7 +596,7 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
 
       {pendingAbandon && (
         <UndoBar
-          message={`"${pendingAbandon.title}" abandoned`}
+          message={t("task.diffMerge.abandonedUndoMessage", { title: pendingAbandon.title })}
           countdownSeconds={60}
           onUndo={handleAbandonUndo}
           onExpire={handleAbandonExpire}
@@ -566,14 +605,6 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
       )}
     </div>
   );
-}
-
-function timeAgo(ts: number): string {
-  const delta = Date.now() - ts;
-  if (delta < 1500) return "just now";
-  if (delta < 60_000) return `${Math.floor(delta / 1000)}s ago`;
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
-  return `${Math.floor(delta / 3_600_000)}h ago`;
 }
 
 interface RejectDialogProps {
@@ -586,25 +617,26 @@ interface RejectDialogProps {
 }
 
 function RejectDialog({ open, reason, onReasonChange, isLoading, onClose, onConfirm }: RejectDialogProps) {
+  const { t } = useI18n();
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-xl bg-popover p-5 ring-1 ring-foreground/10 shadow-xl">
-        <h3 className="font-heading text-base font-medium mb-1">Reject this submission?</h3>
+        <h3 className="font-heading text-base font-medium mb-1">{t("task.review.rejectConfirmTitle")}</h3>
         <p className="text-xs text-text-muted mb-3">
-          The task is sent back to the engineer with this feedback.
+          {t("task.review.rejectConfirmBody")}
         </p>
         <textarea
           autoFocus
           value={reason}
           onChange={(e) => onReasonChange(e.target.value)}
           rows={4}
-          placeholder="What needs to change?"
+          placeholder={t("task.review.rejectPlaceholder")}
           className="w-full rounded-md border border-border-subtle bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand/50"
         />
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="outline" disabled={isLoading} onClick={onClose}>
-            Cancel
+            {t("issue.cancel")}
           </Button>
           <Button
             disabled={isLoading}
@@ -613,10 +645,10 @@ function RejectDialog({ open, reason, onReasonChange, isLoading, onClose, onConf
           >
             {isLoading ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> Rejecting…
+                <Loader2 size={12} className="animate-spin" /> {t("task.review.rejecting")}
               </span>
             ) : (
-              "Reject"
+              t("task.review.reject")
             )}
           </Button>
         </div>

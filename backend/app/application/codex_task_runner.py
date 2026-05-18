@@ -87,6 +87,10 @@ class CodexTaskRunner:
         task.status = "running"
         task.updated_at = datetime.now()
         await self.codex_store.save_codex_task(task)
+        # Prime the activity tracker so the watchdog doesn't fire before the
+        # first LLM token arrives (cold-start sometimes takes ~30s).
+        from app.application import task_activity
+        task_activity.touch(task.id)
         exec_process = await self._create_execution_process(
             task, executor, provider, model,
             kind=kind, triggering_message_id=triggering_message_id,
@@ -198,12 +202,20 @@ class CodexTaskRunner:
                 # Don't fail the run on a bookkeeping update.
                 pass
 
-        exec_final_status = "Completed" if task.status == "done" else "Running"
+        if task.status == "done":
+            exec_final_status = "Completed"
+            exec_exit_code: int | None = 0
+        elif task.status == "failed":
+            exec_final_status = "Failed"
+            exec_exit_code = -1
+        else:
+            exec_final_status = "Running"
+            exec_exit_code = None
         await self.codex_store.update_execution_process_status(
             exec_process.id,
             exec_final_status,
-            exit_code=0 if task.status == "done" else None,
-            completed_at=datetime.now() if task.status == "done" else None,
+            exit_code=exec_exit_code,
+            completed_at=datetime.now() if task.status in {"done", "failed"} else None,
         )
         exec_process.status = exec_final_status
         await self.event_bus.append({
@@ -213,6 +225,7 @@ class CodexTaskRunner:
             "session_id": task.session_id,
             "status": task.status,
             "result": task.result,
+            "review_comment": task.review_comment,
             "execution_process_id": exec_process.id,
         })
         await self._complete_help_child_if_needed(task)

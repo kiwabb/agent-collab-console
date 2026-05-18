@@ -44,6 +44,26 @@ class WorkflowScheduler:
         self._task_dispatcher = task_dispatcher  # callable(task) -> awaitable, optional
         self._event_bus = event_bus
 
+    async def _emit_node_event(self, node: WorkflowNode, issue: CodexIssue | None) -> None:
+        """Best-effort emit of workflow_node_updated so the frontend DAG/
+        IssueDetail can refetch immediately on transitions (pending→running,
+        running→done/failed, qa-rework→pending) instead of waiting for the
+        next poll cycle."""
+        if self._event_bus is None or issue is None:
+            return
+        try:
+            await self._event_bus.append({
+                "type": "workflow_node_updated",
+                "issue_id": issue.id,
+                "session_id": issue.session_id,
+                "node_id": node.id,
+                "node_key": node.node_key,
+                "status": node.status,
+                "task_id": node.task_id,
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("workflow_node_updated emit failed: %s", exc)
+
     # --- Public API ---
 
     async def start_graph(self, graph_id: str) -> WorkflowGraph:
@@ -124,6 +144,54 @@ class WorkflowScheduler:
         graph = await self.store.load_workflow_graph(node.graph_id)
         if graph is None:
             return
+        # Notify subscribers of the node transition so the DAG / IssueDetail
+        # views update in the same tick as task_status — without this, the
+        # graph still ticks via polling.
+        issue_for_event = None
+        try:
+            issue_for_event = await self.store.load_codex_issue(graph.issue_id)
+            await self._emit_node_event(node, issue_for_event)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Conductor observation pass. Runs on every task completion. May
+        # return a decision dict {action, reason, note?}. When action=="escalate"
+        # we pause the workflow — no auto-rework, no auto-finalize, the user
+        # has to take manual action (retry from DAG tab, steer, abandon).
+        # Wrapped so any failure here can't break the scheduler.
+        conductor_decision: dict | None = None
+        try:
+            from app.application.conductor_supervisor import ConductorSupervisor
+            supervisor = ConductorSupervisor(store=self.store, event_bus=self._event_bus)
+            conductor_decision = await supervisor.observe(
+                task=task,
+                node_status=terminal,
+                graph=graph,
+                issue=issue_for_event,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("conductor observation failed: %s", exc)
+
+        # Conductor escalation veto: bail before any of the auto-rework /
+        # finalize machinery so the workflow visibly halts and the user gets
+        # to decide what to do next. Issue stays in_progress; the failed
+        # node stays failed; DAG retry button is the manual resume path.
+        if conductor_decision and conductor_decision.get("action") == "escalate":
+            logger.info(
+                "Conductor escalated after task %s (role=%s) — pausing workflow",
+                task.id, task.role,
+            )
+            if issue_for_event is not None and self._event_bus is not None:
+                try:
+                    await self._event_bus.append({
+                        "type": "issue_updated",
+                        "issue_id": issue_for_event.id,
+                        "session_id": issue_for_event.session_id,
+                        "conductor_paused": True,
+                    })
+                except Exception:  # noqa: BLE001
+                    pass
+            return
 
         # 1. retry-on-fail: bring the failed node back to pending if any
         #    incoming retry-on-fail edge exists AND we're under max_retries.
@@ -152,6 +220,11 @@ class WorkflowScheduler:
         # 3.5 plan-first gate — pause after Product Manager until the user
         # approves the plan summary.
         if await self._maybe_pause_for_plan_approval(graph, node, terminal):
+            return
+
+        # 3.6 QA-pass gate — once QA is done, pause for the human to confirm
+        # before flipping the issue to awaiting_merge / completed.
+        if await self._maybe_pause_for_qa_review(graph, node, terminal):
             return
 
         # 4. ordinary settle pass.
@@ -192,6 +265,19 @@ class WorkflowScheduler:
             )
             return False
 
+        # Best-effort terminate any still-alive Engineer process before reset.
+        if engineer_node.task_id:
+            try:
+                from app.bootstrap import get_codex_process_manager
+                mgr = get_codex_process_manager()
+                if mgr is not None:
+                    await mgr.terminate_task(engineer_node.task_id)
+            except Exception as exc:
+                logger.warning(
+                    "terminate engineer task %s before rework failed: %s",
+                    engineer_node.task_id, exc,
+                )
+
         # Reset both nodes so the scheduler re-fires Engineer first, then QA
         # naturally becomes ready again once Engineer is done.
         await self.store.update_workflow_node(
@@ -200,15 +286,25 @@ class WorkflowScheduler:
             retries=engineer_node.retries + 1,
             completed_at=None,
         )
+        engineer_node.status = "pending"
         await self.store.update_workflow_node(
             completed_node.id,
             status="pending",
             completed_at=None,
         )
+        completed_node.status = "pending"
         logger.info(
             "QA failed → resetting engineer for rework (attempt %s/%s)",
             engineer_node.retries + 1, engineer_node.max_retries,
         )
+        # Tell the UI the graph just re-armed for rework so the DAG redraws
+        # before the next dispatch tick.
+        try:
+            issue_for_event = await self.store.load_codex_issue(graph.issue_id)
+            await self._emit_node_event(engineer_node, issue_for_event)
+            await self._emit_node_event(completed_node, issue_for_event)
+        except Exception:  # noqa: BLE001
+            pass
         await self.settle(graph.id)
         return True
 
@@ -249,6 +345,48 @@ class WorkflowScheduler:
         # NOTE: settle() will see this pending replan and refuse to dispatch
         # until it's confirmed/rejected.
 
+    async def _maybe_pause_for_qa_review(
+        self, graph: WorkflowGraph, node: WorkflowNode, terminal: str
+    ) -> bool:
+        """When QA completes successfully, pause the graph in `awaiting_review`
+        so the human can audit the QA report and either approve (→ awaiting_merge)
+        or reject (→ engineer rework).
+
+        Reject path is handled by the /codex/issues/{id}/qa-review endpoint —
+        it reuses the same node-reset logic as `_maybe_trigger_qa_rework`.
+        """
+        if terminal != "done":
+            return False
+        # Match QA node by canonical key or agent.role_key fallback.
+        if node.node_key != "qa":
+            agents = await self.store.list_agents(workspace_id=None)
+            agent = next((a for a in agents if a.id == node.agent_id), None)
+            if agent is None or agent.role_key != "qa":
+                return False
+
+        issue = await self.store.load_codex_issue(graph.issue_id)
+        if issue is None:
+            return False
+        if issue.status in {"awaiting_review", "awaiting_merge", "completed"}:
+            return True  # already past this gate; don't double-fire
+        issue.status = "awaiting_review"
+        issue.current_phase = "done"
+        issue.updated_at = datetime.now()
+        await self.store.save_codex_issue(issue)
+        if self._event_bus is not None:
+            try:
+                await self._event_bus.append({
+                    "type": "issue_updated",
+                    "issue_id": issue.id,
+                    "session_id": issue.session_id,
+                    "status": issue.status,
+                    "current_phase": issue.current_phase,
+                })
+            except Exception:  # noqa: BLE001
+                pass
+        logger.info("QA-review gate engaged for issue %s", issue.id)
+        return True
+
     async def _maybe_pause_for_plan_approval(
         self, graph: WorkflowGraph, node: WorkflowNode, terminal: str
     ) -> bool:
@@ -272,6 +410,18 @@ class WorkflowScheduler:
         issue.status = "awaiting_approval"
         issue.updated_at = datetime.now()
         await self.store.save_codex_issue(issue)
+        if self._event_bus is not None:
+            try:
+                await self._event_bus.append({
+                    "type": "issue_updated",
+                    "issue_id": issue.id,
+                    "session_id": issue.session_id,
+                    "status": issue.status,
+                    "current_phase": issue.current_phase,
+                    "review_comment": issue.review_comment,
+                })
+            except Exception:  # noqa: BLE001
+                pass
         logger.info("Plan-first gate engaged for issue %s", issue.id)
         return True
 
@@ -433,11 +583,15 @@ class WorkflowScheduler:
         # Engineer rework: when this is a retry caused by an upstream QA
         # failure, surface the most recent QA report on disk as feedback so
         # the engineer prompt builder includes it under "REWORK REQUIRED".
+        # Fallback: when QA didn't fail (e.g. human rejected a passing run),
+        # use issue.review_comment so the user's note still reaches engineer.
         review_comment = None
         if agent.role_key == "engineer" and node.retries > 0 and issue.git_worktree_path:
             review_comment = self._read_latest_qa_failure_summary(
                 issue.git_worktree_path, issue.id
             )
+            if not review_comment and getattr(issue, "review_comment", None):
+                review_comment = issue.review_comment
         if agent.role_key == "architect" and getattr(issue, "review_comment", None):
             review_comment = issue.review_comment
 
@@ -477,6 +631,23 @@ class WorkflowScheduler:
             updated_at=datetime.now(),
         )
         await self.store.save_codex_task(task)
+        # Broadcast the new task to connected clients so the RunDetail / task
+        # list updates immediately on stage transitions (e.g. architect→engineer).
+        # Without this, the frontend only learns about the task when the runner
+        # finally pushes a task_status patch and forces a manual refresh.
+        if self._event_bus is not None:
+            try:
+                from app.application.task_serialization import serialize_task_payload
+                await self._event_bus.append({
+                    "type": "task_created",
+                    "task": serialize_task_payload(task),
+                })
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to emit task_created for workflow node %s: %s",
+                    node.node_key,
+                    exc,
+                )
         if agent.role_key == "architect" and getattr(issue, "review_comment", None):
             issue.review_comment = None
             issue.updated_at = datetime.now()
@@ -487,6 +658,9 @@ class WorkflowScheduler:
             task_id=task.id,
             started_at=datetime.now(),
         )
+        node.status = "running"
+        node.task_id = task.id
+        await self._emit_node_event(node, issue)
         if self._task_dispatcher is not None:
             # Best-effort: the dispatcher may be synchronous (test fakes) or
             # async (production task_runner). If it raises, surface the
@@ -580,16 +754,45 @@ class WorkflowScheduler:
         statuses = {n.status for n in latest.nodes}
         previous_status = latest.status
         terminal_now = False
+        new_issue_status: str | None = None
         if statuses and statuses <= {"done", "skipped"}:
             if latest.status != "done":
                 latest.status = "done"
                 await self.store.save_workflow_graph(latest)
                 terminal_now = True
+            new_issue_status = "completed"
         elif "failed" in statuses and not any(s in {"pending", "blocked", "ready", "running"} for s in statuses):
             if latest.status != "failed":
                 latest.status = "failed"
                 await self.store.save_workflow_graph(latest)
                 terminal_now = True
+            new_issue_status = "failed"
+
+        # Sync the issue's top-level status with the graph terminal state so
+        # the issue list chip flips from "排队中"/"运行中" to "完成"/"失败"
+        # once all nodes settle. Without this, the issue stays at the last
+        # transient status (e.g. "open" → 排队中) even though the work is done.
+        if new_issue_status is not None:
+            issue = await self.store.load_codex_issue(latest.issue_id)
+            if issue is not None and issue.status != new_issue_status:
+                # Never overwrite an in-flight human gate — those resolve via
+                # explicit endpoints (approve-plan, qa-review), not the scheduler.
+                # awaiting_merge is also a terminal-ish state the user moves out
+                # of by clicking Merge Back.
+                if issue.status not in {"awaiting_approval", "awaiting_review", "awaiting_merge"}:
+                    issue.status = new_issue_status
+                    issue.updated_at = datetime.now()
+                    await self.store.save_codex_issue(issue)
+                    if self._event_bus is not None:
+                        try:
+                            await self._event_bus.append({
+                                "type": "issue_updated",
+                                "issue_id": issue.id,
+                                "session_id": issue.session_id,
+                                "status": issue.status,
+                            })
+                        except Exception:  # noqa: BLE001
+                            pass
 
         # Auto-advance the issue's `current_phase` when all nodes whose
         # agent role matches a known phase have completed. This keeps the
@@ -698,6 +901,16 @@ class WorkflowScheduler:
         issue.current_phase = target_phase
         issue.updated_at = datetime.now()
         await self.store.save_codex_issue(issue)
+        if self._event_bus is not None:
+            try:
+                await self._event_bus.append({
+                    "type": "issue_updated",
+                    "issue_id": issue.id,
+                    "session_id": issue.session_id,
+                    "current_phase": issue.current_phase,
+                })
+            except Exception:  # noqa: BLE001
+                pass
 
 
 # Convenience for callers building a graph from a proposed DAG JSON

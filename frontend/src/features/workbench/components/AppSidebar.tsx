@@ -19,8 +19,9 @@ import { getCodexIssues, getWorkspaces, listProjects } from "@/lib/api";
 import type { CodexIssue, Project, Workspace } from "@/lib/types";
 import { useSelection } from "@/features/workbench/state/SelectionProvider";
 import { cn } from "@/lib/utils";
-import { useDataEvent } from "@/lib/dataEvents";
+import { useDataEvent, emitDataEvent } from "@/lib/dataEvents";
 import { workspaceLabel } from "@/lib/workspaceLabel";
+import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 import {
   DropdownMenu,
@@ -82,6 +83,38 @@ export function AppSidebar() {
   // the page currently shows.
   useDataEvent("workspaces:changed", refreshWorkspaces);
   useDataEvent("projects:changed", refreshProjects);
+  useDataEvent("issues:changed", () => {
+    // Drop the cache so the next expand refetches; cheaper than refetching
+    // every open workspace's issue list eagerly.
+    setIssuesByWs({});
+  });
+
+  // Backend-driven sidebar refresh. The sidebar always lives inside
+  // WorkbenchShell — when a workspace is selected we get per-workspace WS
+  // events, otherwise we get the global SSE stream. Either way the bus
+  // surfaces session_*/project_*/issue_* events.
+  useBusEventEffect({
+    match: busEventMatchers.typeIn(
+      "session_created",
+      "session_updated",
+      "session_deleted",
+    ),
+    onEvent: () => {
+      refreshWorkspaces();
+      emitDataEvent("workspaces:changed");
+    },
+    throttleMs: 500,
+  });
+  useBusEventEffect({
+    match: busEventMatchers.typeIn("issue_created", "issue_deleted", "issue_updated", "issue_merged", "issue_abandoned"),
+    onEvent: () => {
+      // Bust the per-workspace issue cache so the next render fetches fresh
+      // status badges; also bump count totals.
+      setIssuesByWs({});
+      emitDataEvent("issues:changed");
+    },
+    throttleMs: 500,
+  });
 
   // Also refresh whenever the route changes — the user may have arrived here
   // from a page that mutated state without dispatching the event.

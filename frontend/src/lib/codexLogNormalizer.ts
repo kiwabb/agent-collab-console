@@ -378,6 +378,19 @@ function normalizeSingle(log: LogEventInput, idx: number): NormalizedEntry | { i
     return { id: `skip-${idx}`, type: "hidden", hidden: true };
   }
 
+  if (stream === "thinking") {
+    const payload = tryParseJSON(safeContent);
+    const text = (payload && typeof payload.text === "string" ? (payload.text as string) : "") || safeContent;
+    return {
+      id: keyBase,
+      type: "thinking",
+      label: "Thinking",
+      content: text,
+      executionProcessId: exec,
+      timestamp: ts,
+    };
+  }
+
   if (stream === "stderr") {
     const stripped = stripAnsi(safeContent);
     return {

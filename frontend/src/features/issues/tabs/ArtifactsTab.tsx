@@ -8,6 +8,7 @@ import { ArtifactPanel } from "@/features/artifacts/ArtifactPanel";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
   issueId: string;
@@ -58,12 +59,25 @@ export function ArtifactsTab({ issueId, active, issue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, issueId]);
 
-  // Live-poll while the issue is still in flight. Cleared as soon as the
-  // issue lands in a terminal state.
+  // Event-driven refresh: artifacts get written when a task completes a phase
+  // (PM PRD, Architect design, Engineer code, QA report). task_status with
+  // terminal status is the right hook.
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("task_status", "workflow_node_updated"),
+    ),
+    onEvent: () => { void fetchArtifacts("poll"); },
+    throttleMs: 500,
+    enabled: active,
+  });
+
+  // Fallback poll while in flight, lengthened to 15s now that events do the
+  // heavy lifting.
   useEffect(() => {
     if (!active) return;
     if (!issue || !ACTIVE_STATUSES.has(issue.status ?? "")) return;
-    const id = window.setInterval(() => void fetchArtifacts("poll"), 5000);
+    const id = window.setInterval(() => void fetchArtifacts("poll"), 15000);
     return () => window.clearInterval(id);
   }, [active, issue, fetchArtifacts]);
 

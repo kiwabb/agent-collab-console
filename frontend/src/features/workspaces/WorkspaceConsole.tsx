@@ -13,12 +13,15 @@ import {
   getProject,
   getRuntimeCatalog,
   getWorkspace,
+  rerunCodexTask,
+  terminateCodexTask,
 } from "@/lib/api";
-import type { CodexIssue, CodexTask, Project, RuntimeCatalog, Workspace } from "@/lib/types";
+import type { CodexIssue, CodexTask, ExecutionProcess, Project, RuntimeCatalog, Workspace } from "@/lib/types";
+import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
+import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
 import { useToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
-import { LogRow } from "@/components/ui/log-row";
 import { ApprovalCard } from "@/components/ui/approval-card";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
@@ -53,6 +56,7 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
   const router = useRouter();
   const { addToast } = useToast();
   const { t } = useI18n();
+  const { lastEvent } = useExecutionProcessesContext();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [catalog, setCatalog] = useState<RuntimeCatalog | null>(null);
@@ -66,6 +70,15 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  const refreshIssues = useCallback(async () => {
+    try {
+      const all = await getCodexIssues(workspaceId);
+      setIssues(all);
+    } catch {
+      // best-effort silent failure; the next user action / full load() will retry
+    }
+  }, [workspaceId]);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -90,6 +103,26 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Refresh the issue list whenever a workflow event arrives that may have
+  // changed an issue's status — terminal task_status (done/failed/completed)
+  // means the scheduler just finalized, and issue_merged/abandoned mutate
+  // status directly. Without this, the issue chip stays at "排队中" even
+  // after the run is fully done.
+  useEffect(() => {
+    if (!lastEvent) return;
+    const type = (lastEvent as { type?: string }).type;
+    if (type === "issue_merged" || type === "issue_abandoned") {
+      void refreshIssues();
+      return;
+    }
+    if (type === "task_status") {
+      const status = String((lastEvent as { status?: string }).status || "").toLowerCase();
+      if (status === "done" || status === "completed" || status === "failed") {
+        void refreshIssues();
+      }
+    }
+  }, [lastEvent, refreshIssues]);
 
   useEffect(() => {
     if (!hasInitializedSelection) {
@@ -515,7 +548,87 @@ type DetailTab = "logs" | "messages" | "result" | "artifacts" | "approvals";
 
 function RunDetailColumn({ issue, project }: { issue: CodexIssue | null; project: Project | null }) {
   const { t } = useI18n();
+  const { addToast } = useToast();
   const [tab, setTab] = useState<DetailTab>("logs");
+  const [issueTasks, setIssueTasks] = useState<CodexTask[]>([]);
+  const { executionProcessesVisible, lastEvent } = useExecutionProcessesContext();
+
+  const issueId = issue?.id ?? null;
+  const issueSessionId = issue?.session_id ?? null;
+  const issueTasksRef = useRef<CodexTask[]>([]);
+  useEffect(() => {
+    issueTasksRef.current = issueTasks;
+  }, [issueTasks]);
+
+  const refreshIssueTasks = useCallback(async () => {
+    if (!issueId) {
+      setIssueTasks([]);
+      return;
+    }
+    try {
+      const tasks = await getCodexTasks(issueSessionId, issueId);
+      setIssueTasks(tasks);
+    } catch {
+      setIssueTasks([]);
+    }
+  }, [issueId, issueSessionId]);
+
+  useEffect(() => {
+    void refreshIssueTasks();
+  }, [refreshIssueTasks]);
+
+  // Stage transitions (e.g. architect→engineer) create a fresh CodexTask
+  // outside of any direct user action in this view, so we have to listen on
+  // the bus to learn about it — otherwise issueTasks stays stale and the new
+  // ExecutionProcess gets filtered out of `liveProcess`, leaving the log
+  // panel blank until the user manually refreshes.
+  useEffect(() => {
+    if (!issueId || !lastEvent) return;
+    const evtType = (lastEvent as { type?: string }).type;
+    if (evtType !== "task_created" && evtType !== "task_status") return;
+    const evtTask = (lastEvent as { task?: { issue_id?: string; session_id?: string; id?: string } }).task;
+    const evtIssueId = evtTask?.issue_id ?? (lastEvent as { issue_id?: string }).issue_id;
+    const evtSessionId =
+      evtTask?.session_id ??
+      (lastEvent as { session_id?: string }).session_id ??
+      (lastEvent as { workspace_id?: string }).workspace_id;
+    const evtTaskId = evtTask?.id ?? (lastEvent as { task_id?: string }).task_id;
+    const matchesIssue = evtIssueId && evtIssueId === issueId;
+    const matchesSession = !evtIssueId && evtSessionId && evtSessionId === issueSessionId;
+    // For task_status without issue_id but with a task_id we already know,
+    // skip the refetch — the status update is for an existing task and
+    // doesn't add anything new to fetch.
+    const isKnownTask =
+      evtType === "task_status" &&
+      !evtIssueId &&
+      evtTaskId &&
+      issueTasksRef.current.some((task) => task.id === evtTaskId);
+    if ((matchesIssue || matchesSession) && !isKnownTask) {
+      void refreshIssueTasks();
+    }
+  }, [lastEvent, issueId, issueSessionId, refreshIssueTasks]);
+
+  const liveProcess = useMemo<ExecutionProcess | null>(() => {
+    if (!issue || issueTasks.length === 0) return null;
+    const taskIdSet = new Set(issueTasks.map((task) => task.id));
+    const candidates = executionProcessesVisible.filter((proc) => taskIdSet.has(proc.task_id));
+    if (candidates.length === 0) return null;
+    const running = candidates.filter((proc) => {
+      const status = String(proc.status || "").toLowerCase();
+      return status === "running" || status === "responding";
+    });
+    const pool = running.length > 0 ? running : candidates;
+    return [...pool].sort((a, b) => {
+      const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+      const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+      return bTime - aTime;
+    })[0] ?? null;
+  }, [issue, issueTasks, executionProcessesVisible]);
+
+  const liveTask = useMemo<CodexTask | null>(() => {
+    if (!liveProcess) return null;
+    return issueTasks.find((task) => task.id === liveProcess.task_id) ?? null;
+  }, [liveProcess, issueTasks]);
 
   if (!issue) {
     return (
@@ -540,7 +653,9 @@ function RunDetailColumn({ issue, project }: { issue: CodexIssue | null; project
         <div className="flex items-center justify-between text-[11px] font-mono text-text-muted mb-2">
           <StatusBadge kind={kind} label={statusLabel} />
           <span className="truncate">
-            run · {issue.id.slice(0, 4)} · pid {Math.floor(Math.random() * 90000) + 10000}
+            run · {issue.id.slice(0, 4)}
+            {liveProcess?.id ? ` · ep ${liveProcess.id.slice(0, 6)}` : ""}
+            {liveTask?.role ? ` · ${liveTask.role}` : ""}
           </span>
         </div>
         <h2 className="text-base font-bold tracking-tight">{issue.title}</h2>
@@ -559,8 +674,51 @@ function RunDetailColumn({ issue, project }: { issue: CodexIssue | null; project
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-auto px-5 py-3">
-        {tab === "logs" && <LogPanelDemo issue={issue} />}
+      <div className="flex-1 min-h-0 overflow-hidden px-5 py-3">
+        {tab === "logs" && (
+          <AgentLiveTimeline
+            executionProcessId={liveProcess?.id ?? null}
+            taskStartedAt={liveProcess?.started_at ?? null}
+            taskStatus={liveTask?.status ?? null}
+            reviewComment={liveTask?.review_comment ?? null}
+            taskResult={liveTask?.result ?? null}
+            taskRole={liveTask?.role ?? null}
+            onRerun={
+              liveTask
+                ? async () => {
+                    try {
+                      await rerunCodexTask(liveTask.id);
+                      addToast({ type: "success", title: t("agentLive.rerunOk") });
+                    } catch (err) {
+                      addToast({
+                        type: "error",
+                        title: t("agentLive.rerunErr"),
+                        message: err instanceof Error ? err.message : String(err),
+                      });
+                    }
+                  }
+                : undefined
+            }
+            onStop={
+              liveTask
+                ? async () => {
+                    if (!window.confirm(t("agentLive.stopConfirm"))) return;
+                    try {
+                      await terminateCodexTask(liveTask.id);
+                      addToast({ type: "success", title: t("agentLive.stopOk") });
+                    } catch (err) {
+                      addToast({
+                        type: "error",
+                        title: t("agentLive.stopErr"),
+                        message: err instanceof Error ? err.message : String(err),
+                      });
+                    }
+                  }
+                : undefined
+            }
+            className="h-full"
+          />
+        )}
         {tab !== "logs" && (
           <div className="text-text-muted text-xs italic py-8 text-center">
             {t("workspace.console.runViewHint", { tab })}
@@ -622,35 +780,3 @@ function TabButton({
   );
 }
 
-/**
- * Placeholder log feed. Real WebSocket wiring lives in IssueDetailPage tabs.
- * Here we just show enough to convey the visual style.
- */
-function LogPanelDemo({ issue }: { issue: CodexIssue }) {
-  const phase = issue.current_phase ?? "planning";
-  return (
-    <div className="font-mono text-[12px]">
-      <LogRow timestamp="00:00.0" kind="sys">
-        codex exec --json --thread {issue.id.slice(0, 8)} &apos;{issue.title}&apos;
-      </LogRow>
-      <LogRow timestamp="00:00.2" kind="tool">
-        {phase} · scan repository structure
-      </LogRow>
-      <LogRow timestamp="00:00.4" kind="out">
-        <span className="text-text-secondary">Live logs stream from the issue&apos;s execution process —{" "}</span>
-        <button
-          type="button"
-          onClick={() => {
-            window.location.href = `/issues/${issue.id}?tab=tasks`;
-          }}
-          className="text-brand hover:underline"
-        >
-          open detail page
-        </button>
-      </LogRow>
-      <LogRow timestamp="00:00.5" kind="ok">
-        ✓ ready
-      </LogRow>
-    </div>
-  );
-}

@@ -226,8 +226,13 @@ class ExecutionProcessWorkspaceStreamManager:
         )
 
     async def add_task(self, workspace_id: str, task: dict, execution_process_id: str | None = None):
-        """Task metadata does not directly mutate the execution-process stream."""
-        return None
+        """Forward task_created to WS subscribers so the frontend's RunDetail
+        can react to new tasks (e.g. workflow stage transitions) without
+        forcing a page refresh. The event itself doesn't mutate the
+        execution-process JsonPatch state, but it carries the new task id
+        the frontend needs to start filtering for the engineer's process.
+        """
+        await self.publish_event(workspace_id, {"type": "task_created", "task": task})
 
     async def remove_task(self, workspace_id: str, task_id: str):
         """Remove any process views associated with a deleted task."""

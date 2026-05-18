@@ -4,11 +4,35 @@ import { createContext, useContext } from "react";
 import type { ExecutionProcess, LogEvent } from "@/lib/types";
 
 // Event types that come through the event bus stream
-export type BusEventType = "task_status" | "task_created" | "message_created" | "log" | "approval_required" | "approval_resolved" | "session_status" | "session_created" | "session_deleted" | "issue_deleted" | "task_deleted" | "issue_merged" | "issue_abandoned";
+export type BusEventType =
+  | "task_status"
+  | "task_created"
+  | "task_deleted"
+  | "message_created"
+  | "message_delta"
+  | "log"
+  | "heartbeat"
+  | "approval_required"
+  | "approval_resolved"
+  | "session_status"
+  | "session_created"
+  | "session_updated"
+  | "session_deleted"
+  | "issue_created"
+  | "issue_updated"
+  | "issue_deleted"
+  | "issue_merged"
+  | "issue_abandoned"
+  | "issue_restored"
+  | "issue_steered"
+  | "workflow_node_updated"
+  | "worktree_dirty"
+  | "conductor_decision";
 
 export interface BusIssueMergedEvent {
   type: "issue_merged";
   issue_id: string;
+  session_id?: string;
   sha: string;
   base_branch: string;
 }
@@ -16,6 +40,75 @@ export interface BusIssueMergedEvent {
 export interface BusIssueAbandonedEvent {
   type: "issue_abandoned";
   issue_id: string;
+  session_id?: string;
+}
+
+export interface BusIssueUpdatedEvent {
+  type: "issue_updated";
+  issue_id: string;
+  session_id?: string;
+  status?: string;
+  current_phase?: string;
+  review_comment?: string | null;
+  is_pinned?: boolean;
+  git_worktree_path?: string | null;
+}
+
+export interface BusIssueCreatedEvent {
+  type: "issue_created";
+  issue_id: string;
+  session_id?: string;
+  issue?: { [key: string]: unknown };
+  forked_from?: string;
+}
+
+export interface BusIssueRestoredEvent {
+  type: "issue_restored";
+  issue_id: string;
+  session_id?: string;
+}
+
+export interface BusIssueSteeredEvent {
+  type: "issue_steered";
+  issue_id: string;
+  session_id?: string;
+  message?: string;
+}
+
+export interface BusIssueDeletedEvent {
+  type: "issue_deleted";
+  issue_id: string;
+  session_id?: string;
+}
+
+export interface BusWorkflowNodeUpdatedEvent {
+  type: "workflow_node_updated";
+  issue_id: string;
+  session_id?: string;
+  node_id: string;
+  node_key: string;
+  status: string;
+  task_id?: string | null;
+}
+
+export interface BusWorktreeDirtyEvent {
+  type: "worktree_dirty";
+  issue_id: string;
+  session_id?: string;
+  task_id?: string;
+  tool_name?: string;
+}
+
+export interface BusConductorDecisionEvent {
+  type: "conductor_decision";
+  issue_id: string;
+  session_id?: string;
+  task_id?: string;
+  role?: string;
+  /** "proceed" | "note" | "escalate" */
+  action: string;
+  reason?: string;
+  note?: string | null;
 }
 
 export function isBusIssueMergedEvent(event: BusEvent): event is BusIssueMergedEvent {
@@ -55,7 +148,20 @@ export function isBusTaskCreatedEvent(event: BusEvent): event is BusTaskCreatedE
   return event.type === "task_created";
 }
 
-export type BusEvent = BusTaskStatusEvent | BusTaskCreatedEvent | BusIssueMergedEvent | BusIssueAbandonedEvent | (LogEvent & { type?: BusEventType });
+export type BusEvent =
+  | BusTaskStatusEvent
+  | BusTaskCreatedEvent
+  | BusIssueCreatedEvent
+  | BusIssueUpdatedEvent
+  | BusIssueMergedEvent
+  | BusIssueAbandonedEvent
+  | BusIssueRestoredEvent
+  | BusIssueSteeredEvent
+  | BusIssueDeletedEvent
+  | BusWorkflowNodeUpdatedEvent
+  | BusWorktreeDirtyEvent
+  | BusConductorDecisionEvent
+  | (LogEvent & { type?: BusEventType });
 
 export interface ExecutionProcessesContextValue {
   executionProcessesAll: ExecutionProcess[];

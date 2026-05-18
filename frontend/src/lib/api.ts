@@ -449,6 +449,24 @@ export async function approveCodexIssuePlan(
   return handleResponse<CodexIssue>(response);
 }
 
+/** Human verdict on a QA-passed issue.
+ * - approve → issue.status becomes "awaiting_merge"
+ * - reject  → workflow scheduler resets the engineer node to pending and
+ *             reruns. Bounded by engineer.max_retries.
+ */
+export async function qaReviewCodexIssue(
+  issueId: string,
+  decision: "approve" | "reject",
+  comment: string | null,
+): Promise<CodexIssue> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/qa-review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision, comment }),
+  });
+  return handleResponse<CodexIssue>(response);
+}
+
 export async function getCodexIssues(
   sessionId: string | null = null,
   projectId: string | null = null,

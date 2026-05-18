@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { applyExecutionProcessPatch } from "@/lib/applyExecutionProcessPatch";
-import { getExecutionProcesses, getWorkspaceStreamUrl } from "@/lib/api";
+import { API_BASE, getExecutionProcesses, getWorkspaceStreamUrl } from "@/lib/api";
 import type { ExecutionProcessesState, ExecutionProcess, LogEvent } from "@/lib/types";
 import type { BusEvent } from "@/contexts/ExecutionProcessesContext";
 import { useWorkbenchStore } from "@/store/workbenchStore";
@@ -46,6 +46,54 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
     }, delay);
   }, []);
 
+  // Global SSE fallback: pages without a workspace scope (e.g. /approvals, the
+  // sidebar) still need to react to backend events like task_status,
+  // session_created, issue_updated. When workspaceId is null we open an SSE
+  // connection to /api/events instead of the per-workspace WS, and we *only*
+  // forward events through lastEvent — execution_processes stays empty since
+  // there's no workspace to scope them to.
+  useEffect(() => {
+    if (workspaceId) return;
+    if (typeof window === "undefined") return;
+    setData(createEmptyExecutionProcesses());
+    setIsConnected(false);
+    setIsInitialized(true);
+    setError(null);
+    dataRef.current = createEmptyExecutionProcesses();
+    useWorkbenchStore.getState().setExecutionProcesses({});
+    useWorkbenchStore.getState().setIsConnected(false);
+
+    // API_BASE is "/api" by default, "<host>/api" when explicitly set.
+    const url = `${API_BASE}/events`;
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource(url);
+    } catch {
+      return;
+    }
+    es.onopen = () => {
+      setIsConnected(true);
+      useWorkbenchStore.getState().setIsConnected(true);
+    };
+    es.onmessage = (msg) => {
+      try {
+        const evt = JSON.parse(msg.data as string) as BusEvent;
+        setLastEvent(evt);
+        useWorkbenchStore.getState().setLastEvent(evt);
+      } catch {
+        // ignore malformed
+      }
+    };
+    es.onerror = () => {
+      setIsConnected(false);
+      useWorkbenchStore.getState().setIsConnected(false);
+    };
+    return () => {
+      es?.close();
+      setIsConnected(false);
+    };
+  }, [workspaceId]);
+
   useEffect(() => {
     if (!workspaceId) {
       if (wsRef.current) {
@@ -62,16 +110,9 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
       }
       retryAttemptsRef.current = 0;
       finishedRef.current = false;
-      setData(createEmptyExecutionProcesses());
-      setIsConnected(false);
-      setIsInitialized(false);
-      setError(null);
-      dataRef.current = createEmptyExecutionProcesses();
-      
-      // Update store
-      useWorkbenchStore.getState().setExecutionProcesses({});
-      useWorkbenchStore.getState().setIsConnected(false);
-      
+      // Note: do NOT reset isInitialized/data here — the global SSE branch
+      // above already initialized them. Returning early lets that branch own
+      // lifecycle for the null-workspaceId case.
       return;
     }
 
@@ -127,6 +168,10 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
             clearTimeout(retryTimerRef.current);
             retryTimerRef.current = null;
           }
+          const heartbeat = window.setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+          }, 30_000);
+          ws.addEventListener("close", () => window.clearInterval(heartbeat), { once: true });
         };
 
         ws.onmessage = (event) => {

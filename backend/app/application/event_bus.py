@@ -127,6 +127,31 @@ class EventBus:
                 execution_process_id = event.get("execution_process_id")
                 if execution_process_id:
                     await message_stream_manager.publish_delta(execution_process_id, event)
+                    # Mirror into the raw logs WS so AgentLiveTimeline can render
+                    # token flow without subscribing to a second channel. Not
+                    # written to the LogEvent table — purely real-time.
+                    import datetime as _dt
+                    await raw_log_stream_manager.publish_log(execution_process_id, {
+                        "kind": "assistant_delta",
+                        "seq": event.get("seq"),
+                        "delta_text": event.get("delta_text"),
+                        "task_id": event.get("task_id"),
+                        "session_id": event.get("session_id"),
+                        "created_at": _dt.datetime.now().isoformat(),
+                    })
+
+            elif event_type == "heartbeat":
+                execution_process_id = event.get("execution_process_id")
+                if execution_process_id:
+                    await raw_log_stream_manager.publish_log(execution_process_id, {
+                        "kind": "heartbeat",
+                        "phase": event.get("phase"),
+                        "last_event_at": event.get("last_event_at"),
+                        "elapsed_since_last_ms": event.get("elapsed_since_last_ms"),
+                        "task_id": event.get("task_id"),
+                        "session_id": event.get("session_id"),
+                        "created_at": event.get("created_at"),
+                    })
             
             elif event_type == "log":
                 task_id = event.get("task_id")
@@ -174,6 +199,23 @@ class EventBus:
                         execution_process_id,
                         None,
                     )
+
+            elif event_type and (
+                event_type.startswith("issue_")
+                or event_type.startswith("session_")
+                or event_type.startswith("project_")
+                or event_type == "workflow_node_updated"
+                or event_type == "worktree_dirty"
+                or event_type == "conductor_decision"
+            ):
+                # Issue lifecycle + workflow + worktree events flow through the
+                # workspace-scoped WS only as BusEvents (no JsonPatch). Consumers
+                # subscribe via lastEvent and call their own refetch. session_id
+                # is the workspace id used to route the event to the right
+                # subscribers.
+                workspace_id = event.get("session_id") or event.get("workspace_id")
+                if workspace_id:
+                    await stream_manager.publish_event(workspace_id, event)
         except Exception as e:
             import traceback
             print(f"[EventBus] Error broadcasting event {event.get('type')}: {e}", file=sys.stderr)
@@ -188,7 +230,11 @@ class EventBus:
         if task is None or not getattr(task, "workflow_node_id", None):
             return
         from app.application.workflow_scheduler import WorkflowScheduler
-        scheduler = WorkflowScheduler(store=async_store, task_dispatcher=_workflow_task_dispatcher)
+        scheduler = WorkflowScheduler(
+            store=async_store,
+            task_dispatcher=_workflow_task_dispatcher,
+            event_bus=self,
+        )
         await scheduler.on_task_completed(task)
 
     def subscribe(self) -> asyncio.Queue:

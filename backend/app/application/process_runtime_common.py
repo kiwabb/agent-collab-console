@@ -72,6 +72,17 @@ class AsyncProcessEntry:
     last_event_at: float = 0.0
     idle_timed_out: bool = False
     idle_timeout_seconds: int | None = None
+    # Latest activity kind tracked by _capture_on_reader for heartbeat phase
+    # reporting: "text" | "reasoning" | "tool" | "idle". Used by the AgentLive
+    # WorkingIndicator on the frontend so users see "Reasoning…" / "Running
+    # tool: X" / "Last activity Xs ago" instead of a blank spinner.
+    last_activity_kind: str = "idle"
+    # Throttle bookkeeping for worktree_dirty events. The frontend GitInfoCard /
+    # DiffPanel subscribe to this to refetch the diff stat while engineer code
+    # changes are in flight. Without throttling, a chatty engineer turn would
+    # storm the event bus.
+    last_worktree_dirty_at: float = 0.0
+    cached_issue_id: str | None = None
 
     @property
     def workspace_id(self) -> str:
@@ -139,6 +150,7 @@ class BaseProcessRuntime:
 
     async def terminate(self, workspace_id: str | None = None, **legacy_kwargs):
         workspace_id = self._resolve_workspace_id(workspace_id, **legacy_kwargs)
+        killed_task_ids: list[str] = []
         for process_key, entry in list(self._processes.items()):
             if not self._owns_entry(entry):
                 continue
@@ -146,6 +158,46 @@ class BaseProcessRuntime:
                 continue
             self._processes.pop(process_key, None)
             await self._cleanup_entry(process_key, entry)
+            entry_task_id = getattr(entry, "task_id", None)
+            if entry_task_id:
+                killed_task_ids.append(entry_task_id)
+
+        # Mark every task / EP we killed as failed in the DB and broadcast the
+        # change. Without this the UI keeps rendering "Running" because the EP
+        # status was never updated when we yanked the process out.
+        for task_id in killed_task_ids:
+            try:
+                task = await self.codex_store.load_codex_task(task_id)
+            except Exception:
+                task = None
+            if task is None or task.status in {"done", "failed", "cancelled"}:
+                continue
+            task.status = "failed"
+            task.updated_at = datetime.now()
+            await self.codex_store.save_codex_task(task)
+            execution_process_id = getattr(task, "last_execution_process_id", None)
+            if execution_process_id:
+                try:
+                    await self.codex_store.update_execution_process_status(
+                        execution_process_id,
+                        "Killed",
+                        exit_code=None,
+                        completed_at=datetime.now(),
+                    )
+                except Exception:
+                    pass
+            if self._event_bus is not None:
+                try:
+                    await self._event_bus.append({
+                        "type": "task_status",
+                        "task_id": task_id,
+                        "session_id": task.session_id,
+                        "status": "failed",
+                        "result": task.result,
+                        "execution_process_id": execution_process_id,
+                    })
+                except Exception:
+                    pass
 
         workspace = await self.codex_store.load_codex_workspace(workspace_id)
         if workspace is not None:
@@ -161,23 +213,41 @@ class BaseProcessRuntime:
             is_match = (process_key == task_id)
             if hasattr(entry, 'task_id') and entry.task_id == task_id:
                 is_match = True
-                
+
             if is_match and self._owns_entry(entry):
                 self._processes.pop(process_key, None)
                 await self._cleanup_entry(process_key, entry)
-                
-        # Update task status in DB
+
+        # Update task + execution-process status in DB. Previously this only
+        # updated `task.status`, leaving the execution_process row at
+        # "running" — the UI's run/status badge is derived from the EP so it
+        # kept showing "Running" even though the task was killed.
         task = await self.codex_store.load_codex_task(task_id)
         if task:
             task.status = "failed"
+            task.updated_at = datetime.now()
             await self.codex_store.save_codex_task(task)
-            
+
+            execution_process_id = getattr(task, "last_execution_process_id", None)
+            if execution_process_id:
+                try:
+                    await self.codex_store.update_execution_process_status(
+                        execution_process_id,
+                        "Killed",
+                        exit_code=None,
+                        completed_at=datetime.now(),
+                    )
+                except Exception:
+                    pass
+
             if self._event_bus:
                 await self._event_bus.append({
                     "type": "task_status",
                     "task_id": task_id,
                     "session_id": task.session_id,
                     "status": "failed",
+                    "result": task.result,
+                    "execution_process_id": execution_process_id,
                 })
 
     async def terminate_all(self):
@@ -343,6 +413,10 @@ class BaseProcessRuntime:
                 task_id, dt, len(delta.get("text", "") or delta.get("thinking", "") or ""),
                 (delta.get("text", "") or delta.get("thinking", "") or "")[:100],
             )
+            # Feed the stall watchdog: any token (even empty-delta keep-alives)
+            # counts as live progress and resets the silence timer.
+            from app.application import task_activity
+            task_activity.touch(task_id)
 
         session_id_val = parsed.get("session_id")
         if session_id_val and entry.resume_session_id is None:
@@ -375,27 +449,39 @@ class BaseProcessRuntime:
                             if text:
                                 text_parts.append(text)
                                 display_parts.append(text)
+                                entry.last_activity_kind = "text"
                         elif item_type == "thinking":
                             thinking = item.get("thinking", "")
                             if thinking:
-                                display_parts.append(f"[Thinking: {thinking[:100]}...]" if len(thinking) > 100 else f"[Thinking: {thinking}]")
+                                thinking_payload = json.dumps(
+                                    {"text": thinking},
+                                    ensure_ascii=False,
+                                    default=str,
+                                )
+                                await self._append_log(workspace_id, "thinking", thinking_payload, task_id)
+                                entry.last_activity_kind = "reasoning"
                         elif item_type == "tool_use":
                             tool_use_id = item.get("id") or item.get("tool_use_id") or ""
                             if tool_use_id and tool_use_id in entry.emitted_tool_use_ids:
                                 continue
                             if tool_use_id:
                                 entry.emitted_tool_use_ids.add(tool_use_id)
+                            tool_name_val = item.get("name") or item.get("tool_name") or ""
                             payload = json.dumps(
                                 {
                                     "kind": "tool_use",
                                     "tool_use_id": tool_use_id,
-                                    "tool_name": item.get("name") or item.get("tool_name") or "",
+                                    "tool_name": tool_name_val,
                                     "input": item.get("input") or {},
                                 },
                                 ensure_ascii=False,
                                 default=str,
                             )
                             await self._append_log(workspace_id, "tool_use", payload, task_id)
+                            entry.last_activity_kind = "tool"
+                            await self._maybe_emit_worktree_dirty(
+                                workspace_id, task_id, entry, tool_name_val,
+                            )
                 if display_parts:
                     new_display = "".join(display_parts).strip()
                     if new_display and new_display != entry.last_emitted_assistant_text:
@@ -459,17 +545,22 @@ class BaseProcessRuntime:
             return
 
         if msg_type == "tool_use":
+            tool_name_val = parsed.get("tool_name") or parsed.get("name") or ""
             payload = json.dumps(
                 {
                     "kind": "tool_use",
                     "tool_use_id": parsed.get("tool_use_id") or parsed.get("id") or "",
-                    "tool_name": parsed.get("tool_name") or parsed.get("name") or "",
+                    "tool_name": tool_name_val,
                     "input": parsed.get("input") or {},
                 },
                 ensure_ascii=False,
                 default=str,
             )
             await self._append_log(workspace_id, "tool_use", payload, task_id)
+            entry.last_activity_kind = "tool"
+            await self._maybe_emit_worktree_dirty(
+                workspace_id, task_id, entry, tool_name_val,
+            )
             return
 
         if msg_type == "tool_result":
@@ -861,6 +952,17 @@ class BaseProcessRuntime:
                     task.result = f"Process exceeded maximum timeout of {timeout_sec} seconds"
                     task.updated_at = datetime.now()
                     await self.codex_store.save_codex_task(task)
+                    execution_process_id = task.last_execution_process_id
+                    if execution_process_id:
+                        try:
+                            await self.codex_store.update_execution_process_status(
+                                execution_process_id,
+                                "Failed",
+                                exit_code=None,
+                                completed_at=datetime.now(),
+                            )
+                        except Exception:
+                            pass
                     if self._event_bus:
                         await self._event_bus.append({
                             "type": "task_status",
@@ -868,18 +970,105 @@ class BaseProcessRuntime:
                             "session_id": task.session_id,
                             "status": "failed",
                             "result": task.result,
-                            "execution_process_id": task.last_execution_process_id,
+                            "execution_process_id": execution_process_id,
                         })
         except asyncio.CancelledError:
             pass
         except Exception:
             pass
 
+    # Tool names that mutate the worktree. Matched case-insensitively. Keep
+    # tight — we don't want every `Bash` to retrigger diff fetches.
+    _WORKTREE_WRITE_TOOLS = frozenset({
+        "apply_patch", "edit", "write", "multiedit", "notebookedit",
+        "applypatch", "str_replace_editor",
+    })
+
+    async def _maybe_emit_worktree_dirty(
+        self,
+        workspace_id: str,
+        task_id: str | None,
+        entry: AsyncProcessEntry,
+        tool_name: str,
+    ) -> None:
+        """Throttled emit of worktree_dirty so the diff/git panels refetch
+        while engineer is writing. 5s window between emits per process."""
+        if self._event_bus is None or not task_id or not tool_name:
+            return
+        if tool_name.lower() not in self._WORKTREE_WRITE_TOOLS:
+            return
+        import time as _time
+        now = _time.monotonic()
+        if now - entry.last_worktree_dirty_at < 5.0:
+            return
+        entry.last_worktree_dirty_at = now
+        # Cache issue_id off the task to avoid hitting the store every emit.
+        if entry.cached_issue_id is None:
+            try:
+                task = await self.codex_store.load_codex_task(task_id)
+                entry.cached_issue_id = getattr(task, "issue_id", None)
+            except Exception:
+                entry.cached_issue_id = None
+        if not entry.cached_issue_id:
+            return
+        try:
+            await self._event_bus.append({
+                "type": "worktree_dirty",
+                "issue_id": entry.cached_issue_id,
+                "session_id": workspace_id,
+                "task_id": task_id,
+                "tool_name": tool_name,
+                "created_at": datetime.now().isoformat(),
+            })
+        except Exception:
+            pass
+
+    async def _heartbeat_loop(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None):
+        """Periodic heartbeat so AgentLiveTimeline can render a live phase + elapsed
+        counter even when stdout is quiet. Emits via event_bus → raw_log_stream_manager."""
+        import time as _time
+        interval = 5.0
+        while entry.alive:
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                return
+            if not entry.alive:
+                return
+            if self._event_bus is None or not task_id:
+                continue
+            try:
+                task = await self.codex_store.load_codex_task(task_id)
+            except Exception:
+                task = None
+            execution_process_id = getattr(task, "last_execution_process_id", None) if task else None
+            if not execution_process_id:
+                continue
+            now = _time.monotonic()
+            last = entry.last_event_at or now
+            elapsed_ms = max(0, int((now - last) * 1000))
+            try:
+                await self._event_bus.append({
+                    "type": "heartbeat",
+                    "execution_process_id": execution_process_id,
+                    "task_id": task_id,
+                    "session_id": workspace_id,
+                    "phase": entry.last_activity_kind or "idle",
+                    "last_event_at": entry.last_event_at,
+                    "elapsed_since_last_ms": elapsed_ms,
+                    "created_at": datetime.now().isoformat(),
+                })
+            except Exception:
+                pass
+
     async def _reader_loop(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None):
         """Async reader loop using await stdout.readline()."""
+        import time as _time
         idle_timeout = int(os.getenv("PROCESS_IDLE_TIMEOUT", "180"))
         max_timeout = int(os.getenv("PROCESS_MAX_TIMEOUT", "1800"))
+        entry.last_event_at = _time.monotonic()
         watchdog_task = asyncio.create_task(self._watchdog(workspace_id, entry, task_id, max_timeout))
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop(workspace_id, entry, task_id))
 
         try:
             while entry.alive:
@@ -894,6 +1083,7 @@ class BaseProcessRuntime:
                 if not line:
                     break
 
+                entry.last_event_at = _time.monotonic()
                 decoded = line.decode("utf-8", errors="replace")
                 await self._append_log(workspace_id, "stdout", decoded, task_id)
                 await self._capture_on_reader(workspace_id, decoded, entry, task_id)
@@ -932,6 +1122,11 @@ class BaseProcessRuntime:
             watchdog_task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(watchdog_task), timeout=1)
+            except Exception:
+                pass
+            heartbeat_task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(heartbeat_task), timeout=1)
             except Exception:
                 pass
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Undo2, X } from "lucide-react";
+import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
 
 interface UndoBarProps {
@@ -22,6 +23,7 @@ interface UndoBarProps {
  * to revert, otherwise it's finalized.
  */
 export function UndoBar({ message, countdownSeconds, onUndo, onExpire, onDismiss }: UndoBarProps) {
+  const { t } = useI18n();
   const [remaining, setRemaining] = useState(countdownSeconds);
   const expiredRef = useRef(false);
 
@@ -70,7 +72,7 @@ export function UndoBar({ message, countdownSeconds, onUndo, onExpire, onDismiss
         )}
       >
         <Undo2 size={12} />
-        Undo
+        {t("task.diffMerge.undo")}
       </button>
       {onDismiss && (
         <button
@@ -79,7 +81,7 @@ export function UndoBar({ message, countdownSeconds, onUndo, onExpire, onDismiss
             expiredRef.current = true;
             onDismiss();
           }}
-          aria-label="Dismiss"
+          aria-label={t("task.diffMerge.dismiss")}
           className="size-7 rounded-full hover:bg-background/10 text-background/60 hover:text-background flex items-center justify-center transition-colors"
         >
           <X size={13} />

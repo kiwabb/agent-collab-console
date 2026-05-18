@@ -133,3 +133,67 @@ test("issue detail approval copy is wired for plan-first review", () => {
     assert.match(source, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
   });
 });
+
+test("diff merge copy is wired through i18n keys", () => {
+  const tab = readSource("features/issues/tabs/DiffMergeTab.tsx");
+  const card = readSource("features/issues/components/GitInfoCard.tsx");
+  const panel = readSource("features/issues/components/DiffPanel.tsx");
+  const undoBar = readSource("components/ui/undo-bar.tsx");
+
+  [
+    't("task.diffMerge.loadFailed")',
+    't("task.review.submitted")',
+    't("task.review.approved")',
+    't("task.diffMerge.refreshPrHint")',
+    't("task.diffMerge.openGitHubPr")',
+    'task.diffMerge.mergeConfirmBody',
+    'task.diffMerge.abandonedUndoMessage',
+    't("task.review.rejectConfirmTitle")',
+    't("task.diffMerge.timeAgo.justNow")',
+  ].forEach((needle) => {
+    if (needle.startsWith("task.diffMerge.")) {
+      assert.match(tab, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    } else {
+      assert.match(tab, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+  });
+
+  [
+    't("task.git.title")',
+    't("task.diffMerge.clipboardUnavailable")',
+    't("task.diffMerge.loadFailed")',
+    't("task.diffMerge.mergeFailed")',
+    't("task.diffMerge.loading")',
+  ].forEach((needle) => {
+    assert.match(card, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  [
+    't("task.diffMerge.changesBy")',
+    'task.diffMerge.runLabel',
+    't("task.base")',
+    't("task.branch")',
+  ].forEach((needle) => {
+    if (needle.startsWith("task.diffMerge.")) {
+      assert.match(panel, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    } else {
+      assert.match(panel, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+  });
+
+  [
+    't("task.diffMerge.undo")',
+    't("task.diffMerge.dismiss")',
+  ].forEach((needle) => {
+    assert.match(undoBar, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+});
+
+test("diff merge translation keys are available in English", () => {
+  assert.equal(getDictionaryValue("en-US", "task.diffMerge.refresh"), "Refresh");
+  assert.equal(getDictionaryValue("en-US", "task.diffMerge.timeAgo.justNow"), "just now");
+  assert.equal(getDictionaryValue("en-US", "task.review.submitted"), "Submitted for review");
+  assert.equal(getDictionaryValue("en-US", "task.git.title"), "Git");
+  assert.equal(getDictionaryValue("en-US", "task.diffMerge.openGitHubPr"), "Open GitHub PR");
+  assert.equal(getDictionaryValue("en-US", "task.diff.fileCountOne"), "{count} file");
+});

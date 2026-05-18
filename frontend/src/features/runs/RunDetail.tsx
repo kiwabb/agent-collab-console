@@ -17,7 +17,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { renderMessageWithLinks } from "@/lib/utils";
 import { shouldShowTopErrorCard } from "@/lib/runDetailErrorState";
 import { MessageMarkdown } from "./MessageMarkdown";
-import { ToolBlock } from "./toolBlocks/ToolBlocks";
+import { AgentLiveTimeline } from "./AgentLiveTimeline";
 
 interface RunDetailProps {
   process: ExecutionProcess | null;
@@ -403,34 +403,44 @@ export function RunDetail({
       </div>
       
       {/* Automated Review Feedback (Prominent) */}
-      {(taskMeta?.status === "rework" || taskMeta?.status === "done") && taskMeta?.review_comment && (
-        <div className="px-5 pt-4">
-          <div className={cn(
-            "p-5 rounded-2xl space-y-3 animate-in fade-in slide-in-from-top-2 duration-500",
-            taskMeta.status === "rework" ? "bg-error/10 border border-error/20" : "bg-success/10 border border-success/20 shadow-lg shadow-success/5"
-          )}>
-            <h4 className={cn(
-              "text-[10px] font-black uppercase tracking-widest flex items-center gap-2",
-              taskMeta.status === "rework" ? "text-error" : "text-success"
+      {(() => {
+        const isQaFailed = taskMeta?.role === "qa" && taskMeta?.status === "failed" && taskMeta?.review_comment;
+        const isArchitectReview = (taskMeta?.status === "rework" || taskMeta?.status === "done") && taskMeta?.review_comment && taskMeta?.role !== "qa";
+        if (!isQaFailed && !isArchitectReview) return null;
+        const isError = taskMeta!.status === "rework" || isQaFailed;
+        return (
+          <div className="px-5 pt-4">
+            <div className={cn(
+              "p-5 rounded-2xl space-y-3 animate-in fade-in slide-in-from-top-2 duration-500",
+              isError ? "bg-error/10 border border-error/20" : "bg-success/10 border border-success/20 shadow-lg shadow-success/5"
             )}>
-              {taskMeta.status === "rework" ? <AlertCircle size={12} /> : <Check size={12} />}
-              {taskMeta.status === "rework" ? t("task.review.architectRejected") : t("task.review.architectApproved")}
-            </h4>
-            <p className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap font-medium">
-              {taskMeta.review_comment}
-            </p>
-            {taskMeta.status === "rework" && (
-              <button
-                onClick={() => onSendMessage(taskMeta.review_comment!, "refine")}
-                className="mt-1 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl bg-error text-background hover:bg-error/90 transition-all shadow-md active:scale-[0.98]"
-              >
-                <RotateCcw size={13} />
-                t("task.review.followSuggestion")
-              </button>
-            )}
+              <h4 className={cn(
+                "text-[10px] font-black uppercase tracking-widest flex items-center gap-2",
+                isError ? "text-error" : "text-success"
+              )}>
+                {isError ? <AlertCircle size={12} /> : <Check size={12} />}
+                {isQaFailed
+                  ? t("task.review.qaFailed")
+                  : taskMeta!.status === "rework"
+                    ? t("task.review.architectRejected")
+                    : t("task.review.architectApproved")}
+              </h4>
+              <p className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap font-medium">
+                {taskMeta!.review_comment}
+              </p>
+              {taskMeta!.status === "rework" && !isQaFailed && (
+                <button
+                  onClick={() => onSendMessage(taskMeta!.review_comment!, "refine")}
+                  className="mt-1 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl bg-error text-background hover:bg-error/90 transition-all shadow-md active:scale-[0.98]"
+                >
+                  <RotateCcw size={13} />
+                  t("task.review.followSuggestion")
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Main Content Area with Internal Tabs */}
       <div className="flex-1 min-h-0 flex flex-col bg-surface/5">
@@ -526,72 +536,34 @@ export function RunDetail({
               )}
             </TabsContent>
 
-            <TabsContent ref={logsContainerRef} value="logs" className="absolute inset-0 m-0 overflow-y-auto p-6 bg-background/40">
-              {isLoadingLogs ? (
+            <TabsContent ref={logsContainerRef} value="logs" className="absolute inset-0 m-0 p-6 bg-background/40">
+              {isLoadingLogs && normalizedLogs.length === 0 ? (
                 <div className="py-20 flex flex-col items-center justify-center gap-4 text-[10px] uppercase font-black tracking-widest text-text-muted opacity-40">
                   <Terminal size={24} className="animate-pulse text-brand" />
                   <span>{t("run.loadingLogs")}</span>
                 </div>
-              ) : normalizedLogs.length === 0 ? (
-                <EmptyState
-                  icon="log"
-                  title={t("run.noLogs")}
-                  description="Logs will appear when the task runs"
-                  className="py-24"
-                />
               ) : (
-                <div className="selection:bg-brand/30 pb-10 space-y-2">
-                  <AnimatePresence initial={false}>
-                    {normalizedLogs.map((log, i) => (
-                      <motion.div
-                        key={log.id || i}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ duration: 0.2 }}
-                      >
-                        {log.type === "tool" ? (
-                          <ToolBlock entry={log} />
-                        ) : (
-                          <div
-                            className={cn(
-                              "flex gap-4 group px-3 py-2 rounded-xl border transition-colors",
-                              log.type === "error"
-                                ? "bg-error/10 border-error/20"
-                                : log.type === "assistant"
-                                  ? "bg-brand/5 border-brand/20"
-                                  : log.type === "help"
-                                    ? "bg-warning/10 border-warning/20"
-                                    : "bg-surface/30 border-transparent hover:bg-surface-hover/50",
-                            )}
-                          >
-                            <span className="shrink-0 text-[10px] font-mono font-bold text-text-muted/30 select-none w-8 text-right group-hover:text-text-muted/60 transition-colors">
-                              {i + 1}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span
-                                  className={cn(
-                                    "text-[9px] font-black uppercase tracking-[0.16em]",
-                                    log.type === "error" ? "text-error" : "text-text-muted",
-                                  )}
-                                >
-                                  {log.label}
-                                </span>
-                              </div>
-                              {log.type === "assistant" && log.content ? (
-                                <MessageMarkdown content={log.content} />
-                              ) : log.content ? (
-                                <p className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-text-secondary group-hover:text-foreground transition-colors">
-                                  {log.content}
-                                </p>
-                              ) : null}
-                            </div>
-                          </div>
-                        )}
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                </div>
+                <AgentLiveTimeline
+                  executionProcessId={process?.id ?? null}
+                  taskStartedAt={process?.started_at ?? null}
+                  taskStatus={taskMeta?.status ?? null}
+                  reviewComment={taskMeta?.review_comment ?? null}
+                  taskResult={taskMeta?.result ?? null}
+                  taskRole={taskMeta?.role ?? null}
+                  onRerun={
+                    onRunAgain
+                      ? async () =>
+                          onRunAgain(
+                            executionConfig.executor as "codex" | "claude",
+                            executionConfig.provider,
+                            executionConfig.model,
+                          )
+                      : undefined
+                  }
+                  onStop={onTerminate}
+                  className="h-full"
+                  emptyHint={t("run.noLogs")}
+                />
               )}
             </TabsContent>
           </div>

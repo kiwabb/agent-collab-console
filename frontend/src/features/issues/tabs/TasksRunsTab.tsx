@@ -23,6 +23,7 @@ import { ExecutionConfigSelector, normalizeExecutionConfig, type ExecutionConfig
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
+import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
   issueId: string;
@@ -96,10 +97,22 @@ export function TasksRunsTab({ issueId, issue }: Props) {
     if (selectedTaskId) void loadRuns(selectedTaskId);
   }, [selectedTaskId, loadRuns]);
 
-  // Periodic refresh while anything is live. Also covers the gap where the
-  // issue is in-progress but the scheduler hasn't created the next task yet —
-  // without checking issue.status, the poll would stop after PM completes and
-  // Architect/Engineer/QA tasks would never appear.
+  // Event-driven refresh. New task spawned (architect→engineer transition) or
+  // a task changes status → reload the lists. Selected task's runs reload too.
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("task_created", "task_status", "task_deleted", "workflow_node_updated"),
+    ),
+    onEvent: () => {
+      void loadTasks();
+      if (selectedTaskId) void loadRuns(selectedTaskId);
+    },
+    throttleMs: 300,
+  });
+
+  // Fallback poll while live, but at a longer interval since events handle
+  // the realtime path. 15s catches anything that slipped through.
   useEffect(() => {
     const issueActive = issue != null && !ISSUE_TERMINAL.has(issue.status);
     const hasLive =
@@ -110,7 +123,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
     const id = window.setInterval(() => {
       void loadTasks();
       if (selectedTaskId) void loadRuns(selectedTaskId);
-    }, 3000);
+    }, 15000);
     return () => window.clearInterval(id);
   }, [issue, tasks, runs, selectedTaskId, loadTasks, loadRuns]);
 

@@ -23,6 +23,11 @@ function isGenerated(path: string): boolean {
   return GENERATED_PATTERNS.some((re) => re.test(path));
 }
 
+function formatFileCount(count: number, t: (key: string, params?: Record<string, string | number>) => string): string {
+  const key = count === 1 ? "task.diff.fileCountOne" : "task.diff.fileCount";
+  return t(key).replace("{count}", String(count));
+}
+
 function shortDateTime(iso: string): string {
   try {
     const d = new Date(iso);
@@ -82,9 +87,9 @@ export function DiffPanel({ diff, baseBranch, branch, stat, attribution }: Props
         {/* Branch context */}
         {(baseBranch || branch) && (
           <div className="px-3 py-1.5 text-xs text-muted-foreground font-mono border-b border-border bg-muted/20">
-            {baseBranch && <span><span className="text-foreground/50">base:</span> {baseBranch}</span>}
+            {baseBranch && <span><span className="text-foreground/50">{t("task.base")}:</span> {baseBranch}</span>}
             {baseBranch && branch && <span className="mx-2 text-muted-foreground/40">→</span>}
-            {branch && <span><span className="text-foreground/50">branch:</span> {branch}</span>}
+            {branch && <span><span className="text-foreground/50">{t("task.branch")}:</span> {branch}</span>}
           </div>
         )}
 
@@ -95,7 +100,7 @@ export function DiffPanel({ diff, baseBranch, branch, stat, attribution }: Props
             {totalAdd > 0 && totalDel > 0 && " "}
             {totalDel > 0 && <span className="text-error">−{totalDel}</span>}
             {(totalAdd > 0 || totalDel > 0) && " · "}
-            {t("task.diff.fileCount").replace("{count}", String(files.length))}
+            {formatFileCount(files.length, t)}
             {hiddenCount > 0 && (
               <button
                 className="ml-2 text-muted-foreground/60 underline hover:text-foreground"
@@ -135,12 +140,12 @@ export function DiffPanel({ diff, baseBranch, branch, stat, attribution }: Props
           Engineer role touches code in this system. */}
       {attribution && (
         <div className="px-3 py-2 text-[11px] text-muted-foreground bg-muted/10 border-b border-border flex items-center gap-2 flex-wrap">
-          <span className="text-foreground/60">Changes by</span>
+          <span className="text-foreground/60">{t("task.diffMerge.changesBy")}</span>
           <span className="font-semibold text-foreground">{attribution.agentName}</span>
           {attribution.runId && (
             <>
               <span className="text-foreground/40">·</span>
-              <span className="font-mono">run {attribution.runId.slice(0, 8)}</span>
+              <span className="font-mono">{t("task.diffMerge.runLabel", { run: attribution.runId.slice(0, 8) })}</span>
             </>
           )}
           {attribution.timestamp && (

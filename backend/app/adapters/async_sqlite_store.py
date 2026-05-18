@@ -1856,6 +1856,8 @@ class AsyncSQLiteStore:
             return None
         return await self.load_workflow_graph(row["id"])
 
+    _UNSET = object()  # sentinel: caller did not pass this kwarg
+
     async def update_workflow_node(
         self,
         node_id: str,
@@ -1865,7 +1867,7 @@ class AsyncSQLiteStore:
         artifact_dir: str | None = None,
         retries: int | None = None,
         started_at: datetime | None = None,
-        completed_at: datetime | None = None,
+        completed_at: object = _UNSET,  # use sentinel so None means "clear to NULL"
     ) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
@@ -1881,8 +1883,10 @@ class AsyncSQLiteStore:
             sets.append("retries = ?"); params.append(retries)
         if started_at is not None:
             sets.append("started_at = ?"); params.append(self._format_datetime(started_at))
-        if completed_at is not None:
-            sets.append("completed_at = ?"); params.append(self._format_datetime(completed_at))
+        if completed_at is not self._UNSET:
+            # Explicit None clears the column to NULL; a datetime value formats it.
+            db_val = self._format_datetime(completed_at) if completed_at is not None else None
+            sets.append("completed_at = ?"); params.append(db_val)
         sets.append("updated_at = ?"); params.append(self._format_datetime(datetime.now()))
         params.append(node_id)
         await conn.execute(f"UPDATE workflow_nodes SET {', '.join(sets)} WHERE id = ?", tuple(params))

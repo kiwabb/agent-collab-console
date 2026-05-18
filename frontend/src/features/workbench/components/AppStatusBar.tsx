@@ -92,11 +92,6 @@ export function AppStatusBar() {
             <span>{formatTok(cost.input_tokens + cost.output_tokens)} tok</span>
           </span>
         )}
-        <div>
-          <span className="text-foreground">main</span>
-          <span className="mx-1.5">·</span>
-          <span>clean</span>
-        </div>
       </div>
     </footer>
   );

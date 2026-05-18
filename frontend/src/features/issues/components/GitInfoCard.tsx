@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { GitBranch, GitMerge, FileText, Loader2, Ban, Copy, Check } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +18,7 @@ import { useI18n } from "@/providers/I18nProvider";
 import { abandonCodexIssue, getCodexIssueDiff, mergeCodexIssue } from "@/lib/api";
 import type { CodexIssue, DiffStat, GitMergeStatus, IssueDiffResult } from "@/lib/types";
 import { DiffPanel } from "./DiffPanel";
+import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
   issue: CodexIssue;
@@ -28,6 +29,11 @@ function statusVariant(status: GitMergeStatus) {
   if (status === "merged") return "secondary" as const;
   if (status === "abandoned") return "destructive" as const;
   return "default" as const;
+}
+
+function formatFileCount(count: number, t: (key: string, params?: Record<string, string | number>) => string): string {
+  const key = count === 1 ? "task.diff.fileCountOne" : "task.diff.fileCount";
+  return t(key).replace("{count}", String(count));
 }
 
 const MERGE_STATUS_KEY = {
@@ -57,35 +63,51 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
       setCopiedPath(true);
       setTimeout(() => setCopiedPath(false), 1500);
     } catch {
-      addToast({ type: "error", title: "Clipboard unavailable" });
+      addToast({ type: "error", title: t("task.diffMerge.clipboardUnavailable") });
     }
   }
 
   // Pull a compact diffstat whenever this issue or its head sha changes; gives
   // the user a "+N −M / K files" surface without opening the diff modal.
-  useEffect(() => {
+  const fetchStat = useCallback(async () => {
     if (!issue.git_worktree_path || issue.git_merge_status !== "open") {
       setStat(null);
       setCommitsAhead(0);
       return;
     }
+    try {
+      const res = await getCodexIssueDiff(issue.id, true);
+      setStat(res.stat ?? null);
+      setCommitsAhead(res.commits_ahead ?? 0);
+    } catch {
+      setStat(null);
+      setCommitsAhead(0);
+    }
+  }, [issue.id, issue.git_worktree_path, issue.git_merge_status]);
+
+  useEffect(() => {
     let cancelled = false;
-    getCodexIssueDiff(issue.id, true)
-      .then((res) => {
-        if (cancelled) return;
-        setStat(res.stat ?? null);
-        setCommitsAhead(res.commits_ahead ?? 0);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setStat(null);
-          setCommitsAhead(0);
-        }
-      });
+    void fetchStat();
     return () => {
       cancelled = true;
+      // Keep `cancelled` referenced so eslint-no-unused-vars stays happy if we
+      // re-add async-aware fetching later; the noop assignment is intentional.
+      void cancelled;
     };
-  }, [issue.id, issue.git_worktree_path, issue.git_merge_status, issue.git_last_commit_sha]);
+  }, [fetchStat, issue.git_last_commit_sha]);
+
+  // Engineer is writing files → backend emits worktree_dirty (throttled to 5s
+  // per process). Refresh the stat so the user sees +N/−M crawl up live
+  // instead of frozen until commit. We add our own 1s debounce on top.
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issue.id),
+      busEventMatchers.typeIn("worktree_dirty", "task_status"),
+    ),
+    onEvent: () => { void fetchStat(); },
+    throttleMs: 1000,
+    enabled: issue.git_merge_status === "open",
+  });
 
   async function handleConfirmAbandon() {
     setAbandoning(true);
@@ -95,7 +117,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
       addToast({ type: "success", title: t("task.abandonSuccess") });
       setAbandonOpen(false);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to abandon";
+      const msg = err instanceof Error ? err.message : t("task.diffMerge.abandonFailed");
       addToast({ type: "error", title: msg });
     } finally {
       setAbandoning(false);
@@ -110,7 +132,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
       const res = await getCodexIssueDiff(issue.id);
       setDiffResult(res);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to load diff";
+      const msg = err instanceof Error ? err.message : t("task.diffMerge.loadFailed");
       addToast({ type: "error", title: msg });
     } finally {
       setDiffLoading(false);
@@ -125,7 +147,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
       addToast({ type: "success", title: t("task.mergeSuccess") });
       setConfirmOpen(false);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to merge";
+      const msg = err instanceof Error ? err.message : t("task.diffMerge.mergeFailed");
       addToast({ type: "error", title: msg });
     } finally {
       setMerging(false);
@@ -137,7 +159,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
         <CardTitle className="flex items-center gap-2 text-sm font-medium flex-wrap">
           <GitBranch size={14} />
-          Git
+          {t("task.git.title")}
           <Badge variant={statusVariant(issue.git_merge_status)}>
             {t(MERGE_STATUS_KEY[issue.git_merge_status])}
           </Badge>
@@ -145,7 +167,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
             <span className="text-xs font-normal font-mono text-muted-foreground">
               <span className="text-success">+{stat.insertions}</span>{" "}
               <span className="text-error">−{stat.deletions}</span>{" "}
-              <span>/ {stat.files} {stat.files === 1 ? "file" : "files"}</span>
+              <span>/ {formatFileCount(stat.files, t)}</span>
             </span>
           )}
           {commitsAhead > 0 && (
@@ -247,7 +269,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
           <div className="overflow-y-auto" style={{ maxHeight: "calc(82vh - 4rem)" }}>
             {diffLoading ? (
               <span className="inline-flex items-center gap-2 p-4 text-sm">
-                <Loader2 className="animate-spin" size={14} /> Loading…
+                <Loader2 className="animate-spin" size={14} /> {t("task.diffMerge.loading")}
               </span>
             ) : (
               <DiffPanel

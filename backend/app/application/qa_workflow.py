@@ -10,6 +10,7 @@ import time
 from pydantic import BaseModel, Field, ValidationError
 
 from app.application.issue_artifact_documents import IssueArtifactDocuments
+from app.application.qa_failure_summary import format_qa_failure_narrative
 
 
 logger = logging.getLogger(__name__)
@@ -210,10 +211,23 @@ class QAWorkflow:
             self._render_qa_report_markdown(report, execution_results), encoding="utf-8"
         )
 
-        task.result = (
-            f"QA report generated for {report.issue_title}. "
-            f"Status: {report.status}. Files: {qa_plan_path.name}, {qa_report_path.name}."
-        )
+        # Store the full structured JSON so AgentDecisionDrawer.case "qa" can render
+        # bugs_found / risks / test_gaps / final_recommendation without reading disk.
+        task.result = report.model_dump_json()
+
+        qa_relpath = str(qa_report_path.relative_to(task.workspace_path))
+        if report.status == "failed":
+            # Mark the task failed so the scheduler's rework gate fires.
+            task.status = "failed"
+            task.review_comment = format_qa_failure_narrative(
+                report.model_dump(), qa_report_relpath=qa_relpath
+            )
+        elif report.status in ("blocked", "needs_follow_up"):
+            # Keep status="done" (no rework loop), but surface the verdict.
+            task.review_comment = (
+                f"[{report.status.upper()}] "
+                + format_qa_failure_narrative(report.model_dump(), qa_report_relpath=qa_relpath)
+            )
         # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
         object.__setattr__(report, "written_files", [
             {"name": "qa/qa_plan.json", "path": str(qa_plan_path), "kind": "testing"},
