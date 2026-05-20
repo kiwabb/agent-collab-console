@@ -7,6 +7,8 @@ session model. This facade routes each executor to its own async runtime.
 Phase 3: Async-only runtime - no more sync threading.Thread paths.
 """
 
+from typing import Any
+
 from app.application.claude_process_runtime import ClaudeProcessRuntime
 from app.application.codex_app_server_runtime import CodexAppServerRuntime
 from app.application.process_runtime_common import AsyncProcessEntry
@@ -15,6 +17,12 @@ from app.application.process_runtime_common import AsyncProcessEntry
 class CodexProcessManager:
     def __init__(self, codex_store, log_store, data_dir=None, event_bus=None, refresh_task_result=None):
         shared_processes = {}
+        # Secondary index keyed by task_id for fast lookup when multiple tasks
+        # share the same workspace_id (Phase 4: concurrent same-role instances).
+        # Runtimes already key _processes by `task_id or workspace_id`, so this
+        # dict is a convenience alias that makes terminate_task O(1) without
+        # iterating the full shared_processes dict.
+        self._task_processes: dict[str, Any] = {}
         self._processes = shared_processes
         self._codex_runtime = CodexAppServerRuntime(
             codex_store=codex_store,
@@ -95,7 +103,7 @@ class CodexProcessManager:
         resolved_workspace_id = workspace_id or session_id or legacy_kwargs.get("workspace_id")
         runtime = self._codex_runtime if executor == "codex" else self._claude_runtime
 
-        return await runtime.write_input_async(
+        result = await runtime.write_input_async(
             workspace_id=resolved_workspace_id,
             input_text=input_text,
             wait=wait,
@@ -110,6 +118,12 @@ class CodexProcessManager:
             force_new_session=force_new_session,
             **legacy_kwargs,
         )
+        # Mirror the entry into the secondary task_id index so concurrent
+        # same-role tasks (Phase 4) can be terminated individually without
+        # iterating the full shared _processes dict.
+        if task_id and task_id in self._processes:
+            self._task_processes[task_id] = self._processes[task_id]
+        return result
 
     async def terminate(self, workspace_id: str | None = None, **legacy_kwargs):
         for runtime in (self._codex_runtime, self._claude_runtime):
@@ -131,6 +145,8 @@ class CodexProcessManager:
         return terminated
 
     async def terminate_task(self, task_id: str):
+        # Clean up the secondary task_id index entry if present.
+        self._task_processes.pop(task_id, None)
         for runtime in (self._codex_runtime, self._claude_runtime):
             await runtime.terminate_task(task_id)
 

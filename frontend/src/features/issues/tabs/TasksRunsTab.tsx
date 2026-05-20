@@ -23,6 +23,7 @@ import { ExecutionConfigSelector, normalizeExecutionConfig, type ExecutionConfig
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
+import { TasksOverviewBar } from "@/features/issues/components/TasksOverviewBar";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
@@ -221,6 +222,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
 
   return (
     <div className="h-full flex flex-col min-h-0 flex-1">
+      <TasksOverviewBar issueId={issueId} />
       <div className="flex-1 min-h-0 grid grid-cols-[220px_240px_1fr] gap-px bg-border-subtle">
         <div className="bg-surface overflow-y-auto flex flex-col min-h-0">
           <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">Tasks</div>

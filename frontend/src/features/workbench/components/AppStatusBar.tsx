@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useBackendStatus } from "@/hooks/useBackendStatus";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
-import { getCodexCostStats, type CodexCostStats } from "@/lib/api";
+import { getCodexCostStats, getEmbeddingStatus, type CodexCostStats, type EmbeddingStatus } from "@/lib/api";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 /**
@@ -15,6 +16,8 @@ export function AppStatusBar() {
   const { status: backendStatus } = useBackendStatus();
   const { executionProcessesAll } = useExecutionProcessesContext();
   const [cost, setCost] = useState<CodexCostStats | null>(null);
+  const [embedding, setEmbedding] = useState<EmbeddingStatus | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     let cancelled = false;
@@ -27,6 +30,11 @@ export function AppStatusBar() {
       }
     }
     void tick();
+    void getEmbeddingStatus()
+      .then((e) => {
+        if (!cancelled) setEmbedding(e);
+      })
+      .catch(() => undefined);
     const id = window.setInterval(tick, 15_000);
     return () => {
       cancelled = true;
@@ -59,7 +67,7 @@ export function AppStatusBar() {
         : "text-status-failed";
 
   return (
-    <footer className="h-7 shrink-0 border-t border-border-subtle bg-background flex items-center px-4 text-[11px] font-mono">
+    <footer className="h-6 shrink-0 border-t border-border-subtle bg-surface flex items-center px-4 text-[11px] font-mono leading-none">
       <div className="flex items-center gap-4 text-text-muted">
         <span className="flex items-center gap-1.5">
           <span
@@ -82,6 +90,26 @@ export function AppStatusBar() {
         )}
       </div>
       <div className="ml-auto flex items-center gap-3 text-text-muted">
+        {embedding && (
+          <button
+            type="button"
+            onClick={() => router.push("/knowledge")}
+            title={
+              embedding.enabled
+                ? `Semantic: ${embedding.model ?? ""}`
+                : "Semantic search disabled — click to manage"
+            }
+            className="flex items-center gap-1.5 hover:text-foreground transition-colors"
+          >
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                embedding.enabled ? "bg-status-done" : "bg-zinc-500",
+              )}
+            />
+            knowledge {embedding.enabled ? "on" : "off"}
+          </button>
+        )}
         {cost && (cost.input_tokens > 0 || cost.output_tokens > 0) && (
           <span
             title={`Input ${cost.input_tokens.toLocaleString()} · Output ${cost.output_tokens.toLocaleString()}${cost.cache_read_tokens ? ` · Cache ${cost.cache_read_tokens.toLocaleString()}` : ""} (pricing: $${cost.pricing.input_per_m}/M in, $${cost.pricing.output_per_m}/M out)`}

@@ -1,0 +1,682 @@
+"""Cross-issue knowledge index: FTS5 + optional semantic embeddings.
+
+Indexes:
+  - issues_fts(title, description) — keyed by issue_id
+  - artifacts_fts(role, name, content) — keyed by artifact_id (artifact_paths.id)
+  - issue_embeddings(issue_id, vector BLOB)
+  - artifact_embeddings(artifact_id, vector BLOB)
+
+Public API:
+  await index_issue(store, issue)
+  await index_artifact(store, artifact_row)
+  await delete_artifact_index(store, artifact_id)
+  await search(store, query, scope, project_id, mode, limit)
+  await find_similar_issues(store, issue_id, k)
+  await reindex_all(store, project_id=None)
+
+Failure model:
+  - FTS writes must succeed (in main txn).
+  - Embedding writes are best-effort: caller wraps in asyncio.create_task.
+  - Search is robust to missing tables: returns empty results.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import struct
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Literal, Optional
+
+logger = logging.getLogger(__name__)
+
+CONTENT_BYTES_CAP = 16_000
+SNIPPET_MAX_TOKENS = 24
+FTS_SNIPPET_ELLIPSIS = "…"
+
+SearchMode = Literal["fts", "semantic", "hybrid"]
+SearchScope = Literal["issues", "artifacts", "all"]
+
+
+# ---------------------------------------------------------------------------
+# Vector helpers (float32 little-endian BLOB)
+# ---------------------------------------------------------------------------
+
+def pack_vector(vec: Iterable[float]) -> bytes:
+    floats = [float(x) for x in vec]
+    return struct.pack(f"<{len(floats)}f", *floats)
+
+
+def unpack_vector(blob: bytes) -> list[float]:
+    if not blob:
+        return []
+    count = len(blob) // 4
+    return list(struct.unpack(f"<{count}f", blob[: count * 4]))
+
+
+def cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    na = 0.0
+    nb = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        na += x * x
+        nb += y * y
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (math.sqrt(na) * math.sqrt(nb))
+
+
+# ---------------------------------------------------------------------------
+# Text helpers
+# ---------------------------------------------------------------------------
+
+def _truncate_bytes(text: str, cap: int = CONTENT_BYTES_CAP) -> str:
+    if not text:
+        return ""
+    data = text.encode("utf-8")
+    if len(data) <= cap:
+        return text
+    return data[:cap].decode("utf-8", errors="ignore")
+
+
+def _read_artifact_text(path_str: str | None) -> str:
+    if not path_str:
+        return ""
+    try:
+        p = Path(path_str)
+    except (TypeError, ValueError):
+        return ""
+    if not p.exists() or not p.is_file():
+        return ""
+    try:
+        raw = p.read_bytes()
+    except OSError:
+        return ""
+    # Skip likely binary blobs (heuristic: NUL byte in first 4KB).
+    if b"\x00" in raw[:4096]:
+        return ""
+    try:
+        text = raw.decode("utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001
+        return ""
+    # If JSON, flatten to text for better FTS tokenization.
+    if p.suffix.lower() == ".json":
+        try:
+            obj = json.loads(text)
+            text = _json_to_text(obj)
+        except Exception:  # noqa: BLE001
+            pass
+    return _truncate_bytes(text)
+
+
+def _json_to_text(obj: Any, depth: int = 0) -> str:
+    if depth > 6:
+        return ""
+    if obj is None or isinstance(obj, bool):
+        return ""
+    if isinstance(obj, (int, float)):
+        return str(obj)
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, list):
+        return "\n".join(_json_to_text(x, depth + 1) for x in obj if x is not None)
+    if isinstance(obj, dict):
+        parts: list[str] = []
+        for k, v in obj.items():
+            piece = _json_to_text(v, depth + 1)
+            if piece:
+                parts.append(f"{k}: {piece}")
+        return "\n".join(parts)
+    return str(obj)
+
+
+def _escape_fts_query(q: str) -> str:
+    """FTS5 MATCH expects a specific grammar. We quote each whitespace-split
+    token and OR them together, so user-typed strings can't blow up.
+    """
+    if not q:
+        return ""
+    tokens = [t for t in q.replace('"', " ").split() if t]
+    if not tokens:
+        return ""
+    return " OR ".join(f'"{t}"' for t in tokens)
+
+
+# ---------------------------------------------------------------------------
+# Indexing
+# ---------------------------------------------------------------------------
+
+async def index_issue(store, issue) -> None:
+    """Upsert an issue row into issues_fts.
+
+    `issue` can be a CodexIssue domain object or a dict.
+    """
+    issue_id = _attr(issue, "id")
+    if not issue_id:
+        return
+    project_id = _attr(issue, "project_id") or ""
+    title = _attr(issue, "title") or ""
+    description = _attr(issue, "description") or ""
+    try:
+        conn = await store._get_conn()
+        await conn.execute("DELETE FROM issues_fts WHERE issue_id = ?", (issue_id,))
+        await conn.execute(
+            "INSERT INTO issues_fts (issue_id, project_id, title, description) VALUES (?, ?, ?, ?)",
+            (issue_id, project_id, title, _truncate_bytes(description)),
+        )
+        await conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index.index_issue failed for %s: %s", issue_id, exc)
+
+
+async def index_artifact(store, artifact_row: dict) -> None:
+    """Upsert an artifact_paths row into artifacts_fts.
+
+    The on-disk file is read; large/binary files are skipped or truncated.
+    """
+    artifact_id = artifact_row.get("id")
+    if not artifact_id:
+        return
+    role = _derive_role(artifact_row)
+    name = artifact_row.get("name") or ""
+    path_str = artifact_row.get("path") or ""
+    issue_id = artifact_row.get("issue_id") or ""
+    project_id = await _lookup_project_id(store, issue_id)
+    content = _read_artifact_text(path_str)
+    try:
+        conn = await store._get_conn()
+        await conn.execute("DELETE FROM artifacts_fts WHERE artifact_id = ?", (artifact_id,))
+        await conn.execute(
+            "INSERT INTO artifacts_fts (artifact_id, issue_id, project_id, role, name, content) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (artifact_id, issue_id, project_id or "", role, name, content),
+        )
+        await conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index.index_artifact failed for %s: %s", artifact_id, exc)
+
+
+async def delete_artifact_index(store, artifact_id: str) -> None:
+    try:
+        conn = await store._get_conn()
+        await conn.execute("DELETE FROM artifacts_fts WHERE artifact_id = ?", (artifact_id,))
+        await conn.execute("DELETE FROM artifact_embeddings WHERE artifact_id = ?", (artifact_id,))
+        await conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index.delete_artifact_index failed for %s: %s", artifact_id, exc)
+
+
+async def store_issue_embedding(
+    store, issue_id: str, vector: list[float], model: str
+) -> None:
+    if not issue_id or not vector:
+        return
+    try:
+        conn = await store._get_conn()
+        await conn.execute(
+            "INSERT OR REPLACE INTO issue_embeddings (issue_id, vector, model, dim, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (issue_id, pack_vector(vector), model, len(vector), datetime.now(timezone.utc).isoformat()),
+        )
+        await conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index.store_issue_embedding failed: %s", exc)
+
+
+async def store_artifact_embedding(
+    store, artifact_id: str, vector: list[float], model: str
+) -> None:
+    if not artifact_id or not vector:
+        return
+    try:
+        conn = await store._get_conn()
+        await conn.execute(
+            "INSERT OR REPLACE INTO artifact_embeddings (artifact_id, vector, model, dim, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (artifact_id, pack_vector(vector), model, len(vector), datetime.now(timezone.utc).isoformat()),
+        )
+        await conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index.store_artifact_embedding failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
+
+async def search(
+    store,
+    query: str,
+    scope: SearchScope = "all",
+    project_id: str | None = None,
+    mode: SearchMode = "hybrid",
+    limit: int = 20,
+    embedding_service=None,
+) -> dict:
+    """Run a knowledge search.
+
+    Returns: { "issues": [...], "artifacts": [...], "mode": <effective>, "query": <str> }
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"issues": [], "artifacts": [], "mode": mode, "query": ""}
+
+    fts_issues: list[dict] = []
+    fts_artifacts: list[dict] = []
+    if mode in ("fts", "hybrid") or mode == "semantic" and embedding_service is None:
+        if scope in ("issues", "all"):
+            fts_issues = await _fts_search_issues(store, query, project_id, limit)
+        if scope in ("artifacts", "all"):
+            fts_artifacts = await _fts_search_artifacts(store, query, project_id, limit)
+
+    sem_issues: list[dict] = []
+    sem_artifacts: list[dict] = []
+    effective_mode = mode
+    if mode in ("semantic", "hybrid") and embedding_service is not None and embedding_service.enabled:
+        try:
+            qvec = await embedding_service.embed_one(query)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("knowledge_index.search semantic embed failed: %s — falling back", exc)
+            qvec = None
+        if qvec:
+            if scope in ("issues", "all"):
+                sem_issues = await _semantic_search_issues(store, qvec, project_id, limit)
+            if scope in ("artifacts", "all"):
+                sem_artifacts = await _semantic_search_artifacts(store, qvec, project_id, limit)
+        else:
+            effective_mode = "fts"
+    elif mode == "semantic" and (embedding_service is None or not embedding_service.enabled):
+        effective_mode = "fts"  # graceful downgrade
+
+    # Merge
+    issues = _merge_rrf(fts_issues, sem_issues, limit) if mode == "hybrid" else (
+        sem_issues if mode == "semantic" and sem_issues else fts_issues
+    )
+    artifacts = _merge_rrf(fts_artifacts, sem_artifacts, limit) if mode == "hybrid" else (
+        sem_artifacts if mode == "semantic" and sem_artifacts else fts_artifacts
+    )
+    return {
+        "issues": issues,
+        "artifacts": artifacts,
+        "mode": effective_mode,
+        "query": query,
+    }
+
+
+async def find_similar_issues(
+    store,
+    issue_id: str,
+    k: int = 5,
+    embedding_service=None,
+) -> list[dict]:
+    """Find issues similar to `issue_id`.
+
+    Strategy:
+      1) If embedding for this issue exists, do cosine vs all peers.
+      2) Else fall back to FTS using the issue's title as the query.
+    """
+    if k <= 0:
+        return []
+
+    # Semantic path
+    if embedding_service is not None and embedding_service.enabled:
+        anchor = await _load_issue_embedding(store, issue_id)
+        if anchor is not None:
+            return await _semantic_similar_issues(store, issue_id, anchor, k)
+
+    # FTS fallback: use title as the query
+    try:
+        conn = await store._get_conn()
+        cur = await conn.execute(
+            "SELECT title, description, project_id FROM codex_issues WHERE id = ?", (issue_id,)
+        )
+        row = await cur.fetchone()
+    except Exception:  # noqa: BLE001
+        return []
+    if not row:
+        return []
+    title, description, project_id = row[0] or "", row[1] or "", row[2]
+    bag = " ".join((title.split() + description.split()[:30])[:30])
+    if not bag.strip():
+        return []
+    hits = await _fts_search_issues(store, bag, project_id, k + 1)
+    return [h for h in hits if h.get("issue_id") != issue_id][:k]
+
+
+# ---------------------------------------------------------------------------
+# Reindex (admin / migration)
+# ---------------------------------------------------------------------------
+
+async def reindex_all(
+    store,
+    project_id: str | None = None,
+    embedding_service=None,
+) -> dict:
+    """Walk codex_issues + artifact_paths and (re)index everything.
+
+    Embeddings are scheduled but not awaited.
+    """
+    indexed_issues = 0
+    indexed_artifacts = 0
+    embedded_issues = 0
+    embedded_artifacts = 0
+
+    try:
+        issues = await store.list_codex_issues(None, project_id)
+    except Exception:  # noqa: BLE001
+        issues = []
+    for issue in issues or []:
+        await index_issue(store, issue)
+        indexed_issues += 1
+        if embedding_service is not None and embedding_service.enabled:
+            title = _attr(issue, "title") or ""
+            desc = _attr(issue, "description") or ""
+            text = f"{title}\n\n{desc}".strip()
+            if text:
+                try:
+                    vec = await embedding_service.embed_one(text)
+                    if vec:
+                        await store_issue_embedding(
+                            store, _attr(issue, "id"), vec, embedding_service.model_label
+                        )
+                        embedded_issues += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("reindex issue embed failed: %s", exc)
+
+    # Artifacts — pull via per-issue list to reuse existing helper
+    for issue in issues or []:
+        issue_id = _attr(issue, "id")
+        if not issue_id:
+            continue
+        try:
+            arts = await store.list_artifacts(issue_id)
+        except Exception:  # noqa: BLE001
+            arts = []
+        for art in arts:
+            await index_artifact(store, art)
+            indexed_artifacts += 1
+            if embedding_service is not None and embedding_service.enabled:
+                text = _read_artifact_text(art.get("path"))
+                if text:
+                    try:
+                        vec = await embedding_service.embed_one(text[:8000])
+                        if vec:
+                            await store_artifact_embedding(
+                                store, art.get("id"), vec, embedding_service.model_label
+                            )
+                            embedded_artifacts += 1
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("reindex artifact embed failed: %s", exc)
+
+    return {
+        "indexed_issues": indexed_issues,
+        "indexed_artifacts": indexed_artifacts,
+        "embedded_issues": embedded_issues,
+        "embedded_artifacts": embedded_artifacts,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Internals
+# ---------------------------------------------------------------------------
+
+def _attr(obj: Any, name: str) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _derive_role(artifact_row: dict) -> str:
+    name = (artifact_row.get("name") or "").lower()
+    path = (artifact_row.get("path") or "").lower()
+    for role in ("pm", "architect", "engineer", "qa"):
+        if f"/{role}/" in path or path.endswith(f"/{role}") or name.startswith(f"{role}_") or f"/{role}/" in name:
+            return role
+    # fall back to artifact kind if present
+    kind = (artifact_row.get("kind") or "").lower()
+    if kind in ("pm", "architect", "engineer", "qa"):
+        return kind
+    return ""
+
+
+async def _lookup_project_id(store, issue_id: str) -> str | None:
+    if not issue_id:
+        return None
+    try:
+        conn = await store._get_conn()
+        cur = await conn.execute("SELECT project_id FROM codex_issues WHERE id = ?", (issue_id,))
+        row = await cur.fetchone()
+    except Exception:  # noqa: BLE001
+        return None
+    if not row:
+        return None
+    return row[0]
+
+
+async def _fts_search_issues(store, query: str, project_id: str | None, limit: int) -> list[dict]:
+    match = _escape_fts_query(query)
+    if not match:
+        return []
+    sql = (
+        "SELECT issue_id, project_id, title, "
+        "snippet(issues_fts, 3, '<mark>', '</mark>', ?, ?) AS snippet, "
+        "bm25(issues_fts) AS score "
+        "FROM issues_fts WHERE issues_fts MATCH ?"
+    )
+    params: list[Any] = [FTS_SNIPPET_ELLIPSIS, SNIPPET_MAX_TOKENS, match]
+    if project_id:
+        sql += " AND project_id = ?"
+        params.append(project_id)
+    sql += " ORDER BY score LIMIT ?"
+    params.append(limit)
+    try:
+        conn = await store._get_conn()
+        cur = await conn.execute(sql, params)
+        rows = await cur.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index._fts_search_issues failed: %s", exc)
+        return []
+    out: list[dict] = []
+    for r in rows:
+        out.append({
+            "kind": "issue",
+            "issue_id": r[0],
+            "project_id": r[1],
+            "title": r[2],
+            "snippet": r[3],
+            "score": float(r[4]) if r[4] is not None else 0.0,
+            "source": "fts",
+        })
+    return out
+
+
+async def _fts_search_artifacts(store, query: str, project_id: str | None, limit: int) -> list[dict]:
+    match = _escape_fts_query(query)
+    if not match:
+        return []
+    sql = (
+        "SELECT artifact_id, issue_id, project_id, role, name, "
+        "snippet(artifacts_fts, 5, '<mark>', '</mark>', ?, ?) AS snippet, "
+        "bm25(artifacts_fts) AS score "
+        "FROM artifacts_fts WHERE artifacts_fts MATCH ?"
+    )
+    params: list[Any] = [FTS_SNIPPET_ELLIPSIS, SNIPPET_MAX_TOKENS, match]
+    if project_id:
+        sql += " AND project_id = ?"
+        params.append(project_id)
+    sql += " ORDER BY score LIMIT ?"
+    params.append(limit)
+    try:
+        conn = await store._get_conn()
+        cur = await conn.execute(sql, params)
+        rows = await cur.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index._fts_search_artifacts failed: %s", exc)
+        return []
+    out: list[dict] = []
+    for r in rows:
+        out.append({
+            "kind": "artifact",
+            "artifact_id": r[0],
+            "issue_id": r[1],
+            "project_id": r[2],
+            "role": r[3],
+            "name": r[4],
+            "snippet": r[5],
+            "score": float(r[6]) if r[6] is not None else 0.0,
+            "source": "fts",
+        })
+    return out
+
+
+async def _semantic_search_issues(store, qvec: list[float], project_id: str | None, limit: int) -> list[dict]:
+    sql = (
+        "SELECT e.issue_id, e.vector, i.title, i.project_id "
+        "FROM issue_embeddings e JOIN codex_issues i ON i.id = e.issue_id"
+    )
+    params: list[Any] = []
+    if project_id:
+        sql += " WHERE i.project_id = ?"
+        params.append(project_id)
+    try:
+        conn = await store._get_conn()
+        cur = await conn.execute(sql, params)
+        rows = await cur.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index._semantic_search_issues failed: %s", exc)
+        return []
+    scored: list[dict] = []
+    for r in rows:
+        vec = unpack_vector(r[1])
+        if not vec:
+            continue
+        score = cosine(qvec, vec)
+        scored.append({
+            "kind": "issue",
+            "issue_id": r[0],
+            "project_id": r[3],
+            "title": r[2],
+            "snippet": "",
+            "score": score,
+            "source": "semantic",
+        })
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:limit]
+
+
+async def _semantic_search_artifacts(store, qvec: list[float], project_id: str | None, limit: int) -> list[dict]:
+    sql = (
+        "SELECT e.artifact_id, e.vector, ap.issue_id, ap.name, ci.project_id "
+        "FROM artifact_embeddings e "
+        "JOIN artifact_paths ap ON ap.id = e.artifact_id "
+        "LEFT JOIN codex_issues ci ON ci.id = ap.issue_id"
+    )
+    params: list[Any] = []
+    if project_id:
+        sql += " WHERE ci.project_id = ?"
+        params.append(project_id)
+    try:
+        conn = await store._get_conn()
+        cur = await conn.execute(sql, params)
+        rows = await cur.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index._semantic_search_artifacts failed: %s", exc)
+        return []
+    scored: list[dict] = []
+    for r in rows:
+        vec = unpack_vector(r[1])
+        if not vec:
+            continue
+        score = cosine(qvec, vec)
+        scored.append({
+            "kind": "artifact",
+            "artifact_id": r[0],
+            "issue_id": r[2],
+            "project_id": r[4],
+            "role": "",
+            "name": r[3],
+            "snippet": "",
+            "score": score,
+            "source": "semantic",
+        })
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:limit]
+
+
+async def _load_issue_embedding(store, issue_id: str) -> list[float] | None:
+    try:
+        conn = await store._get_conn()
+        cur = await conn.execute(
+            "SELECT vector FROM issue_embeddings WHERE issue_id = ?", (issue_id,)
+        )
+        row = await cur.fetchone()
+    except Exception:  # noqa: BLE001
+        return None
+    if not row:
+        return None
+    return unpack_vector(row[0])
+
+
+async def _semantic_similar_issues(store, self_issue_id: str, anchor: list[float], k: int) -> list[dict]:
+    try:
+        conn = await store._get_conn()
+        cur = await conn.execute(
+            "SELECT e.issue_id, e.vector, i.title, i.project_id "
+            "FROM issue_embeddings e JOIN codex_issues i ON i.id = e.issue_id "
+            "WHERE e.issue_id != ?",
+            (self_issue_id,),
+        )
+        rows = await cur.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("knowledge_index._semantic_similar_issues failed: %s", exc)
+        return []
+    out: list[dict] = []
+    for r in rows:
+        vec = unpack_vector(r[1])
+        if not vec:
+            continue
+        score = cosine(anchor, vec)
+        out.append({
+            "issue_id": r[0],
+            "title": r[2],
+            "project_id": r[3],
+            "score": score,
+            "source": "semantic",
+        })
+    out.sort(key=lambda x: x["score"], reverse=True)
+    return out[:k]
+
+
+def _merge_rrf(a: list[dict], b: list[dict], limit: int, k: int = 60) -> list[dict]:
+    """Reciprocal rank fusion: score = sum(1 / (k + rank_i)) across lists.
+
+    Keys items by their identity (issue_id or artifact_id).
+    """
+    bucket: dict[str, dict] = {}
+    for lst in (a, b):
+        for rank, item in enumerate(lst):
+            key = item.get("artifact_id") or item.get("issue_id")
+            if not key:
+                continue
+            cur = bucket.get(key)
+            rrf = 1.0 / (k + rank + 1)
+            if cur is None:
+                merged = dict(item)
+                merged["rrf"] = rrf
+                merged["sources"] = [item.get("source")]
+                bucket[key] = merged
+            else:
+                cur["rrf"] += rrf
+                if item.get("source") and item.get("source") not in cur.get("sources", []):
+                    cur.setdefault("sources", []).append(item.get("source"))
+                # Prefer FTS snippet if we got one.
+                if not cur.get("snippet") and item.get("snippet"):
+                    cur["snippet"] = item.get("snippet")
+    merged = list(bucket.values())
+    merged.sort(key=lambda x: x.get("rrf", 0.0), reverse=True)
+    return merged[:limit]

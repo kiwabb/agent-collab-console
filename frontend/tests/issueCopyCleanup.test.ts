@@ -46,12 +46,14 @@ test("user-facing zh-CN issue copy uses demand wording", () => {
 test("remaining issue-facing views are wired to i18n", () => {
   const issueBoard = readSource("features/issues/IssueBoard.tsx");
   const issueDetail = readSource("features/issues/IssueDetailPage.tsx");
+  const sideStack = readSource("features/issues/components/IssueSideStack.tsx");
   const inboxDashboard = readSource("features/inbox/InboxDashboard.tsx");
 
   assert.match(issueBoard, /t\("issue\.toast\.created"\)/);
   assert.match(issueBoard, /t\("issue\.import\.title"\)/);
   assert.match(issueBoard, /t\("issue\.bulkDelete\.title"\)/);
-  assert.match(issueDetail, /t\("issue\.checklist"\)/);
+  // Acceptance checklist now lives in IssueSideStack (post-refactor).
+  assert.match(sideStack, /t\("issue\.side\.acceptance"\)/);
   assert.match(issueDetail, /t\("issue\.steerDialogTitle"\)/);
   assert.match(issueDetail, /t\("issue\.tab\.tasksRuns"\)/);
   assert.match(inboxDashboard, /useI18n/);

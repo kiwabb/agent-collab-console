@@ -7,6 +7,37 @@ from pydantic import BaseModel, Field, ValidationError
 from app.application.issue_artifact_documents import IssueArtifactDocuments
 
 
+def _scope_hint_for_role(role: str) -> str:
+    """Hard scope guard injected on top of the prompt when a specialist
+    engineer (engineer_frontend / engineer_backend) is dispatched, so the
+    agent doesn't drift into the other side's files."""
+    if role == "engineer_frontend":
+        return (
+            "SCOPE LOCK — FRONTEND SLICE ONLY:\n"
+            "You are the **Frontend Engineer**. A separate Backend Engineer is running in parallel.\n"
+            "- Implement UI / client-side code ONLY: components, pages, hooks, styles, client routing,\n"
+            "  client-side state, fetch calls. Touch files under `frontend/`, `web/`, `client/`, `ui/`,\n"
+            "  or `*.tsx`/`*.jsx`/`*.css` paths.\n"
+            "- DO NOT touch backend / server code (API routes, DB migrations, business logic) — that's\n"
+            "  the Backend Engineer's lane. If you find a backend bug, write it into `qa_notes` for\n"
+            "  the Backend Engineer to pick up instead of fixing it yourself.\n"
+            "- Coordinate via the contract (API shapes, response schemas) in the architect's design.\n\n"
+        )
+    if role == "engineer_backend":
+        return (
+            "SCOPE LOCK — BACKEND SLICE ONLY:\n"
+            "You are the **Backend Engineer**. A separate Frontend Engineer is running in parallel.\n"
+            "- Implement server-side code ONLY: API routes, request/response schemas, DB migrations,\n"
+            "  business logic, background jobs. Touch files under `backend/`, `server/`, `api/`, or\n"
+            "  `*.py` / language-equivalent server paths.\n"
+            "- DO NOT touch frontend / UI code (components, pages, styles) — that's the Frontend\n"
+            "  Engineer's lane. If you find a frontend bug, write it into `qa_notes` for the\n"
+            "  Frontend Engineer instead of fixing it yourself.\n"
+            "- Coordinate via the contract (API shapes, response schemas) in the architect's design.\n\n"
+        )
+    return ""
+
+
 class EngineerWorkflowError(ValueError):
     pass
 
@@ -33,6 +64,10 @@ class EngineerReportDocument(BaseModel):
     # Set this when you cannot reasonably proceed without user input.
     # The framework will pause the pipeline and re-run you once answered.
     clarification_question: str | None = None
+    # Set this when the Architect design has a critical gap that blocks correct
+    # implementation. The framework will reset the Architect node and pass this
+    # as feedback so Architect can revise before you re-run.
+    architect_critique: str | None = None
 
 
 class EngineerWorkflow:
@@ -59,6 +94,8 @@ class EngineerWorkflow:
         "verification_commands": "verification_commands",
         "qanotes": "qa_notes",
         "qa_notes": "qa_notes",
+        "architectcritique": "architect_critique",
+        "architect_critique": "architect_critique",
     }
 
     def __init__(self) -> None:
@@ -81,8 +118,15 @@ class EngineerWorkflow:
             requirement_text, prd_text, bugfix_text, system_design_json, implementation_plan
         )
 
+        # Phase 1 — scope lock for parallel engineer specialists. When the
+        # task is dispatched to `engineer_frontend` / `engineer_backend`
+        # (created by the fan-out heuristic), inject a hard scope guard so
+        # the agent doesn't accidentally touch the other side's files.
+        scope_hint = _scope_hint_for_role(getattr(task, "role", "engineer"))
+
         return (
-            "You are acting as Engineer. Follow an implementation workflow: "
+            scope_hint
+            + "You are acting as Engineer. Follow an implementation workflow: "
             "understand the requirements and design, modify code in the current task workspace, "
             "and produce exactly one JSON object that matches the required schema at the end. "
             "Do not auto-commit or auto-merge changes unless explicitly asked by the user. "
@@ -130,6 +174,14 @@ class EngineerWorkflow:
             "- The system runs a post-execution git-diff cross-check. If you claim 'status=completed' but git diff is empty, the framework will downgrade the status to 'partial' and the Architect Review will see the discrepancy.\n"
             "- 'changed_files=[]' is only acceptable when status='blocked' or when the requirement was already implemented and nothing needed to change (state this explicitly in summary).\n"
             "- DO NOT claim status='blocked' just because pm/requirement.md looks empty — that's a stub file, not the real requirements. The real requirements live in the `existing_prd` section of this prompt (which is read from pm/prd.json). If the existing_prd section above contains a PRD, you have requirements; you must NOT use 'requirements are missing' as a reason to block.\n\n"
+            "ARCHITECT CRITIQUE ESCAPE HATCH:\n"
+            "If the Architect's design has a CRITICAL gap that makes correct implementation impossible\n"
+            "(e.g. missing API contract, contradictory constraints, wrong data schema that would break existing functionality),\n"
+            "you may pause implementation and request a design revision by setting:\n"
+            '  "architect_critique": "Clear, specific description of what is wrong with the design and what must change"\n'
+            "ONLY use this when the gap is blocking — not for minor preferences. The Architect will be reset\n"
+            "and your critique will be delivered as feedback. You will re-run after Architect revises.\n"
+            "Limit: you may only file ONE critique per issue (do not critique a revised design again).\n\n"
             + "OUTPUT FORMAT RULES:\n"
             "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
             "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
@@ -146,7 +198,8 @@ class EngineerWorkflow:
             '"deferred_tasks": [{"title": "string", "description": "string", "priority": "P0|P1|P2"}],\n'
             '"risks": ["string"],\n'
             '"verification_commands": ["string"],\n'
-            '"qa_notes": ["string"]\n'
+            '"qa_notes": ["string"],\n'
+            '"architect_critique": "string|null"  // OPTIONAL: only set when Architect design has a critical blocking gap\n'
             "}\n\n"
             f"user_requirement:\n{task.prompt}"
         )
@@ -195,7 +248,14 @@ class EngineerWorkflow:
 
         self._docs.ensure_issue_root(task.workspace_path, canonical_issue_id)
 
-        impl_md_path = self._docs.engineer_implementation_md_path(task.workspace_path, canonical_issue_id, task.id)
+        # Specialist engineers (engineer_frontend / engineer_backend) write
+        # to per-role subdirs so two parallel implementations don't clobber
+        # each other. Falls back to `engineer/` for the legacy single-role.
+        role = getattr(task, "role", "engineer")
+        subdir = role if role.startswith("engineer") else "engineer"
+        impl_md_path = self._docs.engineer_implementation_md_path(
+            task.workspace_path, canonical_issue_id, task.id, subdir=subdir
+        )
         impl_md_path.write_text(self._render_implementation_markdown(report), encoding="utf-8")
 
         task.result = (
@@ -204,7 +264,7 @@ class EngineerWorkflow:
         )
         # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
         object.__setattr__(report, "written_files", [
-            {"name": f"engineer/{impl_md_path.name}", "path": str(impl_md_path), "kind": "development"},
+            {"name": f"{subdir}/{impl_md_path.name}", "path": str(impl_md_path), "kind": "development"},
         ])
         return report
 

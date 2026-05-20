@@ -207,6 +207,7 @@ class EventBus:
                 or event_type == "workflow_node_updated"
                 or event_type == "worktree_dirty"
                 or event_type == "conductor_decision"
+                or event_type == "agent_message_posted"
             ):
                 # Issue lifecycle + workflow + worktree events flow through the
                 # workspace-scoped WS only as BusEvents (no JsonPatch). Consumers

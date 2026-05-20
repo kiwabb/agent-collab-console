@@ -43,6 +43,28 @@ _BUILTIN_SPECS: list[tuple[str, str, str, str, str, bool, bool]] = [
         False,  # engineer completing does not normally reshape the DAG
         False,
     ),
+    # Phase 1 — parallel engineer specialists. Same prompt template +
+    # persist_kind as `engineer`; the role_key only changes how the
+    # scheduler routes work and which artifact subdir is used so two
+    # specialists can run in parallel without overwriting each other.
+    (
+        "engineer_frontend",
+        "Frontend Engineer",
+        "Implements the frontend slice (UI / client code) of the plan.",
+        "engineer_frontend",
+        "engineer",
+        False,
+        False,
+    ),
+    (
+        "engineer_backend",
+        "Backend Engineer",
+        "Implements the backend slice (API / server code) of the plan.",
+        "engineer_backend",
+        "engineer",
+        False,
+        False,
+    ),
     (
         "qa",
         "QA",

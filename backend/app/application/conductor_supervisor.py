@@ -8,12 +8,15 @@ maximal, then prune). Each call is bounded:
   - On any failure (timeout, parse error, no catalog), we silently no-op
     so the scheduler keeps working.
 
-Three possible decisions:
-  - "proceed"   : nothing to say; scheduler continues as planned
-  - "note"      : Conductor learned something it wants persisted into
-                  team_notes.md so future runs benefit. We append it.
-  - "escalate"  : something is off; emit a flagged event so the UI can
-                  surface a Conductor banner. We do NOT modify flow yet.
+Six possible decisions:
+  - "proceed"               : nothing to say; scheduler continues as planned
+  - "note"                  : Conductor learned something it wants persisted into
+                              team_notes.md so future runs benefit. We append it.
+  - "escalate"              : something is off; emit a flagged event so the UI can
+                              surface a Conductor banner. We do NOT modify flow yet.
+  - "insert_node"           : propose inserting a new agent node into the graph
+  - "reroute"               : propose re-routing edges in the graph
+  - "request_clarification" : ask the user a question before proceeding
 
 We always emit a `conductor_decision` event so the AgentDock dot can
 glow regardless of decision shape. This is the visible feedback that
@@ -24,11 +27,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from app.domain.models import CodexIssue, CodexTask, WorkflowGraph
 
 logger = logging.getLogger(__name__)
+
+_VALID_ACTIONS = {"proceed", "note", "escalate", "reroute", "insert_node", "request_clarification"}
 
 
 class ConductorSupervisor:
@@ -59,6 +66,38 @@ class ConductorSupervisor:
         if decision is None:
             decision = self._heuristic_decision(snapshot)
 
+        action = decision.get("action") or "proceed"
+
+        # Build diff payload for graph-mutation actions so the scheduler can act on it.
+        diff: dict | None = None
+        if action == "insert_node":
+            diff = self._build_insert_node_diff(decision, graph, snapshot)
+            if diff is not None:
+                decision["diff"] = diff
+        elif action == "reroute":
+            diff = self._build_reroute_diff(decision, graph)
+            if diff is not None:
+                decision["diff"] = diff
+
+        # Persist decision record.
+        issue_id = issue.id if issue else (task.issue_id or "")
+        try:
+            if issue_id and hasattr(self.store, "save_conductor_decision"):
+                from app.domain.models import ConductorDecision
+                record = ConductorDecision(
+                    id=str(uuid4()),
+                    issue_id=issue_id,
+                    task_id=task.id,
+                    action=action,
+                    reason=decision.get("reason"),
+                    diff_json=json.dumps(diff, ensure_ascii=False, default=str) if diff is not None else None,
+                    applied_at=None,
+                    created_at=datetime.now(),
+                )
+                await self.store.save_conductor_decision(record)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("conductor persist decision failed: %s", exc)
+
         # Emit visible event so frontend AgentDock can glow.
         try:
             if self._event_bus is not None and issue is not None:
@@ -68,7 +107,7 @@ class ConductorSupervisor:
                     "issue_id": issue.id,
                     "task_id": task.id,
                     "role": task.role,
-                    "action": decision.get("action") or "proceed",
+                    "action": action,
                     "reason": decision.get("reason"),
                     "note": decision.get("note"),
                 })
@@ -76,7 +115,7 @@ class ConductorSupervisor:
             logger.debug("conductor emit failed: %s", exc)
 
         # Persist team-level learning when Conductor produced a note.
-        if decision.get("action") == "note" and decision.get("note") and issue is not None:
+        if action == "note" and decision.get("note") and issue is not None:
             await self._append_team_note(issue, decision["note"])
 
         return decision
@@ -96,6 +135,10 @@ class ConductorSupervisor:
         node_statuses = {n.node_key: n.status for n in graph.nodes}
         # Bound task.result to keep prompt small; QA reports can be long.
         result_excerpt = (task.result or "")[:1200]
+        # Collect available agent role_keys from graph nodes + common builtin roles.
+        graph_roles = list({n.node_key for n in graph.nodes})
+        common_roles = ["security_reviewer", "performance_reviewer", "documentation_writer", "code_reviewer"]
+        available_agents = sorted(set(graph_roles + common_roles))
         return {
             "issue_id": issue.id if issue else task.issue_id,
             "issue_title": (issue.title if issue else None) or task.title,
@@ -110,6 +153,7 @@ class ConductorSupervisor:
                 n.node_key: {"used": n.retries, "max": n.max_retries}
                 for n in graph.nodes
             },
+            "available_agents": available_agents,
         }
 
     async def _invoke_llm(self, snapshot: dict[str, Any]) -> dict[str, Any] | None:
@@ -143,21 +187,30 @@ class ConductorSupervisor:
 
     @staticmethod
     def _build_prompt(snapshot: dict[str, Any]) -> str:
+        available_agents = snapshot.get("available_agents", [])
         return (
             "You are Conductor — the workflow orchestrator and 5th agent in a PM/Architect/Engineer/QA team. "
             "You observe each task completion. Your job is to spot cross-cutting issues (tool mismatches, "
             "agents looping on the wrong root cause, ambiguous handoffs) and either let the workflow proceed, "
-            "record a durable team learning, or flag a problem.\n\n"
-            "Bias hard toward 'proceed' — only intervene when the situation clearly needs cross-agent insight.\n\n"
+            "record a durable team learning, flag a problem, or propose a graph mutation.\n\n"
+            "Bias HARD toward 'proceed' — only intervene when the situation clearly needs cross-agent insight.\n\n"
+            f"Available agent role_keys you may reference: {available_agents}\n\n"
             "Output STRICT JSON, no markdown, exactly one of these shapes:\n"
             '  {"action":"proceed","reason":"<one short sentence>"}\n'
             '  {"action":"note","reason":"<why>","note":"<single-line team_notes.md entry>"}\n'
-            '  {"action":"escalate","reason":"<why>","note":"<single-line summary for the user>"}\n\n'
+            '  {"action":"escalate","reason":"<why>","note":"<single-line summary for the user>"}\n'
+            '  {"action":"insert_node","reason":"<why>","node_key":"<role from available_agents>","insert_after":"<existing node_key>","title":"<human title>"}\n'
+            '  {"action":"reroute","reason":"<why>","from":"<node_key>","to":"<node_key>"}\n'
+            '  {"action":"request_clarification","reason":"<why>","note":"<question for user>"}\n\n'
             "Guidance:\n"
+            "- action=proceed: everything is normal, no team-level signal.\n"
             "- action=note: ONLY when you've discovered a repo convention or recurring failure pattern future agents should know. "
             "Keep the note <140 chars. Imperative voice. Specific.\n"
             "- action=escalate: ONLY when the workflow is stuck in a loop the team can't break (e.g. same QA exit code 2+ rounds in a row).\n"
-            "- action=proceed: everything is normal, no team-level signal.\n\n"
+            "- action=insert_node: ONLY when a critical role (e.g. security_reviewer) is clearly missing and the issue clearly requires it. "
+            "node_key must be from available_agents list. insert_after must be an existing node_key.\n"
+            "- action=reroute: ONLY when the current edge ordering is provably wrong (e.g. QA must run before deployment).\n"
+            "- action=request_clarification: ONLY when you cannot proceed without a human decision.\n\n"
             "Observation snapshot:\n"
             + json.dumps(snapshot, ensure_ascii=False)
         )
@@ -184,7 +237,7 @@ class ConductorSupervisor:
         if not isinstance(payload, dict):
             return None
         action = payload.get("action")
-        if action not in {"proceed", "note", "escalate"}:
+        if action not in _VALID_ACTIONS:
             return None
         return payload
 
@@ -202,6 +255,60 @@ class ConductorSupervisor:
                 "note": None,
             }
         return {"action": "proceed", "reason": "Heuristic: no LLM configured."}
+
+    @staticmethod
+    def _build_insert_node_diff(decision: dict[str, Any], graph: WorkflowGraph, snapshot: dict[str, Any]) -> dict | None:
+        """Build an _apply_diff_to_graph-compatible diff for insert_node."""
+        node_key = decision.get("node_key")
+        insert_after = decision.get("insert_after")
+        title = decision.get("title") or node_key
+        if not node_key or not insert_after:
+            return None
+
+        # Find an agent_id to use: look up from existing graph nodes by role_key match,
+        # or fall back to a placeholder so the diff is structurally valid.
+        agent_id: str | None = None
+        for n in graph.nodes:
+            if n.node_key == node_key:
+                agent_id = n.agent_id  # reuse if already in graph
+                break
+        if agent_id is None:
+            # Use a sentinel; WorkflowOrchestrator / _apply_diff_to_graph will need
+            # the real agent_id resolved before persisting — we signal this via the
+            # diff being present so the scheduler can resolve it.
+            agent_id = f"__role__{node_key}"
+
+        # Find nodes that insert_after currently points to (downstream of insert_after).
+        downstream_keys = [
+            e.to_node_key for e in graph.edges
+            if e.from_node_key == insert_after and e.edge_type == "sequence"
+        ]
+
+        added_edges: list[dict] = [
+            {"from_node_key": insert_after, "to_node_key": node_key, "edge_type": "sequence"}
+        ]
+        for dk in downstream_keys:
+            added_edges.append({"from_node_key": node_key, "to_node_key": dk, "edge_type": "sequence"})
+
+        return {
+            "added_nodes": [{"node_key": node_key, "agent_id": agent_id, "title": title}],
+            "added_edges": added_edges,
+            "removed_node_keys": [],
+        }
+
+    @staticmethod
+    def _build_reroute_diff(decision: dict[str, Any], graph: WorkflowGraph) -> dict | None:
+        """Build an _apply_diff_to_graph-compatible diff for reroute."""
+        from_key = decision.get("from")
+        to_key = decision.get("to")
+        if not from_key or not to_key:
+            return None
+        # Add the new direct edge; leave removal to the user's confirm step.
+        return {
+            "added_nodes": [],
+            "added_edges": [{"from_node_key": from_key, "to_node_key": to_key, "edge_type": "sequence"}],
+            "removed_node_keys": [],
+        }
 
     async def _append_team_note(self, issue: CodexIssue, note: str) -> None:
         try:

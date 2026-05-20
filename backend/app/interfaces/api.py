@@ -949,6 +949,438 @@ async def get_issue_checklist(issue_id: str):
     }
 
 
+@router.get("/codex/issues/{issue_id}/pipeline-stages")
+async def get_issue_pipeline_stages(issue_id: str):
+    """Aggregated per-role pipeline summary for the Issue Detail Hero / Trace.
+
+    Always returns 4 stages (PM / Architect / Engineer / QA) regardless of
+    whether the workflow graph is set up — UI can render the same template
+    even before the DAG materializes. Summary lines are deterministic
+    extracts from on-disk artifacts (no LLM calls).
+
+    Returns:
+        {
+          stages: [
+            {
+              role, label, status, started_at, completed_at,
+              duration_seconds, summary, foot, task_id
+            }, ...
+          ],
+          started_at, completed_at, total_duration_seconds
+        }
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    import json as _json
+    import re as _re
+    from datetime import datetime as _dt
+    from pathlib import Path
+
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    # Map workflow nodes to roles via agent.role_key.
+    nodes_by_role: dict[str, list] = {}
+    graph = await codex_store.load_workflow_graph_for_issue(issue_id)
+    if graph is not None:
+        agents = await codex_store.list_agents(workspace_id=None)
+        agent_role = {a.id: a.role_key for a in agents}
+        for n in graph.nodes:
+            role = agent_role.get(n.agent_id)
+            if role:
+                nodes_by_role.setdefault(role, []).append(n)
+
+    worktree = issue.git_worktree_path
+    issue_root: Path | None = (
+        Path(worktree) / "issues" / issue_id if worktree else None
+    )
+
+    def _read_json(rel: str):
+        if not issue_root:
+            return None
+        p = issue_root / rel
+        if not p.exists():
+            return None
+        try:
+            return _json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _engineer_stats() -> tuple[str, str]:
+        if not issue_root:
+            return "代码实现", ""
+        eng_dir = issue_root / "engineer"
+        if not eng_dir.exists():
+            return "代码实现", ""
+        impls = sorted(eng_dir.glob("implementation-*.md"))
+        if not impls:
+            return "代码实现", ""
+        files_changed = 0
+        added = 0
+        removed = 0
+        for f in impls:
+            try:
+                text = f.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            m_files = _re.search(
+                r"(\d+)\s*files?\s*(?:changed|modified|touched)?",
+                text,
+                _re.IGNORECASE,
+            )
+            m_add = _re.search(r"\+(\d+)\s*(?:[-−]|/)", text)
+            m_rm = _re.search(r"[-−](\d+)\b", text)
+            if m_files:
+                try:
+                    files_changed = max(files_changed, int(m_files.group(1)))
+                except ValueError:
+                    pass
+            if m_add:
+                try:
+                    added = max(added, int(m_add.group(1)))
+                except ValueError:
+                    pass
+            if m_rm:
+                try:
+                    removed = max(removed, int(m_rm.group(1)))
+                except ValueError:
+                    pass
+        if files_changed or added or removed:
+            parts: list[str] = []
+            if files_changed:
+                parts.append(f"{files_changed} files")
+            if added or removed:
+                parts.append(f"+{added} −{removed}")
+            summary = "代码实现 · " + " · ".join(parts)
+        else:
+            summary = "代码实现"
+        return summary, "implementation report 已生成"
+
+    def _stage_summary(role_key: str) -> tuple[str, str]:
+        if role_key == "product_manager":
+            prd = _read_json("pm/prd.json") or {}
+            criteria = prd.get("acceptance_criteria") or []
+            goals = prd.get("goals") or []
+            reqs = (
+                prd.get("requirements")
+                or prd.get("functional_requirements")
+                or []
+            )
+            n_c = (
+                len([c for c in criteria if c])
+                if isinstance(criteria, list)
+                else 0
+            )
+            n_g = (
+                len([g for g in goals if g])
+                if isinstance(goals, list)
+                else 0
+            )
+            n_r = (
+                len([r for r in reqs if r]) if isinstance(reqs, list) else 0
+            )
+            summary = (
+                f"需求分解 · {n_c} acceptance criteria" if n_c else "需求分解"
+            )
+            parts: list[str] = []
+            if n_g:
+                parts.append(f"{n_g} goals")
+            if n_r:
+                parts.append(f"{n_r} reqs")
+            return summary, " · ".join(parts)
+        if role_key == "architect":
+            design = _read_json("architect/system_design.json") or {}
+            comps = design.get("components") or []
+            sch = (
+                design.get("schemas")
+                or design.get("data_models")
+                or []
+            )
+            mig = design.get("migrations") or []
+            n_c = len(comps) if isinstance(comps, list) else 0
+            n_s = len(sch) if isinstance(sch, list) else 0
+            n_m = len(mig) if isinstance(mig, list) else 0
+            summary = (
+                f"系统设计 · {n_c} component" if n_c else "系统设计"
+            )
+            parts: list[str] = []
+            if n_s:
+                parts.append(f"{n_s} schemas")
+            if n_m:
+                parts.append(f"{n_m} migrations")
+            return summary, " · ".join(parts)
+        if role_key == "engineer":
+            return _engineer_stats()
+        if role_key == "qa":
+            qa = _read_json("qa/qa_plan.json") or {}
+            status_lbl = (qa.get("status") or "").lower()
+            cmds = (
+                qa.get("recommended_commands")
+                or qa.get("commands")
+                or []
+            )
+            n_cmds = len(cmds) if isinstance(cmds, list) else 0
+            passed = qa.get("passed") or 0
+            failed = qa.get("failed") or 0
+            results = (
+                qa.get("results")
+                if isinstance(qa.get("results"), dict)
+                else None
+            )
+            if results:
+                passed = results.get("passed") or passed
+                failed = results.get("failed") or failed
+            if status_lbl in ("passed", "ok", "done"):
+                summary = (
+                    f"验证通过 · {n_cmds} cmd · {failed} failed"
+                    if n_cmds
+                    else "验证通过"
+                )
+            elif status_lbl in ("failed", "error"):
+                summary = (
+                    f"验证失败 · {n_cmds} cmd · {failed} failed"
+                    if n_cmds
+                    else "验证失败"
+                )
+            else:
+                summary = "验证"
+            foot_parts: list[str] = []
+            if cmds:
+                first = cmds[0]
+                first_text = (
+                    first
+                    if isinstance(first, str)
+                    else (
+                        first.get("cmd")
+                        or first.get("command")
+                        or ""
+                    )
+                )
+                if first_text:
+                    foot_parts.append(first_text.split()[0])
+            if passed:
+                foot_parts.append(f"{passed} passed")
+            return summary, " · ".join(foot_parts)
+        return "", ""
+
+    role_labels = [
+        ("product_manager", "PM"),
+        ("architect", "Architect"),
+        ("engineer", "Engineer"),
+        ("qa", "QA"),
+    ]
+
+    def _aggregate_status(statuses: list[str]) -> str:
+        if not statuses:
+            return "pending"
+        lowered = [(s or "").lower() for s in statuses]
+        if any(s in ("failed", "error") for s in lowered):
+            return "failed"
+        if any(s == "running" for s in lowered):
+            return "running"
+        if any(s in ("awaiting_review", "awaiting_approval") for s in lowered):
+            return "awaiting"
+        if all(s in ("done", "skipped") for s in lowered):
+            return "done"
+        if any(s in ("done", "skipped") for s in lowered):
+            return "running"
+        return lowered[0] or "pending"
+
+    stages = []
+    for role_key, label in role_labels:
+        role_nodes = nodes_by_role.get(role_key, [])
+        if role_nodes:
+            status = _aggregate_status([n.status for n in role_nodes])
+            starts = [n.started_at for n in role_nodes if n.started_at]
+            completes = [n.completed_at for n in role_nodes if n.completed_at]
+            started_at = min(starts).isoformat() if starts else None
+            completed_at = (
+                max(completes).isoformat()
+                if completes and status == "done"
+                else None
+            )
+            primary_task_id = next(
+                (n.task_id for n in role_nodes if n.task_id), None
+            )
+        else:
+            status = "pending"
+            started_at = None
+            completed_at = None
+            primary_task_id = None
+
+        summary, foot = _stage_summary(role_key)
+
+        duration_seconds = None
+        if started_at and completed_at:
+            try:
+                a = _dt.fromisoformat(started_at)
+                b = _dt.fromisoformat(completed_at)
+                duration_seconds = max(0, int((b - a).total_seconds()))
+            except ValueError:
+                pass
+
+        stages.append(
+            {
+                "role": role_key,
+                "label": label,
+                "status": status,
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "duration_seconds": duration_seconds,
+                "summary": summary,
+                "foot": foot,
+                "task_id": primary_task_id,
+            }
+        )
+
+    starts_all = [s["started_at"] for s in stages if s.get("started_at")]
+    started_at_all = min(starts_all) if starts_all else None
+    completed_at_all = None
+    total_duration = None
+    if stages and all(s["status"] == "done" for s in stages):
+        completes_all = [
+            s["completed_at"] for s in stages if s.get("completed_at")
+        ]
+        if completes_all:
+            completed_at_all = max(completes_all)
+    if started_at_all and completed_at_all:
+        try:
+            a = _dt.fromisoformat(started_at_all)
+            b = _dt.fromisoformat(completed_at_all)
+            total_duration = max(0, int((b - a).total_seconds()))
+        except ValueError:
+            pass
+
+    return {
+        "stages": stages,
+        "started_at": started_at_all,
+        "completed_at": completed_at_all,
+        "total_duration_seconds": total_duration,
+    }
+
+
+@router.get("/codex/issues/{issue_id}/activity")
+async def get_issue_activity(issue_id: str, limit: int = 50):
+    """Time-ordered activity stream for the Issue Detail side panel.
+
+    Derives events from:
+      - issue created_at (synthetic "issue_created")
+      - per-task lifecycle (created → started; updated → done/failed)
+      - project_audit entries scoped to this issue (created/merged/...)
+
+    Events are deduplicated by (type, timestamp, role) and sorted oldest
+    first so the UI can drop the newest N on the timeline tail.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from datetime import datetime as _dt
+
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    role_label = {
+        "product_manager": "PM",
+        "architect": "Architect",
+        "engineer": "Engineer",
+        "qa": "QA",
+    }
+
+    events: list[dict] = []
+
+    if issue.created_at:
+        events.append(
+            {
+                "type": "issue_created",
+                "timestamp": issue.created_at.isoformat()
+                if hasattr(issue.created_at, "isoformat")
+                else str(issue.created_at),
+                "actor": "system",
+                "role": None,
+                "text": "创建 issue",
+                "aux": issue.title,
+            }
+        )
+
+    tasks = await codex_store.list_codex_tasks(issue_id=issue_id)
+    for t in tasks:
+        role = t.get("role")
+        actor = role_label.get(role, role or "agent")
+        if t.get("created_at"):
+            events.append(
+                {
+                    "type": "task_started",
+                    "timestamp": t["created_at"],
+                    "actor": actor,
+                    "role": role,
+                    "text": t.get("title") or "(no title)",
+                    "aux": None,
+                }
+            )
+        status = (t.get("status") or "").lower()
+        if status in ("done", "failed") and t.get("updated_at"):
+            events.append(
+                {
+                    "type": f"task_{status}",
+                    "timestamp": t["updated_at"],
+                    "actor": actor,
+                    "role": role,
+                    "text": (
+                        f"{actor} 完成" if status == "done" else f"{actor} 失败"
+                    ),
+                    "aux": t.get("title"),
+                }
+            )
+
+    if issue.project_id:
+        try:
+            audit = await codex_store.list_project_audit(
+                issue.project_id, limit=200
+            )
+        except Exception:
+            audit = []
+        for a in audit:
+            if a.get("issue_id") != issue_id:
+                continue
+            ts = a.get("created_at")
+            if not ts:
+                continue
+            events.append(
+                {
+                    "type": f"audit_{a.get('event') or 'event'}",
+                    "timestamp": ts,
+                    "actor": "git",
+                    "role": None,
+                    "text": a.get("event") or "",
+                    "aux": a.get("sha")
+                    or a.get("base_branch")
+                    or None,
+                }
+            )
+
+    def _ts_key(e: dict) -> str:
+        return e.get("timestamp") or ""
+
+    events.sort(key=_ts_key)
+
+    # Dedup adjacent identical events (same type + actor + ts).
+    deduped: list[dict] = []
+    last_key: tuple | None = None
+    for e in events:
+        key = (e["type"], e.get("actor"), e["timestamp"])
+        if key == last_key:
+            continue
+        deduped.append(e)
+        last_key = key
+
+    # Apply tail limit if requested.
+    if limit and len(deduped) > limit:
+        deduped = deduped[-limit:]
+
+    return {"events": deduped}
+
+
 @router.get("/codex/cost-stats")
 async def get_codex_cost_stats(
     issue_id: str | None = None,
@@ -2015,6 +2447,52 @@ async def get_codex_issue_artifacts(issue_id: str):
     return result
 
 
+@router.get("/codex/issues/{issue_id}/artifacts/download")
+async def download_issue_artifacts_zip(issue_id: str):
+    """Stream a zip of every artifact file under the issue's artifact roots.
+
+    The frontend "下载 zip" button points here. We assemble the archive in
+    memory (artifacts are bounded — single-digit MB total) and let FastAPI
+    stream it back so the browser saves a single file.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from fastapi.responses import Response
+    import io
+    import zipfile
+    from pathlib import Path
+
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    # Reuse the same scan+backfill path the JSON endpoint uses so we always
+    # include the freshest on-disk artifacts.
+    await _scan_and_backfill_artifacts(issue_id, issue.session_id, codex_store)
+    rows = await codex_store.list_artifacts(issue_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="No artifacts to download")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for row in rows:
+            path = Path(row["path"]) if row.get("path") else None
+            if path is None or not path.exists() or not path.is_file():
+                continue
+            arcname = row.get("name") or path.name
+            try:
+                zf.write(path, arcname)
+            except (OSError, PermissionError):
+                continue
+    buf.seek(0)
+    filename = f"issue-{issue_id[:8]}-artifacts.zip"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) -> list[dict]:
     """Scan disk for artifacts and backfill the database."""
     workspace = await store.load_codex_workspace(session_id)
@@ -2140,8 +2618,9 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
         scan_root(root)
 
     # Backfill DB with scanned artifacts
+    from app.application import knowledge_index_service as _kidx
     for artifact_name, artifact_data in artifact_map.items():
-        await store.save_artifact({
+        row = {
             "id": artifact_data["id"],
             "issue_id": issue_id,
             "task_id": artifact_data["task_id"],
@@ -2149,7 +2628,12 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
             "path": artifact_data["path"],
             "kind": artifact_data["kind"],
             "created_at": artifact_data["created_at"],
-        })
+        }
+        await store.save_artifact(row)
+        try:
+            await _kidx.index_artifact(store, row)
+        except Exception:  # noqa: BLE001
+            pass
 
     return list(artifact_map.values())
 
@@ -4121,6 +4605,286 @@ async def get_issue_graph(issue_id: str):
     return _graph_to_dict(graph)
 
 
+@router.get("/codex/issues/{issue_id}/graph-stats")
+async def get_issue_graph_stats(issue_id: str):
+    """Per-node telemetry for the DAG tab's dn-body / dn-tools / dn-foot.
+
+    For each workflow node we report:
+      - tokens (input + output, summed from the task's stream events)
+      - duration_seconds (task.updated_at - task.created_at; or
+        node.started_at..completed_at)
+      - tools (role-default chip list; the graph schema doesn't carry
+        per-node tools so we derive a sensible default from the role)
+      - est_cost_usd (priced with the same env knobs as /cost-stats)
+
+    Always also returns a synthetic `conductor` block so the start node
+    in the DAG has stats to display.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    import json as _json
+    import re as _re
+    from datetime import datetime as _dt
+    from pathlib import Path
+
+    try:
+        issue = await codex_store.load_codex_issue(issue_id)
+    except AttributeError:
+        # Older test stubs may not expose load_codex_issue. Worktree-less
+        # paths still work — we just won't have on-disk summary stats.
+        issue = None
+    graph = await codex_store.load_workflow_graph_for_issue(issue_id)
+
+    # Per-role summary stats are derived from the same on-disk artifacts
+    # the pipeline-stages endpoint reads. We compute these even when the
+    # graph itself isn't materialized yet so the DAG nodes look populated.
+    worktree = issue.git_worktree_path if issue else None
+    issue_root: Path | None = (
+        Path(worktree) / "issues" / issue_id if worktree else None
+    )
+
+    def _read_json(rel: str):
+        if not issue_root:
+            return None
+        p = issue_root / rel
+        if not p.exists():
+            return None
+        try:
+            return _json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _summary_stats(role_key: str) -> list[dict]:
+        if role_key == "product_manager":
+            prd = _read_json("pm/prd.json") or {}
+            return [
+                {
+                    "num": _safe_len(prd.get("acceptance_criteria")),
+                    "label": "acceptance",
+                    "tone": "good",
+                },
+                {"num": _safe_len(prd.get("goals")), "label": "goals"},
+                {
+                    "num": _safe_len(
+                        prd.get("requirements")
+                        or prd.get("functional_requirements")
+                    ),
+                    "label": "reqs",
+                },
+            ]
+        if role_key == "architect":
+            design = _read_json("architect/system_design.json") or {}
+            return [
+                {
+                    "num": _safe_len(design.get("components")),
+                    "label": "component",
+                },
+                {
+                    "num": _safe_len(
+                        design.get("schemas") or design.get("data_models")
+                    ),
+                    "label": "schemas",
+                },
+                {
+                    "num": _safe_len(design.get("migrations")),
+                    "label": "migrations",
+                },
+            ]
+        if role_key == "engineer" and issue_root:
+            eng_dir = issue_root / "engineer"
+            if not eng_dir.exists():
+                return []
+            files_changed = 0
+            added = 0
+            removed = 0
+            for f in sorted(eng_dir.glob("implementation-*.md")):
+                try:
+                    text = f.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                m_files = _re.search(
+                    r"(\d+)\s*files?", text, _re.IGNORECASE
+                )
+                m_add = _re.search(r"\+(\d+)", text)
+                m_rm = _re.search(r"[-−](\d+)\b", text)
+                if m_files:
+                    files_changed = max(files_changed, int(m_files.group(1)))
+                if m_add:
+                    added = max(added, int(m_add.group(1)))
+                if m_rm:
+                    removed = max(removed, int(m_rm.group(1)))
+            return [
+                {"num": added, "label": "added", "tone": "good"},
+                {"num": removed, "label": "removed", "tone": "bad"},
+                {"num": files_changed, "label": "files"},
+            ]
+        if role_key == "qa":
+            qa = _read_json("qa/qa_plan.json") or {}
+            results = (
+                qa.get("results") if isinstance(qa.get("results"), dict) else {}
+            )
+            passed = qa.get("passed") or (results.get("passed") if results else 0) or 0
+            failed = qa.get("failed") or (results.get("failed") if results else 0) or 0
+            cmds = qa.get("recommended_commands") or qa.get("commands") or []
+            n_cmds = len(cmds) if isinstance(cmds, list) else 0
+            return [
+                {"num": passed, "label": "passed", "tone": "good"},
+                {"num": failed, "label": "failed", "tone": "bad" if failed else None},
+                {"num": n_cmds, "label": "cmd"},
+            ]
+        return []
+
+    if graph is None:
+        # Return an empty shell — UI degrades gracefully.
+        return {"nodes": {}, "conductor": _conductor_stub()}
+
+    agents = await codex_store.list_agents(workspace_id=None)
+    agent_role = {a.id: a.role_key for a in agents}
+
+    input_per_m = float(os.getenv("COST_USD_PER_M_INPUT", "0.30"))
+    output_per_m = float(os.getenv("COST_USD_PER_M_OUTPUT", "1.20"))
+    cache_per_m = float(os.getenv("COST_USD_PER_M_CACHE_READ", "0.075"))
+
+    # Per-role default tool lists matching the design handoff's dn-tools
+    # chips. The graph schema doesn't persist per-node tool calls.
+    role_tools = {
+        "product_manager": ["read", "plan", "write"],
+        "architect": ["design", "grep"],
+        "engineer": ["edit", "bash", "read", "write"],
+        "qa": ["bash", "pytest"],
+    }
+
+    out_nodes: dict[str, dict] = {}
+    for n in graph.nodes:
+        role = agent_role.get(n.agent_id) or n.node_key
+        tools = role_tools.get(role, [])
+
+        tokens_in = 0
+        tokens_out = 0
+        cache_in = 0
+        sample = 0
+
+        if n.task_id:
+            task = await codex_store.load_codex_task(n.task_id)
+            sid = task.session_id if task else None
+            if sid:
+                seen_msg: set[str] = set()
+                rows = await codex_store.load_log_events(
+                    session_id=sid, task_id=n.task_id, limit=5000
+                )
+                for ev in rows:
+                    content = ev.content or ""
+                    if "usage" not in content or "input_tokens" not in content:
+                        continue
+                    try:
+                        obj = _json.loads(content)
+                    except (ValueError, TypeError):
+                        continue
+                    sample += 1
+                    usage = _extract_usage(obj)
+                    if not usage:
+                        continue
+                    msg_id = _extract_message_id(obj)
+                    if msg_id and msg_id in seen_msg:
+                        continue
+                    if msg_id:
+                        seen_msg.add(msg_id)
+                    tokens_in += int(usage.get("input_tokens") or 0)
+                    tokens_out += int(usage.get("output_tokens") or 0)
+                    cache_in += int(
+                        usage.get("cache_read_input_tokens") or 0
+                    )
+
+        # Duration: prefer the node's started_at..completed_at window;
+        # fall back to the task's created_at..updated_at.
+        dur = None
+        start_iso = (
+            n.started_at.isoformat() if n.started_at else None
+        )
+        end_iso = (
+            n.completed_at.isoformat() if n.completed_at else None
+        )
+        if start_iso and end_iso:
+            try:
+                dur = max(
+                    0,
+                    int(
+                        (
+                            _dt.fromisoformat(end_iso)
+                            - _dt.fromisoformat(start_iso)
+                        ).total_seconds()
+                    ),
+                )
+            except ValueError:
+                dur = None
+        elif n.task_id:
+            task = await codex_store.load_codex_task(n.task_id)
+            if task and task.created_at and task.updated_at:
+                try:
+                    dur = max(
+                        0,
+                        int(
+                            (task.updated_at - task.created_at).total_seconds()
+                        ),
+                    )
+                except (TypeError, ValueError):
+                    dur = None
+
+        total_tokens = tokens_in + tokens_out
+        est_cost = (
+            tokens_in * input_per_m / 1_000_000
+            + tokens_out * output_per_m / 1_000_000
+            + cache_in * cache_per_m / 1_000_000
+        )
+
+        out_nodes[n.node_key] = {
+            "task_id": n.task_id,
+            "role_key": role,
+            "tokens": {
+                "input": tokens_in,
+                "output": tokens_out,
+                "total": total_tokens,
+            }
+            if sample
+            else None,
+            "duration_seconds": dur,
+            "tools": tools,
+            "est_cost_usd": round(est_cost, 4) if sample else None,
+            "summary_stats": _summary_stats(role),
+        }
+
+    # Conductor synthetic block — knows the planned graph size.
+    conductor = _conductor_stub()
+    conductor["summary_stats"] = [
+        {"num": len(graph.nodes), "label": "nodes planned"},
+        {"num": len(graph.edges), "label": "edges"},
+    ]
+    return {"nodes": out_nodes, "conductor": conductor}
+
+
+def _safe_len(value) -> int:
+    if isinstance(value, list):
+        return len([v for v in value if v])
+    return 0
+
+
+def _conductor_stub() -> dict:
+    """Static stats block for the synthetic Conductor virtual node.
+
+    Conductor doesn't run as a real task — it's the orchestrator step
+    the UI surfaces as the start of the pipeline.
+    """
+    return {
+        "task_id": None,
+        "role_key": "conductor",
+        "tokens": None,
+        "duration_seconds": None,
+        "tools": ["plan", "approve"],
+        "summary_stats": [],
+        "est_cost_usd": None,
+    }
+
+
 @router.post("/codex/issues/{issue_id}/graph", status_code=201)
 async def save_issue_graph(issue_id: str, request: SaveGraphRequest):
     """Persist (or overwrite) the workflow graph for an issue from a DAG payload."""
@@ -4256,3 +5020,187 @@ async def reject_replan(issue_id: str, replan_id: str):
     except (ValueError, WorkflowSchedulerError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _graph_to_dict(graph)
+
+
+# ----------------------------------------------------------------------------
+# Knowledge stack: cross-issue search, similar issues, team-notes CRUD
+# ----------------------------------------------------------------------------
+
+
+async def _resolve_project_repo_path_async(project_id: str | None) -> str | None:
+    if not project_id or codex_store is None:
+        return None
+    load_project = getattr(codex_store, "load_project", None)
+    if not callable(load_project):
+        return None
+    try:
+        proj = await load_project(project_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if proj is None:
+        return None
+    return getattr(proj, "repo_path", None)
+
+
+@router.get("/codex/search")
+async def codex_search(
+    q: str,
+    scope: str = "all",
+    project_id: str | None = None,
+    mode: str = "hybrid",
+    limit: int = 20,
+):
+    """Cross-issue knowledge search across issues_fts + artifacts_fts (and
+    embeddings when configured). `mode` = fts | semantic | hybrid.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    if scope not in ("issues", "artifacts", "all"):
+        raise HTTPException(status_code=400, detail="scope must be issues|artifacts|all")
+    if mode not in ("fts", "semantic", "hybrid"):
+        raise HTTPException(status_code=400, detail="mode must be fts|semantic|hybrid")
+    limit = max(1, min(50, limit))
+    from app.application import knowledge_index_service as kidx
+    from app.application.embedding_service import get_embedding_service
+    emb = get_embedding_service()
+    result = await kidx.search(
+        codex_store,
+        query=q,
+        scope=scope,  # type: ignore[arg-type]
+        project_id=project_id,
+        mode=mode,  # type: ignore[arg-type]
+        limit=limit,
+        embedding_service=emb,
+    )
+    return result
+
+
+@router.get("/codex/issues/{issue_id}/conductor-log")
+async def codex_issue_conductor_log(issue_id: str):
+    """Return conductor decisions for this issue."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    if not hasattr(codex_store, "list_conductor_decisions"):
+        return {"decisions": []}
+    decisions = await codex_store.list_conductor_decisions(issue_id)
+    return {"decisions": [
+        {"id": d.id, "issue_id": d.issue_id, "task_id": d.task_id,
+         "action": d.action, "reason": d.reason, "diff_json": d.diff_json,
+         "applied_at": d.applied_at.isoformat() if d.applied_at else None,
+         "created_at": d.created_at.isoformat() if d.created_at else None}
+        for d in decisions
+    ]}
+
+
+@router.get("/codex/issues/{issue_id}/agent-messages")
+async def codex_issue_agent_messages(issue_id: str):
+    """Return agent-to-agent messages (critiques, handoffs) for this issue."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    if not hasattr(codex_store, "list_agent_messages"):
+        return {"messages": []}
+    messages = await codex_store.list_agent_messages(issue_id)
+    return {
+        "messages": [
+            {
+                "id": m.id,
+                "issue_id": m.issue_id,
+                "graph_id": m.graph_id,
+                "from_node_key": m.from_node_key,
+                "to_node_key": m.to_node_key,
+                "message_type": m.message_type,
+                "body": m.body,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in messages
+        ]
+    }
+
+
+@router.get("/codex/issues/{issue_id}/similar")
+async def codex_issue_similar(issue_id: str, k: int = 5):
+    """Return up to k issues similar to the given one. Uses embeddings when
+    available, falls back to FTS over the title+description bag of words."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    k = max(1, min(20, k))
+    from app.application import knowledge_index_service as kidx
+    from app.application.embedding_service import get_embedding_service
+    items = await kidx.find_similar_issues(
+        codex_store, issue_id, k=k, embedding_service=get_embedding_service()
+    )
+    return {"items": items}
+
+
+@router.post("/codex/index/reindex")
+async def codex_reindex(project_id: str | None = None):
+    """Walk codex_issues + artifact_paths and rebuild FTS (+ embeddings if
+    configured). Returns counts. Useful right after a migration."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application import knowledge_index_service as kidx
+    from app.application.embedding_service import get_embedding_service
+    stats = await kidx.reindex_all(
+        codex_store, project_id=project_id, embedding_service=get_embedding_service()
+    )
+    return stats
+
+
+@router.get("/codex/embedding/status")
+async def codex_embedding_status():
+    """Tells the frontend whether semantic search is online."""
+    from app.application.embedding_service import get_embedding_service
+    emb = get_embedding_service()
+    return {
+        "enabled": emb.enabled,
+        "model": emb.config.model if emb.enabled else None,
+        "provider_type": emb.config.provider_type if emb.enabled else None,
+    }
+
+
+@router.get("/projects/{project_id}/team-notes")
+async def get_team_notes(project_id: str, include_deleted: bool = False):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.team_notes_service import team_notes
+    repo_path = await _resolve_project_repo_path_async(project_id)
+    raw = team_notes.read_markdown(repo_path)
+    blocks = await team_notes.list_blocks(
+        codex_store, project_id, repo_path, include_deleted=include_deleted
+    )
+    return {
+        "project_id": project_id,
+        "raw_markdown": raw,
+        "blocks": [b.to_dict() for b in blocks],
+    }
+
+
+class TeamNotesPinBody(BaseModel):
+    pinned: bool
+
+
+@router.delete("/projects/{project_id}/team-notes/{block_id}")
+async def delete_team_notes_block(project_id: str, block_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.team_notes_service import team_notes
+    await team_notes.soft_delete(codex_store, project_id, block_id)
+    return {"ok": True, "block_id": block_id, "deleted": True}
+
+
+@router.post("/projects/{project_id}/team-notes/{block_id}/restore")
+async def restore_team_notes_block(project_id: str, block_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.team_notes_service import team_notes
+    await team_notes.restore(codex_store, project_id, block_id)
+    return {"ok": True, "block_id": block_id, "deleted": False}
+
+
+@router.post("/projects/{project_id}/team-notes/{block_id}/pin")
+async def pin_team_notes_block(project_id: str, block_id: str, body: TeamNotesPinBody):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.team_notes_service import team_notes
+    await team_notes.set_pinned(codex_store, project_id, block_id, body.pinned)
+    return {"ok": True, "block_id": block_id, "pinned": body.pinned}

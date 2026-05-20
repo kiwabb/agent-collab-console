@@ -6,6 +6,7 @@ import {
   applyWorkflowTemplate,
   confirmReplan,
   getIssueGraph,
+  getIssueGraphStats,
   listReplanPending,
   listWorkflowTemplates,
   planIssueStream,
@@ -13,6 +14,7 @@ import {
   runCodexTask,
   saveIssueGraph,
   startIssueGraph,
+  type GraphStatsResponse,
   type ReplanPending,
   type WorkflowTemplateSummary,
 } from "@/lib/api";
@@ -20,13 +22,13 @@ import type { ProposedDAG, WorkflowGraph } from "@/lib/types";
 import { Loader2 } from "lucide-react";
 import { ReplanDiffModal } from "@/features/workflow/ReplanDiffModal";
 import { WorkflowGraphView, type WorkflowNodeClickPayload } from "@/features/workflow/WorkflowGraphView";
+import { ConductorLogPanel } from "@/features/workflow/ConductorLogPanel";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { cn } from "@/lib/utils";
 import { agentBus } from "@/features/agents/dock/agentBus";
-import { AgentStatusProvider } from "@/features/agents/dock/AgentStatusProvider";
-import { AgentTimelinePanel } from "@/features/agents/dock/AgentTimelinePanel";
-import { useAgentStatusContext } from "@/features/agents/dock/AgentStatusProvider";
+import { AgentStatusProvider, useAgentStatusContext } from "@/features/agents/dock/AgentStatusProvider";
 import { AgentDecisionDrawer } from "@/features/issues/components/AgentDecisionDrawer";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
@@ -53,6 +55,7 @@ export function DagTab({ issueId }: Props) {
   const { addToast } = useToast();
   const [view, setView] = useState<View>("loading");
   const [graph, setGraph] = useState<WorkflowGraph | null>(null);
+  const [graphStats, setGraphStats] = useState<GraphStatsResponse | null>(null);
   const [proposal, setProposal] = useState<ProposedDAG | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -113,6 +116,14 @@ export function DagTab({ issueId }: Props) {
       setView("no-graph");
     }
     await loadPendingReplans();
+    // Refresh per-node telemetry alongside the graph. Errors are silent —
+    // the DAG still renders without stats.
+    try {
+      const s = await getIssueGraphStats(issueId);
+      setGraphStats(s);
+    } catch {
+      setGraphStats(null);
+    }
   }, [issueId, loadPendingReplans]);
 
   useEffect(() => {
@@ -347,6 +358,7 @@ export function DagTab({ issueId }: Props) {
   return (
     <AgentStatusProvider issueId={issueId}>
       <ConductorPanelHost
+        issueId={issueId}
         open={conductorPanelOpen}
         onClose={() => setConductorPanelOpen(false)}
       />
@@ -512,31 +524,69 @@ export function DagTab({ issueId }: Props) {
       )}
 
       {view === "saved" && graph && (
-        <div className="flex flex-col flex-1 min-h-0 relative rounded-xl border border-border-subtle bg-surface shadow-sm overflow-hidden group">
-          <div className="absolute top-4 left-4 right-4 z-10 flex justify-between items-start pointer-events-none">
-            <div className="flex flex-col gap-1.5 bg-surface/80 backdrop-blur-md p-3 rounded-lg border border-border-subtle shadow-sm pointer-events-auto">
-              <div className="text-[11px] text-text-muted flex items-center gap-3">
-                <span>
-                  Graph <code className="font-mono text-foreground">{graph.id.slice(0, 8)}</code>
-                </span>
-                <span className="text-border-subtle">·</span>
-                <span className="flex items-center gap-1.5">
-                  status: <span className="font-bold text-foreground capitalize">{graph.status}</span>
-                  {graph.status === "running" && (
-                    <span className="size-1.5 rounded-full bg-brand animate-pulse shadow-[0_0_8px_var(--brand)]" />
+        <div className="flex flex-col flex-1 min-h-[520px] relative bg-surface overflow-hidden">
+          {/* === dag-toolbar (matches design handoff) === */}
+          <div
+            className="flex items-center justify-between gap-2.5 px-4 py-3 border-b border-border-subtle font-mono text-[12px] text-text-muted"
+            style={{
+              background:
+                "linear-gradient(180deg, color-mix(in srgb, var(--color-surface-raised) 40%, transparent), transparent)",
+            }}
+          >
+            <div className="flex items-center gap-3.5 min-w-0">
+              <span className="truncate">
+                <b className="text-foreground font-medium">Graph</b>{" "}
+                <span className="text-text-secondary">{graph.id.slice(0, 8)}</span>
+              </span>
+              <span className="text-text-faint">·</span>
+              <span className="inline-flex items-center gap-1.5">
+                <span>status</span>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md border text-[11px] font-mono",
+                    graph.status === "done"
+                      ? "border-status-done/30 text-status-done"
+                      : graph.status === "running"
+                        ? "border-brand/40 text-brand"
+                        : graph.status === "failed"
+                          ? "border-status-failed/40 text-status-failed"
+                          : "border-border-muted text-text-secondary",
                   )}
+                  style={
+                    graph.status === "done"
+                      ? { backgroundColor: "var(--color-done-bg)" }
+                      : graph.status === "running"
+                        ? { backgroundColor: "var(--color-brand-bg)" }
+                        : undefined
+                  }
+                >
+                  {graph.status === "running" && (
+                    <span className="size-1.5 rounded-full bg-brand animate-pulse" />
+                  )}
+                  <span className="capitalize">{graph.status}</span>
                 </span>
-              </div>
-              <span className="text-[10px] text-text-muted/80">
-                Click a node to open its task · alt-click to explain
+              </span>
+              <span className="text-text-faint">·</span>
+              <span>
+                {graph.nodes.length} nodes · {graph.edges.length} edges
               </span>
             </div>
-
-            <div className="flex items-center gap-2 pointer-events-auto opacity-80 group-hover:opacity-100 transition-opacity">
-              <Button onClick={handleAutoPlan} disabled={busy} variant="outline" size="sm" className="h-8 shadow-sm">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Button
+                onClick={handleAutoPlan}
+                disabled={busy}
+                variant="outline"
+                size="sm"
+                className="h-7 px-2.5 text-[12px]"
+              >
                 {busy ? "Planning…" : "Auto-plan"}
               </Button>
-              <Button disabled={busy} onClick={handleStart} size="sm" className="h-8 shadow-sm">
+              <Button
+                disabled={busy}
+                onClick={handleStart}
+                size="sm"
+                className="h-7 px-2.5 text-[12px] bg-brand hover:bg-brand-strong text-black font-semibold"
+              >
                 {busy
                   ? graph.status === "draft"
                     ? "Starting…"
@@ -551,11 +601,11 @@ export function DagTab({ issueId }: Props) {
               </Button>
             </div>
           </div>
-          
+
           <WorkflowGraphView
             graph={graph}
-            className="flex-1 min-h-0 bg-background/50 border-0 rounded-none shadow-none"
             onNodeClick={handleNodeClick}
+            stats={graphStats}
           />
         </div>
       )}
@@ -600,15 +650,23 @@ export function DagTab({ issueId }: Props) {
   );
 }
 
-/** Pulls Conductor history out of the agent status context and renders the
- * shared AgentTimelinePanel. Must live INSIDE <AgentStatusProvider>. */
-function ConductorPanelHost({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** Pulls Conductor history from context + API log and renders ConductorLogPanel.
+ * Must live INSIDE <AgentStatusProvider>. */
+function ConductorPanelHost({
+  issueId,
+  open,
+  onClose,
+}: {
+  issueId: string;
+  open: boolean;
+  onClose: () => void;
+}) {
   const snap = useAgentStatusContext();
   return (
-    <AgentTimelinePanel
+    <ConductorLogPanel
+      issueId={issueId}
       open={open}
-      role="conductor"
-      history={snap.history.conductor}
+      liveHistory={snap.history.conductor}
       onClose={onClose}
     />
   );

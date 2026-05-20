@@ -471,6 +471,7 @@ class SQLiteStore:
                     artifact_dir TEXT,
                     retries INTEGER NOT NULL DEFAULT 0,
                     max_retries INTEGER NOT NULL DEFAULT 1,
+                    instance_index INTEGER NOT NULL DEFAULT 0,
                     started_at TEXT,
                     completed_at TEXT,
                     created_at TEXT,
@@ -521,6 +522,78 @@ class SQLiteStore:
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN workflow_node_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            # Knowledge stack: FTS5 virtual tables + embedding stores + team-notes state
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
+                    issue_id UNINDEXED,
+                    project_id UNINDEXED,
+                    title,
+                    description,
+                    tokenize='porter unicode61'
+                )
+            """)
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
+                    artifact_id UNINDEXED,
+                    issue_id UNINDEXED,
+                    project_id UNINDEXED,
+                    role UNINDEXED,
+                    name,
+                    content,
+                    tokenize='porter unicode61'
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS artifact_embeddings (
+                    artifact_id TEXT PRIMARY KEY,
+                    vector BLOB NOT NULL,
+                    model TEXT NOT NULL,
+                    dim INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS issue_embeddings (
+                    issue_id TEXT PRIMARY KEY,
+                    vector BLOB NOT NULL,
+                    model TEXT NOT NULL,
+                    dim INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS team_notes_state (
+                    project_id TEXT NOT NULL,
+                    block_id TEXT NOT NULL,
+                    deleted_at TEXT,
+                    pinned INTEGER DEFAULT 0,
+                    PRIMARY KEY (project_id, block_id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_messages (
+                    id TEXT PRIMARY KEY,
+                    issue_id TEXT NOT NULL,
+                    graph_id TEXT NOT NULL,
+                    from_node_key TEXT NOT NULL,
+                    to_node_key TEXT NOT NULL,
+                    message_type TEXT NOT NULL DEFAULT 'handoff',
+                    body TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS conductor_decisions (
+                    id TEXT PRIMARY KEY,
+                    issue_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    reason TEXT,
+                    diff_json TEXT,
+                    applied_at TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
             # Create indexes for frequently queried columns
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)")
@@ -550,6 +623,17 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_graph_id ON graph_replan_pending(graph_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_status ON graph_replan_pending(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_workflow_node_id ON codex_tasks(workflow_node_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_messages_issue_id ON agent_messages(issue_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_messages_graph_id ON agent_messages(graph_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_issue_id ON conductor_decisions(issue_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)")
+            # Phase 4: add instance_index to workflow_nodes for existing DBs
+            try:
+                conn.execute(
+                    "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database initialization error: %s", e)

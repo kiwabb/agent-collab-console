@@ -72,6 +72,29 @@ def _agent_by_role(agents: Iterable[Agent], role_key: str) -> Agent | None:
     return next((a for a in agents if a.role_key == role_key), None)
 
 
+_FRONTEND_KEYWORDS = (
+    "frontend", "front-end", "front end", "ui", "ux", "前端",
+    "页面", "界面", "component", "react", "vue", "tsx", "jsx",
+    "css", "tailwind", "页面布局", "组件",
+)
+_BACKEND_KEYWORDS = (
+    "backend", "back-end", "back end", "api", "endpoint", "服务端",
+    "后端", "fastapi", "数据库", "database", "schema", "migration",
+    "route", "router", "controller", "service",
+)
+
+
+def _spans_frontend_and_backend(issue: CodexIssue) -> bool:
+    """Phase 1 — return True when the issue text mentions BOTH frontend
+    and backend signals, suggesting the work parallelizes cleanly. Used
+    by `_heuristic_propose` to pick the fan-out template.
+    """
+    haystack = f"{issue.title or ''}\n{issue.description or ''}".lower()
+    has_fe = any(kw in haystack for kw in _FRONTEND_KEYWORDS)
+    has_be = any(kw in haystack for kw in _BACKEND_KEYWORDS)
+    return has_fe and has_be
+
+
 def _node_order_for_intent(intent: str) -> list[str]:
     """Which built-in roles to invoke and in what order, before any custom agents."""
     if intent == "docs_only":
@@ -262,6 +285,28 @@ class WorkflowOrchestrator:
     def _heuristic_propose(self, issue: CodexIssue, agents: list[Agent]) -> dict:
         agents_by_role = {a.role_key: a for a in agents}
         intent = _classify_intent(issue)
+
+        # Phase 1 — fan-out heuristic. For feature issues whose description
+        # spans both frontend and backend, materialize the parallel template
+        # (PM → Architect → {FE, BE} → QA) instead of a single-chain. Falls
+        # back to the default chain when the specialist agents aren't seeded.
+        if intent == "feature" and _spans_frontend_and_backend(issue):
+            from app.application.workflow_templates import (
+                get_template,
+                template_to_dag,
+            )
+            fan_out = get_template("feature_parallel")
+            if fan_out is not None:
+                dag = template_to_dag(fan_out, agents)
+                if dag is not None:
+                    dag["meta"]["rationale"] = (
+                        "Issue spans frontend + backend — forking Engineer into "
+                        "engineer_frontend and engineer_backend (parallel)."
+                    )
+                    dag["meta"]["created_by"] = "orchestrator:heuristic:fanout"
+                    validate_dag(dag, {a.id for a in agents})
+                    return dag
+
         nodes, edges = _build_proposal(intent, agents_by_role)
         if not nodes:
             raise ValueError("no agents matched the heuristic — registry may be missing builtins")
@@ -355,31 +400,70 @@ class WorkflowOrchestrator:
         rationale_parts: list[str] = []
 
         if completed_node.node_key == "product_manager" and trigger_reason == "node_done":
-            # After PRD lands, the orchestrator considers whether the work
-            # is heavier than initially scoped — heuristic: if there's no
-            # architect node downstream yet, propose inserting one when the
-            # graph already has engineer (i.e., we previously assumed bug/docs).
-            has_arch = any(n.node_key == "architect" for n in graph.nodes)
-            has_eng = any(n.node_key == "engineer" for n in graph.nodes)
-            if not has_arch and has_eng and "architect" in agents_by_role:
-                arch_agent = agents_by_role["architect"]
-                added_nodes.append({
-                    "node_key": "architect",
-                    "agent_id": arch_agent.id,
-                    "role_key": "architect",
-                    "title": arch_agent.name,
-                })
-                added_edges.append({
-                    "from_node_key": "product_manager",
-                    "to_node_key": "architect",
-                    "edge_type": "sequence",
-                })
-                added_edges.append({
-                    "from_node_key": "architect",
-                    "to_node_key": "engineer",
-                    "edge_type": "sequence",
-                })
-                rationale_parts.append("PM produced a PRD that looks system-level; inserting architect.")
+            # Phase 4: multi-instance fan-out. If the PRD carries a subtask_split
+            # list, replace the single "engineer" node with N engineer#0…#N-1 nodes
+            # running in parallel, one per subtask.
+            subtask_split = await self._read_pm_subtask_split(graph)
+            if subtask_split and len(subtask_split) >= 2 and "engineer" in agents_by_role:
+                eng_agent = agents_by_role["engineer"]
+                # Remove the default single engineer node (only if still pending).
+                existing_eng = next((n for n in graph.nodes if n.node_key == "engineer" and n.status not in {"done", "running"}), None)
+                if existing_eng:
+                    removed_node_keys.append("engineer")
+                for idx, subtask in enumerate(subtask_split[:3]):  # cap at 3 per plan
+                    nk = f"engineer#{idx}"
+                    title = subtask.get("title") or f"Engineer #{idx}"
+                    added_nodes.append({
+                        "node_key": nk,
+                        "agent_id": eng_agent.id,
+                        "role_key": "engineer",
+                        "title": title,
+                        "instance_index": idx,
+                    })
+                    # Each engineer#N fans out from architect (or pm if no arch).
+                    upstream = "architect" if any(n.node_key == "architect" for n in graph.nodes) else "product_manager"
+                    added_edges.append({
+                        "from_node_key": upstream,
+                        "to_node_key": nk,
+                        "edge_type": "parallel-fanout",
+                    })
+                    # Each feeds into QA (if present) via sequence.
+                    if any(n.node_key == "qa" for n in graph.nodes):
+                        added_edges.append({
+                            "from_node_key": nk,
+                            "to_node_key": "qa",
+                            "edge_type": "sequence",
+                        })
+                rationale_parts.append(
+                    f"PM subtask_split has {len(subtask_split)} workstreams — "
+                    "replacing single engineer with parallel fan-out instances."
+                )
+            else:
+                # After PRD lands, the orchestrator considers whether the work
+                # is heavier than initially scoped — heuristic: if there's no
+                # architect node downstream yet, propose inserting one when the
+                # graph already has engineer (i.e., we previously assumed bug/docs).
+                has_arch = any(n.node_key == "architect" for n in graph.nodes)
+                has_eng = any(n.node_key == "engineer" for n in graph.nodes)
+                if not has_arch and has_eng and "architect" in agents_by_role:
+                    arch_agent = agents_by_role["architect"]
+                    added_nodes.append({
+                        "node_key": "architect",
+                        "agent_id": arch_agent.id,
+                        "role_key": "architect",
+                        "title": arch_agent.name,
+                    })
+                    added_edges.append({
+                        "from_node_key": "product_manager",
+                        "to_node_key": "architect",
+                        "edge_type": "sequence",
+                    })
+                    added_edges.append({
+                        "from_node_key": "architect",
+                        "to_node_key": "engineer",
+                        "edge_type": "sequence",
+                    })
+                    rationale_parts.append("PM produced a PRD that looks system-level; inserting architect.")
         elif completed_node.node_key == "architect" and trigger_reason == "node_done":
             # Heuristic: many architectures benefit from a security pass alongside QA.
             # Only suggest if a security_reviewer agent is registered and not already in the graph.
@@ -426,6 +510,25 @@ class WorkflowOrchestrator:
             "rationale": " ".join(rationale_parts) or "No structural changes needed.",
             "has_changes": bool(added_nodes or added_edges or removed_node_keys),
         }
+
+    async def _read_pm_subtask_split(self, graph) -> list[dict] | None:
+        """Read subtask_split from the PM's prd.json artifact for this graph's issue."""
+        try:
+            issue = await self.store.load_codex_issue(graph.issue_id)
+            if issue is None or not issue.git_worktree_path:
+                return None
+            from app.application.product_manager_documents import ProductManagerDocuments
+            docs = ProductManagerDocuments()
+            prd_path = docs.prd_json_path(issue.git_worktree_path, issue.id)
+            if not prd_path.exists():
+                return None
+            payload = json.loads(prd_path.read_text(encoding="utf-8"))
+            split = payload.get("subtask_split")
+            if not isinstance(split, list) or len(split) < 2:
+                return None
+            return [s for s in split if isinstance(s, dict)]
+        except Exception:  # noqa: BLE001
+            return None
 
 
 _RATIONALES = {

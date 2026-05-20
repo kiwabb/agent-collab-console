@@ -52,11 +52,17 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
 
   return (
     <>
-      <header className="h-12 shrink-0 border-b border-border-subtle bg-background flex items-center gap-3 px-4">
+      <header className="h-12 shrink-0 border-b border-border-subtle bg-surface flex items-center gap-3.5 px-4 relative z-10">
         <Link
           href="/"
           aria-label="Home"
-          className="flex items-center justify-center size-7 rounded-md bg-brand text-black font-black text-sm shrink-0 hover:bg-brand-strong transition-colors"
+          className="flex items-center justify-center size-[26px] rounded-[7px] font-mono font-bold text-[14px] shrink-0 transition-transform hover:scale-[1.04]"
+          style={{
+            background: "linear-gradient(135deg, var(--color-brand-strong), #cf7838)",
+            color: "#1a0e05",
+            boxShadow:
+              "0 1px 0 rgba(255,255,255,0.18) inset, 0 4px 12px -3px var(--color-brand-ring)",
+          }}
         >
           C
         </Link>
@@ -134,8 +140,8 @@ function SearchInput({ onOpen, t }: { onOpen: () => void; t: (key: string) => st
       type="button"
       onClick={onOpen}
       className={cn(
-        "relative w-72 max-w-[40vw] h-7 pl-7 pr-12 rounded-md text-[12px] text-left outline-none",
-        "bg-surface-input border border-border-subtle",
+        "relative w-[380px] max-w-[42vw] h-[30px] pl-7 pr-12 rounded-[7px] text-[12.5px] text-left outline-none",
+        "bg-surface-input border border-border-muted",
         "text-text-muted hover:border-border-strong hover:text-foreground transition-colors",
       )}
     >

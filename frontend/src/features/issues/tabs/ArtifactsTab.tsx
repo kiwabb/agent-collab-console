@@ -1,14 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Download, ExternalLink, RefreshCw } from "lucide-react";
 import { getCodexIssueArtifacts } from "@/lib/api";
 import type { Artifact, CodexIssue } from "@/lib/types";
-import { ArtifactPanel } from "@/features/artifacts/ArtifactPanel";
+import { ArtifactsSplitView } from "@/features/issues/components/ArtifactsSplitView";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface Props {
   issueId: string;
@@ -24,11 +26,49 @@ interface Props {
 const ACTIVE_STATUSES = new Set(["open", "in_progress"]);
 
 export function ArtifactsTab({ issueId, active, issue }: Props) {
+  const { addToast } = useToast();
+  const { t } = useI18n();
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastFetched, setLastFetched] = useState<number | null>(null);
   const inFlight = useRef(false);
+
+  // Summary stats for the toolbar — total bytes across all artifact bodies
+  // and a deduplicated set of producer agents.
+  const { totalBytes, producers } = useMemo(() => {
+    let bytes = 0;
+    const set = new Set<string>();
+    for (const a of artifacts) {
+      const c = typeof a.content === "string" ? a.content : "";
+      bytes += c.length;
+      const tag = inferProducer(a);
+      if (tag) set.add(tag);
+    }
+    return { totalBytes: bytes, producers: set.size };
+  }, [artifacts]);
+
+  const handleCopyEditorCmd = useCallback(async () => {
+    const cwd = issue?.git_worktree_path;
+    if (!cwd) {
+      addToast({ type: "error", title: t("issue.artifacts.noWorktree") });
+      return;
+    }
+    const cmd = `cd "${cwd}" && code .`;
+    try {
+      await navigator.clipboard.writeText(cmd);
+      addToast({
+        type: "success",
+        title: t("issue.artifacts.copiedCmd"),
+        message: cmd,
+      });
+    } catch {
+      addToast({
+        type: "error",
+        title: t("issue.artifacts.clipboardUnavailable"),
+      });
+    }
+  }, [issue?.git_worktree_path, addToast, t]);
 
   const fetchArtifacts = useCallback(
     async (mode: "initial" | "refresh" | "poll") => {
@@ -83,29 +123,67 @@ export function ArtifactsTab({ issueId, active, issue }: Props) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-6 pt-4 pb-2">
-        <div className="flex items-center gap-2 text-[11px] text-text-muted">
-          <span className="font-mono tabular-nums">
-            {artifacts.length} {artifacts.length === 1 ? "artifact" : "artifacts"}
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border-subtle font-mono text-[12px] text-text-muted flex-wrap">
+        <div className="flex items-center gap-3.5 flex-wrap">
+          <span>
+            <b className="text-foreground font-medium">{artifacts.length}</b>{" "}
+            artifacts
           </span>
-          {lastFetched && (
-            <>
-              <span>·</span>
-              <span>updated {timeAgo(lastFetched)}</span>
-            </>
-          )}
+          <span className="text-text-faint">·</span>
+          <span>
+            {t("issue.artifacts.totalLabel")}{" "}
+            <b className="text-foreground font-medium">
+              {fmtSize(totalBytes)}
+            </b>
+          </span>
+          <span className="text-text-faint">·</span>
+          <span>
+            <b className="text-foreground font-medium">{producers}</b>{" "}
+            {t("issue.artifacts.producersLabel")}
+          </span>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={isRefreshing || isLoading}
-          onClick={() => void fetchArtifacts("refresh")}
-        >
-          <RefreshCw size={12} className={cn("mr-1.5", isRefreshing && "animate-spin")} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isRefreshing || isLoading}
+            onClick={() => void fetchArtifacts("refresh")}
+            className="h-7 px-2.5 text-[12px]"
+          >
+            <RefreshCw
+              size={11}
+              className={cn("mr-1.5", isRefreshing && "animate-spin")}
+            />
+            Refresh
+          </Button>
+          <a
+            href={`/api/codex/issues/${issueId}/artifacts/download`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-border-muted bg-surface-raised text-[12px] text-text-secondary hover:text-foreground hover:bg-surface-input hover:border-border-strong"
+            title={t("issue.artifacts.downloadHint")}
+          >
+            <Download size={11} />
+            {t("issue.artifacts.downloadZip")}
+          </a>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleCopyEditorCmd()}
+            disabled={!issue?.git_worktree_path}
+            className="h-7 px-2.5 text-[12px]"
+            title={
+              issue?.git_worktree_path
+                ? t("issue.artifacts.copyEditorHint")
+                : t("issue.artifacts.noWorktree")
+            }
+          >
+            <ExternalLink size={11} className="mr-1.5" />
+            {t("issue.artifacts.openInEditor")}
+          </Button>
+        </div>
       </div>
-      <div className="flex-1 min-h-0 px-6 pb-6">
+      <div className="flex-1 min-h-0 px-4 pb-4 pt-3">
         {!isLoading && artifacts.length === 0 ? (
           <div className="h-full flex items-center justify-center">
             <EmptyState
@@ -115,17 +193,29 @@ export function ArtifactsTab({ issueId, active, issue }: Props) {
             />
           </div>
         ) : (
-          <ArtifactPanel artifacts={artifacts} isLoading={isLoading} />
+          <ArtifactsSplitView artifacts={artifacts} />
         )}
       </div>
     </div>
   );
 }
 
-function timeAgo(ts: number): string {
-  const delta = Date.now() - ts;
-  if (delta < 1500) return "just now";
-  if (delta < 60_000) return `${Math.floor(delta / 1000)}s ago`;
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
-  return `${Math.floor(delta / 3_600_000)}h ago`;
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function inferProducer(a: Artifact): string {
+  const k = (a.kind || "").toLowerCase();
+  if (/(pm|product_manager)/.test(k)) return "pm";
+  if (/architect/.test(k)) return "architect";
+  if (/engineer/.test(k)) return "engineer";
+  if (/qa/.test(k)) return "qa";
+  const n = a.name ?? "";
+  if (n.startsWith("pm/")) return "pm";
+  if (n.startsWith("architect/")) return "architect";
+  if (n.startsWith("engineer/")) return "engineer";
+  if (n.startsWith("qa/")) return "qa";
+  return "";
 }

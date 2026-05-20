@@ -4,18 +4,25 @@ import { useCallback, useMemo } from "react";
 import ReactFlow, {
   Background,
   BackgroundVariant,
-  Controls,
   type Edge,
   MarkerType,
   type Node,
   type NodeMouseHandler,
+  useReactFlow,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { Maximize2, Minus, Plus } from "lucide-react";
 
 import type { ProposedDAG, WorkflowGraph } from "@/lib/types";
-import { AgentDagNode, type AgentDagNodeData } from "./AgentDagNode";
+import type { GraphStatsResponse } from "@/lib/api";
+import {
+  AgentDagNode,
+  type AgentDagNodeData,
+  type AgentDagNodeStats,
+} from "./AgentDagNode";
 import type { RoleId } from "@/features/agents/dock/personas";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/providers/I18nProvider";
 
 export interface WorkflowNodeClickPayload {
   node_key: string;
@@ -28,19 +35,25 @@ export interface WorkflowNodeClickPayload {
   metaKey?: boolean;
 }
 
+// Design-handoff edge palette: green for normal flow, amber for refine
+// loops, red for retries, brand orange for the Conductor-out edges (set
+// per-edge in toReactFlow when source === CONDUCTOR_KEY).
 const EDGE_COLOR: Record<string, string> = {
-  sequence: "#8b5cf6", // Violet
-  "parallel-fanout": "#10b981", // Emerald
-  "refine-loop": "#f59e0b", // Amber
-  "retry-on-fail": "#ef4444", // Red
-  conditional: "#6366f1", // Indigo
+  sequence: "#4ade80",
+  "parallel-fanout": "#34d977",
+  "refine-loop": "#f59e0b",
+  "retry-on-fail": "#ef4444",
+  conditional: "#60a5fa",
 };
+const EDGE_START_COLOR = "#a8d56b"; // Conductor → root: brand-tinted green
 
 const CONDUCTOR_KEY = "__conductor__";
 const VALID_ROLES = new Set<RoleId>([
   "product_manager",
   "architect",
   "engineer",
+  "engineer_frontend",
+  "engineer_backend",
   "qa",
 ]);
 
@@ -64,6 +77,7 @@ const nodeTypes = { agent: AgentDagNode };
 function toReactFlow(
   graph: GraphLike,
   onNodeClick?: (payload: WorkflowNodeClickPayload) => void,
+  stats?: GraphStatsResponse | null,
 ) {
   const colWidth = 280;
   const rowHeight = 120;
@@ -139,6 +153,9 @@ function toReactFlow(
       : VALID_ROLES.has(roleCandidate)
         ? roleCandidate
         : "engineer"; // graceful fallback for unknown roles
+    const stat: AgentDagNodeStats | null = isConductor
+      ? stats?.conductor ?? null
+      : stats?.nodes?.[n.node_key] ?? null;
     return {
       id: n.node_key,
       type: "agent",
@@ -150,24 +167,31 @@ function toReactFlow(
         task_id: n.task_id ?? null,
         isConductor,
         node_key: n.node_key,
+        stats: stat,
         onClick: onNodeClick,
       },
     };
   });
 
   const rfEdges: Edge[] = edgesWithConductor.map((e, idx) => {
-    const color = EDGE_COLOR[e.edge_type] || "#7a9dcc";
+    const isStart = e.from_node_key === CONDUCTOR_KEY;
+    const color = isStart
+      ? EDGE_START_COLOR
+      : EDGE_COLOR[e.edge_type] || "#4ade80";
     return {
       id: `e${idx}`,
       source: e.from_node_key,
       target: e.to_node_key,
-      type: "smoothstep",
+      // straight = literal line between handles. Matches the design
+      // handoff's horizontal SVG rail with arrowheads.
+      type: "straight",
       label: e.edge_type === "sequence" ? undefined : e.edge_type,
-      animated: e.edge_type === "refine-loop" || e.edge_type === "retry-on-fail",
-      style: { 
-        stroke: color, 
-        strokeWidth: 2.5,
-        filter: `drop-shadow(0 0 4px ${color}80)` 
+      animated:
+        e.edge_type === "refine-loop" || e.edge_type === "retry-on-fail",
+      style: {
+        stroke: color,
+        strokeWidth: 3.4,
+        filter: `drop-shadow(0 0 6px ${color}66)`,
       },
       markerEnd: { type: MarkerType.ArrowClosed, color },
     };
@@ -179,9 +203,17 @@ interface Props {
   graph: WorkflowGraph | ProposedDAG;
   className?: string;
   onNodeClick?: (payload: WorkflowNodeClickPayload) => void;
+  /** Optional per-node telemetry from /graph-stats. */
+  stats?: GraphStatsResponse | null;
 }
 
-export function WorkflowGraphView({ graph, className, onNodeClick }: Props) {
+export function WorkflowGraphView({
+  graph,
+  className,
+  onNodeClick,
+  stats,
+}: Props) {
+  const { t } = useI18n();
   const flow = useMemo(() => {
     if ("dag_json" in graph) {
       return toReactFlow(
@@ -202,6 +234,7 @@ export function WorkflowGraphView({ graph, className, onNodeClick }: Props) {
           })),
         },
         onNodeClick,
+        stats,
       );
     }
     return toReactFlow(
@@ -218,8 +251,9 @@ export function WorkflowGraphView({ graph, className, onNodeClick }: Props) {
         })),
       },
       onNodeClick,
+      stats,
     );
-  }, [graph, onNodeClick]);
+  }, [graph, onNodeClick, stats]);
 
   const handleNodeClick = useCallback<NodeMouseHandler>(
     (event, node) => {
@@ -238,29 +272,131 @@ export function WorkflowGraphView({ graph, className, onNodeClick }: Props) {
   );
 
   return (
-    <div className={cn("relative w-full flex-1 min-h-[420px] rounded-xl overflow-hidden shadow-inner border border-border-subtle bg-background/50", className)}>
-      {/* Radial gradient background accent */}
-      <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_center,rgba(139,92,246,0.08)_0%,transparent_60%)]" />
-      <ReactFlow
-        nodes={flow.nodes}
-        edges={flow.edges}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.25 }}
-        proOptions={{ hideAttribution: true }}
-        nodesDraggable
-        nodesConnectable={false}
-        elementsSelectable
-        onNodeClick={onNodeClick ? handleNodeClick : undefined}
-      >
-        <Background 
-          variant={BackgroundVariant.Dots} 
-          gap={20} 
-          size={1.5} 
-          color="rgba(128,128,128,0.2)" 
+    <div
+      className={cn(
+        "relative w-full flex-1 min-h-[460px] overflow-hidden",
+        className,
+      )}
+      style={{
+        background: `
+          radial-gradient(800px 400px at 50% 60%, var(--color-brand-bg), transparent 60%),
+          radial-gradient(circle at center, color-mix(in srgb, var(--color-background) 92%, white 4%) 0%, var(--color-background) 100%)
+        `,
+      }}
+    >
+      {/* Soft 22px dot grid layered over a 88px square grid — same look
+          as the design handoff. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none opacity-70"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px),
+            radial-gradient(rgba(255,255,255,0.055) 1px, transparent 1px)
+          `,
+          backgroundSize: "88px 88px, 88px 88px, 22px 22px",
+        }}
+      />
+
+      {/* Top-left legend chip */}
+      <div className="absolute left-3.5 top-3.5 z-[2] flex items-center gap-3 px-2.5 py-1.5 rounded-lg bg-background/80 backdrop-blur-sm border border-border-subtle font-mono text-[11px] text-text-muted">
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className="size-2 rounded-full"
+            style={{ background: "var(--color-brand)" }}
+          />
+          {t("issue.dag.legendStart")}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className="size-2 rounded-full"
+            style={{ background: "var(--color-status-done)" }}
+          />
+          {t("issue.dag.legendDone")}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className="size-2 rounded-full"
+            style={{ background: "var(--color-text-muted)" }}
+          />
+          {t("issue.dag.legendQueued")}
+        </span>
+        <span className="text-text-faint">·</span>
+        <span className="text-text-faint">{t("issue.dag.legendHint")}</span>
+      </div>
+
+      <div className="absolute inset-0">
+        <ReactFlow
+          nodes={flow.nodes}
+          edges={flow.edges}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.18 }}
+          proOptions={{ hideAttribution: true }}
+          nodesDraggable
+          nodesConnectable={false}
+          elementsSelectable
+          onNodeClick={onNodeClick ? handleNodeClick : undefined}
+        >
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={20}
+          size={0}
+          color="transparent"
         />
-        <Controls position="bottom-right" showInteractive={false} className="opacity-50 hover:opacity-100 transition-opacity" />
+        <DagFab />
       </ReactFlow>
+      </div>
     </div>
+  );
+}
+
+/** Custom zoom +/-/fit FAB matching the design handoff's dag-fab. */
+function DagFab() {
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const { t } = useI18n();
+  return (
+    <div className="absolute right-3.5 bottom-3.5 flex flex-col gap-1.5 z-[2]">
+      <FabButton
+        title={t("issue.dag.zoomIn")}
+        onClick={() => zoomIn({ duration: 200 })}
+      >
+        <Plus size={12} strokeWidth={2.4} />
+      </FabButton>
+      <FabButton
+        title={t("issue.dag.zoomOut")}
+        onClick={() => zoomOut({ duration: 200 })}
+      >
+        <Minus size={12} strokeWidth={2.4} />
+      </FabButton>
+      <FabButton
+        title={t("issue.dag.fit")}
+        onClick={() => fitView({ duration: 200, padding: 0.18 })}
+      >
+        <Maximize2 size={11} strokeWidth={2} />
+      </FabButton>
+    </div>
+  );
+}
+
+function FabButton({
+  children,
+  onClick,
+  title,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="size-7 rounded-md bg-surface-raised border border-border-muted text-text-muted hover:text-foreground hover:border-border-strong flex items-center justify-center transition-colors"
+    >
+      {children}
+    </button>
   );
 }

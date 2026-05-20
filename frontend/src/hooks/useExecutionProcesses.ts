@@ -176,11 +176,18 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
 
         ws.onmessage = (event) => {
           try {
-            const msg = JSON.parse(event.data as string) as { 
-              JsonPatch?: unknown[]; 
+            // Server pings the socket with the literal string "pong" as a
+            // keep-alive — not JSON. Skip those before attempting parse so
+            // we don't spam the console with SyntaxError every 30s.
+            const raw = event.data as string;
+            if (typeof raw === "string" && (raw === "pong" || raw === "ping")) {
+              return;
+            }
+            const msg = JSON.parse(raw) as {
+              JsonPatch?: unknown[];
               Events?: LogEvent[];
-              Ready?: boolean; 
-              finished?: boolean 
+              Ready?: boolean;
+              finished?: boolean
             };
 
             if (msg.JsonPatch) {

@@ -36,6 +36,42 @@ const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE ?? "ws://localhost:9000";
 
 export { API_BASE, WS_BASE };
 
+/**
+ * Short-window GET dedupe. When multiple components ask for the same URL
+ * within `ttlMs`, they share one in-flight Promise instead of each firing
+ * its own request. Cuts the 80+ XHR storm on the issue detail page
+ * (pipeline-stages × 12, graph × 13, tasks × 15, etc) down to ~10.
+ *
+ * Only applies to GETs. POST/PUT/DELETE bypass — those mutate state.
+ */
+const _dedupeCache = new Map<string, { promise: Promise<Response>; expires: number }>();
+const _DEDUPE_TTL_MS = 1500;
+export async function dedupedFetch(
+  url: string,
+  init?: RequestInit,
+): Promise<Response> {
+  // Bypass dedupe for non-GET — those have side effects.
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method !== "GET") {
+    return fetch(url, init);
+  }
+  const now = Date.now();
+  const key = url;
+  const cached = _dedupeCache.get(key);
+  if (cached && cached.expires > now) {
+    // Clone is required because Response bodies can only be read once.
+    return cached.promise.then((r) => r.clone());
+  }
+  const p = fetch(url, init);
+  _dedupeCache.set(key, { promise: p, expires: now + _DEDUPE_TTL_MS });
+  // Garbage-collect after TTL so stale errors don't linger.
+  p.finally(() => {
+    const c = _dedupeCache.get(key);
+    if (c && c.expires <= Date.now()) _dedupeCache.delete(key);
+  });
+  return p.then((r) => r.clone());
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let errorMessage = `HTTP ${response.status}`;
@@ -205,7 +241,7 @@ export async function getCodexCostStats(opts: {
   if (opts.issueId) params.set("issue_id", opts.issueId);
   if (opts.workspaceId) params.set("workspace_id", opts.workspaceId);
   const qs = params.toString();
-  const response = await fetch(`${API_BASE}/codex/cost-stats${qs ? `?${qs}` : ""}`);
+  const response = await dedupedFetch(`${API_BASE}/codex/cost-stats${qs ? `?${qs}` : ""}`);
   return handleResponse<CodexCostStats>(response);
 }
 
@@ -344,7 +380,7 @@ export async function forkCodexIssue(issueId: string): Promise<CodexIssue> {
 }
 
 export async function getCodexIssue(issueId: string): Promise<CodexIssue> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}`);
+  const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}`);
   return handleResponse<CodexIssue>(response);
 }
 
@@ -491,8 +527,97 @@ export interface IssueChecklist {
 }
 
 export async function getCodexIssueChecklist(issueId: string): Promise<IssueChecklist> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/checklist`);
+  const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}/checklist`);
   return handleResponse<IssueChecklist>(response);
+}
+
+export interface PipelineStage {
+  role: "product_manager" | "architect" | "engineer" | "qa" | string;
+  label: string;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  summary: string;
+  foot: string;
+  task_id: string | null;
+}
+
+export interface PipelineStagesResponse {
+  stages: PipelineStage[];
+  started_at: string | null;
+  completed_at: string | null;
+  total_duration_seconds: number | null;
+}
+
+export async function getIssuePipelineStages(
+  issueId: string,
+): Promise<PipelineStagesResponse | null> {
+  const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}/pipeline-stages`);
+  if (!response.ok) {
+    console.error(`getIssuePipelineStages(${issueId}) failed: HTTP ${response.status}`);
+    return null;
+  }
+  return response.json();
+}
+
+export interface ActivityEvent {
+  type: string;
+  timestamp: string;
+  actor: string;
+  role: string | null;
+  text: string;
+  aux: string | null;
+}
+
+export interface ActivityResponse {
+  events: ActivityEvent[];
+}
+
+export async function getIssueActivity(
+  issueId: string,
+  limit = 50,
+): Promise<ActivityResponse | null> {
+  const response = await dedupedFetch(
+    `${API_BASE}/codex/issues/${issueId}/activity?limit=${limit}`,
+  );
+  if (!response.ok) {
+    console.error(`getIssueActivity(${issueId}) failed: HTTP ${response.status}`);
+    return null;
+  }
+  return response.json();
+}
+
+export interface GraphNodeSummaryStat {
+  num: number;
+  label: string;
+  tone?: "good" | "bad" | null;
+}
+
+export interface GraphNodeStat {
+  task_id: string | null;
+  role_key: string;
+  tokens: { input: number; output: number; total: number } | null;
+  duration_seconds: number | null;
+  tools: string[];
+  est_cost_usd: number | null;
+  summary_stats?: GraphNodeSummaryStat[];
+}
+
+export interface GraphStatsResponse {
+  nodes: Record<string, GraphNodeStat>;
+  conductor: GraphNodeStat;
+}
+
+export async function getIssueGraphStats(
+  issueId: string,
+): Promise<GraphStatsResponse | null> {
+  const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}/graph-stats`);
+  if (!response.ok) {
+    console.error(`getIssueGraphStats(${issueId}) failed: HTTP ${response.status}`);
+    return null;
+  }
+  return response.json();
 }
 
 export async function getCodexIssueArtifacts(issueId: string): Promise<Artifact[]> {
@@ -543,7 +668,7 @@ export async function getCodexTasks(sessionId: string | null = null, issueId: st
   if (issueId) params.set("issue_id", issueId);
   const query = params.toString();
   const url = query ? `${API_BASE}/codex/tasks?${query}` : `${API_BASE}/codex/tasks`;
-  const response = await fetch(url);
+  const response = await dedupedFetch(url);
   if (!response.ok) {
     console.error(`getCodexTasks failed: HTTP ${response.status}`);
     return [];
@@ -1076,7 +1201,7 @@ export async function planIssueStream(issueId: string, cb: PlanStreamCallbacks):
 }
 
 export async function getIssueGraph(issueId: string): Promise<WorkflowGraph | null> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph`);
+  const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}/graph`);
   if (response.status === 404) return null;
   return handleResponse<WorkflowGraph>(response);
 }
@@ -1148,4 +1273,206 @@ export function getProcessLogsUrl(processId: string): string {
 
 export function getProcessMessagesUrl(processId: string): string {
   return `${WS_BASE}/api/execution-processes/${processId}/messages/ws`;
+}
+
+// ----------------------------------------------------------------------------
+// Knowledge stack: cross-issue search, similar issues, team-notes CRUD
+// ----------------------------------------------------------------------------
+
+export type KnowledgeSearchScope = "all" | "issues" | "artifacts";
+export type KnowledgeSearchMode = "fts" | "semantic" | "hybrid";
+
+export interface KnowledgeIssueHit {
+  kind: "issue";
+  issue_id: string;
+  project_id: string | null;
+  title: string;
+  snippet?: string;
+  score?: number;
+  source?: string;
+  rrf?: number;
+}
+
+export interface KnowledgeArtifactHit {
+  kind: "artifact";
+  artifact_id: string;
+  issue_id: string;
+  project_id: string | null;
+  role: string;
+  name: string;
+  snippet?: string;
+  score?: number;
+  source?: string;
+  rrf?: number;
+}
+
+export interface KnowledgeSearchResponse {
+  issues: KnowledgeIssueHit[];
+  artifacts: KnowledgeArtifactHit[];
+  mode: KnowledgeSearchMode;
+  query: string;
+}
+
+export async function searchKnowledge(opts: {
+  q: string;
+  scope?: KnowledgeSearchScope;
+  projectId?: string;
+  mode?: KnowledgeSearchMode;
+  limit?: number;
+}): Promise<KnowledgeSearchResponse> {
+  const params = new URLSearchParams({ q: opts.q });
+  if (opts.scope) params.set("scope", opts.scope);
+  if (opts.projectId) params.set("project_id", opts.projectId);
+  if (opts.mode) params.set("mode", opts.mode);
+  if (typeof opts.limit === "number") params.set("limit", String(opts.limit));
+  const response = await fetch(`${API_BASE}/codex/search?${params.toString()}`);
+  return handleResponse(response);
+}
+
+export interface SimilarIssue {
+  issue_id: string;
+  title: string;
+  project_id: string | null;
+  score?: number;
+  source?: string;
+}
+
+export async function getSimilarIssues(issueId: string, k = 5): Promise<SimilarIssue[]> {
+  const response = await fetch(
+    `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/similar?k=${k}`
+  );
+  const data = await handleResponse<{ items: SimilarIssue[] }>(response);
+  return data.items ?? [];
+}
+
+export interface EmbeddingStatus {
+  enabled: boolean;
+  model: string | null;
+  provider_type: string | null;
+}
+
+export async function getEmbeddingStatus(): Promise<EmbeddingStatus> {
+  const response = await fetch(`${API_BASE}/codex/embedding/status`);
+  return handleResponse(response);
+}
+
+export async function triggerKnowledgeReindex(projectId?: string): Promise<{
+  indexed_issues: number;
+  indexed_artifacts: number;
+  embedded_issues: number;
+  embedded_artifacts: number;
+}> {
+  const url = projectId
+    ? `${API_BASE}/codex/index/reindex?project_id=${encodeURIComponent(projectId)}`
+    : `${API_BASE}/codex/index/reindex`;
+  const response = await fetch(url, { method: "POST" });
+  return handleResponse(response);
+}
+
+export interface TeamNoteBlock {
+  block_id: string;
+  issue_id: string | null;
+  heading: string;
+  body: string;
+  timestamp: string | null;
+  pinned: boolean;
+  deleted_at: string | null;
+  distilled: boolean;
+}
+
+export interface TeamNotesResponse {
+  project_id: string;
+  raw_markdown: string;
+  blocks: TeamNoteBlock[];
+}
+
+export async function getTeamNotes(
+  projectId: string,
+  includeDeleted = false
+): Promise<TeamNotesResponse> {
+  const params = new URLSearchParams();
+  if (includeDeleted) params.set("include_deleted", "true");
+  const response = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/team-notes?${params.toString()}`
+  );
+  return handleResponse(response);
+}
+
+export async function deleteTeamNotesBlock(
+  projectId: string,
+  blockId: string
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/team-notes/${encodeURIComponent(blockId)}`,
+    { method: "DELETE" }
+  );
+  await handleResponse(response);
+}
+
+export async function restoreTeamNotesBlock(
+  projectId: string,
+  blockId: string
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/team-notes/${encodeURIComponent(blockId)}/restore`,
+    { method: "POST" }
+  );
+  await handleResponse(response);
+}
+
+export async function pinTeamNotesBlock(
+  projectId: string,
+  blockId: string,
+  pinned: boolean
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/team-notes/${encodeURIComponent(blockId)}/pin`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned }),
+    }
+  );
+  await handleResponse(response);
+}
+
+// Per-issue: artifacts zip (graph-stats helper already exists above)
+export function getIssueArtifactsDownloadUrl(issueId: string): string {
+  return `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/artifacts/download`;
+}
+
+export interface AgentMessage {
+  id: string;
+  issue_id: string;
+  graph_id: string;
+  from_node_key: string;
+  to_node_key: string;
+  message_type: "handoff" | "critique" | "clarification" | "answer";
+  body: string;
+  created_at: string | null;
+}
+
+export async function getAgentMessages(issueId: string): Promise<AgentMessage[]> {
+  const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/agent-messages`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { messages: AgentMessage[] };
+  return data.messages ?? [];
+}
+
+export interface ConductorDecision {
+  id: string;
+  issue_id: string;
+  task_id: string;
+  action: "proceed" | "note" | "escalate" | "reroute" | "insert_node" | "request_clarification";
+  reason: string | null;
+  diff_json: string | null;
+  applied_at: string | null;
+  created_at: string | null;
+}
+
+export async function getConductorLog(issueId: string): Promise<ConductorDecision[]> {
+  const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-log`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { decisions: ConductorDecision[] };
+  return data.decisions ?? [];
 }

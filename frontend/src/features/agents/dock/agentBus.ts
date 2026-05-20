@@ -68,6 +68,8 @@ const EMPTY_STATE: IssueAgentState = {
     product_manager: [],
     architect: [],
     engineer: [],
+    engineer_frontend: [],
+    engineer_backend: [],
     qa: [],
   },
   rev: 0,

@@ -57,7 +57,7 @@ export function useAgentStatus(issueId: string): AgentStatusSnapshot {
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     async function pull() {
       try {
@@ -79,18 +79,25 @@ export function useAgentStatus(issueId: string): AgentStatusSnapshot {
           }),
         );
         if (!cancelled) setRuns(newRuns);
+        // Adaptive poll: fast (3s) while something is in flight, slow
+        // (30s) when the issue has gone quiet. Saves ~10 redundant
+        // graph+tasks fetches per minute on completed issues.
+        if (!cancelled) {
+          const fast = running.length > 0;
+          timer = setTimeout(pull, fast ? 3000 : 30000);
+        }
       } catch {
         /* silent — handled by other UIs */
+        if (!cancelled) {
+          timer = setTimeout(pull, 30000);
+        }
       }
     }
 
     void pull();
-    // Poll only when there's a chance of state change. We always poll once
-    // on mount; switch to interval if anything is in flight.
-    timer = setInterval(pull, 3000);
     return () => {
       cancelled = true;
-      if (timer) clearInterval(timer);
+      if (timer) clearTimeout(timer);
     };
   }, [issueId]);
 
@@ -115,6 +122,8 @@ export function useAgentStatus(issueId: string): AgentStatusSnapshot {
       product_manager: blankStatus("product_manager"),
       architect: blankStatus("architect"),
       engineer: blankStatus("engineer"),
+      engineer_frontend: blankStatus("engineer_frontend"),
+      engineer_backend: blankStatus("engineer_backend"),
       qa: blankStatus("qa"),
     };
 

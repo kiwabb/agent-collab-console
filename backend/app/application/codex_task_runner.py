@@ -311,7 +311,7 @@ class CodexTaskRunner:
                             project_repo_path = proj.repo_path
                     except Exception:
                         project_repo_path = None
-            managed_prompt = self._role_workflow_service.build_prompt(
+            managed_prompt = await self._role_workflow_service.build_prompt(
                 task,
                 workspace_title=workspace_title,
                 project_repo_path=project_repo_path,

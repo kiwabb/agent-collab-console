@@ -37,6 +37,8 @@ export function useAgentStatusContext(): AgentStatusSnapshot {
       product_manager: { role: "product_manager", text: "", mode: "idle", tone: "neutral" },
       architect: { role: "architect", text: "", mode: "idle", tone: "neutral" },
       engineer: { role: "engineer", text: "", mode: "idle", tone: "neutral" },
+      engineer_frontend: { role: "engineer_frontend", text: "", mode: "idle", tone: "neutral" },
+      engineer_backend: { role: "engineer_backend", text: "", mode: "idle", tone: "neutral" },
       qa: { role: "qa", text: "", mode: "idle", tone: "neutral" },
     },
     activeRole: null,
@@ -45,6 +47,8 @@ export function useAgentStatusContext(): AgentStatusSnapshot {
       product_manager: [],
       architect: [],
       engineer: [],
+      engineer_frontend: [],
+      engineer_backend: [],
       qa: [],
     },
   };

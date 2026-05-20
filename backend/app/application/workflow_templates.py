@@ -22,10 +22,21 @@ class WorkflowTemplate:
     description: str
     intent: str
     # Roles in dispatch order. Adjacent roles get a sequence edge between them.
-    # Use refine-loop edges separately via `extra_edges` for cycles.
     role_order: tuple[str, ...]
     # Per-role title override; falls back to agent.name when missing.
     titles: dict[str, str] = field(default_factory=dict)
+    # Phase 1 — non-linear shapes. Each entry is a (from_role, to_role)
+    # pair the materializer should turn into a parallel-fanout edge that
+    # *overrides* the default sequence chain. Used by `feature_parallel`
+    # to fork engineer into engineer_frontend + engineer_backend and then
+    # join back to QA.
+    #   parallel_edges = (("architect", "engineer_frontend"),
+    #                     ("architect", "engineer_backend"),
+    #                     ("engineer_frontend", "qa"),
+    #                     ("engineer_backend", "qa"))
+    # When set, default `prev → curr` sequence edges are skipped for any
+    # adjacency already covered by an explicit edge here.
+    parallel_edges: tuple[tuple[str, str], ...] = ()
 
 
 TEMPLATES: tuple[WorkflowTemplate, ...] = (
@@ -86,6 +97,38 @@ TEMPLATES: tuple[WorkflowTemplate, ...] = (
             "engineer": "Docs update",
         },
     ),
+    WorkflowTemplate(
+        id="feature_parallel",
+        name="Feature (parallel FE+BE)",
+        description=(
+            "Like 'New feature' but Engineer is split into Frontend + Backend "
+            "specialists running in parallel after Architect. QA joins both."
+        ),
+        intent="feature",
+        role_order=(
+            "product_manager",
+            "architect",
+            "engineer_frontend",
+            "engineer_backend",
+            "qa",
+        ),
+        titles={
+            "product_manager": "Draft PRD",
+            "architect": "Design system",
+            "engineer_frontend": "Frontend implementation",
+            "engineer_backend": "Backend implementation",
+            "qa": "Verify",
+        },
+        # Override the default sequence chain to fork after architect and
+        # join back at QA. The chain edges that would otherwise be added
+        # for the same adjacencies are skipped by template_to_dag.
+        parallel_edges=(
+            ("architect", "engineer_frontend"),
+            ("architect", "engineer_backend"),
+            ("engineer_frontend", "qa"),
+            ("engineer_backend", "qa"),
+        ),
+    ),
 )
 
 
@@ -127,14 +170,36 @@ def template_to_dag(template: WorkflowTemplate, agents: Sequence) -> dict | None
             "role_key": role_key,
             "title": template.titles.get(role_key) or agent.name,
         })
-    edges = [
+    # Build explicit parallel-fanout edges first so we can skip default
+    # sequence edges that cover the same adjacencies (avoids duplicate edges
+    # between the same pair).
+    explicit = {
+        (a, b): {
+            "from_node_key": a,
+            "to_node_key": b,
+            "edge_type": "parallel-fanout",
+        }
+        for a, b in template.parallel_edges
+    }
+    node_keys = {n["node_key"] for n in nodes}
+    explicit_edges = [
+        e for (a, b), e in explicit.items()
+        if a in node_keys and b in node_keys
+    ]
+    # If a node has an explicit incoming edge, drop its default sequence
+    # edge from the prior role_order entry — the explicit fan-out replaces
+    # the linear adjacency.
+    explicit_incoming = {e["to_node_key"] for e in explicit_edges}
+    sequence_edges = [
         {
             "from_node_key": prev["node_key"],
             "to_node_key": curr["node_key"],
             "edge_type": "sequence",
         }
         for prev, curr in zip(nodes, nodes[1:])
+        if curr["node_key"] not in explicit_incoming
     ]
+    edges = sequence_edges + explicit_edges
     return {
         "meta": {
             "intent": template.intent,

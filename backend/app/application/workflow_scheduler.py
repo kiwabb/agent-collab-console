@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Iterable
 from uuid import uuid4
@@ -25,6 +26,7 @@ from app.domain.models import (
     WorkflowGraph,
     WorkflowNode,
 )
+from app.application.role_workflow_service import ENGINEER_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +195,55 @@ class WorkflowScheduler:
                     pass
             return
 
+        # Conductor graph-mutation actions (insert_node / reroute).
+        # CONDUCTOR_AUTONOMY env: "off" | "suggest" (default) | "autonomous"
+        if conductor_decision and conductor_decision.get("action") in {"insert_node", "reroute"}:
+            autonomy = os.getenv("CONDUCTOR_AUTONOMY", "suggest").lower()
+            if autonomy != "off":
+                diff = conductor_decision.get("diff") or {}
+                if autonomy == "autonomous" and diff:
+                    try:
+                        await self._apply_diff_to_graph(graph.id, diff)
+                        logger.info(
+                            "Conductor auto-applied %s diff to graph %s",
+                            conductor_decision.get("action"), graph.id,
+                        )
+                        if self._event_bus is not None and issue_for_event is not None:
+                            try:
+                                await self._event_bus.append({
+                                    "type": "graph_mutated",
+                                    "issue_id": issue_for_event.id,
+                                    "session_id": issue_for_event.session_id,
+                                    "graph_id": graph.id,
+                                    "action": conductor_decision.get("action"),
+                                    "reason": conductor_decision.get("reason"),
+                                })
+                            except Exception:  # noqa: BLE001
+                                pass
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Conductor autonomous diff apply failed: %s", exc)
+                elif autonomy == "suggest" and diff:
+                    # Create a GraphReplanPending so the user sees the suggestion in the UI.
+                    try:
+                        from app.domain.models import GraphReplanPending
+                        replan = GraphReplanPending(
+                            id=str(uuid4()),
+                            graph_id=graph.id,
+                            triggered_by_node_key=node.node_key,
+                            trigger_reason=f"conductor_{conductor_decision.get('action')}",
+                            diff_json=json.dumps(diff, ensure_ascii=False, default=str),
+                            rationale=conductor_decision.get("reason"),
+                            status="pending",
+                            created_at=datetime.now(),
+                        )
+                        await self.store.save_replan_pending(replan)
+                        logger.info(
+                            "Conductor suggested %s — created replan %s for graph %s",
+                            conductor_decision.get("action"), replan.id, graph.id,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Conductor suggest replan save failed: %s", exc)
+
         # 1. retry-on-fail: bring the failed node back to pending if any
         #    incoming retry-on-fail edge exists AND we're under max_retries.
         if terminal == "failed" and node.retries < node.max_retries:
@@ -212,6 +263,13 @@ class WorkflowScheduler:
         # 2. QA failure → Engineer auto-rework. The QA report on disk is the
         #    feedback channel; we just reset the relevant nodes and settle.
         if await self._maybe_trigger_qa_rework(graph, node, terminal):
+            return
+
+        # 2.5. Engineer critique → Architect re-run. If the engineer set
+        #      architect_critique in its output, the role_workflow_service
+        #      already persisted the AgentMessage; we now reset Architect so
+        #      it can revise the design before Engineer re-runs.
+        if await self._maybe_trigger_peer_critique(graph, node, terminal, task):
             return
 
         # 3. replan triggers — only when the completed agent has the flag set.
@@ -302,6 +360,94 @@ class WorkflowScheduler:
         try:
             issue_for_event = await self.store.load_codex_issue(graph.issue_id)
             await self._emit_node_event(engineer_node, issue_for_event)
+            await self._emit_node_event(completed_node, issue_for_event)
+        except Exception:  # noqa: BLE001
+            pass
+        await self.settle(graph.id)
+        return True
+
+    async def _maybe_trigger_peer_critique(
+        self,
+        graph: WorkflowGraph,
+        completed_node: WorkflowNode,
+        terminal: str,
+        task,
+    ) -> bool:
+        """When an Engineer files an architect_critique, reset Architect so it can revise.
+
+        The AgentMessage was already persisted by RoleWorkflowService._record_critique before
+        this method is called. We check the DB for a recent critique message on this issue to
+        decide whether to trigger the loop. Returns True if the loop was armed.
+        """
+        if terminal not in ("done", "partial"):
+            return False
+        # Only engineer roles can critique the architect.
+        role = getattr(task, "role", "")
+        if role not in ENGINEER_ROLES:
+            return False
+
+        # Check if a critique was just recorded.
+        if not hasattr(self.store, "list_agent_messages"):
+            return False
+        messages = await self.store.list_agent_messages(task.issue_id)
+        # Find a critique from this engineer role that hasn't already triggered a rework
+        # (to avoid infinite loops, limit to 1 critique per engineer node).
+        critiques = [m for m in messages if m.message_type == "critique" and m.from_node_key == role]
+        if not critiques:
+            return False
+        # Already had a critique and architect has run again → don't re-trigger.
+        architect_node = next(
+            (n for n in graph.nodes if n.node_key == "architect"), None
+        )
+        if architect_node is None:
+            return False
+        # If architect has already been reset for rework more than once, give up.
+        if architect_node.retries >= 2:
+            logger.info(
+                "Architect already reworked %s times — not re-triggering peer critique",
+                architect_node.retries,
+            )
+            return False
+
+        # The critique message was just saved; we re-fetch to get the most recent one.
+        latest_critique = critiques[-1]
+
+        # Surface critique as review_comment on the issue so the architect prompt
+        # builder picks it up under "REWORK REQUIRED" section.
+        try:
+            issue = await self.store.load_codex_issue(graph.issue_id)
+            if issue is not None:
+                issue.review_comment = (
+                    f"[ENGINEER CRITIQUE] The Engineer flagged a critical design gap:\n\n"
+                    f"{latest_critique.body}\n\n"
+                    "Please revise your architecture to address the above before Engineer re-runs."
+                )
+                await self.store.save_codex_issue(issue)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_maybe_trigger_peer_critique: failed to update issue review_comment: %s", exc)
+
+        # Reset architect node so it re-runs with the critique.
+        await self.store.update_workflow_node(
+            architect_node.id,
+            status="pending",
+            retries=architect_node.retries + 1,
+            completed_at=None,
+        )
+        architect_node.status = "pending"
+        # Also reset the engineer node so it re-runs after architect.
+        await self.store.update_workflow_node(
+            completed_node.id,
+            status="pending",
+            completed_at=None,
+        )
+        completed_node.status = "pending"
+        logger.info(
+            "Engineer critique → resetting architect for design revision (attempt %s)",
+            architect_node.retries,
+        )
+        try:
+            issue_for_event = await self.store.load_codex_issue(graph.issue_id)
+            await self._emit_node_event(architect_node, issue_for_event)
             await self._emit_node_event(completed_node, issue_for_event)
         except Exception:  # noqa: BLE001
             pass
@@ -494,6 +640,7 @@ class WorkflowScheduler:
                 agent_id=n["agent_id"],
                 title=n.get("title"),
                 status="pending",
+                instance_index=int(n.get("instance_index") or 0),
                 created_at=now,
             ))
         for e in diff.get("added_edges", []):
@@ -585,8 +732,11 @@ class WorkflowScheduler:
         # the engineer prompt builder includes it under "REWORK REQUIRED".
         # Fallback: when QA didn't fail (e.g. human rejected a passing run),
         # use issue.review_comment so the user's note still reaches engineer.
+        # Also covers multi-instance engineer nodes like `engineer#0`, `engineer#1`
+        # and Phase-1 parallel roles like `engineer_frontend`, `engineer_backend`.
+        is_engineer_role = agent.role_key == "engineer" or node.node_key.startswith("engineer")
         review_comment = None
-        if agent.role_key == "engineer" and node.retries > 0 and issue.git_worktree_path:
+        if is_engineer_role and node.retries > 0 and issue.git_worktree_path:
             review_comment = self._read_latest_qa_failure_summary(
                 issue.git_worktree_path, issue.id
             )
@@ -608,6 +758,26 @@ class WorkflowScheduler:
             if (managed_role and issue.title)
             else (node.title or agent.name)
         )
+
+        # For multi-instance same-role nodes (e.g. engineer#0, engineer#1) and
+        # Phase-1 parallel roles (engineer_frontend, engineer_backend), use the
+        # node_key as task.role so artifact subdirectory isolation works
+        # automatically — EngineerWorkflow uses role.startswith("engineer") to
+        # determine the subdir, and the node_key encodes the instance identity.
+        # Single-role nodes keep the canonical agent.role_key for back-compat.
+        effective_role = (
+            node.node_key
+            if (node.node_key != agent.role_key and node.node_key.startswith(agent.role_key))
+            else agent.role_key
+        )
+
+        # Phase 4: multi-instance engineer nodes carry a subtask scope in their
+        # title (set by the orchestrator from subtask_split). Prepend the scope
+        # to the prompt so the engineer knows which workstream to tackle.
+        if "#" in node.node_key and is_engineer_role and node.title and node.title not in (prompt or ""):
+            scope_prefix = f"[SUBTASK SCOPE: {node.title}]\n\n"
+            prompt = scope_prefix + (prompt or "")
+
         task = CodexTask(
             id=str(uuid4()),
             session_id=issue.session_id,
@@ -616,7 +786,7 @@ class WorkflowScheduler:
             phase=agent.role_key,  # Free-form tag now; kept for backward compat with old kanban
             title=effective_title,
             prompt=prompt,
-            role=agent.role_key,
+            role=effective_role,
             executor=agent.default_executor or "codex",
             provider=agent.default_provider,
             model=agent.default_model,
@@ -825,6 +995,35 @@ class WorkflowScheduler:
                 worktree_path=issue.git_worktree_path,
                 graph_status=graph.status,
             )
+            # Knowledge stack: rebuild team_notes_state for this project so
+            # newly-appended blocks become visible in the Team Notes UI and
+            # any orphaned state rows are pruned.
+            try:
+                from app.application.team_notes_service import team_notes
+                if issue.project_id and project_repo_path:
+                    md = team_notes.read_markdown(project_repo_path)
+                    parsed = team_notes.parse_blocks(md)
+                    state = await team_notes._load_state(self.store, issue.project_id)
+                    parsed_ids = {b.block_id for b in parsed}
+                    # Ensure every parsed block has a row (default: not deleted, not pinned)
+                    for b in parsed:
+                        if b.block_id not in state:
+                            await team_notes._upsert_state(
+                                self.store, issue.project_id, b.block_id,
+                            )
+                    # Drop state rows whose block no longer exists on disk
+                    for stale_id in set(state.keys()) - parsed_ids:
+                        try:
+                            conn = await self.store._get_conn()
+                            await conn.execute(
+                                "DELETE FROM team_notes_state WHERE project_id = ? AND block_id = ?",
+                                (issue.project_id, stale_id),
+                            )
+                            await conn.commit()
+                        except Exception:  # noqa: BLE001
+                            pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("team_notes_state reconcile skipped: %s", exc)
             # S3c: auto-distill team_notes.md once it accumulates past
             # DISTILL_TRIGGER_BLOCKS raw issue entries. Reuses the
             # orchestrator LLM runner so we share the runtime catalog

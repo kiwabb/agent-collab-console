@@ -13,13 +13,16 @@ import {
   TrendingUp,
   ArrowUpRight,
   GitBranch,
+  Library,
 } from "lucide-react";
 
 import {
   getCodexIssues,
   getCodexStats,
+  getTeamNotes,
   getWorkspaces,
   listProjects,
+  type TeamNoteBlock,
 } from "@/lib/api";
 import type { CodexIssue, CodexStats, Project, Workspace } from "@/lib/types";
 import { useDataEvent } from "@/lib/dataEvents";
@@ -56,6 +59,9 @@ export function InboxDashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
+  const [recentNotes, setRecentNotes] = useState<
+    Array<{ block: TeamNoteBlock; projectId: string; projectName: string }>
+  >([]);
 
   const reload = useCallback(async () => {
     const [s, iss, pr, ws] = await Promise.all([
@@ -68,6 +74,27 @@ export function InboxDashboard() {
     setIssues(iss);
     setProjects(pr);
     setWorkspaces(ws);
+
+    // Knowledge: pull latest 5 team-notes blocks across all projects.
+    try {
+      const perProject = await Promise.all(
+        pr.slice(0, 8).map(async (p) => {
+          try {
+            const tn = await getTeamNotes(p.id, false);
+            return tn.blocks
+              .filter((b) => !b.deleted_at && b.timestamp)
+              .map((block) => ({ block, projectId: p.id, projectName: p.name }));
+          } catch {
+            return [] as Array<{ block: TeamNoteBlock; projectId: string; projectName: string }>;
+          }
+        }),
+      );
+      const flat = perProject.flat();
+      flat.sort((a, b) => (b.block.timestamp || "").localeCompare(a.block.timestamp || ""));
+      setRecentNotes(flat.slice(0, 5));
+    } catch {
+      setRecentNotes([]);
+    }
   }, []);
 
   useEffect(() => {
@@ -256,7 +283,68 @@ export function InboxDashboard() {
             loading={loading}
           />
         </div>
+
+        {/* Recent knowledge updates (team_notes blocks across projects) */}
+        <RecentKnowledgeCard
+          items={recentNotes}
+          onOpenProject={(pid) => router.push(`/knowledge?project=${pid}`)}
+          loading={loading}
+          t={t}
+        />
       </div>
+    </div>
+  );
+}
+
+function RecentKnowledgeCard({
+  items,
+  onOpenProject,
+  loading,
+  t,
+}: {
+  items: Array<{ block: TeamNoteBlock; projectId: string; projectName: string }>;
+  onOpenProject: (projectId: string) => void;
+  loading: boolean;
+  t: (key: string) => string;
+}) {
+  return (
+    <div className="rounded-2xl border border-border-subtle bg-surface overflow-hidden">
+      <div className="px-4 py-3 flex items-center gap-2 border-b border-border-subtle">
+        <Library size={14} className="text-brand" />
+        <span className="text-[13px] font-semibold">{t("inbox.recentKnowledge")}</span>
+        <span className="ml-auto text-[11px] text-text-muted">{items.length}</span>
+      </div>
+      {loading ? (
+        <div className="px-4 py-4 text-[12px] text-text-muted">…</div>
+      ) : items.length === 0 ? (
+        <div className="px-4 py-4 text-[12px] text-text-muted">
+          {t("inbox.recentKnowledgeEmpty")}
+        </div>
+      ) : (
+        <ul className="divide-y divide-border-subtle">
+          {items.map(({ block, projectId, projectName }) => (
+            <li key={`${projectId}:${block.block_id}`}>
+              <button
+                type="button"
+                onClick={() => onOpenProject(projectId)}
+                className="w-full text-left px-4 py-2.5 hover:bg-surface-hover flex items-start gap-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[12.5px] font-medium">{block.heading}</div>
+                  <div className="text-[10.5px] text-text-muted font-mono">
+                    {projectName} · {block.timestamp ?? ""}
+                  </div>
+                </div>
+                {block.pinned && (
+                  <span className="rounded bg-amber-500/15 px-1 py-px text-[10px] text-amber-400">
+                    {t("teamNotes.pinned")}
+                  </span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

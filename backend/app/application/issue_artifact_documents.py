@@ -86,21 +86,44 @@ class IssueArtifactDocuments:
     # Engineer artifacts
     # -------------------------------------------------------------------------
 
-    def engineer_implementation_md_path(self, workspace_path: str, issue_id: str, task_id: str | None = None) -> Path:
+    def engineer_implementation_md_path(
+        self,
+        workspace_path: str,
+        issue_id: str,
+        task_id: str | None = None,
+        subdir: str = "engineer",
+    ) -> Path:
+        """Path for an engineer implementation report.
+
+        Phase 1: when two specialist engineers (engineer_frontend +
+        engineer_backend) run in parallel, each writes to its own subdir
+        (e.g. `engineer_frontend/implementation-<task_id>.md`) so the two
+        don't overwrite each other. Default subdir is `engineer` for the
+        single-engineer flow.
+        """
         if task_id:
             filename = f"implementation-{task_id}.md"
         else:
             filename = "implementation.md"
-        p = self.issue_root(workspace_path, issue_id) / "engineer" / filename
+        p = self.issue_root(workspace_path, issue_id) / subdir / filename
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
     def engineer_find_artifacts(self, workspace_path: str, issue_id: str) -> list[Path]:
-        engineer_dir = self.issue_root(workspace_path, issue_id) / "engineer"
-        if not engineer_dir.exists():
+        """Union of implementation reports across every engineer subdir.
+
+        Scans the legacy `engineer/` directory plus any specialist subdirs
+        (`engineer_frontend/`, `engineer_backend/`, ...) so downstream
+        consumers (QA prompt, artifact backfill) see the full picture.
+        """
+        root = self.issue_root(workspace_path, issue_id)
+        if not root.exists():
             return []
-        # Find all implementation-*.md files and the legacy implementation.md
-        artifacts = list(engineer_dir.glob("implementation*.md"))
+        artifacts: list[Path] = []
+        for subdir in root.iterdir():
+            if not subdir.is_dir() or not subdir.name.startswith("engineer"):
+                continue
+            artifacts.extend(subdir.glob("implementation*.md"))
         return sorted(artifacts)
 
     # -------------------------------------------------------------------------

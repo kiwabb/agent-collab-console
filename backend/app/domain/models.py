@@ -365,7 +365,7 @@ NodeStatus = Literal[
 
 EdgeType = Literal[
     "sequence", "parallel-fanout", "refine-loop",
-    "retry-on-fail", "conditional",
+    "retry-on-fail", "conditional", "critique-loop",
 ]
 
 
@@ -410,6 +410,7 @@ class WorkflowNode(BaseModel):
     artifact_dir: str | None = None
     retries: int = 0
     max_retries: int = 1
+    instance_index: int = 0  # For multi-instance same-role nodes: engineer#0, engineer#1, etc.
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime | None = None
@@ -472,3 +473,36 @@ class GraphReplanPending(BaseModel):
     status: Literal["pending", "confirmed", "rejected"] = "pending"
     created_at: datetime | None = None
     resolved_at: datetime | None = None
+
+
+AgentMessageType = Literal["handoff", "critique", "clarification", "answer"]
+
+
+class AgentMessage(BaseModel):
+    """A structured message passed between two workflow agents (e.g. Engineer → Architect critique).
+
+    Persisted so the Collab Feed tab can replay the full inter-agent conversation.
+    """
+    id: str
+    issue_id: str
+    graph_id: str
+    from_node_key: str
+    to_node_key: str
+    message_type: AgentMessageType = "handoff"
+    body: str
+    created_at: datetime | None = None
+
+
+class ConductorDecision(BaseModel):
+    """A decision record emitted by the ConductorSupervisor for each task completion.
+
+    Persisted so the conductor-log endpoint can replay the full decision history.
+    """
+    id: str
+    issue_id: str
+    task_id: str
+    action: str  # proceed|note|escalate|reroute|insert_node|request_clarification
+    reason: str | None = None
+    diff_json: str | None = None  # JSON-serialized diff when action mutates graph
+    applied_at: datetime | None = None
+    created_at: datetime | None = None

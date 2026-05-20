@@ -23,6 +23,7 @@
   --color-text-primary: #f4f4f5;
   --color-text-secondary: #a1a1aa;
   --color-text-muted: #71717a;
+  --color-text-faint: #52525b;   /* design ref --text-4: extra-dim labels */
 
   /* Borders */
   --color-border-subtle: #1f1f22;
@@ -36,6 +37,7 @@
   --color-status-queued: #71717a;
   --color-status-failed: #ef4444;
   --color-status-info: #60a5fa;
+  --color-status-tool: #c084fc;  /* purple — tool/agent action lane */
 
   /* Legacy aliases mapped to status colors */
   --color-success: var(--color-status-done);
@@ -46,6 +48,17 @@
   --color-warning-bg: rgba(234, 179, 8, 0.10);
   --color-error-bg: rgba(239, 68, 68, 0.10);
   --color-brand-bg: rgba(230, 149, 82, 0.10);
+  --color-brand-ring: rgba(230, 149, 82, 0.22);
+
+  /* Done/info/tool tinted backgrounds + rings (used by chips, node halos) */
+  --color-done-bg: rgba(74, 222, 128, 0.08);
+  --color-done-ring: rgba(74, 222, 128, 0.20);
+  --color-info-bg: rgba(96, 165, 250, 0.08);
+  --color-info-ring: rgba(96, 165, 250, 0.22);
+  --color-tool-bg: rgba(192, 132, 252, 0.08);
+  --color-tool-ring: rgba(192, 132, 252, 0.22);
+  --color-failed-bg: rgba(239, 68, 68, 0.08);
+  --color-failed-ring: rgba(239, 68, 68, 0.22);
 
   /* Log event-type colors (matches screenshot) */
   --color-log-sys: #71717a;       /* gray */
@@ -259,6 +272,7 @@
   --color-text-primary: #171a1f;
   --color-text-secondary: #4e5968;
   --color-text-muted: #788392;
+  --color-text-faint: #9aa6b4;
   --color-border-subtle: #dde3eb;
   --color-border-muted: #ced7e2;
   --color-border-strong: #aeb9c7;
@@ -268,6 +282,7 @@
   --color-status-queued: #6b7280;
   --color-status-failed: #dc2626;
   --color-status-info: #2563eb;
+  --color-status-tool: #9333ea;
   --color-success: var(--color-status-done);
   --color-warning: var(--color-status-awaiting);
   --color-error: var(--color-status-failed);
@@ -275,6 +290,15 @@
   --color-warning-bg: rgba(202, 138, 4, 0.10);
   --color-error-bg: rgba(220, 38, 38, 0.10);
   --color-brand-bg: rgba(217, 122, 59, 0.10);
+  --color-brand-ring: rgba(217, 122, 59, 0.28);
+  --color-done-bg: rgba(22, 163, 74, 0.08);
+  --color-done-ring: rgba(22, 163, 74, 0.22);
+  --color-info-bg: rgba(37, 99, 235, 0.08);
+  --color-info-ring: rgba(37, 99, 235, 0.24);
+  --color-tool-bg: rgba(147, 51, 234, 0.08);
+  --color-tool-ring: rgba(147, 51, 234, 0.22);
+  --color-failed-bg: rgba(220, 38, 38, 0.08);
+  --color-failed-ring: rgba(220, 38, 38, 0.22);
   --color-log-sys: #6b7280;
   --color-log-tool: #9333ea;
   --color-log-out: #1f2937;

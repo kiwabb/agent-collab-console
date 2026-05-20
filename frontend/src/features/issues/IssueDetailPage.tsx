@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, Circle, GitBranch, GitFork, MessageSquarePlus, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import { GitBranch, GitFork, MessageSquarePlus, Loader2 } from "lucide-react";
 import { useI18n } from "@/providers/I18nProvider";
 import {
   forkCodexIssue,
@@ -31,14 +31,19 @@ import { DagTab } from "./tabs/DagTab";
 import { TasksRunsTab } from "./tabs/TasksRunsTab";
 import { ArtifactsTab } from "./tabs/ArtifactsTab";
 import { DiffMergeTab } from "./tabs/DiffMergeTab";
-import { IssueNarrativeTimeline } from "./components/IssueNarrativeTimeline";
+import { CollabFeedTab } from "./tabs/CollabFeedTab";
+import { IssuePipelineTrace } from "./components/IssuePipelineTrace";
+import { IssueSideStack } from "./components/IssueSideStack";
+import { IssueActivityTimelineHorizontal } from "./components/IssueActivityTimelineHorizontal";
+import { FloatingIssueChip } from "./components/FloatingIssueChip";
+import { LiveThinkingDock } from "./components/LiveThinkingDock";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
   issueId: string;
 }
 
-const TABS = ["dag", "tasks", "artifacts", "diff"] as const;
+const TABS = ["dag", "tasks", "artifacts", "diff", "collab"] as const;
 type TabId = (typeof TABS)[number];
 
 function isTab(s: string | null): s is TabId {
@@ -72,7 +77,6 @@ export function IssueDetailPage({ issueId }: Props) {
   const [forking, setForking] = useState(false);
   const [planDraft, setPlanDraft] = useState("");
   const [approvingPlan, setApprovingPlan] = useState(false);
-  const [checklistExpanded, setChecklistExpanded] = useState<boolean | null>(null);
   const [qaRejectDraft, setQaRejectDraft] = useState("");
   const [qaReviewBusy, setQaReviewBusy] = useState<"approve" | "reject" | null>(null);
   const [conductorDecision, setConductorDecision] = useState<{
@@ -305,71 +309,100 @@ export function IssueDetailPage({ issueId }: Props) {
     : "—";
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="px-8 py-3.5 border-b border-border-subtle bg-surface z-10 relative shadow-sm">
-        <div className="flex flex-col gap-3 max-w-6xl w-full mx-auto">
-          {/* Top Row: Meta */}
-          <div className="flex items-center gap-2 text-[12px] font-mono text-text-muted">
-            <StatusBadge kind={kind} label={statusLabel} className="mr-1 shadow-sm" />
-            <span>{t("issue.metaLabel")}</span>
-            <span className="text-border-subtle">/</span>
-            <span className="text-foreground font-semibold">{issueId.slice(0, 8)}</span>
-            {issue?.git_branch && (
-              <>
-                <span className="text-border-subtle">/</span>
-                <span className="flex items-center gap-1.5 text-brand bg-brand/10 border border-brand/20 px-2 py-0.5 rounded-md">
-                  <GitBranch size={12} />
+    // Single scroll container so Hero + Pipeline trace scroll together
+    // with the tabs/side-stack body instead of sticking at the top.
+    <div className="h-full overflow-y-auto">
+      {/* === HERO === */}
+      <section className="px-8 pt-6 pb-4 max-w-[1640px] w-full mx-auto">
+        <div className="flex items-end justify-between gap-6">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-[11.5px] font-mono text-text-muted mb-2">
+              <StatusBadge kind={kind} label={statusLabel} />
+              <span className="text-text-faint">·</span>
+              <span>
+                {t("issue.metaLabel")}{" "}
+                <b className="text-text-secondary font-medium">
+                  {issueId.slice(0, 8)}
+                </b>
+              </span>
+              <span className="text-text-faint">·</span>
+              <span className="uppercase tracking-wider">CODEX 智能体</span>
+            </div>
+            <h1 className="text-[30px] font-semibold tracking-tight leading-[1.15] text-foreground max-w-[760px] text-balance">
+              {renderTitleWithMono(issue?.title ?? t("issue.titleFallback"))}
+            </h1>
+            <div className="flex items-center gap-3.5 mt-2.5 text-[12.5px] text-text-secondary flex-wrap">
+              {issue?.git_branch && (
+                <span className="inline-flex items-center gap-1.5 bg-surface-raised border border-border-subtle px-2.5 py-1 rounded-md font-mono text-[12px] text-foreground">
+                  <GitBranch size={13} className="text-text-muted" />
                   {issue.git_branch}
                 </span>
-              </>
-            )}
-            <div className="ml-auto flex items-center gap-3">
-              <span className="text-[11px] text-text-muted uppercase tracking-wider">
-                {t("issue.phaseLabel")} <span className="text-foreground font-bold">{issue?.current_phase ?? "—"}</span>
-              </span>
-              {issue?.created_at && (
-                <>
-                  <span className="text-border-subtle">·</span>
-                  <span className="text-[11px] text-text-muted">
-                    {t("issue.createdAt", { time: new Date(issue.created_at).toLocaleString() })}
-                  </span>
-                </>
               )}
+              {issue?.created_at && (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="text-text-muted">创建</span>
+                  <b className="font-mono font-medium text-foreground">
+                    {new Date(issue.created_at).toLocaleTimeString("zh-CN", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </b>
+                </span>
+              )}
+              <HeroDurationBit
+                issueId={issueId}
+                reloadKey={issue?.updated_at ?? undefined}
+              />
+              <span className="inline-flex items-center gap-1.5">
+                <span className="text-text-muted">阶段</span>
+                <b className="font-mono font-medium uppercase text-brand-strong">
+                  {issue?.current_phase ?? "—"}
+                </b>
+              </span>
             </div>
           </div>
-
-          {/* Bottom Row: Title and Actions */}
-          <div className="flex items-center justify-between gap-4 mt-1">
-            <h1 className="text-2xl font-bold tracking-tight truncate text-foreground leading-tight">
-              {issue?.title ?? t("issue.titleFallback")}
-            </h1>
-            <div className="flex items-center gap-2.5 shrink-0">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void handleFork()}
-                disabled={forking || !issue?.git_worktree_path}
-                title={t("issue.forkHelp")}
-                className="gap-2 h-8 px-3.5 text-[12px] font-medium shadow-sm hover:shadow-md transition-shadow"
-              >
-                {forking ? <Loader2 size={14} className="animate-spin" /> : <GitFork size={14} />}
-                {t("issue.fork")}
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => setSteerOpen(true)}
-                disabled={!issue?.git_worktree_path}
-                title={issue?.git_worktree_path ? t("issue.steerHelp") : t("issue.noActiveWorktree")}
-                className="gap-2 h-8 px-3.5 text-[12px] font-semibold bg-brand hover:bg-brand-strong text-black shadow-sm shadow-brand/20 hover:shadow-md transition-all"
-              >
-                <MessageSquarePlus size={14} />
-                {t("issue.steer")}
-              </Button>
-            </div>
+          <div className="flex items-center gap-2.5 shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void handleFork()}
+              disabled={forking || !issue?.git_worktree_path}
+              title={t("issue.forkHelp")}
+              className="gap-2 h-[34px] px-3.5 text-[13px] font-medium rounded-lg"
+            >
+              {forking ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <GitFork size={14} />
+              )}
+              {t("issue.fork")}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setSteerOpen(true)}
+              disabled={!issue?.git_worktree_path}
+              title={
+                issue?.git_worktree_path
+                  ? t("issue.steerHelp")
+                  : t("issue.noActiveWorktree")
+              }
+              className="gap-2 h-[34px] px-3.5 text-[13px] font-semibold bg-brand hover:bg-brand-strong text-black rounded-lg shadow-[0_4px_14px_-4px_var(--color-brand-ring)]"
+            >
+              <MessageSquarePlus size={14} />
+              {t("issue.steer")}
+            </Button>
           </div>
         </div>
-      </div>
+
+        {/* Pipeline trace immediately under hero */}
+        <div className="mt-5">
+          <IssuePipelineTrace
+            issueId={issueId}
+            reloadKey={issue?.updated_at ?? undefined}
+          />
+        </div>
+      </section>
 
         {/* Conductor banner — only when there's a recent (< 60s) non-proceed
             decision. We avoid showing "proceed" to keep it from being noise. */}
@@ -399,77 +432,6 @@ export function IssueDetailPage({ issueId }: Props) {
             </button>
           </div>
         )}
-
-        {/* A4: narrative timeline distilled from each role's task.result */}
-        <IssueNarrativeTimeline issueId={issueId} reloadKey={issue?.updated_at ?? undefined} />
-
-        {checklist && checklist.criteria.length > 0 && (() => {
-          const hasUncovered = checklist.criteria.some(c => !c.covered);
-          const isChecklistExpanded = checklistExpanded !== null ? checklistExpanded : hasUncovered;
-          return (
-            <div className="px-8 mt-3">
-              <div className="w-full">
-                <div className="rounded-xl border border-border-subtle bg-surface shadow-sm overflow-hidden">
-                  <div 
-                    role="button"
-                    onClick={() => setChecklistExpanded(!isChecklistExpanded)}
-                    className="px-4 py-3 border-b border-border-subtle bg-surface-hover flex items-center justify-between cursor-pointer select-none hover:bg-surface-hover/80 transition-colors"
-                  >
-                    <div className="flex items-center gap-4">
-                      <span className="font-bold text-[12px] uppercase tracking-wider text-foreground">{t("issue.checklist")}</span>
-                      <div className="flex items-center gap-2">
-                        <div className="w-32 h-1.5 bg-border-subtle rounded-full overflow-hidden shadow-inner">
-                          <div 
-                            className="h-full bg-success transition-all duration-500 ease-out" 
-                            style={{ width: `${Math.round((checklist.criteria.filter(c => c.covered).length / checklist.criteria.length) * 100)}%` }}
-                          />
-                        </div>
-                        <span className="text-[11px] font-mono text-text-muted">
-                          {checklist.criteria.filter((c) => c.covered).length}/{checklist.criteria.length}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="text-text-muted">
-                      {isChecklistExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </div>
-                  </div>
-                  {isChecklistExpanded && (
-                    <ul className="divide-y divide-border-subtle">
-                      {checklist.criteria.slice(0, 6).map((c, i) => (
-                        <li
-                          key={i}
-                          className="flex items-center gap-3 px-4 py-2.5 text-[13px] transition-colors hover:bg-surface-hover/50"
-                        >
-                          {c.covered ? (
-                            <CheckCircle2 size={16} className="text-success shrink-0" />
-                          ) : (
-                            <Circle size={16} className="text-border-strong shrink-0" />
-                          )}
-                          <span className={cn("flex-1", c.covered ? "text-text-secondary line-through" : "text-foreground font-medium")}>
-                            {c.text}
-                          </span>
-                          {c.source && (
-                            <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted/80 bg-surface-raised px-1.5 py-0.5 rounded border border-border-subtle shrink-0">
-                              {c.source}
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                      {checklist.criteria.length > 6 && (
-                        <li className="px-4 py-2.5 text-[12px] font-medium text-text-muted bg-surface-hover flex items-center gap-2">
-                          <div className="w-4 h-4 flex items-center justify-center shrink-0">
-                            <span className="block w-1 h-1 bg-text-muted rounded-full opacity-50 shadow-[4px_0_0_0_currentColor,-4px_0_0_0_currentColor]" />
-                          </div>
-                          {t("issue.checklistMore", { count: checklist.criteria.length - 6 })}
-                        </li>
-                      )}
-                    </ul>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
 
         {issue?.status === "awaiting_review" && (
           <div className="mt-4 mx-8 rounded-xl border border-success/40 bg-success/[0.04] p-4">
@@ -610,32 +572,88 @@ export function IssueDetailPage({ issueId }: Props) {
         </DialogContent>
       </Dialog>
 
-      {/* Tabs */}
-      <Tabs value={tab} onValueChange={onTabChange} className="flex flex-col flex-1 min-h-0 mt-2">
-        <TabsList
-          variant="line"
-          className="px-6 pt-2 self-stretch border-b border-border-subtle gap-6 shrink-0"
-        >
-          <UnderlineTab value="dag" label="DAG" />
-          <UnderlineTab value="tasks" label={t("issue.tab.tasksRuns")} />
-          <UnderlineTab value="artifacts" label={t("console.artifacts")} />
-          <UnderlineTab value="diff" label={t("issue.tab.diffMerge")} />
-        </TabsList>
-        <div className="flex flex-col flex-1 min-h-0">
-          <TabsContent value="dag" className="m-0 h-full flex flex-col min-h-0 flex-1">
-            <DagTab issueId={issueId} />
-          </TabsContent>
-          <TabsContent value="tasks" className="m-0 h-full flex flex-col min-h-0 flex-1">
-            <TasksRunsTab issueId={issueId} issue={issue} />
-          </TabsContent>
-          <TabsContent value="artifacts" className="m-0 h-full flex flex-col min-h-0 flex-1">
-            <ArtifactsTab issueId={issueId} active={tab === "artifacts"} issue={issue} />
-          </TabsContent>
-          <TabsContent value="diff" className="m-0 h-full flex flex-col min-h-0 flex-1 overflow-y-auto">
-            <DiffMergeTab issueId={issueId} issue={issue} active={tab === "diff"} />
-          </TabsContent>
+      {/* === BODY GRID: tabs panel + right-side stack === */}
+      <div className="px-8 pb-16">
+        <div className="max-w-[1640px] w-full mx-auto grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-5 items-start">
+          {/* LEFT panel — tabs. Explicit min-height keeps ReactFlow / Gantt /
+              Diff split views from collapsing to 0 inside the body grid. */}
+          <div className="min-w-0 min-h-[640px] rounded-2xl border border-border-subtle bg-surface overflow-hidden flex flex-col">
+            <Tabs
+              value={tab}
+              onValueChange={onTabChange}
+              className="flex flex-col flex-1 min-h-0"
+            >
+              <TabsList
+                variant="line"
+                className="px-2 pt-2 self-stretch border-b border-border-subtle gap-0.5 shrink-0"
+              >
+                <UnderlineTab value="dag" label="DAG" />
+                <UnderlineTab value="tasks" label={t("issue.tab.tasksRuns")} />
+                <UnderlineTab value="artifacts" label={t("console.artifacts")} />
+                <UnderlineTab value="diff" label={t("issue.tab.diffMerge")} />
+                <UnderlineTab value="collab" label={t("issue.tab.collab")} />
+              </TabsList>
+              <div className="flex flex-col flex-1 min-h-0">
+                <TabsContent
+                  value="dag"
+                  className="m-0 h-full flex flex-col min-h-0 flex-1"
+                >
+                  <DagTab issueId={issueId} />
+                </TabsContent>
+                <TabsContent
+                  value="tasks"
+                  className="m-0 h-full flex flex-col min-h-0 flex-1"
+                >
+                  <TasksRunsTab issueId={issueId} issue={issue} />
+                </TabsContent>
+                <TabsContent
+                  value="artifacts"
+                  className="m-0 h-full flex flex-col min-h-0 flex-1"
+                >
+                  <ArtifactsTab
+                    issueId={issueId}
+                    active={tab === "artifacts"}
+                    issue={issue}
+                  />
+                </TabsContent>
+                <TabsContent
+                  value="diff"
+                  className="m-0 h-full flex flex-col min-h-0 flex-1 overflow-y-auto"
+                >
+                  <DiffMergeTab
+                    issueId={issueId}
+                    issue={issue}
+                    active={tab === "diff"}
+                  />
+                </TabsContent>
+                <TabsContent
+                  value="collab"
+                  className="m-0 h-full flex flex-col min-h-0 flex-1"
+                >
+                  <CollabFeedTab issueId={issueId} active={tab === "collab"} />
+                </TabsContent>
+              </div>
+            </Tabs>
+          </div>
+
+          {/* RIGHT side stack */}
+          <IssueSideStack
+            issueId={issueId}
+            checklist={checklist}
+            reloadKey={issue?.updated_at ?? undefined}
+          />
         </div>
-      </Tabs>
+        {/* Horizontal activity timeline spanning the full width below
+            the tabs/sidebar grid. Replaces the in-sidebar ActivityCard. */}
+        <div className="max-w-[1640px] w-full mx-auto">
+          <IssueActivityTimelineHorizontal
+            issueId={issueId}
+            reloadKey={issue?.updated_at ?? undefined}
+          />
+        </div>
+      </div>
+      <FloatingIssueChip badge={issueId.slice(0, 1)} />
+      <LiveThinkingDock issueId={issueId} />
     </div>
   );
 }
@@ -649,4 +667,95 @@ function UnderlineTab({ value, label }: { value: string; label: string }) {
       {label}
     </TabsTrigger>
   );
+}
+
+/**
+ * Live duration chip for the Hero meta row.
+ * Pulls pipeline-stages and shows `耗时 15m 23s` when the pipeline window
+ * is known. Hidden while waiting for the first sample so the meta row
+ * doesn't bounce.
+ */
+function HeroDurationBit({
+  issueId,
+  reloadKey,
+}: {
+  issueId: string;
+  reloadKey?: string | number;
+}) {
+  const [seconds, setSeconds] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { getIssuePipelineStages } = await import("@/lib/api");
+        const p = await getIssuePipelineStages(issueId);
+        if (cancelled) return;
+        if (p?.total_duration_seconds != null) {
+          setSeconds(p.total_duration_seconds);
+        } else if (p?.started_at) {
+          const start = new Date(p.started_at).getTime();
+          setSeconds(Math.max(0, Math.round((Date.now() - start) / 1000)));
+        }
+      } catch {
+        // silent
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [issueId, reloadKey]);
+
+  if (seconds == null) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="text-text-muted">耗时</span>
+      <b className="font-mono font-medium text-foreground">
+        {fmtDurationShort(seconds)}
+      </b>
+    </span>
+  );
+}
+
+function fmtDurationShort(s: number): string {
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return r ? `${m}m ${String(r).padStart(2, "0")}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+/**
+ * Render an issue title, highlighting code-like segments
+ * (HTTP verbs + paths, `code`-quoted snippets) in mono + brand color.
+ *
+ * Matches the design's hero where `GET /api/echo` reads as a callout.
+ */
+function renderTitleWithMono(title: string): React.ReactNode {
+  const pattern =
+    /(`[^`]+`|\b(?:GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+\/[\w\-/]+|\/[\w\-/]+(?:\.[A-Za-z0-9]+)?)/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(title)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(title.slice(lastIndex, match.index));
+    }
+    const raw = match[0];
+    const text = raw.startsWith("`") ? raw.slice(1, -1) : raw;
+    parts.push(
+      <span
+        key={`m-${match.index}`}
+        className="font-mono font-semibold text-brand-strong"
+      >
+        {text}
+      </span>,
+    );
+    lastIndex = match.index + raw.length;
+  }
+  if (lastIndex < title.length) {
+    parts.push(title.slice(lastIndex));
+  }
+  return parts.length > 0 ? parts : title;
 }

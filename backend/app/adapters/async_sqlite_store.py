@@ -527,6 +527,7 @@ class AsyncSQLiteStore:
                 artifact_dir TEXT,
                 retries INTEGER NOT NULL DEFAULT 0,
                 max_retries INTEGER NOT NULL DEFAULT 1,
+                instance_index INTEGER NOT NULL DEFAULT 0,
                 started_at TEXT,
                 completed_at TEXT,
                 created_at TEXT,
@@ -578,6 +579,78 @@ class AsyncSQLiteStore:
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN workflow_node_id TEXT")
         except Exception:
             pass  # Column already exists
+        # Knowledge stack: FTS5 virtual tables + embedding stores + team-notes state
+        await conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
+                issue_id UNINDEXED,
+                project_id UNINDEXED,
+                title,
+                description,
+                tokenize='porter unicode61'
+            )
+        """)
+        await conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
+                artifact_id UNINDEXED,
+                issue_id UNINDEXED,
+                project_id UNINDEXED,
+                role UNINDEXED,
+                name,
+                content,
+                tokenize='porter unicode61'
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS artifact_embeddings (
+                artifact_id TEXT PRIMARY KEY,
+                vector BLOB NOT NULL,
+                model TEXT NOT NULL,
+                dim INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS issue_embeddings (
+                issue_id TEXT PRIMARY KEY,
+                vector BLOB NOT NULL,
+                model TEXT NOT NULL,
+                dim INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS team_notes_state (
+                project_id TEXT NOT NULL,
+                block_id TEXT NOT NULL,
+                deleted_at TEXT,
+                pinned INTEGER DEFAULT 0,
+                PRIMARY KEY (project_id, block_id)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_messages (
+                id TEXT PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                graph_id TEXT NOT NULL,
+                from_node_key TEXT NOT NULL,
+                to_node_key TEXT NOT NULL,
+                message_type TEXT NOT NULL DEFAULT 'handoff',
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS conductor_decisions (
+                id TEXT PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                reason TEXT,
+                diff_json TEXT,
+                applied_at TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
         # Create indexes for frequently queried columns
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_project_id ON codex_tasks(project_id)")
@@ -610,6 +683,17 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_graph_id ON graph_replan_pending(graph_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_status ON graph_replan_pending(status)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_workflow_node_id ON codex_tasks(workflow_node_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_messages_issue_id ON agent_messages(issue_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_messages_graph_id ON agent_messages(graph_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_issue_id ON conductor_decisions(issue_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)")
+        # Phase 4: add instance_index to workflow_nodes for existing DBs
+        try:
+            await conn.execute(
+                "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
+            )
+        except aiosqlite.OperationalError:
+            pass
         await conn.commit()
 
     async def _ensure_db(self):
@@ -916,6 +1000,15 @@ class AsyncSQLiteStore:
                 self._format_datetime(issue.updated_at),
             ),
         )
+        # Knowledge index: keep FTS in sync. Best-effort.
+        try:
+            await conn.execute("DELETE FROM issues_fts WHERE issue_id = ?", (issue.id,))
+            await conn.execute(
+                "INSERT INTO issues_fts (issue_id, project_id, title, description) VALUES (?, ?, ?, ?)",
+                (issue.id, issue.project_id or "", issue.title or "", issue.description or ""),
+            )
+        except Exception:  # noqa: BLE001
+            pass
         await conn.commit()
 
     async def load_codex_issue(self, issue_id: str) -> CodexIssue | None:
@@ -1722,6 +1815,7 @@ class AsyncSQLiteStore:
             artifact_dir=row["artifact_dir"],
             retries=row["retries"] or 0,
             max_retries=row["max_retries"] or 1,
+            instance_index=row["instance_index"] if "instance_index" in row.keys() else 0,
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
@@ -1777,8 +1871,8 @@ class AsyncSQLiteStore:
                     INSERT INTO workflow_nodes (
                         id, graph_id, node_key, agent_id, title, prompt_override,
                         status, task_id, artifact_dir, retries, max_retries,
-                        started_at, completed_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instance_index, started_at, completed_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         n.id,
@@ -1792,6 +1886,7 @@ class AsyncSQLiteStore:
                         n.artifact_dir,
                         n.retries,
                         n.max_retries,
+                        n.instance_index,
                         self._format_datetime(n.started_at),
                         self._format_datetime(n.completed_at),
                         self._format_datetime(n.created_at) or now_iso,
@@ -1961,3 +2056,93 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
         return (cur.rowcount or 0) > 0
+
+    async def save_agent_message(self, msg: "AgentMessage") -> None:
+        from app.domain.models import AgentMessage  # noqa: F401 (type hint import)
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """INSERT OR REPLACE INTO agent_messages
+               (id, issue_id, graph_id, from_node_key, to_node_key, message_type, body, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                msg.id,
+                msg.issue_id,
+                msg.graph_id,
+                msg.from_node_key,
+                msg.to_node_key,
+                msg.message_type,
+                msg.body,
+                self._format_datetime(msg.created_at or datetime.now()),
+            ),
+        )
+        await conn.commit()
+
+    async def list_agent_messages(self, issue_id: str) -> list["AgentMessage"]:
+        from app.domain.models import AgentMessage
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM agent_messages WHERE issue_id = ? ORDER BY created_at ASC",
+            (issue_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        out: list[AgentMessage] = []
+        for r in rows:
+            out.append(AgentMessage(
+                id=r["id"],
+                issue_id=r["issue_id"],
+                graph_id=r["graph_id"],
+                from_node_key=r["from_node_key"],
+                to_node_key=r["to_node_key"],
+                message_type=r["message_type"],
+                body=r["body"],
+                created_at=self._parse_datetime(r["created_at"]),
+            ))
+        return out
+
+    async def save_conductor_decision(self, d: "ConductorDecision") -> None:
+        from app.domain.models import ConductorDecision  # noqa: F401 (type hint import)
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """INSERT OR REPLACE INTO conductor_decisions
+               (id, issue_id, task_id, action, reason, diff_json, applied_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                d.id,
+                d.issue_id,
+                d.task_id,
+                d.action,
+                d.reason,
+                d.diff_json,
+                self._format_datetime(d.applied_at),
+                self._format_datetime(d.created_at or datetime.now()),
+            ),
+        )
+        await conn.commit()
+
+    async def list_conductor_decisions(self, issue_id: str) -> list["ConductorDecision"]:
+        from app.domain.models import ConductorDecision
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM conductor_decisions WHERE issue_id = ? ORDER BY created_at ASC",
+            (issue_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        out: list[ConductorDecision] = []
+        for r in rows:
+            out.append(ConductorDecision(
+                id=r["id"],
+                issue_id=r["issue_id"],
+                task_id=r["task_id"],
+                action=r["action"],
+                reason=r["reason"],
+                diff_json=r["diff_json"],
+                applied_at=self._parse_datetime(r["applied_at"]),
+                created_at=self._parse_datetime(r["created_at"]),
+            ))
+        return out

@@ -33,6 +33,14 @@ class ProductRequirementDocument(BaseModel):
     # Set this when you cannot reasonably proceed without user input.
     # The framework will pause the pipeline and re-run you once answered.
     clarification_question: str | None = None
+    # Phase 4: multi-instance engineer fan-out.
+    # Populate when the issue naturally decomposes into independent parallel
+    # workstreams that can each be assigned to a separate engineer agent.
+    # Each dict: {"title": str, "scope": str, "role_suffix": str}
+    # e.g. [{"title":"Frontend", "scope":"UI layer", "role_suffix":"frontend"},
+    #        {"title":"Backend",  "scope":"API layer", "role_suffix":"backend"}]
+    # Leave null (omit) for single-engineer issues.
+    subtask_split: list[dict] | None = None
 
 
 class BugfixRequirementDocument(BaseModel):
@@ -79,6 +87,8 @@ class ProductManagerService:
         "openquestions": "open_questions",
         "open_questions": "open_questions",
         "risks": "risks",
+        "subtasksplit": "subtask_split",
+        "subtask_split": "subtask_split",
     }
     BUGFIX_KEY_ALIASES = {
         "language": "language",
@@ -493,10 +503,16 @@ class ProductManagerService:
             '"acceptance_criteria": ["string"], '
             '"constraints": ["string"], '
             '"open_questions": ["string"], '
-            '"risks": ["string"]'
+            '"risks": ["string"], '
+            '"subtask_split": [{"title": "string", "scope": "string", "role_suffix": "string"}] | null'
             "}\n"
             "The PRD must contain meaningful content. Do not return all-empty arrays and an empty requirement_analysis; "
             "include at least one concrete product goal, user story, requirement, acceptance criterion, or analysis sentence.\n"
+            "SUBTASK SPLIT INSTRUCTIONS: Only populate subtask_split when the issue CLEARLY decomposes into 2-3 "
+            "independent parallel workstreams (e.g. a full-stack feature with separable frontend and backend). "
+            "Each entry needs: title (short human label), scope (one sentence on what this workstream covers), "
+            "role_suffix (short lowercase identifier like 'frontend', 'backend', 'mobile'). "
+            "For single-scope issues, bugs, refactors, and docs: set subtask_split to null.\n"
             + (
                 "Update the existing PRD in-place. Preserve still-valid fields and only change what the new requirement affects."
                 if route.name == "requirement_update"

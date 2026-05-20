@@ -16,6 +16,10 @@ export type RoleId =
   | "product_manager"
   | "architect"
   | "engineer"
+  // Phase 1 — specialist engineers that run in parallel after Architect
+  // when an issue spans both frontend and backend work.
+  | "engineer_frontend"
+  | "engineer_backend"
   | "qa";
 
 export interface Persona {
@@ -56,6 +60,20 @@ export const PERSONAS: Record<RoleId, Persona> = {
     emoji: "⚙️",
     color: "#f59e0b",
     blurb: "Writes the code, runs the tests.",
+  },
+  engineer_frontend: {
+    id: "engineer_frontend",
+    name: "FE Engineer",
+    emoji: "🎨",
+    color: "#06b6d4",
+    blurb: "Implements the UI / client slice.",
+  },
+  engineer_backend: {
+    id: "engineer_backend",
+    name: "BE Engineer",
+    emoji: "🔧",
+    color: "#a855f7",
+    blurb: "Implements the API / server slice.",
   },
   qa: {
     id: "qa",

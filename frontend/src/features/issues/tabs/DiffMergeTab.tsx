@@ -17,7 +17,8 @@ import {
   submitCodexTask,
 } from "@/lib/api";
 import type { CodexIssue, CodexTask, IssueDiffResult } from "@/lib/types";
-import { DiffPanel } from "@/features/issues/components/DiffPanel";
+import { DiffSplitView } from "@/features/issues/components/DiffSplitView";
+import { DiffStatBar } from "@/features/issues/components/DiffStatBar";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
@@ -126,18 +127,6 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
   const reviewableTask = mainTasks.find((t) => t.status === "awaiting_review");
   const doneTaskForSubmit = mainTasks.find((t) => t.status === "done");
   const isAbandoned = issue?.status === "cancelled";
-  // C3: which Engineer run produced these changes. Only Engineer touches
-  // code in this system, so a single attribution covers the whole diff.
-  const engineerAttribution = (() => {
-    const engs = tasks.filter((t) => t.role === "engineer" && t.status === "done");
-    if (engs.length === 0) return null;
-    const latest = engs[engs.length - 1];
-    return {
-      agentName: t("task.diffMerge.engineer"),
-      runId: latest.last_execution_process_id ?? latest.id,
-      timestamp: latest.updated_at ?? null,
-    };
-  })();
 
   const handleSubmit = useCallback(async () => {
     if (!doneTaskForSubmit) return;
@@ -523,20 +512,79 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         </div>
       </section>
 
-      <section className="rounded-lg border border-border-subtle p-4">
-        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">{t("task.diffMerge.diff")}</h3>
+      <section className="rounded-2xl border border-border-subtle overflow-hidden">
+        {/* === diff-toolbar (matches design handoff) === */}
+        <div className="flex items-center justify-between gap-3.5 px-4 py-3 border-b border-border-subtle bg-surface flex-wrap">
+          <div className="flex items-center gap-4 font-mono text-[12px] text-text-muted flex-wrap">
+            <span>
+              <b className="text-foreground font-medium">
+                {diff?.stat?.files ?? 0}
+              </b>{" "}
+              files changed
+            </span>
+            <span>
+              <b className="text-status-done">
+                +{diff?.stat?.insertions ?? 0}
+              </b>{" "}
+              <b className="text-status-failed">
+                −{diff?.stat?.deletions ?? 0}
+              </b>
+            </span>
+            <DiffStatBar
+              add={diff?.stat?.insertions ?? 0}
+              rm={diff?.stat?.deletions ?? 0}
+            />
+            <span className="text-text-faint">·</span>
+            <span>
+              base <b className="text-foreground font-medium">
+                {diff?.base_branch ?? "—"}
+              </b>{" "}
+              ← head{" "}
+              <b className="text-foreground font-medium">
+                {diff?.branch ?? issue?.git_branch ?? "—"}
+              </b>
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {!issue?.github_pr_url && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!!busy || isAbandoned || !diff || diff.diff.length === 0}
+                onClick={() => void handleCreatePR()}
+                className="h-7 px-2.5 text-[12px]"
+              >
+                {busy === "pr-create" ? (
+                  <Loader2 size={11} className="animate-spin" />
+                ) : (
+                  <GitPullRequest size={11} className="mr-1.5" />
+                )}
+                {t("task.diffMerge.openGitHubPr")}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              disabled={!!busy || isAbandoned || !diff || diff.diff.length === 0}
+              onClick={() => setConfirmKind("merge")}
+              className="h-7 px-2.5 text-[12px] bg-brand hover:bg-brand-strong text-black font-semibold"
+            >
+              {busy === "merge" ? (
+                <span className="flex items-center gap-1.5">
+                  <Loader2 size={11} className="animate-spin" />
+                  {t("task.diffMerge.merging")}
+                </span>
+              ) : (
+                t("task.mergeBack")
+              )}
+            </Button>
+          </div>
+        </div>
         {!diff ? (
-          <div className="text-sm text-text-muted">{t("task.diffMerge.loading")}</div>
+          <div className="p-4 text-sm text-text-muted">{t("task.diffMerge.loading")}</div>
         ) : diff.diff.length === 0 ? (
-          <div className="text-sm text-text-muted">{t("task.diffMerge.noChanges")}</div>
+          <div className="p-4 text-sm text-text-muted">{t("task.diffMerge.noChanges")}</div>
         ) : (
-          <DiffPanel
-            diff={diff.diff}
-            baseBranch={diff.base_branch}
-            branch={diff.branch}
-            stat={diff.stat ?? null}
-            attribution={engineerAttribution}
-          />
+          <DiffSplitView diff={diff.diff} />
         )}
       </section>
 

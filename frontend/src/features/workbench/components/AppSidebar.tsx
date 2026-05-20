@@ -14,6 +14,7 @@ import {
   Command,
   Users,
   ChevronsUpDown,
+  Library,
 } from "lucide-react";
 import { getCodexIssues, getWorkspaces, listProjects } from "@/lib/api";
 import type { CodexIssue, Project, Workspace } from "@/lib/types";
@@ -263,6 +264,12 @@ export function AppSidebar() {
           onClick={() => router.push("/artifacts")}
         />
         <NavRow
+          icon={<Library size={13} />}
+          label={t("sidebar.knowledge")}
+          active={pathname.startsWith("/knowledge")}
+          onClick={() => router.push("/knowledge")}
+        />
+        <NavRow
           icon={<Users size={13} />}
           label={t("sidebar.agents")}
           active={pathname.startsWith("/agents")}
@@ -406,24 +413,47 @@ function NavRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] transition-colors",
+        "relative group w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[13px] transition-colors",
         active
           ? highlightActive
-            ? "bg-brand/10 text-foreground font-semibold"
+            ? "text-brand-strong font-medium"
             : "text-foreground font-medium bg-surface-hover"
           : "text-text-secondary hover:text-foreground hover:bg-surface-hover",
       )}
+      style={
+        active && highlightActive
+          ? { background: "var(--color-brand-bg)" }
+          : undefined
+      }
     >
-      <span className={cn("shrink-0", active && highlightActive ? "text-brand" : "text-text-muted")}>
+      {active && highlightActive && (
+        <span
+          aria-hidden
+          className="absolute -left-2 top-1.5 bottom-1.5 w-[2px] rounded-full bg-brand"
+        />
+      )}
+      <span
+        className={cn(
+          "shrink-0",
+          active && highlightActive ? "text-brand-strong" : "text-text-muted",
+        )}
+      >
         {icon}
       </span>
       <span className="flex-1 truncate text-left">{label}</span>
       {count !== undefined && (
         <span
           className={cn(
-            "text-[10px] tabular-nums shrink-0",
-            active && highlightActive ? "text-brand" : "text-text-muted",
+            "text-[11px] font-mono tabular-nums shrink-0 px-1.5 leading-[18px] min-w-[18px] text-center rounded",
+            active && highlightActive
+              ? "text-brand-strong border border-brand-ring/40 bg-transparent"
+              : "text-text-muted border border-border-muted bg-surface-input",
           )}
+          style={
+            active && highlightActive
+              ? { borderColor: "var(--color-brand-ring)" }
+              : undefined
+          }
         >
           {count}
         </span>

@@ -27,7 +27,8 @@ export type BusEventType =
   | "issue_steered"
   | "workflow_node_updated"
   | "worktree_dirty"
-  | "conductor_decision";
+  | "conductor_decision"
+  | "agent_message_posted";
 
 export interface BusIssueMergedEvent {
   type: "issue_merged";
