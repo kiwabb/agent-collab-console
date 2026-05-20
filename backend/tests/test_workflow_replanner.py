@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.adapters.async_sqlite_store import AsyncSQLiteStore
 from app.application.agent_seed import seed_builtin_agents
 from app.application.workflow_orchestrator import WorkflowOrchestrator
 from app.application.workflow_scheduler import (
@@ -34,18 +35,35 @@ def reseed():
 
 
 async def _make_issue(store, title="Add feature X"):
-    session = CodexSession(id=str(uuid4()), title="ws", cwd="/tmp", status="idle", created_at=datetime.now())
+    session = CodexSession(
+        id=str(uuid4()),
+        title="ws",
+        cwd="/tmp",
+        status="idle",
+        created_at=datetime.now(),
+        settings={"plan_first_pm": False},
+    )
     await store.save_codex_session(session)
     issue = CodexIssue(id=str(uuid4()), session_id=session.id, title=title, description="", created_at=datetime.now())
     await store.save_codex_issue(issue)
     return issue
 
 
-def test_replan_after_qa_failure_proposes_refine_loop():
-    import app.bootstrap as bootstrap_module
-    store = bootstrap_module.async_store
+async def _make_store(tmp_path):
+    store = AsyncSQLiteStore(tmp_path / "console.db")
+    await seed_builtin_agents(store)
+    return store
 
+
+async def _exhaust_engineer_retries(store, graph_id: str) -> None:
+    graph = await store.load_workflow_graph(graph_id)
+    engineer = next(n for n in graph.nodes if n.node_key == "engineer")
+    await store.update_workflow_node(engineer.id, retries=max(engineer.max_retries, 1))
+
+
+def test_replan_after_qa_failure_proposes_refine_loop(tmp_path):
     async def run():
+        store = await _make_store(tmp_path)
         issue = await _make_issue(store, title="Implement onboarding feature")
         dag = await WorkflowOrchestrator(store=store).propose_graph(issue)
         graph = await materialize_graph_from_dag(store, issue.id, dag)
@@ -60,6 +78,7 @@ def test_replan_after_qa_failure_proposes_refine_loop():
             running = next(n for n in g.nodes if n.status == "running")
             t = await store.load_codex_task(running.task_id)
             await sched.on_task_completed(t)
+        await _exhaust_engineer_retries(store, graph.id)
         # Now QA should be running. Fail it.
         g = await store.load_workflow_graph(graph.id)
         qa_node = next(n for n in g.nodes if n.node_key == "qa")
@@ -75,15 +94,14 @@ def test_replan_after_qa_failure_proposes_refine_loop():
         diff = pending[0].diff_json
         assert "refine-loop" in diff
         assert "qa" in diff and "engineer" in diff
+        await store.close()
 
     _run(run())
 
 
-def test_confirming_replan_applies_diff_and_resumes():
-    import app.bootstrap as bootstrap_module
-    store = bootstrap_module.async_store
-
+def test_confirming_replan_applies_diff_and_resumes(tmp_path):
     async def run():
+        store = await _make_store(tmp_path)
         issue = await _make_issue(store, "Implement onboarding")
         dag = await WorkflowOrchestrator(store=store).propose_graph(issue)
         graph = await materialize_graph_from_dag(store, issue.id, dag)
@@ -98,6 +116,7 @@ def test_confirming_replan_applies_diff_and_resumes():
             running = next(n for n in g.nodes if n.status == "running")
             t = await store.load_codex_task(running.task_id)
             await sched.on_task_completed(t)
+        await _exhaust_engineer_retries(store, graph.id)
         # Now fail QA.
         g = await store.load_workflow_graph(graph.id)
         qa = next(n for n in g.nodes if n.node_key == "qa")
@@ -113,15 +132,14 @@ def test_confirming_replan_applies_diff_and_resumes():
         # Replan row should now be resolved.
         remaining = await store.list_pending_replans(graph.id)
         assert remaining == []
+        await store.close()
 
     _run(run())
 
 
-def test_rejecting_replan_skips_diff_application():
-    import app.bootstrap as bootstrap_module
-    store = bootstrap_module.async_store
-
+def test_rejecting_replan_skips_diff_application(tmp_path):
     async def run():
+        store = await _make_store(tmp_path)
         issue = await _make_issue(store, "Implement onboarding")
         dag = await WorkflowOrchestrator(store=store).propose_graph(issue)
         graph = await materialize_graph_from_dag(store, issue.id, dag)
@@ -135,6 +153,7 @@ def test_rejecting_replan_skips_diff_application():
             running = next(n for n in g.nodes if n.status == "running")
             t = await store.load_codex_task(running.task_id)
             await sched.on_task_completed(t)
+        await _exhaust_engineer_retries(store, graph.id)
         g = await store.load_workflow_graph(graph.id)
         qa = next(n for n in g.nodes if n.node_key == "qa")
         qa_task = await store.load_codex_task(qa.task_id)
@@ -148,16 +167,15 @@ def test_rejecting_replan_skips_diff_application():
         edges_after = set((e.from_node_key, e.to_node_key, e.edge_type) for e in
                           (await store.load_workflow_graph(graph.id)).edges)
         assert edges_after == edges_before
+        await store.close()
 
     _run(run())
 
 
-def test_engineer_done_does_not_trigger_replan():
+def test_engineer_done_does_not_trigger_replan(tmp_path):
     """Engineer is not in the replan-trigger set, so completion proceeds normally."""
-    import app.bootstrap as bootstrap_module
-    store = bootstrap_module.async_store
-
     async def run():
+        store = await _make_store(tmp_path)
         issue = await _make_issue(store, "Implement onboarding")
         dag = await WorkflowOrchestrator(store=store).propose_graph(issue)
         graph = await materialize_graph_from_dag(store, issue.id, dag)
@@ -181,15 +199,14 @@ def test_engineer_done_does_not_trigger_replan():
         # Engineer node has done status.
         eng = next(n for n in g.nodes if n.node_key == "engineer")
         assert eng.status == "done"
+        await store.close()
 
     _run(run())
 
 
-def test_replan_diff_rejects_removing_done_nodes():
-    import app.bootstrap as bootstrap_module
-    store = bootstrap_module.async_store
-
+def test_replan_diff_rejects_removing_done_nodes(tmp_path):
     async def run():
+        store = await _make_store(tmp_path)
         issue = await _make_issue(store, "x")
         dag = await WorkflowOrchestrator(store=store).propose_graph(issue)
         graph = await materialize_graph_from_dag(store, issue.id, dag)
@@ -218,5 +235,6 @@ def test_replan_diff_rejects_removing_done_nodes():
         after = await store.load_workflow_graph(graph.id)
         remaining = {n.node_key for n in after.nodes}
         assert remaining.issuperset(done_keys)
+        await store.close()
 
     _run(run())

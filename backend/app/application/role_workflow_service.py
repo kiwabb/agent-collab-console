@@ -8,6 +8,7 @@ from app.application.clarification import (
     apply_clarification_if_needed,
 )
 from app.application.engineer_workflow import EngineerWorkflow
+from app.application.agent_catalog.generic_specialist_workflow import GenericSpecialistWorkflow
 from app.application.product_manager_service import ProductManagerService
 from app.application.project_memory_service import project_memory
 from app.application.qa_workflow import QAWorkflow
@@ -25,10 +26,11 @@ class RoleWorkflowService:
         self._architect_service = ArchitectWorkflow()
         self._engineer_service = EngineerWorkflow()
         self._qa_service = QAWorkflow()
+        self._specialist_service = GenericSpecialistWorkflow()
         self.codex_store = codex_store
 
     def is_managed_role(self, role: str) -> bool:
-        return role in MANAGED_ROLES
+        return role in MANAGED_ROLES or self._is_specialist_role(role)
 
     async def build_prompt(
         self,
@@ -59,6 +61,8 @@ class RoleWorkflowService:
             base = self._engineer_service.build_prompt(task, workspace_title)
         elif role == "qa":
             base = self._qa_service.build_prompt(task, workspace_title)
+        elif self._is_specialist_role(role):
+            base = self._specialist_service.build_prompt(task, workspace_title)
         else:
             return None  # general — handled elsewhere
 
@@ -127,6 +131,8 @@ class RoleWorkflowService:
             doc = self._engineer_service.persist_result(task, workspace_title)
         elif role == "qa":
             doc = self._qa_service.persist_result(task, workspace_title)
+        elif self._is_specialist_role(role):
+            doc = self._specialist_service.persist_result(task, workspace_title)
 
         # P2: clarification flow. If the role surfaced a critical question,
         # transition the task into awaiting_review with the question text,
@@ -181,6 +187,10 @@ class RoleWorkflowService:
                     asyncio.create_task(_embed())
 
         return doc
+
+    @staticmethod
+    def _is_specialist_role(role: str | None) -> bool:
+        return bool(role and (role.startswith("specialist:") or role.startswith("custom:")))
 
     async def _record_critique(self, task, critique: str) -> None:
         """Persist an Engineer→Architect critique as an AgentMessage and emit the bus event."""

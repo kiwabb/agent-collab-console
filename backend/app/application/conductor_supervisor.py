@@ -31,11 +31,22 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from app.domain.models import CodexIssue, CodexTask, WorkflowGraph
+from app.domain.models import CodexIssue, SubAgentResult, WorkflowGraph
 
 logger = logging.getLogger(__name__)
 
-_VALID_ACTIONS = {"proceed", "note", "escalate", "reroute", "insert_node", "request_clarification"}
+_VALID_ACTIONS = {
+    "proceed",
+    "note",
+    "escalate",
+    "reroute",
+    "insert_node",
+    "request_clarification",
+    "spawn_specialist",
+    "spawn_custom",
+    "dispatch_next",
+    "inject_context",
+}
 
 
 class ConductorSupervisor:
@@ -48,7 +59,7 @@ class ConductorSupervisor:
     async def observe(
         self,
         *,
-        task: CodexTask,
+        result: SubAgentResult,
         node_status: str,
         graph: WorkflowGraph,
         issue: CodexIssue | None,
@@ -58,7 +69,7 @@ class ConductorSupervisor:
         if os.getenv("CONDUCTOR_ENABLED", "true").lower() != "true":
             return None
 
-        snapshot = self._build_snapshot(task=task, node_status=node_status, graph=graph, issue=issue)
+        snapshot = self._build_snapshot(result=result, node_status=node_status, graph=graph, issue=issue)
 
         # Resolve LLM runner. If no catalog / no API key, fall back to a
         # heuristic decision so we still emit *something* every round.
@@ -80,14 +91,14 @@ class ConductorSupervisor:
                 decision["diff"] = diff
 
         # Persist decision record.
-        issue_id = issue.id if issue else (task.issue_id or "")
+        issue_id = issue.id if issue else ""
         try:
             if issue_id and hasattr(self.store, "save_conductor_decision"):
                 from app.domain.models import ConductorDecision
                 record = ConductorDecision(
                     id=str(uuid4()),
                     issue_id=issue_id,
-                    task_id=task.id,
+                    task_id=result.task_id,
                     action=action,
                     reason=decision.get("reason"),
                     diff_json=json.dumps(diff, ensure_ascii=False, default=str) if diff is not None else None,
@@ -98,6 +109,27 @@ class ConductorSupervisor:
         except Exception as exc:  # noqa: BLE001
             logger.debug("conductor persist decision failed: %s", exc)
 
+        # Maintain issue-level rolling Conductor state so later scheduler
+        # settle passes can consume explicit dispatch/context decisions.
+        try:
+            if issue_id and hasattr(self.store, "save_conductor_state"):
+                from app.application.conductor_actions import record_conductor_decision
+                from app.domain.models import ConductorState
+                state = None
+                if hasattr(self.store, "load_conductor_state"):
+                    state = await self.store.load_conductor_state(issue_id)
+                state = state or ConductorState(issue_id=issue_id)
+                updated_state = record_conductor_decision(
+                    state,
+                    decision=decision,
+                    task_id=result.task_id,
+                    completed_node_key=result.node_key,
+                )
+                await self.store.save_conductor_state(updated_state)
+                decision["_state_recorded"] = True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("conductor state update failed: %s", exc)
+
         # Emit visible event so frontend AgentDock can glow.
         try:
             if self._event_bus is not None and issue is not None:
@@ -105,8 +137,8 @@ class ConductorSupervisor:
                     "type": "conductor_decision",
                     "session_id": issue.session_id,
                     "issue_id": issue.id,
-                    "task_id": task.id,
-                    "role": task.role,
+                    "task_id": result.task_id,
+                    "role": result.role,
                     "action": action,
                     "reason": decision.get("reason"),
                     "note": decision.get("note"),
@@ -126,28 +158,38 @@ class ConductorSupervisor:
     def _build_snapshot(
         self,
         *,
-        task: CodexTask,
+        result: SubAgentResult,
         node_status: str,
         graph: WorkflowGraph,
         issue: CodexIssue | None,
     ) -> dict[str, Any]:
-        """Construct a compact JSON payload for the LLM. Keep this small."""
+        """Construct a structured payload for the LLM."""
         node_statuses = {n.node_key: n.status for n in graph.nodes}
-        # Bound task.result to keep prompt small; QA reports can be long.
-        result_excerpt = (task.result or "")[:1200]
         # Collect available agent role_keys from graph nodes + common builtin roles.
         graph_roles = list({n.node_key for n in graph.nodes})
-        common_roles = ["security_reviewer", "performance_reviewer", "documentation_writer", "code_reviewer"]
-        available_agents = sorted(set(graph_roles + common_roles))
+        try:
+            from app.application.agent_catalog.catalog import AgentCatalog
+            catalog_roles = [agent.role_key for agent in AgentCatalog().list_available_agents()]
+        except Exception:  # noqa: BLE001
+            catalog_roles = []
+        available_agents = sorted(set(graph_roles + catalog_roles))
         return {
-            "issue_id": issue.id if issue else task.issue_id,
-            "issue_title": (issue.title if issue else None) or task.title,
+            "issue_id": issue.id if issue else None,
+            "issue_title": issue.title if issue else None,
             "issue_status": issue.status if issue else None,
             "issue_phase": issue.current_phase if issue else None,
-            "completed_role": task.role,
+            "completed_role": result.role,
+            "completed_node_key": result.node_key,
             "completed_status": node_status,
-            "task_result_excerpt": result_excerpt,
-            "review_comment": task.review_comment,
+            "task_result": result.summary,
+            "artifact_json": result.artifact_json,
+            "artifact_markdown": result.artifact_markdown,
+            "artifact_paths": result.artifact_paths,
+            "files_changed": result.files_changed,
+            "qa_commands": result.qa_commands,
+            "clarification_question": result.clarification_question,
+            "critique": result.critique,
+            "review_comment": result.review_comment_in,
             "graph_node_statuses": node_statuses,
             "retries": {
                 n.node_key: {"used": n.retries, "max": n.max_retries}
@@ -201,7 +243,11 @@ class ConductorSupervisor:
             '  {"action":"escalate","reason":"<why>","note":"<single-line summary for the user>"}\n'
             '  {"action":"insert_node","reason":"<why>","node_key":"<role from available_agents>","insert_after":"<existing node_key>","title":"<human title>"}\n'
             '  {"action":"reroute","reason":"<why>","from":"<node_key>","to":"<node_key>"}\n'
-            '  {"action":"request_clarification","reason":"<why>","note":"<question for user>"}\n\n'
+            '  {"action":"request_clarification","reason":"<why>","note":"<question for user>"}\n'
+            '  {"action":"spawn_specialist","reason":"<why>","role_key":"<specialist from available_agents>","prompt":"<focused specialist brief>"}\n'
+            '  {"action":"spawn_custom","reason":"<why>","name":"<custom_agent_name>","prompt":"<focused custom brief>","schema":{}}\n\n'
+            '  {"action":"dispatch_next","reason":"<why>","target_node_key":"<existing node_key>","prompt_override":"<optional replacement prompt>","context_inject":"<optional context>"}\n'
+            '  {"action":"inject_context","reason":"<why>","target_node_key":"<existing node_key>","context_message":"<context to prepend>"}\n\n'
             "Guidance:\n"
             "- action=proceed: everything is normal, no team-level signal.\n"
             "- action=note: ONLY when you've discovered a repo convention or recurring failure pattern future agents should know. "
@@ -210,7 +256,11 @@ class ConductorSupervisor:
             "- action=insert_node: ONLY when a critical role (e.g. security_reviewer) is clearly missing and the issue clearly requires it. "
             "node_key must be from available_agents list. insert_after must be an existing node_key.\n"
             "- action=reroute: ONLY when the current edge ordering is provably wrong (e.g. QA must run before deployment).\n"
-            "- action=request_clarification: ONLY when you cannot proceed without a human decision.\n\n"
+            "- action=request_clarification: ONLY when you cannot proceed without a human decision.\n"
+            "- action=spawn_specialist: ONLY when a predefined specialist should inspect a narrow risk. role_key must be from available_agents.\n"
+            "- action=spawn_custom: ONLY when no predefined specialist fits and a one-off expert would materially reduce risk.\n\n"
+            "- action=dispatch_next: ONLY when a particular existing pending/blocked node must run before ordinary readiness order.\n"
+            "- action=inject_context: ONLY when a pending downstream node needs extra context but normal graph order is still fine.\n\n"
             "Observation snapshot:\n"
             + json.dumps(snapshot, ensure_ascii=False)
         )

@@ -235,6 +235,8 @@ async def _refresh_task_result(task):
         if latest_result:
             task.result = latest_result
     if task.status == "done" and task.result:
+        if getattr(task, "result_json", None) is None:
+            task.result_json = task.result
         workspace = await codex_store.load_codex_workspace(task.session_id)
         workspace_title = workspace.title if workspace is not None else None
         # Persist artifacts but never let a persist failure poison the task's
@@ -244,6 +246,7 @@ async def _refresh_task_result(task):
         # task result so the issue UI can render a warning chip.
         try:
             artifact = await role_workflow_service.persist_result(task, workspace_title=workspace_title)
+            task._subagent_doc = artifact
         except Exception as exc:  # noqa: BLE001
             logger.exception("persist_result failed for task %s (role=%s)", task.id, getattr(task, "role", None))
             try:
@@ -4146,6 +4149,7 @@ class AgentCreateRequest(BaseModel):
     persist_kind: str | None = None
     triggers_replan_on_done: bool = False
     triggers_replan_on_fail: bool = False
+    agent_tier: str = "custom"
 
 
 class AgentUpdateRequest(BaseModel):
@@ -4161,6 +4165,12 @@ class AgentUpdateRequest(BaseModel):
     persist_kind: str | None = None
     triggers_replan_on_done: bool | None = None
     triggers_replan_on_fail: bool | None = None
+
+
+class SpawnCustomAgentRequest(BaseModel):
+    name: str
+    prompt: str
+    output_schema_hint: dict | None = Field(default=None, alias="schema")
 
 
 def _require_agent_store():
@@ -4223,6 +4233,7 @@ async def create_agent(request: AgentCreateRequest):
         default_model=request.default_model,
         artifact_subdir=request.artifact_subdir or f"node_{request.role_key}",
         persist_kind=request.persist_kind,
+        agent_tier=request.agent_tier if request.agent_tier in {"managed", "specialist", "custom"} else "custom",
         triggers_replan_on_done=request.triggers_replan_on_done,
         triggers_replan_on_fail=request.triggers_replan_on_fail,
         is_builtin=False,
@@ -4267,6 +4278,55 @@ async def delete_agent(agent_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     return Response(status_code=204)
+
+
+@router.post("/codex/issues/{issue_id}/conductor/spawn-custom", status_code=201)
+async def spawn_custom_agent_for_issue(issue_id: str, request: SpawnCustomAgentRequest):
+    """Create an ad-hoc custom agent and enqueue a task for the issue."""
+    store = _require_agent_store()
+    issue = await store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+    from app.application.agent_catalog.catalog import AgentCatalog
+    from app.domain.models import Agent
+
+    definition = AgentCatalog().register_custom(
+        name=request.name,
+        prompt=request.prompt,
+        schema=request.output_schema_hint,
+    )
+    existing = await store.list_agents(workspace_id=None, role_key=definition.role_key)
+    agent = next((a for a in existing if a.workspace_id is None), None)
+    if agent is None:
+        now = datetime.now()
+        agent = Agent(
+            id=str(uuid4()),
+            workspace_id=None,
+            name=definition.display_name,
+            role_key=definition.role_key,
+            description=definition.prompt_template,
+            system_prompt_template=definition.prompt_template,
+            output_schema=definition.output_schema,
+            default_executor="claude",
+            artifact_subdir=f"specialists/{definition.role_key}",
+            persist_kind="specialist",
+            agent_tier="custom",
+            is_builtin=False,
+            created_at=now,
+            updated_at=now,
+        )
+        await store.save_agent(agent)
+
+    task = await create_codex_task(CreateTaskRequest(
+        session_id=issue.session_id,
+        issue_id=issue.id,
+        phase=definition.role_key,
+        title=f"{definition.display_name}: {issue.title}",
+        prompt=request.prompt,
+        role=definition.role_key,
+        executor=agent.default_executor or "claude",
+    ))
+    return {"agent": agent.model_dump(), "task": task}
 
 
 # --- Workflow plan endpoint (PR2) ---
@@ -5090,6 +5150,48 @@ async def codex_issue_conductor_log(issue_id: str):
          "created_at": d.created_at.isoformat() if d.created_at else None}
         for d in decisions
     ]}
+
+
+@router.get("/codex/issues/{issue_id}/conductor-state")
+async def codex_issue_conductor_state(issue_id: str):
+    """Return IssueConductor rolling state for this issue."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    if not hasattr(codex_store, "load_conductor_state"):
+        return {
+            "issue_id": issue_id,
+            "running_thread": [],
+            "pending_dispatches": [],
+            "scratchpad": "",
+            "decision_count": 0,
+            "updated_at": None,
+        }
+    state = await codex_store.load_conductor_state(issue_id)
+    if state is None:
+        return {
+            "issue_id": issue_id,
+            "running_thread": [],
+            "pending_dispatches": [],
+            "scratchpad": "",
+            "decision_count": 0,
+            "updated_at": None,
+        }
+    try:
+        running_thread = json.loads(state.running_thread_json or "[]")
+    except json.JSONDecodeError:
+        running_thread = []
+    try:
+        pending_dispatches = json.loads(state.pending_dispatches_json or "[]")
+    except json.JSONDecodeError:
+        pending_dispatches = []
+    return {
+        "issue_id": state.issue_id,
+        "running_thread": running_thread if isinstance(running_thread, list) else [],
+        "pending_dispatches": pending_dispatches if isinstance(pending_dispatches, list) else [],
+        "scratchpad": state.scratchpad,
+        "decision_count": state.decision_count,
+        "updated_at": state.updated_at.isoformat() if state.updated_at else None,
+    }
 
 
 @router.get("/codex/issues/{issue_id}/agent-messages")

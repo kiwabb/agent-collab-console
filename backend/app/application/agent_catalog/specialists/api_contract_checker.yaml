@@ -1,0 +1,29 @@
+{
+  "role_key": "api_contract_checker",
+  "display_name": "API Contract Checker",
+  "prompt_template": "Validate request/response contracts, compatibility, errors, and client/server alignment.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "findings": {
+        "type": "array"
+      },
+      "recommendations": {
+        "type": "array"
+      },
+      "clarification_question": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "default_max_retries": 1
+}

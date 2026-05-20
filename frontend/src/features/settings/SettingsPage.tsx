@@ -6,6 +6,7 @@ import { usePreferences, type FontSize } from "@/providers/PreferencesProvider";
 import { useI18n } from "@/providers/I18nProvider";
 import { getRuntimeCatalog, updateRuntimeCatalog } from "@/lib/api";
 import { RuntimeCatalogEditor } from "@/components/runtime/RuntimeCatalogEditor";
+import { AgentCatalogPanel } from "@/features/workflow/AgentCatalogPanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -24,6 +25,7 @@ import {
   Type,
   Zap,
   LayoutGrid,
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Locale } from "@/lib/i18n";
@@ -107,6 +109,15 @@ export function SettingsPage() {
                     <Database size={14} />
                   </div>
                   {t("settings.runtime")}
+                </TabsTrigger>
+                <TabsTrigger
+                  value="agents"
+                  className="w-full flex items-center justify-start gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all data-[state=active]:bg-brand/10 data-[state=active]:text-brand hover:bg-surface-hover hover:text-foreground text-text-secondary group border border-transparent data-[state=active]:border-brand/20"
+                >
+                  <div className="size-8 rounded-lg bg-surface-raised flex items-center justify-center group-data-[state=active]:bg-brand/20 group-data-[state=active]:shadow-inner transition-colors">
+                    <Bot size={14} />
+                  </div>
+                  Agent Catalog
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -382,6 +393,18 @@ export function SettingsPage() {
                     </div>
                   </CardContent>
                 </Card>
+              </TabsContent>
+
+              <TabsContent value="agents" className="w-full p-8 mt-0 outline-none animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="mb-6">
+                  <h2 className="text-2xl font-black tracking-tight text-foreground mb-1 italic">
+                    Agent Catalog
+                  </h2>
+                  <p className="text-xs text-text-muted">
+                    Managed core roles, predefined specialists, and custom agents currently registered in the backend.
+                  </p>
+                </div>
+                <AgentCatalogPanel />
               </TabsContent>
             </div>
           </main>

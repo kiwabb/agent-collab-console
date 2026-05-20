@@ -522,6 +522,7 @@ export interface Agent {
   default_model: string | null;
   artifact_subdir: string | null;
   persist_kind: string | null;
+  agent_tier: "managed" | "specialist" | "custom";
   triggers_replan_on_done: boolean;
   triggers_replan_on_fail: boolean;
   is_builtin: boolean;
@@ -542,6 +543,7 @@ export interface CreateAgentRequest {
   default_model?: string | null;
   artifact_subdir?: string | null;
   persist_kind?: string | null;
+  agent_tier?: "managed" | "specialist" | "custom";
   triggers_replan_on_done?: boolean;
   triggers_replan_on_fail?: boolean;
 }

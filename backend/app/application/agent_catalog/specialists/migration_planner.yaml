@@ -1,0 +1,29 @@
+{
+  "role_key": "migration_planner",
+  "display_name": "Migration Planner",
+  "prompt_template": "Plan safe schema, data, or API migrations with rollout, rollback, and verification steps.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "findings": {
+        "type": "array"
+      },
+      "recommendations": {
+        "type": "array"
+      },
+      "clarification_question": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "default_max_retries": 1
+}

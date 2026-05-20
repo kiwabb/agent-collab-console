@@ -1,0 +1,29 @@
+{
+  "role_key": "accessibility_reviewer",
+  "display_name": "Accessibility Reviewer",
+  "prompt_template": "Review UI and flows against accessibility semantics, keyboard use, contrast, and assistive tech needs.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "findings": {
+        "type": "array"
+      },
+      "recommendations": {
+        "type": "array"
+      },
+      "clarification_question": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "default_max_retries": 1
+}
