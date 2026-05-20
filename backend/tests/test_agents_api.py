@@ -29,13 +29,16 @@ def reseed_builtins():
     yield
 
 
-def test_seed_creates_four_builtin_agents(client):
+def test_seed_creates_managed_and_specialist_builtin_agents(client):
     resp = client.get("/api/agents")
     assert resp.status_code == 200
     agents = resp.json()
     builtins = [a for a in agents if a["is_builtin"]]
-    role_keys = sorted(a["role_key"] for a in builtins)
-    assert role_keys == ["architect", "engineer", "product_manager", "qa"]
+    role_keys = {a["role_key"] for a in builtins}
+    assert {"architect", "engineer", "product_manager", "qa"} <= role_keys
+    assert "specialist:security_reviewer" in role_keys
+    assert "specialist:performance_reviewer" in role_keys
+    assert {a["agent_tier"] for a in builtins} == {"managed", "specialist"}
 
 
 def test_seed_is_idempotent(client):
@@ -45,7 +48,7 @@ def test_seed_is_idempotent(client):
     _run_async(seed_builtin_agents(bootstrap_module.async_store))
     resp = client.get("/api/agents")
     builtins = [a for a in resp.json() if a["is_builtin"]]
-    assert len(builtins) == 4
+    assert len(builtins) == 16
 
 
 def test_builtin_pm_and_architect_trigger_replan_on_done(client):
@@ -67,25 +70,26 @@ def test_builtin_qa_triggers_replan_on_fail(client):
 def test_create_custom_agent(client):
     payload = {
         "name": "Security Reviewer",
-        "role_key": "security_reviewer",
+        "role_key": "custom_security_reviewer",
         "description": "Audits code for security issues.",
         "system_prompt_template": "Review {issue_title} for security vulnerabilities.",
     }
     resp = client.post("/api/agents", json=payload)
     assert resp.status_code == 201, resp.text
     agent = resp.json()
-    assert agent["role_key"] == "security_reviewer"
+    assert agent["role_key"] == "custom_security_reviewer"
     assert agent["is_builtin"] is False
-    assert agent["artifact_subdir"] == "node_security_reviewer"
+    assert agent["agent_tier"] == "custom"
+    assert agent["artifact_subdir"] == "node_custom_security_reviewer"
     # Listing should now surface it
     listing = client.get("/api/agents").json()
-    assert any(a["role_key"] == "security_reviewer" for a in listing)
+    assert any(a["role_key"] == "custom_security_reviewer" for a in listing)
 
 
 def test_create_agent_rejects_duplicate_role_key_in_same_scope(client):
     payload = {
         "name": "Sec1",
-        "role_key": "security_reviewer",
+        "role_key": "duplicate_scope_reviewer",
         "system_prompt_template": "x",
     }
     assert client.post("/api/agents", json=payload).status_code == 201

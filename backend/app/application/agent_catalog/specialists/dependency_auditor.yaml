@@ -1,0 +1,29 @@
+{
+  "role_key": "dependency_auditor",
+  "display_name": "Dependency Auditor",
+  "prompt_template": "Audit dependency changes for security, license, version, and operational risks.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "findings": {
+        "type": "array"
+      },
+      "recommendations": {
+        "type": "array"
+      },
+      "clarification_question": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "default_max_retries": 1
+}

@@ -217,6 +217,261 @@ def test_scheduler_can_disable_plan_first_gate():
     _run(run())
 
 
+def test_conductor_spawn_specialist_adds_and_dispatches_node(monkeypatch):
+    import app.bootstrap as bootstrap_module
+    from app.application.conductor_supervisor import ConductorSupervisor
+    store = bootstrap_module.async_store
+
+    monkeypatch.setenv("CONDUCTOR_AUTONOMY", "autonomous")
+
+    async def fake_observe(self, **kwargs):
+        return {
+            "action": "spawn_specialist",
+            "reason": "Auth flow needs focused security review",
+            "role_key": "security_reviewer",
+            "prompt": "Review the authentication flow for security risks.",
+        }
+
+    monkeypatch.setattr(ConductorSupervisor, "observe", fake_observe)
+    dispatched: list = []
+
+    async def auto_done_dispatcher(task):
+        dispatched.append(task)
+        task.status = "done"
+        task.updated_at = datetime.now()
+        await store.save_codex_task(task)
+
+    async def run():
+        issue = await _make_issue_in_store(
+            store,
+            title="Secure login flow",
+            plan_first_pm=False,
+        )
+        agents = {a.role_key: a for a in await store.list_agents(workspace_id=None)}
+        dag = {
+            "nodes": [
+                {
+                    "node_key": "architect",
+                    "agent_id": agents["architect"].id,
+                    "role_key": "architect",
+                    "title": "Architect",
+                }
+            ],
+            "edges": [],
+        }
+        graph = await materialize_graph_from_dag(store, issue.id, dag)
+        scheduler = WorkflowScheduler(store=store, task_dispatcher=auto_done_dispatcher)
+
+        await scheduler.start_graph(graph.id)
+        first_task = dispatched[0]
+        await scheduler.on_task_completed(first_task)
+
+        updated = await store.load_workflow_graph(graph.id)
+        spawned_node = next(
+            n for n in updated.nodes if n.node_key.startswith("specialist_security_reviewer")
+        )
+        assert spawned_node.status == "running"
+        assert spawned_node.prompt_override == "Review the authentication flow for security risks."
+        assert any(
+            e.from_node_key == "architect" and e.to_node_key == spawned_node.node_key
+            for e in updated.edges
+        )
+        spawned_task = dispatched[-1]
+        assert spawned_task.role == "specialist:security_reviewer"
+        assert spawned_task.prompt == "Review the authentication flow for security risks."
+
+    _run(run())
+
+
+def test_conductor_spawn_custom_registers_agent_and_dispatches_node(monkeypatch):
+    import app.bootstrap as bootstrap_module
+    from app.application.conductor_supervisor import ConductorSupervisor
+    store = bootstrap_module.async_store
+
+    monkeypatch.setenv("CONDUCTOR_AUTONOMY", "autonomous")
+
+    async def fake_observe(self, **kwargs):
+        return {
+            "action": "spawn_custom",
+            "reason": "Need a focused migration checklist",
+            "name": "Migration Checklist",
+            "prompt": "Create a migration checklist for this change.",
+            "schema": {"type": "object", "properties": {"checklist": {"type": "array"}}},
+        }
+
+    monkeypatch.setattr(ConductorSupervisor, "observe", fake_observe)
+    dispatched: list = []
+
+    async def auto_done_dispatcher(task):
+        dispatched.append(task)
+        task.status = "done"
+        task.updated_at = datetime.now()
+        await store.save_codex_task(task)
+
+    async def run():
+        issue = await _make_issue_in_store(
+            store,
+            title="Database migration",
+            plan_first_pm=False,
+        )
+        agents = {a.role_key: a for a in await store.list_agents(workspace_id=None)}
+        graph = await materialize_graph_from_dag(
+            store,
+            issue.id,
+            {
+                "nodes": [
+                    {
+                        "node_key": "architect",
+                        "agent_id": agents["architect"].id,
+                        "role_key": "architect",
+                        "title": "Architect",
+                    }
+                ],
+                "edges": [],
+            },
+        )
+        scheduler = WorkflowScheduler(store=store, task_dispatcher=auto_done_dispatcher)
+
+        await scheduler.start_graph(graph.id)
+        await scheduler.on_task_completed(dispatched[0])
+
+        custom_agents = await store.list_agents(workspace_id=None, role_key="custom:migration_checklist")
+        assert custom_agents
+        assert custom_agents[0].agent_tier == "custom"
+        updated = await store.load_workflow_graph(graph.id)
+        spawned_node = next(
+            n for n in updated.nodes if n.node_key.startswith("custom_migration_checklist")
+        )
+        assert spawned_node.status == "running"
+        spawned_task = dispatched[-1]
+        assert spawned_task.role == "custom:migration_checklist"
+        assert spawned_task.executor == "claude"
+
+    _run(run())
+
+
+def test_conductor_inject_context_updates_next_node_prompt(monkeypatch):
+    import app.bootstrap as bootstrap_module
+    from app.application.conductor_supervisor import ConductorSupervisor
+    store = bootstrap_module.async_store
+
+    monkeypatch.setenv("CONDUCTOR_AUTONOMY", "autonomous")
+
+    async def fake_observe(self, **kwargs):
+        return {
+            "action": "inject_context",
+            "reason": "Architect needs a constraint from PM.",
+            "target_node_key": "architect",
+            "context_message": "Preserve the existing REST API contract.",
+        }
+
+    monkeypatch.setattr(ConductorSupervisor, "observe", fake_observe)
+    dispatched: list = []
+
+    async def auto_done_dispatcher(task):
+        dispatched.append(task)
+        task.status = "done"
+        task.updated_at = datetime.now()
+        await store.save_codex_task(task)
+
+    async def run():
+        issue = await _make_issue_in_store(
+            store,
+            title="Refactor auth API",
+            plan_first_pm=False,
+        )
+        agents = {a.role_key: a for a in await store.list_agents(workspace_id=None)}
+        graph = await materialize_graph_from_dag(
+            store,
+            issue.id,
+            {
+                "nodes": [
+                    {"node_key": "product_manager", "agent_id": agents["product_manager"].id},
+                    {"node_key": "architect", "agent_id": agents["architect"].id},
+                ],
+                "edges": [
+                    {"from_node_key": "product_manager", "to_node_key": "architect"},
+                ],
+            },
+        )
+        scheduler = WorkflowScheduler(store=store, task_dispatcher=auto_done_dispatcher)
+
+        await scheduler.start_graph(graph.id)
+        await scheduler.on_task_completed(dispatched[0])
+
+        architect_task = dispatched[-1]
+        assert architect_task.role == "architect"
+        assert "[CONDUCTOR CONTEXT]" in architect_task.prompt
+        assert "Preserve the existing REST API contract." in architect_task.prompt
+        assert "Refactor auth API" in architect_task.prompt
+        state = await store.load_conductor_state(issue.id)
+        assert state is not None
+        assert state.pending_dispatches_json == "[]"
+
+    _run(run())
+
+
+def test_conductor_dispatch_next_prioritizes_blocked_node(monkeypatch):
+    import app.bootstrap as bootstrap_module
+    from app.application.conductor_supervisor import ConductorSupervisor
+    store = bootstrap_module.async_store
+
+    monkeypatch.setenv("CONDUCTOR_AUTONOMY", "autonomous")
+
+    async def fake_observe(self, **kwargs):
+        return {
+            "action": "dispatch_next",
+            "reason": "Security should run immediately.",
+            "target_node_key": "specialist_security_reviewer",
+            "prompt_override": "Review auth before implementation continues.",
+        }
+
+    monkeypatch.setattr(ConductorSupervisor, "observe", fake_observe)
+    dispatched: list = []
+
+    async def auto_done_dispatcher(task):
+        dispatched.append(task)
+        task.status = "done"
+        task.updated_at = datetime.now()
+        await store.save_codex_task(task)
+
+    async def run():
+        issue = await _make_issue_in_store(
+            store,
+            title="Implement secure login",
+            plan_first_pm=False,
+        )
+        agents = {a.role_key: a for a in await store.list_agents(workspace_id=None)}
+        graph = await materialize_graph_from_dag(
+            store,
+            issue.id,
+            {
+                "nodes": [
+                    {"node_key": "architect", "agent_id": agents["architect"].id},
+                    {
+                        "node_key": "specialist_security_reviewer",
+                        "agent_id": agents["specialist:security_reviewer"].id,
+                    },
+                    {"node_key": "engineer", "agent_id": agents["engineer"].id},
+                ],
+                "edges": [
+                    {"from_node_key": "architect", "to_node_key": "engineer"},
+                    {"from_node_key": "engineer", "to_node_key": "specialist_security_reviewer"},
+                ],
+            },
+        )
+        scheduler = WorkflowScheduler(store=store, task_dispatcher=auto_done_dispatcher)
+
+        await scheduler.start_graph(graph.id)
+        await scheduler.on_task_completed(dispatched[0])
+
+        prioritized_task = dispatched[-1]
+        assert prioritized_task.role == "specialist:security_reviewer"
+        assert prioritized_task.prompt == "Review auth before implementation continues."
+
+    _run(run())
+
+
 def test_approve_plan_endpoint_resumes_scheduler(client, monkeypatch):
     import app.bootstrap as bootstrap_module
     from app.application.workflow_scheduler import WorkflowScheduler

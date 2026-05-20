@@ -1,0 +1,29 @@
+{
+  "role_key": "i18n_checker",
+  "display_name": "I18n Checker",
+  "prompt_template": "Review text, formatting, locale, timezone, and translation-readiness issues.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "findings": {
+        "type": "array"
+      },
+      "recommendations": {
+        "type": "array"
+      },
+      "clarification_question": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "default_max_retries": 1
+}

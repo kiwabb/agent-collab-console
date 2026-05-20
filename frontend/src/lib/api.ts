@@ -1476,3 +1476,32 @@ export async function getConductorLog(issueId: string): Promise<ConductorDecisio
   const data = (await res.json()) as { decisions: ConductorDecision[] };
   return data.decisions ?? [];
 }
+
+export interface ConductorStatePayload {
+  issue_id: string;
+  running_thread: Array<{
+    task_id: string;
+    completed_node_key: string;
+    action: string;
+    reason?: string | null;
+    note?: string | null;
+    created_at: string;
+  }>;
+  pending_dispatches: Array<{
+    action: string;
+    target_node_key?: string | null;
+    prompt_override?: string | null;
+    context_inject?: string | null;
+    context_message?: string | null;
+    reason?: string | null;
+  }>;
+  scratchpad: string;
+  decision_count: number;
+  updated_at?: string | null;
+}
+
+export async function getConductorState(issueId: string): Promise<ConductorStatePayload | null> {
+  const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-state`);
+  if (!res.ok) return null;
+  return (await res.json()) as ConductorStatePayload;
+}

@@ -1,0 +1,29 @@
+{
+  "role_key": "log_summarizer",
+  "display_name": "Log Summarizer",
+  "prompt_template": "Summarize long execution logs into root causes, important evidence, and recommended next actions.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "findings": {
+        "type": "array"
+      },
+      "recommendations": {
+        "type": "array"
+      },
+      "clarification_question": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "default_max_retries": 1
+}

@@ -148,6 +148,21 @@ class IssueArtifactDocuments:
         return [p for p in paths if p.exists()]
 
     # -------------------------------------------------------------------------
+    # Specialist artifacts
+    # -------------------------------------------------------------------------
+
+    def specialist_artifact_path(
+        self,
+        workspace_path: str,
+        issue_id: str,
+        role_key: str,
+        task_id: str,
+    ) -> Path:
+        p = self.issue_root(workspace_path, issue_id) / "specialists" / role_key / f"{task_id}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    # -------------------------------------------------------------------------
     # Aggregate listing
     # -------------------------------------------------------------------------
 

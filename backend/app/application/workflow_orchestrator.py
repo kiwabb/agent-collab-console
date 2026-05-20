@@ -83,6 +83,13 @@ _BACKEND_KEYWORDS = (
     "route", "router", "controller", "service",
 )
 
+_SECURITY_REVIEW_KEYWORDS = (
+    "auth", "authentication", "authorization", "oauth", "login",
+    "security", "secure", "permission", "permissions", "token",
+    "secret", "secrets", "credential", "credentials", "vulnerability",
+    "安全", "认证", "鉴权", "权限", "登录", "令牌", "密钥",
+)
+
 
 def _spans_frontend_and_backend(issue: CodexIssue) -> bool:
     """Phase 1 — return True when the issue text mentions BOTH frontend
@@ -93,6 +100,13 @@ def _spans_frontend_and_backend(issue: CodexIssue) -> bool:
     has_fe = any(kw in haystack for kw in _FRONTEND_KEYWORDS)
     has_be = any(kw in haystack for kw in _BACKEND_KEYWORDS)
     return has_fe and has_be
+
+
+def _needs_security_review(issue: CodexIssue | None) -> bool:
+    if issue is None:
+        return False
+    haystack = f"{issue.title or ''}\n{issue.description or ''}".lower()
+    return any(keyword in haystack for keyword in _SECURITY_REVIEW_KEYWORDS)
 
 
 def _node_order_for_intent(intent: str) -> list[str]:
@@ -465,23 +479,33 @@ class WorkflowOrchestrator:
                     })
                     rationale_parts.append("PM produced a PRD that looks system-level; inserting architect.")
         elif completed_node.node_key == "architect" and trigger_reason == "node_done":
-            # Heuristic: many architectures benefit from a security pass alongside QA.
-            # Only suggest if a security_reviewer agent is registered and not already in the graph.
+            # Only suggest a security pass when the issue text is security-
+            # relevant. Generic feature/refactor issues should continue
+            # through the normal DAG without spawning specialists.
+            issue = await self.store.load_codex_issue(graph.issue_id) if self.store is not None else None
             existing_keys = {n.node_key for n in graph.nodes}
-            if "security_reviewer" in agents_by_role and "security_reviewer" not in existing_keys:
-                sec_agent = agents_by_role["security_reviewer"]
+            sec_agent = (
+                agents_by_role.get("specialist:security_reviewer")
+                or agents_by_role.get("security_reviewer")
+            )
+            if (
+                _needs_security_review(issue)
+                and sec_agent is not None
+                and "security_reviewer" not in existing_keys
+                and "specialist_security_reviewer" not in existing_keys
+            ):
                 added_nodes.append({
-                    "node_key": "security_reviewer",
+                    "node_key": "specialist_security_reviewer",
                     "agent_id": sec_agent.id,
-                    "role_key": "security_reviewer",
+                    "role_key": sec_agent.role_key,
                     "title": sec_agent.name,
                 })
                 added_edges.append({
                     "from_node_key": "engineer",
-                    "to_node_key": "security_reviewer",
+                    "to_node_key": "specialist_security_reviewer",
                     "edge_type": "parallel-fanout",
                 })
-                rationale_parts.append("Architecture changes detected; suggesting a parallel security review.")
+                rationale_parts.append("Security-sensitive issue detected; suggesting a parallel security review.")
         elif completed_node.node_key == "qa" and trigger_reason == "node_failed":
             # QA failed — propose a refine-loop edge back to engineer.
             already_loop = any(

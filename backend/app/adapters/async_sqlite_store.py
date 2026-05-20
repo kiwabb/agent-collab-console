@@ -148,6 +148,7 @@ class AsyncSQLiteStore:
                 executor TEXT DEFAULT 'codex',
                 status TEXT DEFAULT 'pending',
                 result TEXT,
+                result_json TEXT,
                 parent_task_id TEXT,
                 task_kind TEXT DEFAULT 'normal',
                 blocked_by_help_id TEXT,
@@ -296,6 +297,14 @@ class AsyncSQLiteStore:
             pass
         try:
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN model TEXT")
+        except aiosqlite.OperationalError:
+            pass
+        try:
+            await conn.execute("ALTER TABLE codex_tasks ADD COLUMN result_json TEXT")
+        except aiosqlite.OperationalError:
+            pass
+        try:
+            await conn.execute("ALTER TABLE agents ADD COLUMN agent_tier TEXT DEFAULT 'managed'")
         except aiosqlite.OperationalError:
             pass
         try:
@@ -492,6 +501,7 @@ class AsyncSQLiteStore:
                 default_model TEXT,
                 artifact_subdir TEXT,
                 persist_kind TEXT,
+                agent_tier TEXT DEFAULT 'managed',
                 triggers_replan_on_done INTEGER NOT NULL DEFAULT 0,
                 triggers_replan_on_fail INTEGER NOT NULL DEFAULT 0,
                 is_builtin INTEGER NOT NULL DEFAULT 0,
@@ -649,6 +659,16 @@ class AsyncSQLiteStore:
                 diff_json TEXT,
                 applied_at TEXT,
                 created_at TEXT NOT NULL
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS conductor_states (
+                issue_id TEXT PRIMARY KEY,
+                running_thread_json TEXT NOT NULL DEFAULT '[]',
+                pending_dispatches_json TEXT NOT NULL DEFAULT '[]',
+                scratchpad TEXT NOT NULL DEFAULT '',
+                decision_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT
             )
         """)
         # Create indexes for frequently queried columns
@@ -1066,13 +1086,13 @@ class AsyncSQLiteStore:
         await conn.execute(
             """INSERT OR REPLACE INTO codex_tasks (
                 id, session_id, project_id, issue_id, phase, title, prompt, role, executor, provider, model,
-                status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path,
+                status, result, result_json, parent_task_id, task_kind, blocked_by_help_id, workspace_path,
                 git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha,
                 resume_session_id, resume_message_id, last_execution_process_id,
                 sequence_index, sequence_group, review_comment, workflow_node_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (task.id, task.session_id, task.project_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
-             task.provider, task.model, task.status, task.result, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
+             task.provider, task.model, task.status, task.result, task.result_json, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
              task.workspace_path,
              task.git_branch, task.git_base_branch, task.git_worktree_path, task.git_merge_status, task.git_last_commit_sha,
              task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
@@ -1106,6 +1126,7 @@ class AsyncSQLiteStore:
             model=row["model"] if "model" in keys and row["model"] else None,
             status=row["status"],
             result=row["result"],
+            result_json=row["result_json"] if "result_json" in keys and row["result_json"] else None,
             parent_task_id=row["parent_task_id"] if row["parent_task_id"] else None,
             task_kind=row["task_kind"] if "task_kind" in keys and row["task_kind"] else "normal",
             blocked_by_help_id=row["blocked_by_help_id"] if "blocked_by_help_id" in keys and row["blocked_by_help_id"] else None,
@@ -1136,7 +1157,7 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
         select_sql = (
-            "SELECT id, session_id, project_id, issue_id, phase, title, prompt, role, executor, status, result, "
+            "SELECT id, session_id, project_id, issue_id, phase, title, prompt, role, executor, status, result, result_json, "
             "parent_task_id, task_kind, blocked_by_help_id, workspace_path, "
             "git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, "
             "resume_session_id, resume_message_id, last_execution_process_id, "
@@ -1708,6 +1729,7 @@ class AsyncSQLiteStore:
             default_model=row["default_model"],
             artifact_subdir=row["artifact_subdir"],
             persist_kind=row["persist_kind"],
+            agent_tier=row["agent_tier"] if "agent_tier" in row.keys() and row["agent_tier"] else "managed",
             triggers_replan_on_done=bool(row["triggers_replan_on_done"]),
             triggers_replan_on_fail=bool(row["triggers_replan_on_fail"]),
             is_builtin=bool(row["is_builtin"]),
@@ -1723,9 +1745,9 @@ class AsyncSQLiteStore:
             INSERT OR REPLACE INTO agents (
                 id, workspace_id, name, role_key, description, system_prompt_template,
                 input_schema, output_schema, default_executor, default_provider, default_model,
-                artifact_subdir, persist_kind, triggers_replan_on_done, triggers_replan_on_fail,
+                artifact_subdir, persist_kind, agent_tier, triggers_replan_on_done, triggers_replan_on_fail,
                 is_builtin, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 agent.id,
@@ -1741,6 +1763,7 @@ class AsyncSQLiteStore:
                 agent.default_model,
                 agent.artifact_subdir,
                 agent.persist_kind,
+                agent.agent_tier,
                 1 if agent.triggers_replan_on_done else 0,
                 1 if agent.triggers_replan_on_fail else 0,
                 1 if agent.is_builtin else 0,
@@ -1960,6 +1983,7 @@ class AsyncSQLiteStore:
         status: str | None = None,
         task_id: str | None = None,
         artifact_dir: str | None = None,
+        prompt_override: str | None = None,
         retries: int | None = None,
         started_at: datetime | None = None,
         completed_at: object = _UNSET,  # use sentinel so None means "clear to NULL"
@@ -1974,6 +1998,8 @@ class AsyncSQLiteStore:
             sets.append("task_id = ?"); params.append(task_id)
         if artifact_dir is not None:
             sets.append("artifact_dir = ?"); params.append(artifact_dir)
+        if prompt_override is not None:
+            sets.append("prompt_override = ?"); params.append(prompt_override)
         if retries is not None:
             sets.append("retries = ?"); params.append(retries)
         if started_at is not None:
@@ -2101,6 +2127,46 @@ class AsyncSQLiteStore:
                 created_at=self._parse_datetime(r["created_at"]),
             ))
         return out
+
+    async def save_conductor_state(self, state: "ConductorState") -> None:
+        from app.domain.models import ConductorState  # noqa: F401 (type hint import)
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """INSERT OR REPLACE INTO conductor_states
+               (issue_id, running_thread_json, pending_dispatches_json, scratchpad, decision_count, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                state.issue_id,
+                state.running_thread_json,
+                state.pending_dispatches_json,
+                state.scratchpad,
+                state.decision_count,
+                self._format_datetime(state.updated_at or datetime.now()),
+            ),
+        )
+        await conn.commit()
+
+    async def load_conductor_state(self, issue_id: str) -> "ConductorState | None":
+        from app.domain.models import ConductorState
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM conductor_states WHERE issue_id = ?",
+            (issue_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return ConductorState(
+            issue_id=row["issue_id"],
+            running_thread_json=row["running_thread_json"] or "[]",
+            pending_dispatches_json=row["pending_dispatches_json"] or "[]",
+            scratchpad=row["scratchpad"] or "",
+            decision_count=int(row["decision_count"] or 0),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
 
     async def save_conductor_decision(self, d: "ConductorDecision") -> None:
         from app.domain.models import ConductorDecision  # noqa: F401 (type hint import)

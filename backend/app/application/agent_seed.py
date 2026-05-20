@@ -11,6 +11,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from app.domain.models import Agent
+from app.application.agent_catalog.catalog import AgentCatalog, SPECIALIST_PREFIX
 
 
 # (role_key, name, description, artifact_subdir, persist_kind,
@@ -98,8 +99,34 @@ async def seed_builtin_agents(store) -> int:
             output_schema={},
             artifact_subdir=subdir,
             persist_kind=persist_kind,
+            agent_tier="managed",
             triggers_replan_on_done=on_done,
             triggers_replan_on_fail=on_fail,
+            is_builtin=True,
+            created_at=now,
+            updated_at=now,
+        )
+        await store.save_agent(agent)
+        created += 1
+    catalog = AgentCatalog()
+    existing = {a.role_key for a in await store.list_agents(workspace_id=None)}
+    for definition in catalog.list_available_agents():
+        role_key = f"{SPECIALIST_PREFIX}{definition.role_key}"
+        if role_key in existing:
+            continue
+        agent = Agent(
+            id=str(uuid4()),
+            workspace_id=None,
+            name=definition.display_name,
+            role_key=role_key,
+            description=definition.prompt_template,
+            system_prompt_template=f"[specialist:{definition.role_key}]",
+            input_schema=[],
+            output_schema=definition.output_schema,
+            default_executor="claude",
+            artifact_subdir=f"specialists/{definition.role_key}",
+            persist_kind="specialist",
+            agent_tier="specialist",
             is_builtin=True,
             created_at=now,
             updated_at=now,

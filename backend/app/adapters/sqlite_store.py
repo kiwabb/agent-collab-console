@@ -169,6 +169,7 @@ class SQLiteStore:
                     model TEXT,
                     status TEXT DEFAULT 'pending',
                     result TEXT,
+                    result_json TEXT,
                     parent_task_id TEXT,
                     task_kind TEXT DEFAULT 'normal',
                     blocked_by_help_id TEXT,
@@ -324,6 +325,14 @@ class SQLiteStore:
             except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN result_json TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE agents ADD COLUMN agent_tier TEXT DEFAULT 'managed'")
+            except sqlite3.OperationalError:
+                pass
+            try:
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN project_id TEXT")
             except sqlite3.OperationalError:
                 pass
@@ -436,6 +445,7 @@ class SQLiteStore:
                     default_model TEXT,
                     artifact_subdir TEXT,
                     persist_kind TEXT,
+                    agent_tier TEXT DEFAULT 'managed',
                     triggers_replan_on_done INTEGER NOT NULL DEFAULT 0,
                     triggers_replan_on_fail INTEGER NOT NULL DEFAULT 0,
                     is_builtin INTEGER NOT NULL DEFAULT 0,
@@ -592,6 +602,16 @@ class SQLiteStore:
                     diff_json TEXT,
                     applied_at TEXT,
                     created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS conductor_states (
+                    issue_id TEXT PRIMARY KEY,
+                    running_thread_json TEXT NOT NULL DEFAULT '[]',
+                    pending_dispatches_json TEXT NOT NULL DEFAULT '[]',
+                    scratchpad TEXT NOT NULL DEFAULT '',
+                    decision_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT
                 )
             """)
             # Create indexes for frequently queried columns
@@ -1036,9 +1056,9 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO codex_tasks (id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO codex_tasks (id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, result_json, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (task.id, task.session_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
-             task.provider, task.model, task.status, task.result, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
+             task.provider, task.model, task.status, task.result, task.result_json, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
              task.workspace_path, task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
              self._format_datetime(task.created_at),
              self._format_datetime(task.updated_at)),
@@ -1067,6 +1087,7 @@ class SQLiteStore:
             model=row["model"] if "model" in row.keys() and row["model"] else None,
             status=row["status"],
             result=row["result"],
+            result_json=row["result_json"] if "result_json" in row.keys() and row["result_json"] else None,
             parent_task_id=row["parent_task_id"] if row["parent_task_id"] else None,
             task_kind=row["task_kind"] if "task_kind" in row.keys() and row["task_kind"] else "normal",
             blocked_by_help_id=row["blocked_by_help_id"] if "blocked_by_help_id" in row.keys() and row["blocked_by_help_id"] else None,
@@ -1083,7 +1104,7 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        select_sql = "SELECT id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at FROM codex_tasks"
+        select_sql = "SELECT id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, result_json, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at FROM codex_tasks"
         if session_id and issue_id:
             rows = conn.execute(
                 f"{select_sql} WHERE session_id = ? AND issue_id = ? ORDER BY created_at ASC",
@@ -1456,6 +1477,49 @@ class SQLiteStore:
         )
         conn.commit()
         conn.close()
+
+    # --- Conductor State ---
+
+    def save_conductor_state(self, state: "ConductorState") -> None:
+        from app.domain.models import ConductorState  # noqa: F401 (type hint import)
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO conductor_states
+               (issue_id, running_thread_json, pending_dispatches_json, scratchpad, decision_count, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                state.issue_id,
+                state.running_thread_json,
+                state.pending_dispatches_json,
+                state.scratchpad,
+                state.decision_count,
+                self._format_datetime(state.updated_at or datetime.now()),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def load_conductor_state(self, issue_id: str) -> "ConductorState | None":
+        from app.domain.models import ConductorState
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM conductor_states WHERE issue_id = ?",
+            (issue_id,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return ConductorState(
+            issue_id=row["issue_id"],
+            running_thread_json=row["running_thread_json"] or "[]",
+            pending_dispatches_json=row["pending_dispatches_json"] or "[]",
+            scratchpad=row["scratchpad"] or "",
+            decision_count=int(row["decision_count"] or 0),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
 
     # --- Runtime Catalog ---
 

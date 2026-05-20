@@ -1,0 +1,29 @@
+{
+  "role_key": "security_reviewer",
+  "display_name": "Security Reviewer",
+  "prompt_template": "Review implementation plans and code for auth, data exposure, injection, secrets, and abuse risks.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "findings": {
+        "type": "array"
+      },
+      "recommendations": {
+        "type": "array"
+      },
+      "clarification_question": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "default_max_retries": 1
+}

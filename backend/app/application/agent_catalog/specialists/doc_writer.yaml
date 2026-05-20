@@ -1,0 +1,29 @@
+{
+  "role_key": "doc_writer",
+  "display_name": "Documentation Writer",
+  "prompt_template": "Produce concise user-facing and developer-facing documentation updates for the completed work.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "findings": {
+        "type": "array"
+      },
+      "recommendations": {
+        "type": "array"
+      },
+      "clarification_question": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "default_max_retries": 1
+}

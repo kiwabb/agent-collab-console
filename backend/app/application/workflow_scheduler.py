@@ -18,6 +18,12 @@ from datetime import datetime
 from typing import Iterable
 from uuid import uuid4
 
+from app.application.agent_catalog.catalog import (
+    CUSTOM_PREFIX,
+    SPECIALIST_PREFIX,
+    AgentCatalog,
+    AgentDefinition,
+)
 from app.domain.models import (
     Agent,
     CodexIssue,
@@ -104,8 +110,15 @@ class WorkflowScheduler:
         if issue is not None and issue.status == "awaiting_approval":
             return await self._require_graph(graph_id)
 
+        priority_node_keys: set[str] = set()
+        if issue is not None:
+            priority_node_keys = await self._apply_pending_conductor_dispatches(graph, issue)
+            graph = await self._require_graph(graph_id)
+
         # Dispatch all ready nodes (concurrent dispatch handles parallel-fanout naturally).
         ready_nodes = [n for n in graph.nodes if n.status == "ready"]
+        if priority_node_keys:
+            ready_nodes = [n for n in ready_nodes if n.node_key in priority_node_keys]
         if ready_nodes:
             issue = issue or await self.store.load_codex_issue(graph.issue_id)
             if issue is None:
@@ -162,15 +175,29 @@ class WorkflowScheduler:
         # has to take manual action (retry from DAG tab, steer, abandon).
         # Wrapped so any failure here can't break the scheduler.
         conductor_decision: dict | None = None
+        conductor_graph_mutated = False
         try:
             from app.application.conductor_supervisor import ConductorSupervisor
+            from app.application.subagent_result_builder import build_subagent_result
             supervisor = ConductorSupervisor(store=self.store, event_bus=self._event_bus)
-            conductor_decision = await supervisor.observe(
+            subagent_result = build_subagent_result(
                 task=task,
+                node=node,
+                doc=getattr(task, "_subagent_doc", None),
+            )
+            conductor_decision = await supervisor.observe(
+                result=subagent_result,
                 node_status=terminal,
                 graph=graph,
                 issue=issue_for_event,
             )
+            if conductor_decision is not None and issue_for_event is not None:
+                await self._record_conductor_decision_state(
+                    issue=issue_for_event,
+                    task=task,
+                    node=node,
+                    decision=conductor_decision,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.debug("conductor observation failed: %s", exc)
 
@@ -204,6 +231,7 @@ class WorkflowScheduler:
                 if autonomy == "autonomous" and diff:
                     try:
                         await self._apply_diff_to_graph(graph.id, diff)
+                        conductor_graph_mutated = True
                         logger.info(
                             "Conductor auto-applied %s diff to graph %s",
                             conductor_decision.get("action"), graph.id,
@@ -244,6 +272,52 @@ class WorkflowScheduler:
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("Conductor suggest replan save failed: %s", exc)
 
+        # Conductor agent-spawn actions use the same graph-mutation path as
+        # replans, but derive the node/agent from the local agent catalog.
+        if conductor_decision and conductor_decision.get("action") in {"spawn_specialist", "spawn_custom"}:
+            autonomy = os.getenv("CONDUCTOR_AUTONOMY", "suggest").lower()
+            if autonomy != "off":
+                try:
+                    diff = await self._build_conductor_spawn_diff(
+                        graph=graph,
+                        source_node=node,
+                        decision=conductor_decision,
+                    )
+                    if autonomy == "autonomous" and diff:
+                        await self._apply_diff_to_graph(graph.id, diff)
+                        conductor_graph_mutated = True
+                        logger.info(
+                            "Conductor auto-spawned %s on graph %s",
+                            conductor_decision.get("action"), graph.id,
+                        )
+                        if self._event_bus is not None and issue_for_event is not None:
+                            try:
+                                await self._event_bus.append({
+                                    "type": "graph_mutated",
+                                    "issue_id": issue_for_event.id,
+                                    "session_id": issue_for_event.session_id,
+                                    "graph_id": graph.id,
+                                    "action": conductor_decision.get("action"),
+                                    "reason": conductor_decision.get("reason"),
+                                })
+                            except Exception:  # noqa: BLE001
+                                pass
+                    elif autonomy == "suggest" and diff:
+                        from app.domain.models import GraphReplanPending
+                        replan = GraphReplanPending(
+                            id=str(uuid4()),
+                            graph_id=graph.id,
+                            triggered_by_node_key=node.node_key,
+                            trigger_reason=f"conductor_{conductor_decision.get('action')}",
+                            diff_json=json.dumps(diff, ensure_ascii=False, default=str),
+                            rationale=conductor_decision.get("reason"),
+                            status="pending",
+                            created_at=datetime.now(),
+                        )
+                        await self.store.save_replan_pending(replan)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Conductor spawn handling failed: %s", exc)
+
         # 1. retry-on-fail: bring the failed node back to pending if any
         #    incoming retry-on-fail edge exists AND we're under max_retries.
         if terminal == "failed" and node.retries < node.max_retries:
@@ -273,7 +347,8 @@ class WorkflowScheduler:
             return
 
         # 3. replan triggers — only when the completed agent has the flag set.
-        await self._maybe_open_replan(graph, node, terminal)
+        if not conductor_graph_mutated:
+            await self._maybe_open_replan(graph, node, terminal)
 
         # 3.5 plan-first gate — pause after Product Manager until the user
         # approves the plan summary.
@@ -639,7 +714,9 @@ class WorkflowScheduler:
                 node_key=n["node_key"],
                 agent_id=n["agent_id"],
                 title=n.get("title"),
+                prompt_override=n.get("prompt"),
                 status="pending",
+                max_retries=int(n.get("max_retries") or 1),
                 instance_index=int(n.get("instance_index") or 0),
                 created_at=now,
             ))
@@ -661,10 +738,248 @@ class WorkflowScheduler:
         # Rebuild dag_json so the persisted source of truth stays in sync.
         graph.dag_json = json.dumps({
             "meta": {"created_by": "replanner"},
-            "nodes": [{"node_key": n.node_key, "agent_id": n.agent_id, "role_key": n.node_key, "title": n.title} for n in new_nodes],
+            "nodes": [
+                {
+                    "node_key": n.node_key,
+                    "agent_id": n.agent_id,
+                    "role_key": n.node_key,
+                    "title": n.title,
+                    "prompt": n.prompt_override,
+                    "max_retries": n.max_retries,
+                }
+                for n in new_nodes
+            ],
             "edges": [{"from_node_key": e.from_node_key, "to_node_key": e.to_node_key, "edge_type": e.edge_type, "condition_expr": e.condition_expr} for e in new_edges],
         }, ensure_ascii=False, default=str)
         await self.store.save_workflow_graph(graph, nodes=new_nodes, edges=new_edges)
+
+    async def _apply_pending_conductor_dispatches(
+        self,
+        graph: WorkflowGraph,
+        issue: CodexIssue,
+    ) -> set[str]:
+        if not hasattr(self.store, "load_conductor_state") or not hasattr(self.store, "save_conductor_state"):
+            return set()
+        state = await self.store.load_conductor_state(issue.id)
+        if state is None:
+            return set()
+        from app.application.conductor_actions import (
+            decode_pending_dispatches,
+            encode_pending_dispatches,
+        )
+        pending = decode_pending_dispatches(state)
+        if not pending:
+            return set()
+
+        nodes_by_key = {node.node_key: node for node in graph.nodes}
+        remaining: list[dict] = []
+        priority_node_keys: set[str] = set()
+        consumed = False
+        for dispatch in pending:
+            target_key = dispatch.get("target_node_key")
+            target = nodes_by_key.get(target_key)
+            if target is None:
+                continue
+            if target.status in {"running", "done", "failed", "skipped"}:
+                continue
+
+            action = dispatch.get("action")
+            prompt_override = target.prompt_override
+            if action == "inject_context":
+                context = str(dispatch.get("context_message") or "").strip()
+                if context:
+                    prompt_override = self._prepend_conductor_context(
+                        context,
+                        target.prompt_override,
+                        issue,
+                    )
+                    await self.store.update_workflow_node(target.id, prompt_override=prompt_override)
+                    target.prompt_override = prompt_override
+                    consumed = True
+                else:
+                    remaining.append(dispatch)
+            elif action == "dispatch_next":
+                replacement = dispatch.get("prompt_override")
+                if replacement:
+                    prompt_override = str(replacement)
+                elif dispatch.get("context_inject"):
+                    prompt_override = self._prepend_conductor_context(
+                        str(dispatch["context_inject"]),
+                        target.prompt_override,
+                        issue,
+                    )
+                await self.store.update_workflow_node(
+                    target.id,
+                    status="ready",
+                    prompt_override=prompt_override,
+                )
+                target.status = "ready"
+                target.prompt_override = prompt_override
+                priority_node_keys.add(target.node_key)
+                consumed = True
+            else:
+                remaining.append(dispatch)
+
+        if consumed:
+            state.pending_dispatches_json = encode_pending_dispatches(remaining)
+            state.updated_at = datetime.now()
+            await self.store.save_conductor_state(state)
+        return priority_node_keys
+
+    @staticmethod
+    def _prepend_conductor_context(
+        context_message: str,
+        existing_prompt: str | None,
+        issue: CodexIssue,
+    ) -> str:
+        issue_body = (issue.description or "").strip()
+        if issue.title and issue_body:
+            fallback = f"{issue.title}\n\n{issue_body}"
+        else:
+            fallback = issue.title or issue_body or ""
+        base = existing_prompt or fallback
+        return f"[CONDUCTOR CONTEXT]\n{context_message.strip()}\n\n{base}".strip()
+
+    async def _record_conductor_decision_state(
+        self,
+        *,
+        issue: CodexIssue,
+        task: CodexTask,
+        node: WorkflowNode,
+        decision: dict,
+    ) -> None:
+        if decision.get("_state_recorded"):
+            return
+        if not hasattr(self.store, "save_conductor_state"):
+            return
+        try:
+            from app.application.conductor_actions import record_conductor_decision
+            from app.domain.models import ConductorState
+            state = None
+            if hasattr(self.store, "load_conductor_state"):
+                state = await self.store.load_conductor_state(issue.id)
+            state = state or ConductorState(issue_id=issue.id)
+            updated = record_conductor_decision(
+                state,
+                decision=decision,
+                task_id=task.id,
+                completed_node_key=node.node_key,
+            )
+            await self.store.save_conductor_state(updated)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("conductor scheduler state update failed: %s", exc)
+
+    async def _build_conductor_spawn_diff(
+        self,
+        *,
+        graph: WorkflowGraph,
+        source_node: WorkflowNode,
+        decision: dict,
+    ) -> dict:
+        action = decision.get("action")
+        catalog = AgentCatalog()
+        if action == "spawn_specialist":
+            role_key = str(decision.get("role_key") or "").strip()
+            if not role_key:
+                raise WorkflowSchedulerError("spawn_specialist requires role_key")
+            normalized = catalog.normalize_role_key(role_key)
+            definition = catalog.resolve_agent(f"{SPECIALIST_PREFIX}{normalized}")
+            agent = await self._ensure_catalog_agent(definition)
+            base_node_key = f"specialist_{normalized}"
+        elif action == "spawn_custom":
+            name = str(decision.get("name") or decision.get("role_key") or "").strip()
+            prompt = str(decision.get("prompt") or "").strip()
+            if not name or not prompt:
+                raise WorkflowSchedulerError("spawn_custom requires name and prompt")
+            definition = catalog.register_custom(
+                name=name,
+                prompt=prompt,
+                schema=decision.get("schema") if isinstance(decision.get("schema"), dict) else None,
+            )
+            agent = await self._ensure_catalog_agent(definition)
+            base_node_key = definition.role_key.replace(":", "_")
+        else:
+            return {}
+
+        prompt_override = str(decision.get("prompt") or definition.prompt_template).strip()
+        existing_edges = {
+            (edge.from_node_key, edge.to_node_key)
+            for edge in graph.edges
+        }
+        for node in graph.nodes:
+            if (
+                node.agent_id == agent.id
+                and node.prompt_override == prompt_override
+                and (source_node.node_key, node.node_key) in existing_edges
+            ):
+                return {}
+
+        node_key = self._unique_node_key(base_node_key, {node.node_key for node in graph.nodes})
+        return {
+            "added_nodes": [
+                {
+                    "node_key": node_key,
+                    "agent_id": agent.id,
+                    "title": decision.get("title") or agent.name,
+                    "prompt": prompt_override,
+                    "max_retries": definition.default_max_retries,
+                }
+            ],
+            "added_edges": [
+                {
+                    "from_node_key": source_node.node_key,
+                    "to_node_key": node_key,
+                    "edge_type": "sequence",
+                }
+            ],
+        }
+
+    async def _ensure_catalog_agent(self, definition: AgentDefinition) -> Agent:
+        if definition.role_key.startswith(CUSTOM_PREFIX):
+            role_key = definition.role_key
+            tier = "custom"
+            artifact_role = definition.role_key
+            system_prompt = definition.prompt_template
+            is_builtin = False
+        else:
+            role_key = f"{SPECIALIST_PREFIX}{definition.role_key}"
+            tier = "specialist"
+            artifact_role = definition.role_key
+            system_prompt = f"[specialist:{definition.role_key}]"
+            is_builtin = True
+
+        existing = await self.store.list_agents(workspace_id=None, role_key=role_key)
+        if existing:
+            return existing[0]
+
+        now = datetime.now()
+        agent = Agent(
+            id=f"agent-{role_key.replace(':', '-')}",
+            workspace_id=None,
+            name=definition.display_name,
+            role_key=role_key,
+            description=definition.prompt_template,
+            system_prompt_template=system_prompt,
+            output_schema=definition.output_schema,
+            default_executor="claude",
+            artifact_subdir=f"specialists/{artifact_role}",
+            persist_kind="specialist",
+            agent_tier=tier,
+            is_builtin=is_builtin,
+            created_at=now,
+            updated_at=now,
+        )
+        await self.store.save_agent(agent)
+        return agent
+
+    @staticmethod
+    def _unique_node_key(base: str, existing: set[str]) -> str:
+        if base not in existing:
+            return base
+        index = 1
+        while f"{base}_{index}" in existing:
+            index += 1
+        return f"{base}_{index}"
 
     # --- Internal helpers ---
 

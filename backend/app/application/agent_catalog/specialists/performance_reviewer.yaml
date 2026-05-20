@@ -1,0 +1,29 @@
+{
+  "role_key": "performance_reviewer",
+  "display_name": "Performance Reviewer",
+  "prompt_template": "Analyze latency, throughput, database, rendering, and scalability risks. Recommend measurable improvements.",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "findings": {
+        "type": "array"
+      },
+      "recommendations": {
+        "type": "array"
+      },
+      "clarification_question": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "default_max_retries": 1
+}

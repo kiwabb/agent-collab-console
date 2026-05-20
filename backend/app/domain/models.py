@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
@@ -195,6 +196,7 @@ class CodexTask(BaseModel):
     model: str | None = None     # Model override (e.g., "claude-sonnet-4-6", "gpt-4o")
     status: str = "pending"
     result: str | None = None
+    result_json: str | None = None
     parent_task_id: str | None = None  # Task this was continued from, if any
     task_kind: str = "normal"
     blocked_by_help_id: str | None = None
@@ -217,6 +219,30 @@ class CodexTask(BaseModel):
     @property
     def workspace_id(self) -> str:
         return self.session_id
+
+
+@dataclass
+class SubAgentResult:
+    """Structured envelope handed to Conductor after a workflow node finishes."""
+
+    task_id: str
+    node_key: str
+    role: str
+    agent_id: str
+    status: str
+    summary: str
+    artifact_json: dict | None
+    artifact_markdown: str | None
+    artifact_paths: list[str]
+    files_changed: list[str]
+    qa_commands: list[dict] | None
+    clarification_question: str | None
+    critique: dict | None
+    duration_s: float
+    retry_count: int
+    max_retries: int
+    review_comment_in: str | None
+    caller_node_key: str | None
 
 
 class CodexTaskMessage(BaseModel):
@@ -390,6 +416,7 @@ class Agent(BaseModel):
     default_model: str | None = None
     artifact_subdir: str | None = None  # legacy subdir (pm/architect/...) or "node_<key>" for custom
     persist_kind: str | None = None  # Hooks RoleWorkflowService.persist_result()
+    agent_tier: Literal["managed", "specialist", "custom"] = "managed"
     triggers_replan_on_done: bool = False  # PM/architect set this true
     triggers_replan_on_fail: bool = False  # QA sets this true
     is_builtin: bool = False
@@ -473,6 +500,18 @@ class GraphReplanPending(BaseModel):
     status: Literal["pending", "confirmed", "rejected"] = "pending"
     created_at: datetime | None = None
     resolved_at: datetime | None = None
+
+
+@dataclass
+class ConductorState:
+    """Issue-level rolling state for Conductor decisions and dispatch hints."""
+
+    issue_id: str
+    running_thread_json: str = "[]"
+    pending_dispatches_json: str = "[]"
+    scratchpad: str = ""
+    decision_count: int = 0
+    updated_at: datetime | None = None
 
 
 AgentMessageType = Literal["handoff", "critique", "clarification", "answer"]
