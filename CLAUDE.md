@@ -33,7 +33,7 @@ cd frontend && npm run build && npm run lint
 
 **i18n**: `useI18n().t("key")`，key 在 `frontend/src/lib/i18n.ts`。
 
-**环境变量**: `REAL_CLI=true` (默认 true,Engineer 真改代码、QA 真跑测试;false 走 mock) / `CODEX_LAUNCH_ENABLED=true` (默认 true,真启 codex 进程) / `QA_EXECUTE_COMMANDS=true` (跟 REAL_CLI 同源,显式关掉测试执行) / `QA_COMMAND_TIMEOUT_S=120` / `QA_TOTAL_BUDGET_S=300` / `CODEX_WORKSPACE_ROOT` / `SQLITE_DB_PATH` / `CLAUDE_CMD` (默认 "claude") / `CODEX_CMD` (默认 "codex")
+**环境变量**: `REAL_CLI=true` (默认 true,Engineer 真改代码、QA 真跑测试;false 走 mock) / `CODEX_LAUNCH_ENABLED=true` (默认 true,真启 codex 进程) / `QA_EXECUTE_COMMANDS=true` (跟 REAL_CLI 同源,显式关掉测试执行) / `QA_COMMAND_TIMEOUT_S=120` / `QA_TOTAL_BUDGET_S=300` / `CODEX_WORKSPACE_ROOT` / `SQLITE_DB_PATH` / `CLAUDE_CMD` (默认 "claude") / `CODEX_CMD` (默认 "codex") / `MAX_CONCURRENT_INSTANCES_PER_ROLE=3` (默认 3,Phase 4 多实例同角色并发上限,如 3 个 Engineer 同时各持一个子任务)
 
 **P0 闭环**: QA 阶段会真实执行 LLM 提议的 `recommended_commands`(在 worktree cwd 内),命令经安全过滤(rm -rf / sudo / git push 等拒跑)+ 单条超时 + 总预算。任一非零退出 → status 强制覆盖为 `failed`,不信 LLM 自报。QA failed 后 `WorkflowScheduler._maybe_trigger_qa_rework` 自动把 Engineer 节点重置 pending,把 qa_plan.json 失败摘要塞进 `task.review_comment` 触发"REWORK REQUIRED"分支,最多 `engineer.max_retries` 次自循环。
 
