@@ -26,6 +26,7 @@ from app.application.agent_catalog.catalog import (
 )
 from app.domain.models import (
     Agent,
+    AgentMessage,
     CodexIssue,
     CodexTask,
     WorkflowEdge,
@@ -168,6 +169,12 @@ class WorkflowScheduler:
             await self._emit_node_event(node, issue_for_event)
         except Exception:  # noqa: BLE001
             pass
+
+        # Phase 4: Specialist mesh handling. If this task is a specialist_child,
+        # resume the parent after collecting the specialist's result.
+        if task.task_kind == "specialist_child" and task.status == "done":
+            if await self._maybe_resume_from_specialist(task, graph):
+                return
 
         # Conductor observation pass. Runs on every task completion. May
         # return a decision dict {action, reason, note?}. When action=="escalate"
@@ -362,6 +369,92 @@ class WorkflowScheduler:
 
         # 4. ordinary settle pass.
         await self.settle(graph.id)
+
+    async def _maybe_resume_from_specialist(
+        self, specialist_child_task: CodexTask, graph: WorkflowGraph
+    ) -> bool:
+        """Phase 4: Handle specialist child task completion and parent resumption.
+
+        When a specialist child task completes successfully, inject its result
+        into the parent task's review_comment and reset the parent to pending
+        so it can re-run with the specialist findings.
+
+        Returns True if parent was resumed (caller should not continue to scheduler logic).
+        """
+        if specialist_child_task.task_kind != "specialist_child":
+            return False
+        if specialist_child_task.status != "done":
+            return False
+
+        parent = await self.store.load_codex_task(specialist_child_task.parent_task_id)
+        if parent is None:
+            logger.warning(
+                "Specialist child %s has no parent task",
+                specialist_child_task.id,
+            )
+            return False
+
+        now = datetime.now()
+
+        # Build specialist result summary from the task result
+        # The specialist's raw result is already in specialist_child_task.result
+        specialist_summary = specialist_child_task.result or "(no result)"
+        if len(specialist_summary) > 1000:
+            specialist_summary = specialist_summary[:1000] + "\n... (truncated)"
+
+        # Inject specialist result into parent's review_comment
+        continuation = (
+            f"[SPECIALIST RESULT from {specialist_child_task.role}]\n\n"
+            f"{specialist_summary}\n\n"
+            f"Incorporate the above specialist findings into your next output."
+        )
+        if parent.review_comment:
+            parent.review_comment = parent.review_comment + "\n\n" + continuation
+        else:
+            parent.review_comment = continuation
+
+        # Reset parent to pending so the scheduler will re-dispatch it
+        parent.status = "pending"
+        parent.updated_at = now
+        await self.store.save_codex_task(parent)
+
+        # Record specialist result as AgentMessage for the collab feed
+        try:
+            msg = AgentMessage(
+                id=str(uuid4()),
+                issue_id=parent.issue_id,
+                graph_id=graph.id if graph else "",
+                from_node_key=specialist_child_task.role,
+                to_node_key=parent.role,
+                message_type="specialist_result",
+                body=specialist_summary[:500],
+                created_at=now,
+            )
+            await self.store.save_agent_message(msg)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to record specialist result message: %s", exc)
+
+        # Emit events for real-time updates
+        try:
+            await self._event_bus.append({
+                "type": "specialist_completed",
+                "parent_task_id": parent.id,
+                "child_task_id": specialist_child_task.id,
+                "specialist_role": specialist_child_task.role,
+            })
+            await self._event_bus.append({
+                "type": "task_status",
+                "task_id": parent.id,
+                "session_id": parent.session_id,
+                "status": parent.status,
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Re-settle the graph to pick up the parent task again
+        await self.settle(graph.id)
+
+        return True
 
     async def _maybe_trigger_qa_rework(
         self, graph: WorkflowGraph, completed_node: WorkflowNode, terminal: str

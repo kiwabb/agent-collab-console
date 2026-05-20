@@ -1447,7 +1447,7 @@ export interface AgentMessage {
   graph_id: string;
   from_node_key: string;
   to_node_key: string;
-  message_type: "handoff" | "critique" | "clarification" | "answer";
+  message_type: "handoff" | "critique" | "clarification" | "answer" | "specialist_call" | "specialist_result";
   body: string;
   created_at: string | null;
 }

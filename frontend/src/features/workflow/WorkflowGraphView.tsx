@@ -38,12 +38,14 @@ export interface WorkflowNodeClickPayload {
 // Design-handoff edge palette: green for normal flow, amber for refine
 // loops, red for retries, brand orange for the Conductor-out edges (set
 // per-edge in toReactFlow when source === CONDUCTOR_KEY).
+// Phase 4: specialist_call uses dashed blue lines for mesh calls
 const EDGE_COLOR: Record<string, string> = {
   sequence: "#4ade80",
   "parallel-fanout": "#34d977",
   "refine-loop": "#f59e0b",
   "retry-on-fail": "#ef4444",
   conditional: "#60a5fa",
+  specialist_call: "#3b82f6",  // Blue for specialist mesh calls
 };
 const EDGE_START_COLOR = "#a8d56b"; // Conductor → root: brand-tinted green
 
@@ -178,6 +180,7 @@ function toReactFlow(
     const color = isStart
       ? EDGE_START_COLOR
       : EDGE_COLOR[e.edge_type] || "#4ade80";
+    const isSpecialistCall = e.edge_type === "specialist_call";
     return {
       id: `e${idx}`,
       source: e.from_node_key,
@@ -191,6 +194,7 @@ function toReactFlow(
       style: {
         stroke: color,
         strokeWidth: 3.4,
+        strokeDasharray: isSpecialistCall ? "8 4" : undefined,  // Dashed line for specialist calls
         filter: `drop-shadow(0 0 6px ${color}66)`,
       },
       markerEnd: { type: MarkerType.ArrowClosed, color },
