@@ -68,6 +68,10 @@ class EngineerReportDocument(BaseModel):
     # implementation. The framework will reset the Architect node and pass this
     # as feedback so Architect can revise before you re-run.
     architect_critique: str | None = None
+    # Phase 4: Request specialist assistance (e.g., security review) without waiting for Conductor.
+    # Set this field to call a specialist agent directly. The specialist will complete,
+    # and the Engineer will resume with the specialist's findings in review_comment.
+    call_specialist: dict | None = None  # {"role_key": "security_reviewer", "prompt": "...", "why": "..."}
 
 
 class EngineerWorkflow:
@@ -96,6 +100,8 @@ class EngineerWorkflow:
         "qa_notes": "qa_notes",
         "architectcritique": "architect_critique",
         "architect_critique": "architect_critique",
+        "callspecialist": "call_specialist",
+        "call_specialist": "call_specialist",
     }
 
     def __init__(self) -> None:
@@ -182,6 +188,22 @@ class EngineerWorkflow:
             "ONLY use this when the gap is blocking — not for minor preferences. The Architect will be reset\n"
             "and your critique will be delivered as feedback. You will re-run after Architect revises.\n"
             "Limit: you may only file ONE critique per issue (do not critique a revised design again).\n\n"
+            "MESH CALL ESCAPE HATCH — Direct Specialist Invocation (Phase 4):\n"
+            "When you detect that your work touches security-sensitive code, performance-critical paths,\n"
+            "or requires deep expertise from a specialist (security, performance, accessibility, etc.),\n"
+            "you can directly request specialist help WITHOUT waiting for the Conductor.\n"
+            "Set the 'call_specialist' field to:\n"
+            '  "call_specialist": {\n'
+            '    "role_key": "<specialist-key>",  // e.g., "specialist:security_reviewer", "specialist:performance_reviewer"\n'
+            '    "prompt": "Your specific question for the specialist",\n'
+            '    "why": "Brief explanation why this specialist is needed"\n'
+            "  }\n"
+            "The specialist will run independently, review your code, and their findings will be\n"
+            "reinjected into your next run. Use this when:\n"
+            "- You write authentication/authorization code and want security review\n"
+            "- You implement performance-critical algorithms and want optimization review\n"
+            "- You build accessibility features and want a11y verification\n"
+            "ONLY set this once per output. If you need the specialist, pause your work and request help.\n\n"
             + "OUTPUT FORMAT RULES:\n"
             "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
             "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
@@ -199,7 +221,8 @@ class EngineerWorkflow:
             '"risks": ["string"],\n'
             '"verification_commands": ["string"],\n'
             '"qa_notes": ["string"],\n'
-            '"architect_critique": "string|null"  // OPTIONAL: only set when Architect design has a critical blocking gap\n'
+            '"architect_critique": "string|null",  // OPTIONAL: only set when Architect design has a critical blocking gap\n'
+            '"call_specialist": {"role_key": "string", "prompt": "string", "why": "string"} | null  // OPTIONAL Phase 4: request specialist help\n'
             "}\n\n"
             f"user_requirement:\n{task.prompt}"
         )

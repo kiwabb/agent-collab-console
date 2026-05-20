@@ -14,6 +14,16 @@ const ROLE_LABEL: Record<string, string> = {
   engineer_frontend: "FE Engineer",
   engineer_backend: "BE Engineer",
   qa: "QA",
+  "specialist:security_reviewer": "🔒 Security Reviewer",
+  "specialist:performance_reviewer": "⚡ Performance Reviewer",
+  "specialist:doc_writer": "📚 Doc Writer",
+  "specialist:code_reviewer": "👁️ Code Reviewer",
+  "specialist:migration_planner": "🚀 Migration Planner",
+  "specialist:dependency_auditor": "📦 Dependency Auditor",
+  "specialist:api_contract_checker": "📋 API Contract Checker",
+  "specialist:accessibility_reviewer": "♿ Accessibility Reviewer",
+  "specialist:i18n_checker": "🌍 i18n Checker",
+  "specialist:log_summarizer": "📊 Log Summarizer",
 };
 
 const TYPE_CONFIG: Record<
@@ -43,6 +53,18 @@ const TYPE_CONFIG: Record<
     colorClass: "text-text-secondary",
     borderClass: "border-l-border-muted",
     bgClass: "bg-surface-raised",
+  },
+  specialist_call: {
+    label: "Specialist Call",
+    colorClass: "text-blue-500",
+    borderClass: "border-l-blue-500",
+    bgClass: "bg-blue-50",
+  },
+  specialist_result: {
+    label: "Specialist Result",
+    colorClass: "text-blue-700",
+    borderClass: "border-l-blue-700",
+    bgClass: "bg-blue-100",
   },
 };
 

@@ -65,6 +65,10 @@ class QAReportDocument(BaseModel):
     # Set this when you cannot reasonably proceed without user input.
     # The framework will pause the pipeline and re-run you once answered.
     clarification_question: str | None = None
+    # Phase 4: Request specialist assistance (e.g., security review) without waiting for Conductor.
+    # Set this field to call a specialist agent directly. The specialist will complete,
+    # and the QA will resume with the specialist's findings in review_comment.
+    call_specialist: dict | None = None  # {"role_key": "security_reviewer", "prompt": "...", "why": "..."}
 
 
 class QAWorkflow:
@@ -96,6 +100,8 @@ class QAWorkflow:
         "test_gaps": "test_gaps",
         "finalrecommendation": "final_recommendation",
         "final_recommendation": "final_recommendation",
+        "callspecialist": "call_specialist",
+        "call_specialist": "call_specialist",
     }
 
     def __init__(self) -> None:

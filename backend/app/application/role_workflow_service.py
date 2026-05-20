@@ -147,6 +147,17 @@ class RoleWorkflowService:
             if critique and isinstance(critique, str) and critique.strip():
                 await self._record_critique(task, critique.strip())
 
+        # Phase 4: specialist mesh call. If Engineer/QA set call_specialist, spawn a specialist child.
+        # The scheduler will handle pausing parent, running specialist, and resuming parent.
+        if doc is not None and role in (ENGINEER_ROLES | {"qa"}):
+            call_specialist = getattr(doc, "call_specialist", None)
+            if call_specialist and isinstance(call_specialist, dict):
+                specialist_role_key = call_specialist.get("role_key")
+                specialist_prompt = call_specialist.get("prompt")
+                why = call_specialist.get("why", "")
+                if specialist_role_key and specialist_prompt:
+                    await self._request_specialist(task, specialist_role_key, specialist_prompt, why)
+
         # If store is available and document has written_files, persist to DB
         if self.codex_store and doc and hasattr(doc, "written_files"):
             import asyncio
@@ -237,3 +248,33 @@ class RoleWorkflowService:
         except Exception as exc:  # noqa: BLE001
             import logging
             logging.getLogger(__name__).warning("_record_critique failed: %s", exc)
+
+    async def _request_specialist(
+        self, task, specialist_role_key: str, specialist_prompt: str, why: str
+    ) -> None:
+        """Phase 4: Request specialist help from Engineer/QA task."""
+        if not self.codex_store:
+            return
+        try:
+            from app.application.specialist_orchestrator import SpecialistOrchestrator
+            from app.application.event_bus import event_bus
+
+            # Initialize orchestrator with dependencies from the task runner
+            # In production, this would be injected. For now, we instantiate it here.
+            # The task_runner is needed to start the specialist child task.
+            # We defer this initialization to the scheduler layer where task_runner is available.
+            # For now, just mark the task as wanting specialist help;
+            # the scheduler will detect and act on it.
+
+            # Actually, we can't start the specialist child directly from here because
+            # we don't have task_runner. Instead, we'll set a flag on the task that
+            # the scheduler will detect and handle. The scheduler has all the pieces.
+
+            # Set a marker so workflow_scheduler knows to invoke SpecialistOrchestrator
+            task.review_comment = (
+                f"[PENDING_SPECIALIST_CALL] role_key={specialist_role_key}\n"
+                f"prompt={specialist_prompt}\nwhy={why}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning("_request_specialist setup failed: %s", exc)

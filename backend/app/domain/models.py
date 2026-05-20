@@ -514,7 +514,7 @@ class ConductorState:
     updated_at: datetime | None = None
 
 
-AgentMessageType = Literal["handoff", "critique", "clarification", "answer"]
+AgentMessageType = Literal["handoff", "critique", "clarification", "answer", "specialist_call", "specialist_result"]
 
 
 class AgentMessage(BaseModel):
