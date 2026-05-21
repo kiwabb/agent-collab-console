@@ -273,13 +273,37 @@ If something is unclear or blocked, use `request_user_clarification`.
     except Exception as exc:  # noqa: BLE001
         _logger.warning("conductor hot event append failed: %s", exc)
 
-    # Record project memory
+    # Seal the graph: WorkflowScheduler.on_task_completed no longer marks
+    # the graph terminal in Conductor mode — that was a stale fixed-pipeline
+    # assumption (it would fire as soon as the current node set was all done,
+    # even though Conductor was about to dispatch the next agent). The loop
+    # owns the graph lifecycle now.
     try:
         graph = await store.load_workflow_graph_for_issue(issue.id)
         if graph is not None:
+            graph_status = "done" if result.status in {"done", "success", "completed"} else "failed"
+            if graph.status != graph_status:
+                graph.status = graph_status
+                graph.updated_at = datetime.now()
+                await store.save_workflow_graph(graph)
             await record_project_memory(graph.id, store)
+            if event_bus is not None:
+                try:
+                    issue_status = "completed" if graph_status == "done" else "failed"
+                    if issue.status not in {"awaiting_approval", "awaiting_review", "awaiting_merge"}:
+                        issue.status = issue_status
+                        issue.updated_at = datetime.now()
+                        await store.save_codex_issue(issue)
+                        await event_bus.append({
+                            "type": "issue_updated",
+                            "issue_id": issue.id,
+                            "session_id": issue.session_id,
+                            "status": issue.status,
+                        })
+                except Exception as exc:  # noqa: BLE001
+                    _logger.debug("issue_updated emit failed: %s", exc)
     except Exception as exc:  # noqa: BLE001
-        _logger.warning("project memory recording failed: %s", exc)
+        _logger.warning("graph status seal / project memory failed: %s", exc)
 
     # Update conductor task status
     conductor_task.status = result.status
