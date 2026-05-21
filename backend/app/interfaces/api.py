@@ -14,7 +14,7 @@ from typing import Literal
 import subprocess
 
 from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service
-from app.domain.models import CodexIssue, Project
+from app.domain.models import CodexIssue, ConductorTask, Project
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
 from app.application.role_workflow_service import RoleWorkflowService
@@ -52,6 +52,15 @@ class RateLimitError(APIError):
     def __init__(self, message: str, retry_after: int = 60):
         super().__init__(429, message)
         self.retry_after = retry_after
+
+
+class ProjectConductorAskRequest(BaseModel):
+    question: str = Field(..., min_length=1)
+
+
+class ProjectConductorStartLoopRequest(BaseModel):
+    prompt: str | None = None
+    issue_id: str | None = None
 
 
 # --- Exception Handlers (added in main.py, not on router) ---
@@ -247,6 +256,29 @@ async def _refresh_task_result(task):
         try:
             artifact = await role_workflow_service.persist_result(task, workspace_title=workspace_title)
             task._subagent_doc = artifact
+            if task.project_id and task.issue_id and getattr(task, "workflow_node_id", None):
+                try:
+                    from app.application.project_conductor import ProjectConductor
+                    from app.application.subagent_result_builder import build_subagent_result
+
+                    graph = await codex_store.load_workflow_graph_for_issue(task.issue_id)
+                    node = next(
+                        (n for n in (graph.nodes if graph is not None else []) if n.id == task.workflow_node_id),
+                        None,
+                    )
+                    if node is not None:
+                        envelope = build_subagent_result(task=task, node=node, doc=artifact)
+                        await ProjectConductor(
+                            project_id=task.project_id,
+                            store=codex_store,
+                            event_bus=event_bus,
+                        ).notify_subagent_complete(
+                            envelope,
+                            project_id=task.project_id,
+                            issue_id=task.issue_id,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("ProjectConductor notify_subagent_complete failed for task %s: %s", task.id, exc)
         except Exception as exc:  # noqa: BLE001
             logger.exception("persist_result failed for task %s (role=%s)", task.id, getattr(task, "role", None))
             try:
@@ -5192,6 +5224,237 @@ async def codex_issue_conductor_state(issue_id: str):
         "decision_count": state.decision_count,
         "updated_at": state.updated_at.isoformat() if state.updated_at else None,
     }
+
+
+@router.get("/codex/projects/{project_id}/conductor-state")
+async def codex_project_conductor_state(project_id: str):
+    """Return ProjectConductor tiered-memory state for a project."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.project_conductor import ProjectConductor
+
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    conductor = ProjectConductor(project_id=project_id, store=codex_store, event_bus=event_bus)
+    state = await conductor.get_or_create_state()
+    try:
+        hot_thread = json.loads(state.hot_thread_json or "[]")
+    except json.JSONDecodeError:
+        hot_thread = []
+    try:
+        warm_summaries = json.loads(state.warm_summaries_json or "[]")
+    except json.JSONDecodeError:
+        warm_summaries = []
+    cold = await codex_store.list_project_memory_embeddings(project_id, limit=20)
+    return {
+        "project_id": state.project_id,
+        "hot_thread": hot_thread if isinstance(hot_thread, list) else [],
+        "warm_summaries": warm_summaries if isinstance(warm_summaries, list) else [],
+        "cold_memories": [
+            {
+                "id": memory.id,
+                "source_kind": memory.source_kind,
+                "source_id": memory.source_id,
+                "summary_text": memory.summary_text,
+                "created_at": memory.created_at.isoformat() if memory.created_at else None,
+            }
+            for memory in cold
+        ],
+        "pinned_text": state.pinned_text,
+        "hot_tokens": state.hot_tokens,
+        "warm_tokens": state.warm_tokens,
+        "total_tasks_handled": state.total_tasks_handled,
+        "last_compaction_at": state.last_compaction_at.isoformat() if state.last_compaction_at else None,
+        "updated_at": state.updated_at.isoformat() if state.updated_at else None,
+    }
+
+
+@router.post("/codex/projects/{project_id}/conductor/ask")
+async def codex_project_conductor_ask(project_id: str, request: ProjectConductorAskRequest):
+    """Ask the long-lived ProjectConductor an ad-hoc project question."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.project_conductor import ProjectConductor
+
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    task = ConductorTask(
+        id=str(uuid4()),
+        project_id=project_id,
+        task_kind="ad_hoc",
+        payload={"question": request.question},
+        created_at=datetime.now(),
+    )
+    conductor = ProjectConductor(project_id=project_id, store=codex_store, event_bus=event_bus)
+    return await conductor.handle_task(task)
+
+
+@router.post("/codex/projects/{project_id}/conductor/schedule-review")
+async def codex_project_conductor_schedule_review(project_id: str):
+    """Queue a deterministic scheduled-review conductor task."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.project_conductor import ProjectConductor
+
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    task = ConductorTask(
+        id=str(uuid4()),
+        project_id=project_id,
+        task_kind="scheduled_review",
+        payload={"question": "Run a scheduled project health review."},
+        created_at=datetime.now(),
+    )
+    conductor = ProjectConductor(project_id=project_id, store=codex_store, event_bus=event_bus)
+    return await conductor.handle_task(task)
+
+
+@router.post("/codex/projects/{project_id}/conductor/start-loop")
+async def codex_project_conductor_start_loop(project_id: str, request: ProjectConductorStartLoopRequest):
+    """Run the Phase 6 ProjectConductor Anthropic tool-use loop."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.conductor_main_loop import run_conductor_loop
+    from app.application.conductor_tools import build_conductor_tools
+    from app.application.llm_runner import call_llm_with_tools, resolve_streaming_context
+    from app.application.project_conductor import ProjectConductor
+
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    issue = None
+    if request.issue_id:
+        issue = await codex_store.load_codex_issue(request.issue_id)
+        if issue is None:
+            raise HTTPException(status_code=404, detail="Issue not found")
+
+    prompt = (request.prompt or "").strip()
+    if not prompt and issue is not None:
+        prompt = f"Run ProjectConductor loop for issue: {issue.title}\n\n{issue.description or ''}".strip()
+    if not prompt:
+        prompt = "Run ProjectConductor loop for this project and summarize the next best action."
+
+    task = ConductorTask(
+        id=str(uuid4()),
+        project_id=project_id,
+        task_kind="issue" if issue else "ad_hoc",
+        issue_id=issue.id if issue else None,
+        payload={"prompt": prompt, "mode": "loop"},
+        status="running",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await codex_store.save_conductor_task(task)
+
+    registry = build_conductor_tools(project_id=project_id, store=codex_store, event_bus=event_bus)
+    catalog = await _get_runtime_catalog_service().load_catalog()
+    ctx = None if os.getenv("CONDUCTOR_MODE", "").lower() == "observe" else resolve_streaming_context(catalog)
+
+    async def llm(messages, tools):
+        if ctx is None:
+            return {
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_fallback_final",
+                        "name": "finalize_task",
+                        "input": {
+                            "status": "done",
+                            "answer": "No usable LLM executor is configured; ProjectConductor loop created a deterministic checkpoint instead.",
+                        },
+                    }
+                ],
+            }
+        return await call_llm_with_tools(messages=messages, tools=tools, ctx=ctx)
+
+    result = await run_conductor_loop(
+        prompt=prompt,
+        llm=llm,
+        tools=registry.tools,
+        tool_definitions=registry.definitions,
+    )
+    conductor = ProjectConductor(project_id=project_id, store=codex_store, event_bus=event_bus)
+    await conductor.append_hot_event(
+        role="project_conductor",
+        content=result.final_text,
+        issue_id=issue.id if issue else None,
+        extra={
+            "task_id": task.id,
+            "kind": "loop",
+            "status": result.status,
+            "tool_events": result.tool_events,
+        },
+    )
+    payload = {
+        "status": result.status,
+        "answer": result.final_text,
+        "task_id": task.id,
+        "tool_events": result.tool_events,
+        "turn_count": result.turn_count,
+        "llm": None if ctx is None else {"executor": ctx.executor_label, "model": ctx.model},
+    }
+    task.status = result.status
+    task.result_json = json.dumps(payload, ensure_ascii=False, default=str)
+    task.updated_at = datetime.now()
+    await codex_store.save_conductor_task(task)
+    if event_bus is not None and hasattr(event_bus, "append"):
+        try:
+            await event_bus.append(
+                {
+                    "type": "project_conductor_loop",
+                    "project_id": project_id,
+                    "task_id": task.id,
+                    "status": result.status,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("ProjectConductor loop event emit failed", exc_info=True)
+    return payload
+
+
+@router.get("/codex/projects/{project_id}/conductor/stream")
+async def codex_project_conductor_stream(project_id: str):
+    """SSE replay of recent ProjectConductor loop/tool events."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from fastapi.responses import StreamingResponse
+    from app.application.project_conductor import ProjectConductor
+
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    async def emit(event: str, payload) -> str:
+        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+    async def gen():
+        conductor = ProjectConductor(project_id=project_id, store=codex_store, event_bus=event_bus)
+        state = await conductor.get_or_create_state()
+        try:
+            hot_thread = json.loads(state.hot_thread_json or "[]")
+        except json.JSONDecodeError:
+            hot_thread = []
+        yield await emit("meta", {"project_id": project_id, "mode": "loop"})
+        for item in hot_thread[-20:] if isinstance(hot_thread, list) else []:
+            yield await emit("event", item)
+            for tool_event in item.get("tool_events", []) if isinstance(item, dict) else []:
+                yield await emit("tool", tool_event)
+        yield await emit("done", {"project_id": project_id})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/codex/issues/{issue_id}/agent-messages")

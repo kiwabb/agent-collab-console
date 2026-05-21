@@ -42,6 +42,7 @@ import { cn } from "@/lib/utils";
 import { emitDataEvent } from "@/lib/dataEvents";
 import { workspaceLabel } from "@/lib/workspaceLabel";
 import { useI18n } from "@/providers/I18nProvider";
+import { ProjectConductorPage } from "@/features/projects/ProjectConductorPage";
 
 interface Props {
   projectId: string;
@@ -252,6 +253,8 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             loading={loading}
           />
         </div>
+
+        <ProjectConductorPage projectId={projectId} />
 
         {/* Toolbar */}
         <div className="flex items-center gap-2">

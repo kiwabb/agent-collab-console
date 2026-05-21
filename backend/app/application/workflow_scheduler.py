@@ -29,6 +29,7 @@ from app.domain.models import (
     AgentMessage,
     CodexIssue,
     CodexTask,
+    ConductorTask,
     WorkflowEdge,
     WorkflowGraph,
     WorkflowNode,
@@ -72,6 +73,111 @@ class WorkflowScheduler:
             })
         except Exception as exc:  # noqa: BLE001
             logger.debug("workflow_node_updated emit failed: %s", exc)
+
+    async def _run_project_conductor_loop_after_task(
+        self,
+        *,
+        task: CodexTask,
+        node: WorkflowNode,
+        graph: WorkflowGraph,
+        issue: CodexIssue | None,
+        node_status: str,
+    ) -> None:
+        """Phase 6 loop mode: treat ProjectConductor as a tool-using session."""
+        if issue is None:
+            return
+        project_id = issue.project_id
+        if not project_id:
+            session = await self.store.load_codex_session(issue.session_id)
+            project_id = getattr(session, "project_id", None) if session is not None else None
+        if not project_id:
+            return
+
+        from app.application.conductor_main_loop import run_conductor_loop
+        from app.application.conductor_tools import build_conductor_tools
+        from app.application.llm_runner import call_llm_with_tools, resolve_streaming_context
+        from app.application.project_conductor import ProjectConductor
+        from app.application.subagent_result_builder import build_subagent_result
+        from app.application.runtime_catalog_service import RuntimeCatalogService
+
+        prompt = (
+            "A workflow sub-agent just finished. Decide whether to retrieve project memory, "
+            "dispatch/inject context/request clarification, or finalize this conductor turn.\n\n"
+            f"Issue: {issue.title}\n"
+            f"Node: {node.node_key} ({task.role})\n"
+            f"Node status: {node_status}\n"
+            f"Task status: {task.status}\n"
+            f"Task summary: {task.summary or task.title or ''}"
+        )
+        conductor_task = ConductorTask(
+            id=str(uuid4()),
+            project_id=project_id,
+            task_kind="issue",
+            issue_id=issue.id,
+            payload={"prompt": prompt, "mode": "loop", "source_task_id": task.id},
+            status="running",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        await self.store.save_conductor_task(conductor_task)
+        registry = build_conductor_tools(project_id=project_id, store=self.store, event_bus=self._event_bus)
+        catalog = await RuntimeCatalogService(self.store).load_catalog()
+        ctx = resolve_streaming_context(catalog)
+
+        async def llm(messages, tools):
+            if ctx is None:
+                result = build_subagent_result(
+                    task=task,
+                    node=node,
+                    doc=getattr(task, "_subagent_doc", None),
+                )
+                return {
+                    "stop_reason": "tool_use",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_scheduler_fallback_final",
+                            "name": "finalize_task",
+                            "input": {
+                                "status": "done",
+                                "answer": f"Observed {result.role} finishing {node.node_key}: {result.summary}",
+                            },
+                        }
+                    ],
+                }
+            return await call_llm_with_tools(messages=messages, tools=tools, ctx=ctx)
+
+        result = await run_conductor_loop(
+            prompt=prompt,
+            llm=llm,
+            tools=registry.tools,
+            tool_definitions=registry.definitions,
+        )
+        await ProjectConductor(project_id=project_id, store=self.store, event_bus=self._event_bus).append_hot_event(
+            role="project_conductor",
+            content=result.final_text,
+            issue_id=issue.id,
+            extra={
+                "task_id": conductor_task.id,
+                "kind": "loop",
+                "status": result.status,
+                "source_task_id": task.id,
+                "tool_events": result.tool_events,
+            },
+        )
+        conductor_task.status = result.status
+        conductor_task.result_json = json.dumps(
+            {
+                "status": result.status,
+                "answer": result.final_text,
+                "tool_events": result.tool_events,
+                "turn_count": result.turn_count,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+        conductor_task.updated_at = datetime.now()
+        await self.store.save_conductor_task(conductor_task)
 
     # --- Public API ---
 
@@ -184,27 +290,37 @@ class WorkflowScheduler:
         conductor_decision: dict | None = None
         conductor_graph_mutated = False
         try:
-            from app.application.conductor_supervisor import ConductorSupervisor
-            from app.application.subagent_result_builder import build_subagent_result
-            supervisor = ConductorSupervisor(store=self.store, event_bus=self._event_bus)
-            subagent_result = build_subagent_result(
-                task=task,
-                node=node,
-                doc=getattr(task, "_subagent_doc", None),
-            )
-            conductor_decision = await supervisor.observe(
-                result=subagent_result,
-                node_status=terminal,
-                graph=graph,
-                issue=issue_for_event,
-            )
-            if conductor_decision is not None and issue_for_event is not None:
-                await self._record_conductor_decision_state(
-                    issue=issue_for_event,
+            conductor_mode = os.getenv("CONDUCTOR_MODE", "observe").lower()
+            if conductor_mode == "loop":
+                await self._run_project_conductor_loop_after_task(
                     task=task,
                     node=node,
-                    decision=conductor_decision,
+                    graph=graph,
+                    issue=issue_for_event,
+                    node_status=terminal,
                 )
+            else:
+                from app.application.conductor_supervisor import ConductorSupervisor
+                from app.application.subagent_result_builder import build_subagent_result
+                supervisor = ConductorSupervisor(store=self.store, event_bus=self._event_bus)
+                subagent_result = build_subagent_result(
+                    task=task,
+                    node=node,
+                    doc=getattr(task, "_subagent_doc", None),
+                )
+                conductor_decision = await supervisor.observe(
+                    result=subagent_result,
+                    node_status=terminal,
+                    graph=graph,
+                    issue=issue_for_event,
+                )
+                if conductor_decision is not None and issue_for_event is not None:
+                    await self._record_conductor_decision_state(
+                        issue=issue_for_event,
+                        task=task,
+                        node=node,
+                        decision=conductor_decision,
+                    )
         except Exception as exc:  # noqa: BLE001
             logger.debug("conductor observation failed: %s", exc)
 

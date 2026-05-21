@@ -23,6 +23,9 @@ import type {
   ValidateRuntimeCatalogResponse,
   TestExecutorResponse,
   Project,
+  ProjectConductorAskResult,
+  ProjectConductorLoopResult,
+  ProjectConductorState,
   GitBranch,
   Agent,
   CreateAgentRequest,
@@ -213,6 +216,42 @@ export async function repairProject(projectId: string): Promise<{ pruned: boolea
 export async function getProjectStats(projectId: string): Promise<import("./types").ProjectStats> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/stats`);
   return handleResponse<import("./types").ProjectStats>(response);
+}
+
+export async function getProjectConductorState(projectId: string): Promise<ProjectConductorState> {
+  const response = await fetch(`${API_BASE}/codex/projects/${projectId}/conductor-state`);
+  return handleResponse<ProjectConductorState>(response);
+}
+
+export async function askProjectConductor(
+  projectId: string,
+  question: string,
+): Promise<ProjectConductorAskResult> {
+  const response = await fetch(`${API_BASE}/codex/projects/${projectId}/conductor/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  return handleResponse<ProjectConductorAskResult>(response);
+}
+
+export async function scheduleProjectConductorReview(projectId: string): Promise<ProjectConductorAskResult> {
+  const response = await fetch(`${API_BASE}/codex/projects/${projectId}/conductor/schedule-review`, {
+    method: "POST",
+  });
+  return handleResponse<ProjectConductorAskResult>(response);
+}
+
+export async function startProjectConductorLoop(
+  projectId: string,
+  prompt?: string,
+): Promise<ProjectConductorLoopResult> {
+  const response = await fetch(`${API_BASE}/codex/projects/${projectId}/conductor/start-loop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  });
+  return handleResponse<ProjectConductorLoopResult>(response);
 }
 
 export async function getCodexStats(): Promise<import("./types").CodexStats> {

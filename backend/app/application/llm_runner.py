@@ -14,7 +14,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 import httpx
 
@@ -27,6 +27,31 @@ logger = logging.getLogger(__name__)
 # more than necessary, but we re-resolve on each invocation in case the
 # user edited it.
 LLM_RUNNER_TYPE = Callable[[str], Awaitable[str | None]]
+
+
+def extract_tool_use_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return valid Anthropic `tool_use` content blocks from a message."""
+    blocks = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(blocks, list):
+        return []
+    tool_uses: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        if not block.get("id") or not block.get("name"):
+            continue
+        tool_input = block.get("input")
+        if tool_input is not None and not isinstance(tool_input, dict):
+            continue
+        tool_uses.append(
+            {
+                "type": "tool_use",
+                "id": str(block["id"]),
+                "name": str(block["name"]),
+                "input": tool_input or {},
+            }
+        )
+    return tool_uses
 
 
 def _pick_executor(
@@ -276,3 +301,38 @@ async def stream_llm(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[st
                             yield text
                 elif etype == "message_stop":
                     return
+
+
+async def call_llm_with_tools(
+    *,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    ctx: StreamingPlanContext,
+) -> dict[str, Any]:
+    """Call an Anthropic-compatible messages endpoint with tool definitions."""
+    url = f"{ctx.endpoint}/v1/messages"
+    payload: dict[str, Any] = {
+        "model": ctx.model,
+        "max_tokens": ctx.max_tokens,
+        "messages": messages,
+    }
+    if tools:
+        payload["tools"] = tools
+    async with httpx.AsyncClient(timeout=ctx.timeout_s) as client:
+        response = await client.post(
+            url,
+            headers={
+                "x-api-key": ctx.api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=payload,
+        )
+    if response.status_code != 200:
+        raise RuntimeError(f"LLM tools HTTP {response.status_code}: {response.text[:300]}")
+    data = response.json()
+    if extract_tool_use_blocks(data):
+        return data
+    if not isinstance(data.get("content"), list):
+        data["content"] = []
+    return data

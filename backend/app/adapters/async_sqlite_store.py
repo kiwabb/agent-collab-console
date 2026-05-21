@@ -671,6 +671,43 @@ class AsyncSQLiteStore:
                 updated_at TEXT
             )
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS project_conductor_states (
+                project_id TEXT PRIMARY KEY,
+                hot_thread_json TEXT NOT NULL DEFAULT '[]',
+                warm_summaries_json TEXT NOT NULL DEFAULT '[]',
+                pinned_text TEXT NOT NULL DEFAULT '',
+                hot_tokens INTEGER NOT NULL DEFAULT 0,
+                warm_tokens INTEGER NOT NULL DEFAULT 0,
+                last_compaction_at TEXT,
+                total_tasks_handled INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS conductor_tasks (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                task_kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                issue_id TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                result_json TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS project_memory_embeddings (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                summary_text TEXT NOT NULL,
+                vector_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT
+            )
+        """)
         # Create indexes for frequently queried columns
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_project_id ON codex_tasks(project_id)")
@@ -707,6 +744,9 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_messages_graph_id ON agent_messages(graph_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_issue_id ON conductor_decisions(issue_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_id ON conductor_tasks(project_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
         # Phase 4: add instance_index to workflow_nodes for existing DBs
         try:
             await conn.execute(
@@ -2167,6 +2207,145 @@ class AsyncSQLiteStore:
             decision_count=int(row["decision_count"] or 0),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
+
+    async def save_project_conductor_state(self, state: "ProjectConductorState") -> None:
+        from app.domain.models import ProjectConductorState  # noqa: F401
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """INSERT OR REPLACE INTO project_conductor_states
+               (project_id, hot_thread_json, warm_summaries_json, pinned_text,
+                hot_tokens, warm_tokens, last_compaction_at, total_tasks_handled, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                state.project_id,
+                state.hot_thread_json,
+                state.warm_summaries_json,
+                state.pinned_text,
+                state.hot_tokens,
+                state.warm_tokens,
+                self._format_datetime(state.last_compaction_at),
+                state.total_tasks_handled,
+                self._format_datetime(state.updated_at),
+            ),
+        )
+        await conn.commit()
+
+    async def load_project_conductor_state(self, project_id: str) -> "ProjectConductorState | None":
+        from app.domain.models import ProjectConductorState
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM project_conductor_states WHERE project_id = ?",
+            (project_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return ProjectConductorState(
+            project_id=row["project_id"],
+            hot_thread_json=row["hot_thread_json"] or "[]",
+            warm_summaries_json=row["warm_summaries_json"] or "[]",
+            pinned_text=row["pinned_text"] or "",
+            hot_tokens=int(row["hot_tokens"] or 0),
+            warm_tokens=int(row["warm_tokens"] or 0),
+            last_compaction_at=self._parse_datetime(row["last_compaction_at"]),
+            total_tasks_handled=int(row["total_tasks_handled"] or 0),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    async def save_conductor_task(self, task: "ConductorTask") -> None:
+        from app.domain.models import ConductorTask  # noqa: F401
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """INSERT OR REPLACE INTO conductor_tasks
+               (id, project_id, task_kind, payload_json, issue_id, status, result_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task.id,
+                task.project_id,
+                task.task_kind,
+                json.dumps(task.payload, ensure_ascii=False, default=str),
+                task.issue_id,
+                task.status,
+                task.result_json,
+                self._format_datetime(task.created_at),
+                self._format_datetime(task.updated_at or datetime.now()),
+            ),
+        )
+        await conn.commit()
+
+    async def load_conductor_task(self, task_id: str) -> "ConductorTask | None":
+        from app.domain.models import ConductorTask
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM conductor_tasks WHERE id = ?", (task_id,)) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        return ConductorTask(
+            id=row["id"],
+            project_id=row["project_id"],
+            task_kind=row["task_kind"],
+            payload=payload if isinstance(payload, dict) else {},
+            issue_id=row["issue_id"],
+            status=row["status"],
+            result_json=row["result_json"],
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    async def save_project_memory_embedding(self, memory: "ProjectMemoryEmbedding") -> None:
+        from app.domain.models import ProjectMemoryEmbedding  # noqa: F401
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """INSERT OR REPLACE INTO project_memory_embeddings
+               (id, project_id, source_kind, source_id, summary_text, vector_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                memory.id,
+                memory.project_id,
+                memory.source_kind,
+                memory.source_id,
+                memory.summary_text,
+                memory.vector_json,
+                self._format_datetime(memory.created_at or datetime.now()),
+            ),
+        )
+        await conn.commit()
+
+    async def list_project_memory_embeddings(self, project_id: str, limit: int | None = None) -> list["ProjectMemoryEmbedding"]:
+        from app.domain.models import ProjectMemoryEmbedding
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM project_memory_embeddings WHERE project_id = ? ORDER BY created_at ASC"
+        args: list = [project_id]
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(limit)
+        async with conn.execute(sql, tuple(args)) as cur:
+            rows = await cur.fetchall()
+        return [
+            ProjectMemoryEmbedding(
+                id=row["id"],
+                project_id=row["project_id"],
+                source_kind=row["source_kind"],
+                source_id=row["source_id"],
+                summary_text=row["summary_text"],
+                vector_json=row["vector_json"] or "[]",
+                created_at=self._parse_datetime(row["created_at"]),
+            )
+            for row in rows
+        ]
 
     async def save_conductor_decision(self, d: "ConductorDecision") -> None:
         from app.domain.models import ConductorDecision  # noqa: F401 (type hint import)

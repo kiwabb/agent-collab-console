@@ -514,6 +514,52 @@ class ConductorState:
     updated_at: datetime | None = None
 
 
+@dataclass
+class ProjectConductorState:
+    """Project-level long-lived conductor context with tiered memory."""
+
+    project_id: str
+    hot_thread_json: str = "[]"
+    warm_summaries_json: str = "[]"
+    pinned_text: str = ""
+    hot_tokens: int = 0
+    warm_tokens: int = 0
+    last_compaction_at: datetime | None = None
+    total_tasks_handled: int = 0
+    updated_at: datetime | None = None
+
+
+ConductorTaskKind = Literal["issue", "qa_question", "scheduled_review", "ad_hoc"]
+
+
+@dataclass
+class ConductorTask:
+    """A top-level ProjectConductor task; issues are one task kind among several."""
+
+    id: str
+    project_id: str
+    task_kind: ConductorTaskKind
+    payload: dict
+    issue_id: str | None = None
+    status: str = "pending"
+    result_json: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass
+class ProjectMemoryEmbedding:
+    """Cold-memory placeholder row; vector storage can be upgraded later."""
+
+    id: str
+    project_id: str
+    source_kind: str
+    source_id: str
+    summary_text: str
+    vector_json: str = "[]"
+    created_at: datetime | None = None
+
+
 AgentMessageType = Literal["handoff", "critique", "clarification", "answer", "specialist_call", "specialist_result"]
 
 

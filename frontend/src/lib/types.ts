@@ -367,6 +367,48 @@ export interface ProjectStats {
   issues_abandoned: number;
 }
 
+export interface ProjectConductorState {
+  project_id: string;
+  hot_thread: Array<Record<string, unknown>>;
+  warm_summaries: Array<Record<string, unknown>>;
+  cold_memories: Array<{
+    id: string;
+    source_kind: string;
+    source_id: string;
+    summary_text: string;
+    created_at: string | null;
+  }>;
+  pinned_text: string;
+  hot_tokens: number;
+  warm_tokens: number;
+  total_tasks_handled: number;
+  last_compaction_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ProjectConductorAskResult {
+  status: string;
+  answer: string;
+  task_id: string;
+}
+
+export interface ProjectConductorToolEvent {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+  result: unknown;
+  is_error: boolean;
+}
+
+export interface ProjectConductorLoopResult extends ProjectConductorAskResult {
+  tool_events: ProjectConductorToolEvent[];
+  turn_count: number;
+  llm?: {
+    executor: string;
+    model: string;
+  } | null;
+}
+
 export interface CodexStats {
   workspaces_total: number;
   sessions_total: number;
