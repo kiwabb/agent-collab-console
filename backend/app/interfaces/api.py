@@ -5457,6 +5457,64 @@ async def codex_project_conductor_stream(project_id: str):
     )
 
 
+@router.get("/codex/issues/{issue_id}/subagent-results")
+async def codex_issue_subagent_results(issue_id: str):
+    """Return completed/failed sub-agent task results for an issue."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    tasks = await codex_store.list_codex_tasks(issue_id=issue_id)
+    terminal = {"done", "failed", "completed"}
+    results = []
+    for t in tasks:
+        if t.get("status") not in terminal:
+            continue
+        artifact = None
+        if t.get("result_json"):
+            try:
+                artifact = json.loads(t["result_json"])
+            except (json.JSONDecodeError, TypeError):
+                artifact = None
+        results.append({
+            "task_id": t["id"],
+            "role": t.get("role") or "unknown",
+            "title": t.get("title") or "",
+            "status": t.get("status"),
+            "task_kind": t.get("task_kind") or "initial",
+            "parent_task_id": t.get("parent_task_id"),
+            "summary": t.get("result") or "",
+            "artifact_json": artifact,
+            "updated_at": t.get("updated_at"),
+        })
+    return results
+
+
+@router.get("/codex/issues/{issue_id}/agent-mesh")
+async def codex_issue_agent_mesh(issue_id: str):
+    """Return AgentMessage list for an issue (alias of agent-messages logic)."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    if not hasattr(codex_store, "list_agent_messages"):
+        return []
+    import dataclasses
+    messages = await codex_store.list_agent_messages(issue_id)
+    return [dataclasses.asdict(m) for m in messages]
+
+
+class ProjectConductorMessageRequest(BaseModel):
+    message: str
+
+
+@router.post("/codex/projects/{project_id}/conductor/message")
+async def codex_project_conductor_message(project_id: str, request: ProjectConductorMessageRequest):
+    """Append a user message to the ProjectConductor hot thread."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.project_conductor import ProjectConductor
+    conductor = ProjectConductor(project_id=project_id, store=codex_store)
+    await conductor.append_hot_event(role="user", content=request.message)
+    return {"status": "ok"}
+
+
 @router.get("/codex/issues/{issue_id}/agent-messages")
 async def codex_issue_agent_messages(issue_id: str):
     """Return agent-to-agent messages (critiques, handoffs) for this issue."""

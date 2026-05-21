@@ -683,3 +683,15 @@ export interface ProposedDAG {
   nodes: ProposedDAGNode[];
   edges: ProposedDAGEdge[];
 }
+
+export interface SubAgentResultPayload {
+  task_id: string;
+  role: string;
+  title: string;
+  status: string;
+  task_kind: string;
+  parent_task_id: string | null;
+  summary: string;
+  artifact_json: Record<string, unknown> | null;
+  updated_at: string | null;
+}

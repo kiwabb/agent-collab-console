@@ -11,9 +11,18 @@ import {
   getCodexIssueChecklist,
   qaReviewCodexIssue,
   steerCodexIssue,
+  getSubAgentResults,
+  getAgentMesh,
+  getConductorState,
   type IssueChecklist,
+  type SubAgentResultPayload,
+  type AgentMessage,
+  type ConductorStatePayload,
 } from "@/lib/api";
 import type { CodexIssue } from "@/lib/types";
+import { SubAgentResultCard } from "./components/SubAgentResultCard";
+import { AgentMeshGraph } from "./components/AgentMeshGraph";
+import { ConductorChatBar } from "./components/ConductorChatBar";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
@@ -43,7 +52,7 @@ interface Props {
   issueId: string;
 }
 
-const TABS = ["dag", "tasks", "artifacts", "diff", "collab"] as const;
+const TABS = ["agent", "dag", "tasks", "artifacts", "diff", "collab"] as const;
 type TabId = (typeof TABS)[number];
 
 function isTab(s: string | null): s is TabId {
@@ -86,6 +95,9 @@ export function IssueDetailPage({ issueId }: Props) {
     role?: string;
     receivedAt: number;
   } | null>(null);
+  const [subAgentResults, setSubAgentResults] = useState<SubAgentResultPayload[]>([]);
+  const [agentMeshMessages, setAgentMeshMessages] = useState<AgentMessage[]>([]);
+  const [conductorState, setConductorState] = useState<ConductorStatePayload | null>(null);
 
   const handleFork = useCallback(async () => {
     setForking(true);
@@ -240,6 +252,25 @@ export function IssueDetailPage({ issueId }: Props) {
     }
     setPlanDraft("");
   }, [issue?.status, issue?.review_comment]);
+
+  const loadAgentTab = useCallback(async () => {
+    try {
+      const [results, mesh, cState] = await Promise.all([
+        getSubAgentResults(issueId).catch(() => [] as SubAgentResultPayload[]),
+        getAgentMesh(issueId).catch(() => [] as AgentMessage[]),
+        getConductorState(issueId).catch(() => null),
+      ]);
+      setSubAgentResults(results);
+      setAgentMeshMessages(mesh);
+      setConductorState(cState);
+    } catch {
+      // silent
+    }
+  }, [issueId]);
+
+  useEffect(() => {
+    if (tab === "agent") void loadAgentTab();
+  }, [tab, issueId, loadAgentTab]);
 
   const onTabChange = (next: string) => {
     if (!isTab(next)) return;
@@ -587,6 +618,7 @@ export function IssueDetailPage({ issueId }: Props) {
                 variant="line"
                 className="px-2 pt-2 self-stretch border-b border-border-subtle gap-0.5 shrink-0"
               >
+                <UnderlineTab value="agent" label="Agent" />
                 <UnderlineTab value="dag" label="DAG" />
                 <UnderlineTab value="tasks" label={t("issue.tab.tasksRuns")} />
                 <UnderlineTab value="artifacts" label={t("console.artifacts")} />
@@ -594,6 +626,19 @@ export function IssueDetailPage({ issueId }: Props) {
                 <UnderlineTab value="collab" label={t("issue.tab.collab")} />
               </TabsList>
               <div className="flex flex-col flex-1 min-h-0">
+                <TabsContent
+                  value="agent"
+                  className="m-0 flex flex-col min-h-0 flex-1 overflow-hidden"
+                >
+                  <AgentTabContent
+                    issueId={issueId}
+                    projectId={issue?.project_id ?? null}
+                    conductorState={conductorState}
+                    subAgentResults={subAgentResults}
+                    agentMeshMessages={agentMeshMessages}
+                    onConductorSent={() => void loadAgentTab()}
+                  />
+                </TabsContent>
                 <TabsContent
                   value="dag"
                   className="m-0 h-full flex flex-col min-h-0 flex-1"
@@ -657,6 +702,103 @@ export function IssueDetailPage({ issueId }: Props) {
     </div>
   );
 }
+
+interface AgentTabContentProps {
+  issueId: string;
+  projectId: string | null;
+  conductorState: ConductorStatePayload | null;
+  subAgentResults: SubAgentResultPayload[];
+  agentMeshMessages: AgentMessage[];
+  onConductorSent?: () => void;
+}
+
+function AgentTabContent({
+  projectId,
+  conductorState,
+  subAgentResults,
+  agentMeshMessages,
+  onConductorSent,
+}: AgentTabContentProps) {
+  const threadItems = conductorState?.running_thread ?? [];
+  const lastFive = threadItems.slice(-5).reverse();
+
+  const meshNodes = Array.from(
+    new Map(
+      agentMeshMessages.flatMap((m) => [
+        [m.from_node_key, { id: m.from_node_key, role: m.from_node_key }],
+        [m.to_node_key, { id: m.to_node_key, role: m.to_node_key }],
+      ]),
+    ).values(),
+  );
+
+  const meshEdges = agentMeshMessages.map((m) => ({
+    id: m.id,
+    from_node_key: m.from_node_key,
+    to_node_key: m.to_node_key,
+    message_type: m.message_type,
+    body: m.body,
+  }));
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      {/* Conductor Thread */}
+      <div className="shrink-0 px-4 pt-3 pb-2">
+        <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1.5">
+          Conductor Thread
+        </p>
+        <div className="max-h-40 overflow-y-auto flex flex-col gap-1">
+          {lastFive.length === 0 && (
+            <p className="text-[12px] text-text-muted italic">No conductor activity.</p>
+          )}
+          {lastFive.map((entry, i) => (
+            <div key={i} className="text-[12px] flex gap-2 items-start">
+              <span className="font-semibold text-brand shrink-0 capitalize">
+                {(entry as { action?: string }).action ?? "event"}
+              </span>
+              <span className="text-text-secondary leading-snug">
+                {(entry as { reason?: string | null; note?: string | null }).reason ??
+                  (entry as { note?: string | null }).note ??
+                  ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-2 flex flex-col gap-3">
+        {/* Sub-agent Results */}
+        <div>
+          <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-2">
+            Sub-agent Results ({subAgentResults.length})
+          </p>
+          {subAgentResults.length === 0 ? (
+            <p className="text-[12px] text-text-muted italic">No completed sub-agent tasks yet.</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {subAgentResults.map((r) => (
+                <SubAgentResultCard key={r.task_id} result={r} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Mesh Graph */}
+        <div>
+          <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-2">
+            Agent Mesh
+          </p>
+          <div className="rounded-xl border border-border-subtle bg-surface-raised p-2">
+            <AgentMeshGraph nodes={meshNodes} edges={meshEdges} />
+          </div>
+        </div>
+      </div>
+
+      {/* Conductor Chat Bar (sticky bottom) */}
+      <ConductorChatBar projectId={projectId} onSent={onConductorSent} />
+    </div>
+  );
+}
+
 
 function UnderlineTab({ value, label }: { value: string; label: string }) {
   return (

@@ -1544,3 +1544,34 @@ export async function getConductorState(issueId: string): Promise<ConductorState
   if (!res.ok) return null;
   return (await res.json()) as ConductorStatePayload;
 }
+
+export interface SubAgentResultPayload {
+  task_id: string;
+  role: string;
+  title: string;
+  status: string;
+  task_kind: string;
+  parent_task_id: string | null;
+  summary: string;
+  artifact_json: Record<string, unknown> | null;
+  updated_at: string | null;
+}
+
+export async function getSubAgentResults(issueId: string): Promise<SubAgentResultPayload[]> {
+  const response = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/subagent-results`);
+  return handleResponse<SubAgentResultPayload[]>(response);
+}
+
+export async function getAgentMesh(issueId: string): Promise<AgentMessage[]> {
+  const response = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/agent-mesh`);
+  return handleResponse<AgentMessage[]>(response);
+}
+
+export async function appendConductorMessage(projectId: string, message: string): Promise<{ status: string }> {
+  const response = await fetch(`${API_BASE}/codex/projects/${encodeURIComponent(projectId)}/conductor/message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  return handleResponse<{ status: string }>(response);
+}
