@@ -165,25 +165,25 @@ export function RuntimeCatalogEditor({
             try {
               const result = await validateRuntimeCatalog(localCatalog);
               if (result.valid) {
-                addToast({ type: "success", title: "Catalog is valid" });
+                addToast({ type: "success", title: t("runtime.catalog.valid") });
               } else {
                 addToast({
                   type: "error",
-                  title: "Validation failed",
-                  message: result.error ?? "Unknown error",
+                  title: t("runtime.catalog.validationFailed"),
+                  message: result.error ?? t("runtime.catalog.unknownError"),
                 });
               }
             } catch (err) {
               addToast({
                 type: "error",
-                title: "Validation failed",
+                title: t("runtime.catalog.validationFailed"),
                 message: err instanceof Error ? err.message : String(err),
               });
             }
           }}
           className="text-xs font-bold uppercase tracking-widest text-text-muted hover:text-foreground border border-border-subtle rounded-md px-3 py-1.5"
         >
-          Validate
+          {t("runtime.catalog.validate")}
         </button>
       </div>
 
@@ -368,7 +368,7 @@ function ExecutorCard({
                   <XCircle className="h-3 w-3 text-destructive" />
                 )
               ) : (
-                "Test"
+                t("runtime.catalog.test")
               )}
             </Button>
             {testResult?.success && (

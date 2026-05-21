@@ -44,9 +44,9 @@ export function SettingsPage() {
   useEffect(() => {
     getRuntimeCatalog()
       .then(setRuntimeCatalog)
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load runtime catalog"))
+      .catch((err) => setError(err instanceof Error ? err.message : t("settings.runtimeLoadFailed")))
       .finally(() => setLoading(false));
-  }, []);
+  }, [t]);
 
   const themeOptions: { value: ThemePreference; label: string; icon: React.ReactNode }[] = [
     { value: "light", label: t("settings.theme.light"), icon: <Sun size={18} /> },
@@ -117,7 +117,7 @@ export function SettingsPage() {
                   <div className="size-8 rounded-lg bg-surface-raised flex items-center justify-center group-data-[state=active]:bg-brand/20 group-data-[state=active]:shadow-inner transition-colors">
                     <Bot size={14} />
                   </div>
-                  Agent Catalog
+                  {t("settings.agents")}
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -290,7 +290,7 @@ export function SettingsPage() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-bold">{t("settings.reducedMotion")}</p>
-                          <p className="text-[10px] opacity-60">{reducedMotion ? "ON" : "OFF"}</p>
+                          <p className="text-[10px] opacity-60">{reducedMotion ? t("settings.state.on") : t("settings.state.off")}</p>
                         </div>
                         {reducedMotion && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
                           <Check size={12} className="text-background" />
@@ -326,7 +326,7 @@ export function SettingsPage() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-bold">{t("settings.compactMode")}</p>
-                          <p className="text-[10px] opacity-60">{compactMode ? "ON" : "OFF"}</p>
+                          <p className="text-[10px] opacity-60">{compactMode ? t("settings.state.on") : t("settings.state.off")}</p>
                         </div>
                         {compactMode && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
                           <Check size={12} className="text-background" />
@@ -383,7 +383,7 @@ export function SettingsPage() {
                               setRuntimeCatalog(cat);
                               setSaveStatus("saved");
                             } catch (err) {
-                              setSaveError(err instanceof Error ? err.message : "Save failed");
+                              setSaveError(err instanceof Error ? err.message : t("settings.saveFailed"));
                               setSaveStatus("error");
                             }
                           }}
@@ -398,10 +398,10 @@ export function SettingsPage() {
               <TabsContent value="agents" className="w-full p-8 mt-0 outline-none animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div className="mb-6">
                   <h2 className="text-2xl font-black tracking-tight text-foreground mb-1 italic">
-                    Agent Catalog
+                    {t("settings.agents")}
                   </h2>
                   <p className="text-xs text-text-muted">
-                    Managed core roles, predefined specialists, and custom agents currently registered in the backend.
+                    {t("settings.agentsDesc")}
                   </p>
                 </div>
                 <AgentCatalogPanel />

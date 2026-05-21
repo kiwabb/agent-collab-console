@@ -6,34 +6,44 @@ import { listAgents } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
 
 type AgentTier = Agent["agent_tier"];
-
-const TIER_COPY: Record<AgentTier, { title: string; description: string; icon: ReactNode; tone: string }> = {
-  managed: {
-    title: "Managed core",
-    description: "Framework-owned PM, Architect, Engineer, and QA workflows.",
-    icon: <Network size={16} />,
-    tone: "text-brand bg-brand/10 border-brand/20",
-  },
-  specialist: {
-    title: "Specialists",
-    description: "Predefined focused reviewers available to Conductor and DAGs.",
-    icon: <ShieldCheck size={16} />,
-    tone: "text-status-running bg-status-running/10 border-status-running/20",
-  },
-  custom: {
-    title: "Custom agents",
-    description: "Ad-hoc roles created by users or Conductor spawn_custom.",
-    icon: <Sparkles size={16} />,
-    tone: "text-status-passed bg-status-passed/10 border-status-passed/20",
-  },
-};
+type AgentDisplay = { name: string; description: string | null };
 
 const TIER_ORDER: AgentTier[] = ["managed", "specialist", "custom"];
+const MANAGED_ROLE_KEYS = [
+  "product_manager",
+  "architect",
+  "engineer",
+  "engineer_frontend",
+  "engineer_backend",
+  "qa",
+] as const;
+const SPECIALIST_ROLE_KEYS = [
+  "accessibility_reviewer",
+  "api_contract_checker",
+  "code_reviewer",
+  "dependency_auditor",
+  "doc_writer",
+  "i18n_checker",
+  "log_summarizer",
+  "migration_planner",
+  "performance_reviewer",
+  "security_reviewer",
+] as const;
+
+function isManagedRoleKey(roleKey: string): roleKey is (typeof MANAGED_ROLE_KEYS)[number] {
+  return (MANAGED_ROLE_KEYS as readonly string[]).includes(roleKey);
+}
+
+function isSpecialistRoleKey(roleKey: string): roleKey is (typeof SPECIALIST_ROLE_KEYS)[number] {
+  return (SPECIALIST_ROLE_KEYS as readonly string[]).includes(roleKey);
+}
 
 export function AgentCatalogPanel() {
+  const { t } = useI18n();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,16 +71,59 @@ export function AgentCatalogPanel() {
     }, { managed: [], specialist: [], custom: [] });
   }, [agents]);
 
+  const tierCopy: Record<AgentTier, { title: string; description: string; icon: ReactNode; tone: string }> = {
+    managed: {
+      title: t("settings.agentTier.managed.title"),
+      description: t("settings.agentTier.managed.desc"),
+      icon: <Network size={16} />,
+      tone: "text-brand bg-brand/10 border-brand/20",
+    },
+    specialist: {
+      title: t("settings.agentTier.specialist.title"),
+      description: t("settings.agentTier.specialist.desc"),
+      icon: <ShieldCheck size={16} />,
+      tone: "text-status-running bg-status-running/10 border-status-running/20",
+    },
+    custom: {
+      title: t("settings.agentTier.custom.title"),
+      description: t("settings.agentTier.custom.desc"),
+      icon: <Sparkles size={16} />,
+      tone: "text-status-passed bg-status-passed/10 border-status-passed/20",
+    },
+  };
+
+  const getAgentDisplay = (agent: Agent): AgentDisplay => {
+    if (isManagedRoleKey(agent.role_key)) {
+      return {
+        name: t(`settings.agentRole.managed.${agent.role_key}.name` as const),
+        description: t(`settings.agentRole.managed.${agent.role_key}.desc` as const),
+      };
+    }
+    if (agent.role_key.startsWith("specialist:")) {
+      const specialistKey = agent.role_key.slice("specialist:".length);
+      if (isSpecialistRoleKey(specialistKey)) {
+        return {
+          name: t(`settings.agentRole.specialist.${specialistKey}.name` as const),
+          description: t(`settings.agentRole.specialist.${specialistKey}.desc` as const),
+        };
+      }
+    }
+    return {
+      name: agent.name,
+      description: agent.description ?? null,
+    };
+  };
+
   return (
     <Card className="w-full bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
       <CardHeader className="border-b border-border-subtle/50 pb-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
-              Agent Catalog
+              {t("settings.agents")}
             </CardTitle>
             <CardDescription className="text-xs font-medium mt-2 max-w-2xl">
-              Browse managed workflow roles, predefined specialists, and custom agents available to Conductor.
+              {t("settings.agentsDesc")}
             </CardDescription>
           </div>
           <Button
@@ -81,7 +134,7 @@ export function AgentCatalogPanel() {
             className="gap-2 rounded-xl"
           >
             {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCcw size={14} />}
-            Refresh
+            {t("settings.refresh")}
           </Button>
         </div>
       </CardHeader>
@@ -93,12 +146,12 @@ export function AgentCatalogPanel() {
         ) : loading ? (
           <div className="flex items-center justify-center py-16 gap-3 text-xs font-black uppercase tracking-[0.25em] text-brand">
             <Loader2 size={18} className="animate-spin" />
-            Loading catalog
+            {t("settings.loadingCatalog")}
           </div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
             {TIER_ORDER.map((tier) => {
-              const meta = TIER_COPY[tier];
+              const meta = tierCopy[tier];
               return (
                 <section
                   key={tier}
@@ -115,48 +168,51 @@ export function AgentCatalogPanel() {
                       </div>
                     </div>
                     <div className="mt-4 text-[10px] font-black uppercase tracking-[0.2em] text-text-muted">
-                      {grouped[tier].length} agents
+                      {t("settings.agentCount", { count: grouped[tier].length })}
                     </div>
                   </div>
 
                   <div className="divide-y divide-border-subtle">
                     {grouped[tier].length === 0 ? (
                       <div className="p-6 text-center text-xs text-text-muted">
-                        No {tier} agents registered.
+                        {t(`settings.agentTierEmpty.${tier}` as const)}
                       </div>
-                    ) : grouped[tier].map((agent) => (
-                      <article key={agent.id} className="p-4 hover:bg-surface-hover transition-colors">
-                        <div className="flex items-start gap-3">
-                          <div className="mt-0.5 size-8 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center text-text-muted">
-                            <Bot size={14} />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <h4 className="text-[13px] font-bold truncate">{agent.name}</h4>
-                              {agent.is_builtin && (
-                                <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-brand">
-                                  built-in
-                                </span>
+                    ) : grouped[tier].map((agent) => {
+                      const display = getAgentDisplay(agent);
+                      return (
+                        <article key={agent.id} className="p-4 hover:bg-surface-hover transition-colors">
+                          <div className="flex items-start gap-3">
+                            <div className="mt-0.5 size-8 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center text-text-muted">
+                              <Bot size={14} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-[13px] font-bold truncate">{display.name}</h4>
+                                {agent.is_builtin && (
+                                  <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-brand">
+                                    {t("settings.builtIn")}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1 font-mono text-[10px] text-text-muted truncate">{agent.role_key}</p>
+                              {display.description && (
+                                <p className="mt-2 text-[11px] text-text-secondary leading-relaxed line-clamp-3">
+                                  {display.description}
+                                </p>
                               )}
-                            </div>
-                            <p className="mt-1 font-mono text-[10px] text-text-muted truncate">{agent.role_key}</p>
-                            {agent.description && (
-                              <p className="mt-2 text-[11px] text-text-secondary leading-relaxed line-clamp-3">
-                                {agent.description}
-                              </p>
-                            )}
-                            <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-text-muted">
-                              <span className="rounded-lg border border-border-subtle bg-surface-raised px-2 py-1 font-mono">
-                                executor: {agent.default_executor ?? "unset"}
-                              </span>
-                              <span className="rounded-lg border border-border-subtle bg-surface-raised px-2 py-1 font-mono">
-                                artifact: {agent.artifact_subdir ?? "none"}
-                              </span>
+                              <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-text-muted">
+                                <span className="rounded-lg border border-border-subtle bg-surface-raised px-2 py-1 font-mono">
+                                  {t("settings.agentMeta.executor")}: {agent.default_executor ?? t("settings.agentMeta.unset")}
+                                </span>
+                                <span className="rounded-lg border border-border-subtle bg-surface-raised px-2 py-1 font-mono">
+                                  {t("settings.agentMeta.artifact")}: {agent.artifact_subdir ?? t("settings.agentMeta.none")}
+                                </span>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </article>
-                    ))}
+                        </article>
+                      );
+                    })}
                   </div>
                 </section>
               );

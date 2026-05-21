@@ -8,6 +8,7 @@ import type { ProjectConductorLoopResult, ProjectConductorToolEvent } from "@/li
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { useI18n } from "@/providers/I18nProvider";
 
 type ThreadEvent = {
   id: string;
@@ -19,6 +20,7 @@ type ThreadEvent = {
 
 export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectId: string; onLoopDone?: () => void }) {
   const { addToast } = useToast();
+  const { t } = useI18n();
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -87,13 +89,13 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
     } catch (err) {
       addToast({
         type: "error",
-        title: "Conductor loop failed",
+        title: t("projectConductor.toast.loopFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setRunning(false);
     }
-  }, [projectId, prompt, onLoopDone, connectStream, addToast]);
+  }, [projectId, prompt, onLoopDone, connectStream, addToast, t]);
 
   return (
     <div className="rounded-2xl border border-border-subtle bg-surface/75 p-4 shadow-inner shadow-black/5">
@@ -103,15 +105,15 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
             <RadioTower size={17} />
           </div>
           <div>
-            <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">Tool-use ThreadDock</h3>
+            <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">{t("projectConductor.threadDock.title")}</h3>
             <p className="mt-1 text-xs text-text-muted">
-              {connected ? "Listening to conductor events..." : "Loop events replay here after each run."}
+              {connected ? t("projectConductor.threadDock.listening") : t("projectConductor.threadDock.replayHint")}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-text-muted">
           <Activity size={14} className={connected || running ? "text-brand animate-pulse" : ""} />
-          {running ? "running" : connected ? "streaming" : "idle"}
+          {running ? t("projectConductor.threadDock.status.running") : connected ? t("projectConductor.threadDock.status.streaming") : t("projectConductor.threadDock.status.idle")}
         </div>
       </div>
 
@@ -122,33 +124,33 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
           onKeyDown={(event) => {
             if (event.key === "Enter") void handleStartLoop();
           }}
-          placeholder="Ask the loop to inspect risk, retrieve memory, or dispatch a helper..."
+          placeholder={t("projectConductor.threadDock.promptPlaceholder")}
           className="bg-surface-input border-border-subtle"
         />
         <Button onClick={() => void handleStartLoop()} disabled={running} className="gap-2 shrink-0">
           {running ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-          Start loop
+          {t("projectConductor.threadDock.startLoop")}
         </Button>
       </div>
 
       {latestResult && (
         <div className="mt-3 rounded-xl border border-brand/15 bg-brand/5 p-3 text-xs leading-relaxed text-text-secondary">
-          <span className="font-black text-text-primary">Latest:</span> {latestResult.answer}
+          <span className="font-black text-text-primary">{t("projectConductor.threadDock.latest")}</span> {latestResult.answer}
         </div>
       )}
 
       <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-text-muted">
-            <Bot size={13} /> Turns
+            <Bot size={13} /> {t("projectConductor.threadDock.turns")}
           </div>
           {events.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">No loop turns yet.</p>
+            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">{t("projectConductor.threadDock.empty.turns")}</p>
           ) : (
             events.map((event) => (
               <div key={event.id} className="rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs">
                 <div className="font-black text-text-primary">{event.role}</div>
-                <p className="mt-1 whitespace-pre-wrap leading-relaxed text-text-secondary">{event.content || "(empty turn)"}</p>
+                <p className="mt-1 whitespace-pre-wrap leading-relaxed text-text-secondary">{event.content || t("projectConductor.threadDock.empty.turn")}</p>
               </div>
             ))
           )}
@@ -156,16 +158,18 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
 
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-text-muted">
-            <Wrench size={13} /> Tool cards
+            <Wrench size={13} /> {t("projectConductor.threadDock.toolCards")}
           </div>
           {tools.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">No tool calls yet.</p>
+            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">{t("projectConductor.threadDock.empty.tools")}</p>
           ) : (
             tools.map((tool, index) => (
               <div key={`${tool.id}-${index}`} className="rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-black text-text-primary">{tool.name}</span>
-                  <span className={tool.is_error ? "text-red-500" : "text-text-muted"}>{tool.is_error ? "error" : "ok"}</span>
+                  <span className={tool.is_error ? "text-red-500" : "text-text-muted"}>
+                    {tool.is_error ? t("projectConductor.threadDock.toolState.error") : t("projectConductor.threadDock.toolState.ok")}
+                  </span>
                 </div>
                 <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-text-muted">
                   {JSON.stringify(tool.result, null, 2)}
