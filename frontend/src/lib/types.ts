@@ -664,26 +664,6 @@ export interface WorkflowGraph {
   edges: WorkflowEdge[];
 }
 
-export interface ProposedDAGNode {
-  node_key: string;
-  agent_id: string;
-  role_key: string;
-  title: string;
-}
-
-export interface ProposedDAGEdge {
-  from_node_key: string;
-  to_node_key: string;
-  edge_type: WorkflowEdgeType;
-  condition_expr?: string | null;
-}
-
-export interface ProposedDAG {
-  meta: { intent?: string; rationale?: string; created_by?: string };
-  nodes: ProposedDAGNode[];
-  edges: ProposedDAGEdge[];
-}
-
 export interface SubAgentResultPayload {
   task_id: string;
   role: string;

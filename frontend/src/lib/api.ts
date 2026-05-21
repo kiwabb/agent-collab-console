@@ -31,7 +31,6 @@ import type {
   CreateAgentRequest,
   UpdateAgentRequest,
   WorkflowGraph,
-  ProposedDAG,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
@@ -314,32 +313,6 @@ export async function getCodexIssueDiff(
     : `${API_BASE}/codex/issues/${issueId}/diff`;
   const response = await fetch(url);
   return handleResponse<import("./types").IssueDiffResult>(response);
-}
-
-export interface WorkflowTemplateSummary {
-  id: string;
-  name: string;
-  description: string;
-  intent: string;
-  role_order: string[];
-}
-
-export async function listWorkflowTemplates(): Promise<WorkflowTemplateSummary[]> {
-  const response = await fetch(`${API_BASE}/codex/workflow-templates`);
-  const data = await handleResponse<{ templates: WorkflowTemplateSummary[] }>(response);
-  return data.templates;
-}
-
-export async function applyWorkflowTemplate(
-  issueId: string,
-  templateId: string,
-): Promise<{ graph_id: string; template_id: string; nodes: number; edges: number }> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/apply-template`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ template_id: templateId }),
-  });
-  return handleResponse(response);
 }
 
 /** B1: inject a mid-run hint into the issue's worktree. The next dispatched
@@ -677,10 +650,6 @@ export async function updateCodexIssuePhase(issueId: string, currentPhase: strin
   });
   return handleResponse<CodexIssue>(response);
 }
-
-// Legacy transitionIssueTo{Architecture,Development,Testing} helpers removed
-// in the DAG migration. Use planIssue / saveIssueGraph / startIssueGraph /
-// the workflow scheduler endpoints instead.
 
 export async function deleteCodexIssue(issueId: string): Promise<unknown> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}`, {
@@ -1160,84 +1129,7 @@ export async function deleteAgent(agentId: string): Promise<void> {
   }
 }
 
-// --- Workflow plan / graph (PR2 + PR3) ---
-
-export async function planIssue(issueId: string): Promise<ProposedDAG> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/plan`, { method: "POST" });
-  return handleResponse<ProposedDAG>(response);
-}
-
-export interface PlanStreamCallbacks {
-  onMeta?: (meta: { executor: string | null; model: string | null; reason?: string }) => void;
-  onLog?: (msg: string) => void;
-  onChunk?: (text: string) => void;
-  onNode?: (node: Record<string, unknown>) => void;
-  onEdge?: (edge: Record<string, unknown>) => void;
-  onDone?: (dag: ProposedDAG) => void;
-  onError?: (msg: string) => void;
-  signal?: AbortSignal;
-}
-
-export async function planIssueStream(issueId: string, cb: PlanStreamCallbacks): Promise<void> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/plan/stream`, {
-    method: "POST",
-    headers: { Accept: "text/event-stream" },
-    signal: cb.signal,
-  });
-  if (!response.ok || !response.body) {
-    throw new Error(`stream failed: HTTP ${response.status}`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    // SSE events terminated by blank line.
-    let idx: number;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const block = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      let event = "message";
-      let data = "";
-      for (const line of block.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        else if (line.startsWith("data:")) data += line.slice(5).trim();
-      }
-      if (!data) continue;
-      let payload: unknown;
-      try {
-        payload = JSON.parse(data);
-      } catch {
-        continue;
-      }
-      switch (event) {
-        case "meta":
-          cb.onMeta?.(payload as { executor: string | null; model: string | null; reason?: string });
-          break;
-        case "log":
-          cb.onLog?.(String(payload));
-          break;
-        case "chunk":
-          cb.onChunk?.((payload as { text: string }).text);
-          break;
-        case "node":
-          cb.onNode?.(payload as Record<string, unknown>);
-          break;
-        case "edge":
-          cb.onEdge?.(payload as Record<string, unknown>);
-          break;
-        case "done":
-          cb.onDone?.((payload as { dag: ProposedDAG }).dag);
-          break;
-        case "error":
-          cb.onError?.(String((payload as { message?: string }).message ?? payload));
-          break;
-      }
-    }
-  }
-}
+// --- Workflow graph (Conductor-driven) ---
 
 export async function getIssueGraph(issueId: string): Promise<WorkflowGraph | null> {
   const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}/graph`);
@@ -1245,59 +1137,8 @@ export async function getIssueGraph(issueId: string): Promise<WorkflowGraph | nu
   return handleResponse<WorkflowGraph>(response);
 }
 
-export async function saveIssueGraph(issueId: string, dag: ProposedDAG, createdBy = "user"): Promise<WorkflowGraph> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dag, created_by: createdBy }),
-  });
-  return handleResponse<WorkflowGraph>(response);
-}
-
-export async function startIssueGraph(issueId: string): Promise<WorkflowGraph> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/start`, { method: "POST" });
-  return handleResponse<WorkflowGraph>(response);
-}
-
 export async function autoStartIssueGraph(issueId: string): Promise<WorkflowGraph> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/auto-start`, { method: "POST" });
-  return handleResponse<WorkflowGraph>(response);
-}
-
-export interface ReplanPending {
-  id: string;
-  graph_id: string;
-  triggered_by_node_key: string;
-  trigger_reason: string;
-  diff: {
-    added_nodes?: Array<{ node_key: string; role_key?: string; title?: string }>;
-    added_edges?: Array<{ from_node_key: string; to_node_key: string; edge_type: string }>;
-    removed_node_keys?: string[];
-    rationale?: string;
-  };
-  rationale: string | null;
-  status: string;
-  created_at: string | null;
-}
-
-export async function listReplanPending(issueId: string): Promise<ReplanPending[]> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/replan-pending`);
-  return handleResponse<ReplanPending[]>(response);
-}
-
-export async function confirmReplan(issueId: string, replanId: string): Promise<WorkflowGraph> {
-  const response = await fetch(
-    `${API_BASE}/codex/issues/${issueId}/graph/replan/${replanId}/confirm`,
-    { method: "POST" }
-  );
-  return handleResponse<WorkflowGraph>(response);
-}
-
-export async function rejectReplan(issueId: string, replanId: string): Promise<WorkflowGraph> {
-  const response = await fetch(
-    `${API_BASE}/codex/issues/${issueId}/graph/replan/${replanId}/reject`,
-    { method: "POST" }
-  );
   return handleResponse<WorkflowGraph>(response);
 }
 

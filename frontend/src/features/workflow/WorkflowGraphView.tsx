@@ -13,7 +13,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { Maximize2, Minus, Plus } from "lucide-react";
 
-import type { ProposedDAG, WorkflowGraph } from "@/lib/types";
+import type { WorkflowGraph } from "@/lib/types";
 import type { GraphStatsResponse } from "@/lib/api";
 import {
   AgentDagNode,
@@ -149,11 +149,14 @@ function toReactFlow(
     const seen = rowSeenInDepth.get(depth) ?? 0;
     rowSeenInDepth.set(depth, seen + 1);
     const isConductor = n.node_key === CONDUCTOR_KEY;
-    const roleCandidate = (n.role_key ?? n.node_key) as RoleId;
+    // Conductor may dispatch the same role multiple times; node_key gets
+    // suffixed `engineer#1`, `engineer#2`, …. Strip the suffix to resolve
+    // the role icon.
+    const baseKey = (n.role_key ?? n.node_key).split("#")[0] as RoleId;
     const role: RoleId = isConductor
       ? "conductor"
-      : VALID_ROLES.has(roleCandidate)
-        ? roleCandidate
+      : VALID_ROLES.has(baseKey)
+        ? baseKey
         : "engineer"; // graceful fallback for unknown roles
     const stat: AgentDagNodeStats | null = isConductor
       ? stats?.conductor ?? null
@@ -204,7 +207,7 @@ function toReactFlow(
 }
 
 interface Props {
-  graph: WorkflowGraph | ProposedDAG;
+  graph: WorkflowGraph;
   className?: string;
   onNodeClick?: (payload: WorkflowNodeClickPayload) => void;
   /** Optional per-node telemetry from /graph-stats. */
@@ -218,15 +221,16 @@ export function WorkflowGraphView({
   stats,
 }: Props) {
   const { t } = useI18n();
-  const flow = useMemo(() => {
-    if ("dag_json" in graph) {
-      return toReactFlow(
+  const flow = useMemo(
+    () =>
+      toReactFlow(
         {
           nodes: graph.nodes.map((n) => ({
             node_key: n.node_key,
             title: n.title,
-            // WorkflowGraph nodes don't carry role_key explicitly, but
-            // node_key matches role_key for the seeded 4-phase preset.
+            // node_key matches role_key for dispatch_role-created nodes;
+            // for duplicates (engineer#1, engineer#2…) the prefix still resolves
+            // to the right role icon via the toReactFlow lookup.
             role_key: n.node_key,
             status: n.status,
             task_id: n.task_id,
@@ -239,25 +243,9 @@ export function WorkflowGraphView({
         },
         onNodeClick,
         stats,
-      );
-    }
-    return toReactFlow(
-      {
-        nodes: graph.nodes.map((n) => ({
-          node_key: n.node_key,
-          title: n.title,
-          role_key: n.role_key,
-        })),
-        edges: graph.edges.map((e) => ({
-          from_node_key: e.from_node_key,
-          to_node_key: e.to_node_key,
-          edge_type: e.edge_type,
-        })),
-      },
-      onNodeClick,
-      stats,
-    );
-  }, [graph, onNodeClick, stats]);
+      ),
+    [graph, onNodeClick, stats],
+  );
 
   const handleNodeClick = useCallback<NodeMouseHandler>(
     (event, node) => {

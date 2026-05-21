@@ -1,20 +1,15 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 
-// Shared helper: convert legacy "transition to X" intent into a graph start.
-// Typed as `any` because the store is declared further down the file and we
-// only need access to a handful of methods/fields — this is a migration
-// shim, not stable surface.
+// Conductor-driven restart: the old "transition to architecture/development/testing"
+// buttons map onto a single action — kick the Conductor loop on the issue.
+// Conductor decides which agent to dispatch next; the phase label on the issue
+// updates as nodes complete.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function startGraphForIssue(get: any, set: any, flagKey: string, issueId: string, newPhase: string) {
   set((state: any) => { state[flagKey] = true; });  // eslint-disable-line @typescript-eslint/no-explicit-any
   try {
-    let graph = await getIssueGraph(issueId);
-    if (graph === null) {
-      const proposed = await planIssue(issueId);
-      graph = await saveIssueGraph(issueId, proposed);
-    }
-    await startIssueGraph(issueId);
+    await autoStartIssueGraph(issueId);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const issue = get().issues.find((i: any) => i.id === issueId);
     if (issue && get().updateIssue) {
@@ -24,7 +19,7 @@ async function startGraphForIssue(get: any, set: any, flagKey: string, issueId: 
       await get().loadIssueArtifacts(issueId);
     }
   } catch (err) {
-    set((state: any) => { state.error = err instanceof Error ? err.message : 'Graph start failed'; });  // eslint-disable-line @typescript-eslint/no-explicit-any
+    set((state: any) => { state.error = err instanceof Error ? err.message : 'Conductor start failed'; });  // eslint-disable-line @typescript-eslint/no-explicit-any
     throw err;
   } finally {
     set((state: any) => { state[flagKey] = false; });  // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -46,20 +41,17 @@ import type {
   SendMessageResult,
 } from '@/lib/types';
 import type { BusEvent } from '@/contexts/ExecutionProcessesContext';
-import { 
-  listProjects, 
-  getProject, 
-  getWorkspaces, 
-  getCodexIssues, 
-  getCodexTasks, 
+import {
+  listProjects,
+  getProject,
+  getWorkspaces,
+  getCodexIssues,
+  getCodexTasks,
   getTaskHelpRequests,
   getCodexIssueArtifacts,
   getPendingApprovals,
   getRuntimeCatalog,
-  planIssue,
-  getIssueGraph,
-  saveIssueGraph,
-  startIssueGraph,
+  autoStartIssueGraph,
   refineCodexTask,
   chatCodexTask,
   sendCodexTask,
@@ -484,11 +476,9 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>()(
       }
     },
 
-    // Phase transitions now route through the workflow DAG:
-    //   1. plan (heuristic) → 2. save graph (if missing) → 3. start graph.
-    // We keep three separate methods so existing callers / UI labels don't
-    // change, but they all share the same code path now. The `phase` arg only
-    // updates the issue's display label.
+    // Phase transition buttons all call the Conductor restart endpoint;
+    // Conductor decides which agent to dispatch next. The `phase` arg only
+    // updates the issue's display label so existing UI labels keep working.
     transitionToArchitecture: async (issueId) => {
       await startGraphForIssue(get, set, 'isTransitioningToArchitecture', issueId, 'architecture');
     },

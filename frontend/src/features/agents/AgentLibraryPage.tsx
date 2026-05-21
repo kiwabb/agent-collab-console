@@ -32,7 +32,7 @@ import { useI18n } from "@/providers/I18nProvider";
  * they have framework hooks tied to role_key.
  *
  * Adding a custom agent (e.g. SecurityReviewer / DBA / DocWriter)
- * registers a new role_key that workflow templates and the orchestrator
+ * registers a new role_key that the Conductor can dispatch via dispatch_subagent
  * can reference.
  */
 export function AgentLibraryPage() {
@@ -120,7 +120,7 @@ export function AgentLibraryPage() {
             {agents.map((a) => (
               <li
                 key={a.id}
-                className="grid grid-cols-[1fr_120px_160px_160px_90px] gap-3 px-4 py-3 items-center group hover:bg-surface-hover transition-colors"
+                className="grid grid-cols-[1fr_120px_160px_90px] gap-3 px-4 py-3 items-center group hover:bg-surface-hover transition-colors"
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -140,10 +140,6 @@ export function AgentLibraryPage() {
                 </div>
                 <div className="text-[11px] text-text-muted truncate">
                   {a.artifact_subdir ?? "—"}
-                </div>
-                <div className="text-[11px] text-text-muted flex flex-col gap-0.5">
-                  <span>{a.triggers_replan_on_done ? "✓ replan-done" : ""}</span>
-                  <span>{a.triggers_replan_on_fail ? "✓ replan-fail" : ""}</span>
                 </div>
                 <div className="flex items-center gap-1 justify-end">
                   <button
@@ -189,7 +185,7 @@ export function AgentLibraryPage() {
           title="Delete agent?"
           description={
             confirmDelete
-              ? `"${confirmDelete.name}" will be removed. Issues that reference it via DAG node will fall back to the heuristic.`
+              ? `"${confirmDelete.name}" will be removed. The Conductor will no longer be able to dispatch this role.`
               : ""
           }
           confirmText="Delete"
@@ -217,8 +213,6 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
   const [systemPromptTemplate, setSystemPromptTemplate] = useState("");
   const [defaultExecutor, setDefaultExecutor] = useState<string>("claude");
   const [artifactSubdir, setArtifactSubdir] = useState("");
-  const [replanOnDone, setReplanOnDone] = useState(false);
-  const [replanOnFail, setReplanOnFail] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -229,8 +223,6 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
     setSystemPromptTemplate(editing?.system_prompt_template ?? "");
     setDefaultExecutor(editing?.default_executor ?? "claude");
     setArtifactSubdir(editing?.artifact_subdir ?? "");
-    setReplanOnDone(editing?.triggers_replan_on_done ?? false);
-    setReplanOnFail(editing?.triggers_replan_on_fail ?? false);
     setSaving(false);
   }, [open, editing]);
 
@@ -247,8 +239,6 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
           description: description.trim() || null,
           default_executor: defaultExecutor || null,
           artifact_subdir: artifactSubdir.trim() || null,
-          triggers_replan_on_done: replanOnDone,
-          triggers_replan_on_fail: replanOnFail,
         };
         // Don't try to overwrite a builtin's prompt template — backend
         // will reject and the framework relies on the `[builtin:...]`
@@ -264,8 +254,6 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
           system_prompt_template: systemPromptTemplate,
           default_executor: defaultExecutor || null,
           artifact_subdir: artifactSubdir.trim() || null,
-          triggers_replan_on_done: replanOnDone,
-          triggers_replan_on_fail: replanOnFail,
         };
         await createAgent(payload);
         addToast({ type: "success", title: "Agent created" });
@@ -290,7 +278,7 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
           <DialogDescription>
             {isBuiltin
               ? "This is a built-in agent. Only the surface fields can be edited; the system prompt template is owned by the framework."
-              : "Custom roles get their own slot in the agents registry. Reference them via workflow templates or have the orchestrator suggest them."}
+              : "Custom roles get their own slot in the agents registry. The Conductor can dispatch them via dispatch_subagent or spawn_custom_subagent."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -362,24 +350,6 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
                 className="bg-surface-input border-border-subtle font-mono text-[12px]"
               />
             </Field>
-          </div>
-          <div className="flex gap-4 pt-1">
-            <label className="flex items-center gap-2 text-[12px] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={replanOnDone}
-                onChange={(e) => setReplanOnDone(e.target.checked)}
-              />
-              Trigger replan on done
-            </label>
-            <label className="flex items-center gap-2 text-[12px] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={replanOnFail}
-                onChange={(e) => setReplanOnFail(e.target.checked)}
-              />
-              Trigger replan on fail
-            </label>
           </div>
         </div>
         <DialogFooter>

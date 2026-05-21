@@ -2265,21 +2265,9 @@ async def approve_codex_issue_plan(issue_id: str, request: ApprovePlanRequest):
         "review_comment": issue.review_comment,
     })
 
-    graph = await codex_store.load_workflow_graph_for_issue(issue_id)
-    if graph is None:
-        # Approval can still be recorded even if the graph was removed, but
-        # the scheduler can't resume without one.
-        return issue
-
-    from app.application.workflow_scheduler import WorkflowScheduler
-    from app.application.event_bus import _workflow_task_dispatcher
-
-    scheduler = WorkflowScheduler(
-        store=codex_store,
-        task_dispatcher=_workflow_task_dispatcher,
-        event_bus=event_bus,
-    )
-    await scheduler.settle(graph.id)
+    # In Conductor-driven mode, the Conductor loop is running as a background task.
+    # Approving the plan just updates the issue status above — the Conductor observes
+    # the status change via the event bus and continues orchestration automatically.
     return issue
 
 
@@ -2361,14 +2349,23 @@ async def qa_review_codex_issue(issue_id: str, request: QaReviewRequest):
         "review_comment": issue.review_comment,
     })
 
-    from app.application.workflow_scheduler import WorkflowScheduler
-    from app.application.event_bus import _workflow_task_dispatcher
-    scheduler = WorkflowScheduler(
-        store=codex_store,
-        task_dispatcher=_workflow_task_dispatcher,
-        event_bus=event_bus,
-    )
-    await scheduler.settle(graph.id)
+    # Conductor-driven re-dispatch: a fresh engineer task is created with the
+    # human feedback in review_comment so REWORK branch picks it up. We use
+    # dispatch_role (the same path Conductor's dispatch_subagent tool uses).
+    try:
+        from app.application.task_dispatcher import dispatch_role
+        from app.application.event_bus import _workflow_task_dispatcher
+        await dispatch_role(
+            issue=issue,
+            role="engineer",
+            store=codex_store,
+            task_dispatcher_fn=_workflow_task_dispatcher,
+            event_bus=event_bus,
+            prev_node_key="qa",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("qa-review reject re-dispatch failed: %s", exc)
+
     return issue
 
 
@@ -2788,22 +2785,6 @@ async def abandon_codex_issue(issue_id: str):
         "session_id": issue.session_id,
     })
     return issue
-
-
-@router.get("/codex/workflow-templates")
-async def list_workflow_templates():
-    """List the pre-baked workflow templates (now returns empty list — DAG templates replaced by Conductor)."""
-    return {"templates": []}
-
-
-class ApplyTemplateRequest(BaseModel):
-    template_id: str
-
-
-@router.post("/codex/issues/{issue_id}/apply-template")
-async def apply_workflow_template(issue_id: str, request: ApplyTemplateRequest):
-    """DAG templates replaced by Conductor — returns 410 Gone."""
-    raise HTTPException(status_code=410, detail="Workflow templates removed: Conductor now orchestrates dynamically")
 
 
 class CreatePRRequest(BaseModel):
@@ -4167,12 +4148,6 @@ class AgentUpdateRequest(BaseModel):
     triggers_replan_on_fail: bool | None = None
 
 
-class SpawnCustomAgentRequest(BaseModel):
-    name: str
-    prompt: str
-    output_schema_hint: dict | None = Field(default=None, alias="schema")
-
-
 def _require_agent_store():
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
@@ -4278,216 +4253,6 @@ async def delete_agent(agent_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     return Response(status_code=204)
-
-
-@router.post("/codex/issues/{issue_id}/conductor/spawn-custom", status_code=201)
-async def spawn_custom_agent_for_issue(issue_id: str, request: SpawnCustomAgentRequest):
-    """Create an ad-hoc custom agent and enqueue a task for the issue."""
-    store = _require_agent_store()
-    issue = await store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-    from app.application.agent_catalog.catalog import AgentCatalog
-    from app.domain.models import Agent
-
-    definition = AgentCatalog().register_custom(
-        name=request.name,
-        prompt=request.prompt,
-        schema=request.output_schema_hint,
-    )
-    existing = await store.list_agents(workspace_id=None, role_key=definition.role_key)
-    agent = next((a for a in existing if a.workspace_id is None), None)
-    if agent is None:
-        now = datetime.now()
-        agent = Agent(
-            id=str(uuid4()),
-            workspace_id=None,
-            name=definition.display_name,
-            role_key=definition.role_key,
-            description=definition.prompt_template,
-            system_prompt_template=definition.prompt_template,
-            output_schema=definition.output_schema,
-            default_executor="claude",
-            artifact_subdir=f"specialists/{definition.role_key}",
-            persist_kind="specialist",
-            agent_tier="custom",
-            is_builtin=False,
-            created_at=now,
-            updated_at=now,
-        )
-        await store.save_agent(agent)
-
-    task = await create_codex_task(CreateTaskRequest(
-        session_id=issue.session_id,
-        issue_id=issue.id,
-        phase=definition.role_key,
-        title=f"{definition.display_name}: {issue.title}",
-        prompt=request.prompt,
-        role=definition.role_key,
-        executor=agent.default_executor or "claude",
-    ))
-    return {"agent": agent.model_dump(), "task": task}
-
-
-# --- Workflow plan endpoint (PR2) ---
-
-
-async def _persist_failed_orchestrator_output(issue, raw_text: str, *, reason: str) -> None:
-    """Write the LLM's raw response to the issue worktree on parse failure
-    so a human can see exactly what the model produced. Best-effort — never
-    raises."""
-    if not issue.git_worktree_path or not raw_text:
-        return
-    try:
-        from pathlib import Path as _Path
-        out = _Path(issue.git_worktree_path) / "issues" / issue.id / "_orchestrator_failure.txt"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        header = (
-            f"# Orchestrator LLM output that failed to parse\n"
-            f"reason: {reason}\n"
-            f"timestamp: {datetime.now().isoformat()}\n"
-            f"chars: {len(raw_text)}\n\n---\n\n"
-        )
-        out.write_text(header + raw_text, encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        pass  # Best-effort — don't escalate file-write errors.
-
-
-def _extract_first_json_object(text: str) -> str | None:
-    """Find the first complete top-level `{...}` via proper brace balancing.
-
-    Tolerates wrapping markdown code fences (```json ... ```), leading prose,
-    and trailing prose. The walker is depth-aware and string-aware so it
-    skips braces inside string literals.
-    """
-    if not text:
-        return None
-    # Strip ```json / ``` fences if present — Codex/Claude with weak
-    # instruction-following sometimes wrap output anyway.
-    fence_start = text.find("```")
-    if fence_start != -1:
-        after = text[fence_start + 3 :]
-        # Drop the optional language tag on the same line.
-        nl = after.find("\n")
-        if nl != -1:
-            after = after[nl + 1 :]
-        fence_end = after.rfind("```")
-        if fence_end != -1:
-            text = after[:fence_end]
-
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    in_str = False
-    esc = False
-    for i in range(start, len(text)):
-        c = text[i]
-        if in_str:
-            if esc:
-                esc = False
-            elif c == "\\":
-                esc = True
-            elif c == '"':
-                in_str = False
-            continue
-        if c == '"':
-            in_str = True
-        elif c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return None
-
-
-def _stream_extract_complete_objects(text: str, key: str, already_emitted: set[str]) -> list[dict]:
-    """Best-effort: find complete JSON objects inside the array assigned to
-    `"<key>"` in the accumulating LLM text. Each object is matched by
-    brace-balancing forward from a `{`. Returns the newly-parseable ones
-    (de-duped by their JSON-serialized form).
-    """
-    import json
-    out: list[dict] = []
-    # Find the start of the array for this key.
-    needle = f'"{key}"'
-    idx = text.find(needle)
-    if idx == -1:
-        return out
-    bracket = text.find("[", idx)
-    if bracket == -1:
-        return out
-    i = bracket + 1
-    n = len(text)
-    while i < n:
-        # Skip whitespace, commas.
-        while i < n and text[i] in " \t\r\n,":
-            i += 1
-        if i >= n:
-            break
-        if text[i] == "]":
-            break
-        if text[i] != "{":
-            i += 1
-            continue
-        # Brace-balance forward.
-        depth = 0
-        in_str = False
-        esc = False
-        j = i
-        while j < n:
-            c = text[j]
-            if in_str:
-                if esc:
-                    esc = False
-                elif c == "\\":
-                    esc = True
-                elif c == '"':
-                    in_str = False
-            else:
-                if c == '"':
-                    in_str = True
-                elif c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                    if depth == 0:
-                        j += 1
-                        break
-            j += 1
-        else:
-            return out  # ran out of text mid-object; wait for more
-        chunk = text[i:j]
-        try:
-            obj = json.loads(chunk)
-            sig = json.dumps(obj, sort_keys=True)
-            if sig not in already_emitted:
-                already_emitted.add(sig)
-                out.append(obj)
-        except Exception:
-            pass
-        i = j
-    return out
-
-
-@router.post("/codex/issues/{issue_id}/plan/stream")
-async def propose_issue_plan_stream_removed(issue_id: str):
-    """LLM-streaming DAG planner removed — Conductor handles orchestration."""
-    raise HTTPException(status_code=410, detail="LLM plan stream removed: use /graph/auto-start for Conductor-driven orchestration")
-
-
-@router.post("/codex/issues/{issue_id}/plan")
-async def propose_issue_plan(issue_id: str):
-    """Replaced by Conductor-driven orchestration — returns 410 Gone."""
-    raise HTTPException(status_code=410, detail="DAG planner removed: use /graph/auto-start for Conductor-driven orchestration")
-
-
-# --- Workflow graph persistence (PR3) ---
-
-class SaveGraphRequest(BaseModel):
-    dag: dict
-    created_by: str = "user"
 
 
 def _graph_to_dict(graph) -> dict:
@@ -4795,24 +4560,6 @@ def _conductor_stub() -> dict:
     }
 
 
-@router.post("/codex/issues/{issue_id}/graph", status_code=201)
-async def save_issue_graph(issue_id: str, request: SaveGraphRequest):
-    """Persist (or overwrite) the workflow graph for an issue from a DAG payload."""
-    store = _require_agent_store()
-    issue = await store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-    from app.application.workflow_scheduler import materialize_graph_from_dag
-    graph = await materialize_graph_from_dag(store, issue_id, request.dag, created_by=request.created_by)
-    return _graph_to_dict(graph)
-
-
-@router.post("/codex/issues/{issue_id}/graph/start")
-async def start_issue_graph(issue_id: str):
-    """Legacy DAG start endpoint — redirects to Conductor auto-start."""
-    return await auto_start_issue_graph(issue_id)
-
-
 @router.post("/codex/issues/{issue_id}/graph/auto-start", status_code=201)
 async def auto_start_issue_graph(issue_id: str):
     """Start Conductor-driven orchestration for an issue.
@@ -4875,29 +4622,6 @@ async def auto_start_issue_graph(issue_id: str):
     ))
 
     return _graph_to_dict(graph)
-
-
-# --- Replanner endpoints (removed — Conductor replaced DAG replanning) ---
-
-
-@router.get("/codex/issues/{issue_id}/graph/replan-pending")
-async def list_replan_pending(issue_id: str):
-    """Replan pending queue — always empty in Conductor mode."""
-    return []
-
-
-@router.post("/codex/issues/{issue_id}/graph/replan/{replan_id}/confirm")
-async def confirm_replan(issue_id: str, replan_id: str):
-    """Replan confirm — removed in Conductor refactor."""
-    raise HTTPException(status_code=410, detail="Replanning removed: Conductor handles orchestration dynamically")
-
-
-@router.post("/codex/issues/{issue_id}/graph/replan/{replan_id}/reject")
-async def reject_replan(issue_id: str, replan_id: str):
-    """Replan reject — removed in Conductor refactor."""
-    raise HTTPException(status_code=410, detail="Replanning removed: Conductor handles orchestration dynamically")
-
-
 
 
 # ----------------------------------------------------------------------------
