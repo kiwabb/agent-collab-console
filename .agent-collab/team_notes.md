@@ -1,5 +1,4 @@
 ## ⚙️ Distilled lessons (auto-curated)
-{
 - Co-locate a corresponding test file in `backend/tests/` for every new endpoint, using the naming pattern `test_<endpoint_name>.py`.
 - Verify all backend changes with `cd backend && python3 -m pytest tests/<test_name>.py -v` before considering work complete.
 - Keep feature changes small and focused; spreading a single feature across many files across both frontend and backend often signals over-scoping.
@@ -72,3 +71,5 @@ _intent: feature · graph status: done_
 - 在 Approvals 页面新增 QA 已通过 分组,帮助人工确认流程更清晰
 - 通过彩色徽章和状态标识,直观展示等待人工确认的 issue
 - 保持与现有 tabs (All/Issues/Task reviews/Agent questions/Tool calls) 视觉一致性
+
+- [Conductor] If backend fails, verify frontend is not hardcoding API contracts from failed implementation. Consider sequential dependency for backend->frontend on API-heavy features.
