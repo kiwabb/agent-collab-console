@@ -16,7 +16,14 @@ class ConductorToolRegistry:
     tools: dict[str, ToolCallable]
 
 
-def build_conductor_tools(*, project_id: str, store, event_bus=None) -> ConductorToolRegistry:
+def build_conductor_tools(
+    *,
+    project_id: str,
+    store,
+    event_bus=None,
+    task_dispatcher_fn=None,
+    issue_id: str | None = None,
+) -> ConductorToolRegistry:
     conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
 
     async def retrieve_cold_memory(tool_input: dict[str, Any]) -> dict[str, Any]:
@@ -25,15 +32,59 @@ def build_conductor_tools(*, project_id: str, store, event_bus=None) -> Conducto
         return {"memories": await conductor.retrieve_cold(query, top_k=max(1, min(top_k, 10)))}
 
     async def dispatch_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
-        payload = {
-            "project_id": project_id,
-            "node_key": tool_input.get("node_key"),
-            "role": tool_input.get("role"),
-            "prompt": tool_input.get("prompt"),
-            "status": "queued",
-        }
-        await _emit(event_bus, "conductor_tool", {"tool": "dispatch_subagent", **payload})
-        return payload
+        if task_dispatcher_fn is None or not issue_id:
+            # Fallback stub (project-level ad-hoc usage without issue context)
+            payload = {
+                "project_id": project_id,
+                "node_key": tool_input.get("node_key"),
+                "role": tool_input.get("role"),
+                "prompt": tool_input.get("prompt"),
+                "status": "queued",
+                "note": "no issue context",
+            }
+            await _emit(event_bus, "conductor_tool", {"tool": "dispatch_subagent", **payload})
+            return payload
+
+        from app.application.task_completion_registry import TaskCompletionRegistry
+        from app.application.task_dispatcher import dispatch_role
+
+        role = str(tool_input.get("role") or "")
+        prompt_override = tool_input.get("prompt") or None
+        prev_node_key = tool_input.get("prev_node_key") or None
+
+        issue = await store.load_codex_issue(issue_id)
+        if issue is None:
+            return {"error": f"Issue {issue_id} not found"}
+
+        try:
+            task_id, node_id = await dispatch_role(
+                issue=issue,
+                role=role,
+                prompt_override=prompt_override,
+                store=store,
+                task_dispatcher_fn=task_dispatcher_fn,
+                event_bus=event_bus,
+                prev_node_key=prev_node_key,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+        registry = TaskCompletionRegistry.get()
+        registry.register(task_id)
+
+        await _emit(event_bus, "conductor_tool", {
+            "tool": "dispatch_subagent",
+            "role": role,
+            "task_id": task_id,
+            "status": "dispatched",
+        })
+
+        try:
+            result = await registry.wait_for(task_id, timeout=900.0)
+        except TimeoutError:
+            return {"error": "subagent timed out after 900s", "task_id": task_id, "role": role}
+
+        return result or {"task_id": task_id, "role": role, "status": "done"}
 
     async def spawn_custom_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
         payload = {
@@ -109,13 +160,13 @@ def _tool_definitions() -> list[dict[str, Any]]:
         ),
         _tool(
             "dispatch_subagent",
-            "Dispatch an existing workflow sub-agent/node with focused instructions.",
+            "Dispatch a workflow sub-agent by role. Waits for completion and returns the result. Available roles: pm, architect, engineer, qa. You can also use specialist role keys from the agent catalog.",
             {
-                "node_key": {"type": "string"},
-                "role": {"type": "string"},
-                "prompt": {"type": "string"},
+                "role": {"type": "string", "description": "Role to dispatch: pm, architect, engineer, qa, or a specialist role_key"},
+                "prompt": {"type": "string", "description": "Optional focused instruction for this agent run"},
+                "prev_node_key": {"type": "string", "description": "node_key of the previously dispatched node, for graph edge visualization"},
             },
-            ["prompt"],
+            ["role"],
         ),
         _tool(
             "spawn_custom_subagent",

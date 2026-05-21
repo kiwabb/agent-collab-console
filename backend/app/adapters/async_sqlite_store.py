@@ -2053,6 +2053,51 @@ class AsyncSQLiteStore:
         await conn.execute(f"UPDATE workflow_nodes SET {', '.join(sets)} WHERE id = ?", tuple(params))
         await conn.commit()
 
+    async def add_workflow_node(self, node: "WorkflowNode") -> None:
+        """Insert a single new node (used by Conductor-driven dynamic dispatch)."""
+        await self._ensure_db()
+        conn = await self._get_conn()
+        now_iso = self._format_datetime(datetime.now())
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO workflow_nodes (
+                id, graph_id, node_key, agent_id, title, prompt_override,
+                status, task_id, artifact_dir, retries, max_retries,
+                instance_index, started_at, completed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                node.id, node.graph_id, node.node_key, node.agent_id, node.title,
+                node.prompt_override, node.status, node.task_id, node.artifact_dir,
+                node.retries, node.max_retries, node.instance_index,
+                self._format_datetime(node.started_at),
+                self._format_datetime(node.completed_at),
+                self._format_datetime(node.created_at) or now_iso,
+                now_iso,
+            ),
+        )
+        await conn.commit()
+
+    async def add_workflow_edge(self, edge: "WorkflowEdge") -> None:
+        """Insert a single new edge (used by Conductor-driven dynamic dispatch)."""
+        await self._ensure_db()
+        conn = await self._get_conn()
+        now_iso = self._format_datetime(datetime.now())
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO workflow_edges (
+                id, graph_id, from_node_key, to_node_key, edge_type,
+                condition_expr, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                edge.id, edge.graph_id, edge.from_node_key, edge.to_node_key,
+                edge.edge_type, edge.condition_expr,
+                self._format_datetime(edge.created_at) or now_iso,
+            ),
+        )
+        await conn.commit()
+
     async def find_node_by_task_id(self, task_id: str) -> "WorkflowNode | None":
         await self._ensure_db()
         conn = await self._get_conn()

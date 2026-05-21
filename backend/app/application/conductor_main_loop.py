@@ -7,9 +7,19 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Union
+from uuid import uuid4
+
+from app.application.conductor_tools import build_conductor_tools
+from app.application.llm_runner import call_llm_with_tools, resolve_streaming_context
+from app.application.project_conductor import ProjectConductor
+from app.application.project_memory_service import record_project_memory
+from app.application.runtime_catalog_service import RuntimeCatalogService
+from app.domain.models import ConductorTask
 
 
 ToolCallable = Callable[[dict[str, Any]], Union[Awaitable[Any], Any]]
@@ -146,3 +156,138 @@ async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+async def run_issue_conductor_loop(
+    issue,
+    project_id: str,
+    store,
+    event_bus=None,
+    task_dispatcher_fn=None,
+) -> "ConductorLoopResult":
+    """Entry point for Conductor-driven issue orchestration.
+
+    Replaces the fixed PM->Architect->Engineer->QA pipeline. The Conductor
+    decides which agents to call in what order based on the issue context.
+    """
+    _logger = logging.getLogger(__name__)
+
+    # Build tool registry with real dispatch capability
+    registry = build_conductor_tools(
+        project_id=project_id,
+        store=store,
+        event_bus=event_bus,
+        task_dispatcher_fn=task_dispatcher_fn,
+        issue_id=issue.id,
+    )
+
+    catalog = await RuntimeCatalogService(store).load_catalog()
+    ctx = resolve_streaming_context(catalog)
+
+    # Load project context (pinned team_notes + warm memories)
+    conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
+    project_context = ""
+    try:
+        state = await conductor._load_state()
+        if state:
+            if state.pinned_text:
+                project_context += f"\n\n## PROJECT CONTEXT (team_notes)\n{state.pinned_text[:2000]}"
+            if state.warm_summaries_json:
+                warm = json.loads(state.warm_summaries_json or "[]")
+                if warm:
+                    project_context += "\n\n## RECENT PROJECT HISTORY\n" + "\n".join(str(w) for w in warm[-3:])
+    except Exception:  # noqa: BLE001
+        pass
+
+    prompt = f"""You are the ProjectConductor orchestrating work on this issue.
+
+## Issue
+Title: {issue.title}
+Description: {issue.description or "(no description provided)"}
+{project_context}
+
+## Your Job
+Use the `dispatch_subagent` tool to run the agents needed to complete this issue.
+Standard agents: pm, architect, engineer, qa.
+You can also use specialist roles: security_reviewer, perf_reviewer, doc_writer, etc.
+
+## Guidelines
+- Start with `pm` to clarify requirements (unless the issue is purely technical and requirements are crystal clear)
+- Use `architect` for features needing design decisions; skip for simple fixes
+- Always run `engineer` to implement
+- Always run `qa` to verify
+- Pass `prev_node_key` as the node_key of the agent you just dispatched (for graph visualization)
+- If a subagent result shows `clarification_question`, use `request_user_clarification` to ask the user
+- If QA fails (status=failed), consider dispatching `engineer` again with the QA failure in the prompt
+- When all work is complete, call `finalize_task` with a summary
+- You MUST call `finalize_task` to end the loop
+
+## Important
+Think step by step. After each dispatch_subagent returns, analyze the result before deciding the next step.
+If something is unclear or blocked, use `request_user_clarification`.
+"""
+
+    async def llm(messages, tools):
+        if ctx is None:
+            return {
+                "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "id": "toolu_fallback", "name": "finalize_task",
+                              "input": {"status": "done", "answer": "LLM not configured; conductor loop skipped."}}],
+            }
+        return await call_llm_with_tools(messages=messages, tools=tools, ctx=ctx)
+
+    # Save conductor task record
+    conductor_task = ConductorTask(
+        id=str(uuid4()),
+        project_id=project_id,
+        task_kind="issue",
+        issue_id=issue.id,
+        payload={"mode": "conductor_loop", "issue_title": issue.title},
+        status="running",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await store.save_conductor_task(conductor_task)
+
+    result = await run_conductor_loop(
+        prompt=prompt,
+        llm=llm,
+        tools=registry.tools,
+        tool_definitions=registry.definitions,
+        max_turns=30,
+    )
+
+    # Write final answer to ProjectConductor hot thread
+    try:
+        await conductor.append_hot_event(
+            role="project_conductor",
+            content=result.final_text,
+            issue_id=issue.id,
+            extra={
+                "task_id": conductor_task.id,
+                "kind": "issue_loop",
+                "status": result.status,
+                "tool_events": result.tool_events,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("conductor hot event append failed: %s", exc)
+
+    # Record project memory
+    try:
+        graph = await store.load_workflow_graph_for_issue(issue.id)
+        if graph is not None:
+            await record_project_memory(graph.id, store)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("project memory recording failed: %s", exc)
+
+    # Update conductor task status
+    conductor_task.status = result.status
+    conductor_task.updated_at = datetime.now()
+    conductor_task.result_json = json.dumps({
+        "status": result.status, "answer": result.final_text,
+        "tool_events": result.tool_events, "turn_count": result.turn_count,
+    }, ensure_ascii=False, default=str)
+    await store.save_conductor_task(conductor_task)
+
+    return result

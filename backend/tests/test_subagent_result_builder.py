@@ -1,11 +1,10 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from app.application.subagent_result_builder import build_subagent_result
-from app.application.workflow_scheduler import WorkflowScheduler
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
 from app.adapters.sqlite_store import SQLiteStore
-from app.domain.models import Agent, CodexIssue, CodexTask, WorkflowGraph, WorkflowNode
+from app.domain.models import CodexTask, WorkflowGraph, WorkflowNode
 
 
 class FakeDoc:
@@ -182,109 +181,7 @@ def test_build_subagent_result_preserves_qa_commands_and_clarification():
     assert result.clarification_question == "Should QA run browser tests too?"
 
 
-class FakeStore:
-    def __init__(self, *, node: WorkflowNode, graph: WorkflowGraph, issue: CodexIssue) -> None:
-        self.node = node
-        self.graph = graph
-        self.issue = issue
 
-    async def find_node_by_task_id(self, task_id: str):
-        return self.node
-
-    async def update_workflow_node(self, node_id: str, **updates):
-        for key, value in updates.items():
-            setattr(self.node, key, value)
-
-    async def load_workflow_graph(self, graph_id: str):
-        return self.graph
-
-    async def load_codex_issue(self, issue_id: str):
-        return self.issue
-
-    async def save_conductor_decision(self, record):
-        pass
-
-    async def list_pending_replans(self, graph_id: str):
-        return []
-
-    async def list_workflow_edges(self, graph_id: str):
-        return []
-
-    async def list_workflow_nodes(self, graph_id: str):
-        return [self.node]
-
-    async def update_workflow_graph(self, graph_id: str, **updates):
-        for key, value in updates.items():
-            setattr(self.graph, key, value)
-
-    async def save_workflow_graph(self, graph: WorkflowGraph):
-        self.graph = graph
-
-    async def save_codex_issue(self, issue: CodexIssue):
-        self.issue = issue
-
-    async def list_agents(self, workspace_id=None):
-        return [
-            Agent(
-                id="agent-engineer",
-                name="Engineer",
-                role_key="engineer",
-                system_prompt_template="",
-                triggers_replan_on_done=False,
-            )
-        ]
-
-
-def test_scheduler_passes_subagent_result_to_conductor(monkeypatch):
-    captured = {}
-
-    async def fake_observe(self, *, result, node_status, graph, issue):
-        captured["result"] = result
-        return {"action": "proceed", "reason": "test"}
-
-    monkeypatch.setattr("app.application.conductor_supervisor.ConductorSupervisor.observe", fake_observe)
-
-    now = datetime(2026, 1, 1, 12, 0, 0)
-    task = CodexTask(
-        id="task-2",
-        session_id="session-1",
-        issue_id="issue-1",
-        title="Build UI",
-        prompt="Build the UI",
-        role="engineer",
-        status="done",
-        result="Implementation report generated.",
-        workflow_node_id="node-id",
-        created_at=now,
-        updated_at=now + timedelta(seconds=8),
-    )
-    node = WorkflowNode(
-        id="node-id",
-        graph_id="graph-1",
-        node_key="engineer",
-        agent_id="agent-engineer",
-        task_id=task.id,
-        status="running",
-    )
-    graph = WorkflowGraph(
-        id="graph-1",
-        issue_id="issue-1",
-        status="running",
-        dag_json="{}",
-        nodes=[node],
-        edges=[],
-    )
-    issue = CodexIssue(id="issue-1", session_id="session-1", title="Build UI")
-    task._subagent_doc = FakeDoc([])
-
-    scheduler = WorkflowScheduler(store=FakeStore(node=node, graph=graph, issue=issue))
-
-    import asyncio
-    asyncio.run(scheduler.on_task_completed(task))
-
-    assert captured["result"].task_id == "task-2"
-    assert captured["result"].artifact_json["issue_title"] == "Add export"
-    assert captured["result"].duration_s == 8.0
 
 
 def test_sqlite_store_persists_raw_task_result_json(tmp_path: Path):

@@ -2,7 +2,6 @@ from pathlib import Path
 
 from app.application.agent_catalog.catalog import AgentCatalog
 from app.application.agent_catalog.generic_specialist_workflow import GenericSpecialistWorkflow
-from app.application.conductor_supervisor import ConductorSupervisor
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.subagent_result_builder import build_subagent_result
 from app.application.agent_seed import seed_builtin_agents
@@ -166,24 +165,3 @@ def test_subagent_result_builder_preserves_specialist_artifact(tmp_path: Path):
     ]
 
 
-def test_conductor_prompt_allows_spawn_specialist_and_custom():
-    snapshot = {
-        "available_agents": ["security_reviewer", "performance_reviewer"],
-        "issue_title": "Auth security review",
-    }
-
-    prompt = ConductorSupervisor._build_prompt(snapshot)
-
-    assert "spawn_specialist" in prompt
-    assert "spawn_custom" in prompt
-    assert "security_reviewer" in prompt
-
-
-def test_conductor_parse_accepts_spawn_specialist():
-    decision = ConductorSupervisor._parse_decision(
-        '{"action":"spawn_specialist","reason":"Auth sensitive","role_key":"security_reviewer","prompt":"Review auth flow"}'
-    )
-
-    assert decision is not None
-    assert decision["action"] == "spawn_specialist"
-    assert decision["role_key"] == "security_reviewer"

@@ -420,3 +420,58 @@ def _parse_changed_files_section(impl_md_text: str) -> list[str]:
 
 # Module-level singleton for convenience; the service is stateless.
 project_memory = ProjectMemoryService()
+
+
+async def record_project_memory(graph_id: str, store) -> None:
+    """Standalone async function for recording project memory after a graph completes.
+
+    Extracts from WorkflowScheduler._record_project_memory for use by the
+    Conductor-driven issue loop (run_issue_conductor_loop).
+    """
+    try:
+        from app.domain.models import WorkflowGraph
+        graph = await store.load_workflow_graph(graph_id)
+        if graph is None:
+            return
+        issue = await store.load_codex_issue(graph.issue_id)
+        if issue is None:
+            return
+        project_repo_path = None
+        if issue.project_id:
+            load_project = getattr(store, "load_project", None)
+            if callable(load_project):
+                proj = await load_project(issue.project_id)
+                if proj is not None:
+                    project_repo_path = proj.repo_path
+        project_memory.record_issue_completion(
+            project_repo_path,
+            issue_id=issue.id,
+            issue_title=issue.title or issue.id,
+            worktree_path=issue.git_worktree_path,
+            graph_status=graph.status,
+        )
+        # Reconcile team_notes_state
+        try:
+            from app.application.team_notes_service import team_notes
+            if issue.project_id and project_repo_path:
+                md = team_notes.read_markdown(project_repo_path)
+                parsed = team_notes.parse_blocks(md)
+                state = await team_notes._load_state(store, issue.project_id)
+                parsed_ids = {b.block_id for b in parsed}
+                for b in parsed:
+                    if b.block_id not in state:
+                        await team_notes._upsert_state(store, issue.project_id, b.block_id)
+                for stale_id in set(state.keys()) - parsed_ids:
+                    try:
+                        conn = await store._get_conn()
+                        await conn.execute(
+                            "DELETE FROM team_notes_state WHERE project_id = ? AND block_id = ?",
+                            (issue.project_id, stale_id),
+                        )
+                        await conn.commit()
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("team_notes_state reconcile skipped: %s", exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("record_project_memory failed for graph %s: %s", graph_id, exc)

@@ -2792,11 +2792,8 @@ async def abandon_codex_issue(issue_id: str):
 
 @router.get("/codex/workflow-templates")
 async def list_workflow_templates():
-    """List the pre-baked workflow templates the UI can offer at issue
-    creation. Each template skips/adds phases for common intents
-    (feature/bug/hotfix/refactor/docs)."""
-    from app.application.workflow_templates import list_template_summaries
-    return {"templates": list_template_summaries()}
+    """List the pre-baked workflow templates (now returns empty list — DAG templates replaced by Conductor)."""
+    return {"templates": []}
 
 
 class ApplyTemplateRequest(BaseModel):
@@ -2805,37 +2802,8 @@ class ApplyTemplateRequest(BaseModel):
 
 @router.post("/codex/issues/{issue_id}/apply-template")
 async def apply_workflow_template(issue_id: str, request: ApplyTemplateRequest):
-    """Materialize a template's DAG for the given issue. Replaces any
-    existing graph for this issue."""
-    if codex_store is None:
-        raise HTTPException(status_code=503, detail="SQLite store not available")
-    issue = await codex_store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
-
-    from app.application.workflow_templates import get_template, template_to_dag
-    from app.application.workflow_scheduler import materialize_graph_from_dag
-
-    template = get_template(request.template_id)
-    if template is None:
-        raise HTTPException(status_code=404, detail=f"Template '{request.template_id}' not found")
-
-    agents = await codex_store.list_agents(workspace_id=None)
-    dag = template_to_dag(template, agents)
-    if dag is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Template references a role that isn't registered as an agent",
-        )
-    graph = await materialize_graph_from_dag(
-        codex_store, issue_id, dag, created_by=f"template:{template.id}"
-    )
-    return {
-        "graph_id": graph.id,
-        "template_id": template.id,
-        "nodes": len(dag["nodes"]),
-        "edges": len(dag["edges"]),
-    }
+    """DAG templates replaced by Conductor — returns 410 Gone."""
+    raise HTTPException(status_code=410, detail="Workflow templates removed: Conductor now orchestrates dynamically")
 
 
 class CreatePRRequest(BaseModel):
@@ -4504,165 +4472,15 @@ def _stream_extract_complete_objects(text: str, key: str, already_emitted: set[s
 
 
 @router.post("/codex/issues/{issue_id}/plan/stream")
-async def propose_issue_plan_stream(issue_id: str):
-    """Stream the orchestrator. Emits SSE events:
-
-      event: meta        — {"executor","model"}; or {"executor":null,"reason":...} when no LLM is configured
-      event: log         — informational status string
-      event: chunk       — {"text": "..."} raw LLM text delta
-      event: node        — node object as it becomes parseable in the JSON
-      event: edge        — edge object as it becomes parseable
-      event: done        — full validated DAG (created_by: orchestrator_llm)
-      event: error       — {"message"} terminal failure — no DAG, caller must retry / fix config
-
-    Heuristic fallback is intentionally **not** wired here: the user wants to see
-    real LLM output or a clear failure, not a silently substituted template.
-    """
-    import asyncio
-    import json
-    import os
-    from fastapi.responses import StreamingResponse
-    from app.application.workflow_orchestrator import _build_llm_prompt, validate_dag
-    from app.application.llm_runner import resolve_streaming_context, stream_llm
-
-    store = _require_agent_store()
-    issue = await store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-    agents = await store.list_agents(workspace_id=None)
-    if not agents:
-        raise HTTPException(status_code=400, detail="no agents available")
-
-    async def emit(event: str, payload) -> str:
-        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-    async def gen():
-        llm_disabled = os.getenv("WORKFLOW_ORCHESTRATOR_LLM", "").lower() == "false"
-        catalog = await _get_runtime_catalog_service().load_catalog()
-        ctx = None if llm_disabled else resolve_streaming_context(catalog)
-
-        if ctx is None:
-            yield await emit(
-                "meta",
-                {"executor": None, "model": None, "reason": "no usable LLM executor"},
-            )
-            yield await emit(
-                "error",
-                {"message": "No LLM is configured. Add an executor with api_endpoint + api_key in Settings → Runtime Config."},
-            )
-            return
-
-        yield await emit("meta", {"executor": ctx.executor_label, "model": ctx.model})
-        yield await emit("log", "Sending prompt to LLM…")
-
-        prompt = _build_llm_prompt(issue, agents)
-        accumulated = ""
-        emitted_nodes: set[str] = set()
-        emitted_edges: set[str] = set()
-        try:
-            async for delta in stream_llm(prompt, ctx):
-                accumulated += delta
-                yield await emit("chunk", {"text": delta})
-                for n in _stream_extract_complete_objects(accumulated, "nodes", emitted_nodes):
-                    yield await emit("node", n)
-                for e in _stream_extract_complete_objects(accumulated, "edges", emitted_edges):
-                    yield await emit("edge", e)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            yield await emit("error", {"message": f"LLM call failed: {exc}"})
-            return
-
-        # Log the raw LLM output so it's visible in the uvicorn console for
-        # debugging. Truncates very long bodies to keep logs reasonable.
-        import logging
-        _log = logging.getLogger("workflow_orchestrator.stream")
-        _log.info(
-            "LLM raw output (%d chars) for issue=%s:\n%s",
-            len(accumulated),
-            issue_id,
-            accumulated if len(accumulated) <= 4000 else accumulated[:2000] + "\n…[truncated]…\n" + accumulated[-2000:],
-        )
-
-        # Final parse from accumulated text. Compensate for gateways that
-        # honor the assistant-prefill "{" (Anthropic native) by prepending
-        # one if the stream began without it. Gateways that re-emit "{"
-        # themselves (MiniMax) already start with "{" so this is a no-op
-        # for them.
-        if not accumulated.lstrip().startswith("{") and not accumulated.lstrip().startswith("```"):
-            accumulated = "{" + accumulated
-        raw_json = _extract_first_json_object(accumulated)
-        # Fallback: tolerant_json_loads handles trailing commas + unquoted
-        # keys, things models sometimes do despite strict instructions.
-        if not raw_json:
-            try:
-                from app.application.tolerant_json import tolerant_json_loads
-                dag_attempt = tolerant_json_loads(accumulated)
-                if isinstance(dag_attempt, dict):
-                    raw_json = json.dumps(dag_attempt)
-            except Exception:  # noqa: BLE001
-                raw_json = None
-        if not raw_json:
-            # Persist the raw LLM output to the worktree for postmortem.
-            await _persist_failed_orchestrator_output(issue, accumulated, reason="no_json_object")
-            yield await emit(
-                "error",
-                {"message": "LLM finished without producing a JSON object — try Auto-plan again, or raise WORKFLOW_ORCHESTRATOR_MAX_TOKENS if the response was truncated. Raw output saved to issues/<id>/_orchestrator_failure.txt."},
-            )
-            return
-        try:
-            dag = json.loads(raw_json)
-        except json.JSONDecodeError as exc:
-            await _persist_failed_orchestrator_output(issue, accumulated, reason=f"json_decode: {exc}")
-            yield await emit("error", {"message": f"LLM output was not valid JSON: {exc} (raw saved to issues/<id>/_orchestrator_failure.txt)"})
-            return
-        dag.setdefault("meta", {})
-        dag["meta"].setdefault("created_by", "orchestrator_llm")
-        for edge in dag.get("edges", []):
-            edge.setdefault("edge_type", "sequence")
-        try:
-            validate_dag(dag, {a.id for a in agents})
-        except ValueError as exc:
-            yield await emit("error", {"message": f"LLM produced an invalid DAG: {exc}"})
-            return
-        yield await emit("done", {"dag": dag})
-
-    return StreamingResponse(
-        gen(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+async def propose_issue_plan_stream_removed(issue_id: str):
+    """LLM-streaming DAG planner removed — Conductor handles orchestration."""
+    raise HTTPException(status_code=410, detail="LLM plan stream removed: use /graph/auto-start for Conductor-driven orchestration")
 
 
 @router.post("/codex/issues/{issue_id}/plan")
 async def propose_issue_plan(issue_id: str):
-    """Run the orchestrator and return a proposed DAG. Does NOT persist.
-
-    Tries the real LLM (configured via the runtime catalog) first; silently
-    falls back to the keyword heuristic when the LLM is unreachable, the
-    response can't be parsed/validated, or `WORKFLOW_ORCHESTRATOR_LLM` is
-    explicitly set to "false".
-    """
-    import os
-    store = _require_agent_store()
-    issue = await store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-    from app.application.workflow_orchestrator import WorkflowOrchestrator
-    from app.application.llm_runner import build_llm_runner
-
-    llm_disabled = os.getenv("WORKFLOW_ORCHESTRATOR_LLM", "").lower() == "false"
-    llm_runner = None if llm_disabled else build_llm_runner(_get_runtime_catalog_service())
-    orchestrator = WorkflowOrchestrator(store=store, llm_runner=llm_runner)
-    try:
-        dag = await orchestrator.propose_graph(issue, use_llm=not llm_disabled)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return dag
+    """Replaced by Conductor-driven orchestration — returns 410 Gone."""
+    raise HTTPException(status_code=410, detail="DAG planner removed: use /graph/auto-start for Conductor-driven orchestration")
 
 
 # --- Workflow graph persistence (PR3) ---
@@ -4984,12 +4802,6 @@ async def save_issue_graph(issue_id: str, request: SaveGraphRequest):
     issue = await store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-    agents = await store.list_agents(workspace_id=None)
-    from app.application.workflow_orchestrator import validate_dag
-    try:
-        validate_dag(request.dag, {a.id for a in agents})
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
     from app.application.workflow_scheduler import materialize_graph_from_dag
     graph = await materialize_graph_from_dag(store, issue_id, request.dag, created_by=request.created_by)
     return _graph_to_dict(graph)
@@ -4997,37 +4809,25 @@ async def save_issue_graph(issue_id: str, request: SaveGraphRequest):
 
 @router.post("/codex/issues/{issue_id}/graph/start")
 async def start_issue_graph(issue_id: str):
-    """Begin DAG execution. Returns the graph after the first settle pass."""
-    store = _require_agent_store()
-    graph = await store.load_workflow_graph_for_issue(issue_id)
-    if graph is None:
-        raise HTTPException(status_code=404, detail="No workflow graph exists for this issue")
-    from app.application.workflow_scheduler import WorkflowScheduler
-    from app.application.event_bus import _workflow_task_dispatcher
-    scheduler = WorkflowScheduler(store=store, task_dispatcher=_workflow_task_dispatcher)
-    graph = await scheduler.start_graph(graph.id)
-    return _graph_to_dict(graph)
+    """Legacy DAG start endpoint — redirects to Conductor auto-start."""
+    return await auto_start_issue_graph(issue_id)
 
 
 @router.post("/codex/issues/{issue_id}/graph/auto-start", status_code=201)
 async def auto_start_issue_graph(issue_id: str):
-    """Propose a default DAG (heuristic, no LLM), persist, and start execution.
+    """Start Conductor-driven orchestration for an issue.
 
-    Used by the workspace console for instant issue creation without a manual
-    DAG-review step. Ensures all tasks get workflow_node_id so the scheduler
-    can run plan-first gate, QA rework loop, and downstream dispatch.
+    Creates a minimal WorkflowGraph and launches run_issue_conductor_loop as a
+    background task. The Conductor decides which agents to run and in what order,
+    dynamically populating the graph with nodes for visualization.
     """
+    import asyncio
     store = _require_agent_store()
     issue = await store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-    agents = await store.list_agents(workspace_id=None)
-    if not agents:
-        raise HTTPException(status_code=500, detail="No agents available — built-in agents may not be seeded")
 
-    # Create git worktree for the issue if the project is configured and the
-    # issue doesn't have one yet. Without this, tasks dispatched by the scheduler
-    # would have workspace_path=None and fail to persist role artifacts.
+    # Ensure worktree exists
     if issue.project_id and not issue.git_worktree_path and project_service is not None:
         project = await project_service.get_project(issue.project_id)
         if project is not None:
@@ -5040,78 +4840,64 @@ async def auto_start_issue_graph(issue_id: str):
             except (GitError, WorktreeError):
                 pass  # No git project — run without worktree (tests, demo mode)
 
-    from app.application.workflow_orchestrator import WorkflowOrchestrator
-    orchestrator = WorkflowOrchestrator(store=store)
-    dag = await orchestrator.propose_graph(issue, agents, use_llm=False)
-    from app.application.workflow_scheduler import materialize_graph_from_dag, WorkflowScheduler
-    from app.application.event_bus import _workflow_task_dispatcher
-    graph = await materialize_graph_from_dag(store, issue_id, dag, created_by="console")
-    scheduler = WorkflowScheduler(
-        store=store,
-        task_dispatcher=_workflow_task_dispatcher,
-        event_bus=event_bus,
+    from app.domain.models import WorkflowGraph
+    now = datetime.now()
+    graph = WorkflowGraph(
+        id=str(uuid4()),
+        issue_id=issue_id,
+        dag_json="{}",
+        status="running",
+        created_by="conductor",
+        created_at=now,
+        updated_at=now,
+        nodes=[],
+        edges=[],
     )
-    graph = await scheduler.start_graph(graph.id)
+    await store.save_workflow_graph(graph, nodes=[], edges=[])
+
+    project_id = issue.project_id
+    if not project_id:
+        workspace = await store.load_codex_session(issue.session_id)
+        project_id = getattr(workspace, "project_id", None) if workspace else None
+
+    if not project_id:
+        raise HTTPException(status_code=409, detail="Issue has no associated project")
+
+    from app.application.conductor_main_loop import run_issue_conductor_loop
+    from app.application.event_bus import _workflow_task_dispatcher
+
+    asyncio.create_task(run_issue_conductor_loop(
+        issue=issue,
+        project_id=project_id,
+        store=store,
+        event_bus=event_bus,
+        task_dispatcher_fn=_workflow_task_dispatcher,
+    ))
+
     return _graph_to_dict(graph)
 
 
-# --- Replanner endpoints (PR6) ---
+# --- Replanner endpoints (removed — Conductor replaced DAG replanning) ---
 
 
 @router.get("/codex/issues/{issue_id}/graph/replan-pending")
 async def list_replan_pending(issue_id: str):
-    store = _require_agent_store()
-    graph = await store.load_workflow_graph_for_issue(issue_id)
-    if graph is None:
-        return []
-    pending = await store.list_pending_replans(graph.id)
-    return [
-        {
-            "id": r.id,
-            "graph_id": r.graph_id,
-            "triggered_by_node_key": r.triggered_by_node_key,
-            "trigger_reason": r.trigger_reason,
-            "diff": json.loads(r.diff_json) if r.diff_json else {},
-            "rationale": r.rationale,
-            "status": r.status,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        for r in pending
-    ]
+    """Replan pending queue — always empty in Conductor mode."""
+    return []
 
 
 @router.post("/codex/issues/{issue_id}/graph/replan/{replan_id}/confirm")
 async def confirm_replan(issue_id: str, replan_id: str):
-    store = _require_agent_store()
-    from app.application.workflow_scheduler import WorkflowScheduler, WorkflowSchedulerError
-    from app.application.event_bus import _workflow_task_dispatcher
-    scheduler = WorkflowScheduler(
-        store=store,
-        task_dispatcher=_workflow_task_dispatcher,
-        event_bus=event_bus,
-    )
-    try:
-        graph = await scheduler.apply_replan(replan_id, "confirmed")
-    except (ValueError, WorkflowSchedulerError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _graph_to_dict(graph)
+    """Replan confirm — removed in Conductor refactor."""
+    raise HTTPException(status_code=410, detail="Replanning removed: Conductor handles orchestration dynamically")
 
 
 @router.post("/codex/issues/{issue_id}/graph/replan/{replan_id}/reject")
 async def reject_replan(issue_id: str, replan_id: str):
-    store = _require_agent_store()
-    from app.application.workflow_scheduler import WorkflowScheduler, WorkflowSchedulerError
-    from app.application.event_bus import _workflow_task_dispatcher
-    scheduler = WorkflowScheduler(
-        store=store,
-        task_dispatcher=_workflow_task_dispatcher,
-        event_bus=event_bus,
-    )
-    try:
-        graph = await scheduler.apply_replan(replan_id, "rejected")
-    except (ValueError, WorkflowSchedulerError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _graph_to_dict(graph)
+    """Replan reject — removed in Conductor refactor."""
+    raise HTTPException(status_code=410, detail="Replanning removed: Conductor handles orchestration dynamically")
+
+
 
 
 # ----------------------------------------------------------------------------
@@ -5352,7 +5138,7 @@ async def codex_project_conductor_start_loop(project_id: str, request: ProjectCo
 
     registry = build_conductor_tools(project_id=project_id, store=codex_store, event_bus=event_bus)
     catalog = await _get_runtime_catalog_service().load_catalog()
-    ctx = None if os.getenv("CONDUCTOR_MODE", "").lower() == "observe" else resolve_streaming_context(catalog)
+    ctx = resolve_streaming_context(catalog)
 
     async def llm(messages, tools):
         if ctx is None:
