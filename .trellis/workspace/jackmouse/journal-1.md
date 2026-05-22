@@ -39,3 +39,37 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Conductor 交互式对话 (Steer + Resume)
+
+**Date**: 2026-05-22
+**Task**: Conductor 交互式对话 (Steer + Resume)
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+用户主动给 Conductor 发消息影响下一轮决策（poll DB 注入 [USER INTERJECTION] user turn）+ mid-call interrupt Pause/Resume（asyncio task.cancel + wake_event）。conductor_turns 加 consumed_at 列 + kind='user_message'；新 conductor_pause_registry.py 单例 _ConductorControl；3 新 API 端点。前端 ConductorLogPanel 加输入框 + Pause/Resume + 状态 chip + user_message 气泡渲染。23/23 conductor test 过，frontend build 干净。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5e3cc65` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
