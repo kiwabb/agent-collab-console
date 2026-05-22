@@ -30,6 +30,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Locale } from "@/lib/i18n";
 import type { RuntimeCatalog } from "@/lib/types";
+import { PageFrame } from "@/features/workbench/components/PageFrame";
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -66,23 +67,14 @@ export function SettingsPage() {
   ];
 
   return (
-    <div className="flex flex-col h-full bg-background font-sans overflow-hidden">
-      {/* Inline header strip — full app shell is provided by the parent
-          (WorkbenchShell), so this page only adds the title + save status. */}
-      <div className="shrink-0 flex items-center justify-between px-6 pt-5 pb-3 border-b border-border-subtle">
-        <div className="flex items-center gap-3">
-          <div className="size-8 rounded-xl bg-brand/10 flex items-center justify-center shadow-inner">
-            <Settings size={18} className="text-brand" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">{t("settings.title")}</h1>
-            <p className="text-[11px] text-text-muted">{t("settings.preferences")}</p>
-          </div>
-        </div>
-        <AutoSaveIndicator status={saveStatus} error={saveError} />
-      </div>
-
-      {/* Main Content with Sidebar Layout */}
+    <PageFrame
+      eyebrow={t("settings.preferences")}
+      title={t("settings.title")}
+      description={t("settings.preferences")}
+      maxWidthClassName="max-w-[1280px]"
+      actions={<AutoSaveIndicator status={saveStatus} error={saveError} />}
+      contentClassName="flex overflow-hidden"
+    >
       <div className="flex-1 flex overflow-hidden">
         <Tabs defaultValue="general" className="flex-1 flex overflow-hidden">
           {/* Sidebar */}
@@ -410,6 +402,6 @@ export function SettingsPage() {
           </main>
         </Tabs>
       </div>
-    </div>
+    </PageFrame>
   );
 }

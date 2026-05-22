@@ -22,10 +22,15 @@ import {
 import type { Approval, CodexIssue, CodexTask } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  EmptyStateAction,
+  InteractionEmptyState,
+} from "@/components/ui/interaction-empty-state";
 import { useToast } from "@/components/ui/toast";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
+import { PageFrame } from "@/features/workbench/components/PageFrame";
 
 const CLARIFY_PREFIX = "[CLARIFY] ";
 
@@ -232,42 +237,25 @@ export function ApprovalsPage() {
   );
 
   return (
-    <div className="min-h-full">
-      <div className="relative overflow-hidden border-b border-border-subtle">
-        <div
-          aria-hidden
-          className="absolute inset-0 opacity-[0.35] pointer-events-none"
-          style={{
-            background:
-              "radial-gradient(900px 300px at 12% -10%, rgba(96,165,250,0.25), transparent 60%), radial-gradient(700px 240px at 90% -10%, rgba(230,149,82,0.18), transparent 60%)",
-          }}
-        />
-        <div className="relative px-8 pt-7 pb-6 max-w-[1280px] mx-auto">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="size-9 rounded-xl bg-gradient-to-br from-info to-info/60 flex items-center justify-center shadow-lg shadow-info/30">
-              <ShieldCheck size={18} className="text-black" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h1 className="text-2xl font-bold tracking-tight">Approvals</h1>
-              <p className="text-[12px] text-text-muted">
-                Review the things waiting on you across every project.
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={refreshing}
-              onClick={() => void load("refresh")}
-            >
-              <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
-              Refresh
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-8 py-6 max-w-[1280px] mx-auto space-y-5">
-        <div className="flex items-center gap-1 border-b border-border-subtle">
+    <PageFrame
+      eyebrow="approvals"
+      title="Approvals"
+      description="Review the things waiting on you across every project."
+      actions={(
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={refreshing}
+          onClick={() => void load("refresh")}
+        >
+          <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
+          Refresh
+        </Button>
+      )}
+      contentClassName="space-y-5"
+    >
+      <div className="space-y-5">
+        <div className="enterprise-card flex items-center gap-1 overflow-x-auto rounded-2xl px-2">
           <TabBtn active={tab === "all"} onClick={() => setTab("all")}>
             All <Pill>{total}</Pill>
           </TabBtn>
@@ -289,22 +277,26 @@ export function ApprovalsPage() {
         </div>
 
         {loading ? (
-          <div className="py-16 text-center text-sm text-text-muted">Loading…</div>
+          <InteractionEmptyState
+            tone="loading"
+            title="Loading approvals"
+            description="Checking issues, reviews, questions, and tool permissions."
+          />
         ) : total === 0 ? (
-          <div className="py-20 text-center">
-            <div className="inline-flex size-12 rounded-full bg-success/10 items-center justify-center mb-3">
-              <CheckCircle2 size={20} className="text-success" />
-            </div>
-            <h2 className="text-base font-semibold">Inbox zero</h2>
-            <p className="text-sm text-text-muted mt-1">
-              Nothing is waiting on a human right now.
-            </p>
-          </div>
+          <InteractionEmptyState
+            title="Inbox zero"
+            description="Nothing is waiting on a human right now. You can return to the operational inbox or refresh this review queue."
+            action={
+              <EmptyStateAction onClick={() => router.push("/")}>
+                Open Inbox
+              </EmptyStateAction>
+            }
+          />
         ) : (
           <div className="space-y-6">
             {visible.length > 0 && (
               <Section title="Issues awaiting approval" count={visible.length}>
-                <ul className="divide-y divide-border-subtle rounded-xl border border-border-subtle overflow-hidden">
+                <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
                   {visible.map((issue) => (
                     <RowCard
                       key={issue.id}
@@ -337,7 +329,7 @@ export function ApprovalsPage() {
                     return (
                       <li
                         key={task.id}
-                        className="rounded-xl border border-brand/40 bg-brand/5 p-4"
+                        className="enterprise-card rounded-2xl border-brand/40 bg-brand/5 p-4"
                       >
                         <div className="flex items-baseline gap-2">
                           <StatusBadge kind="awaiting" label={`${task.role ?? "agent"} asks`} />
@@ -370,7 +362,7 @@ export function ApprovalsPage() {
 
             {visibleReviews.length > 0 && (
               <Section title="Tasks awaiting review" count={visibleReviews.length}>
-                <ul className="divide-y divide-border-subtle rounded-xl border border-border-subtle overflow-hidden">
+                <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
                   {visibleReviews.map((task) => (
                     <RowCard
                       key={task.id}
@@ -394,7 +386,7 @@ export function ApprovalsPage() {
 
             {visibleQaPassed.length > 0 && (
               <Section title="QA passed" count={visibleQaPassed.length}>
-                <ul className="divide-y divide-border-subtle rounded-xl border border-border-subtle overflow-hidden">
+                <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
                   {visibleQaPassed.map((issue) => (
                     <RowCard
                       key={issue.id}
@@ -421,7 +413,7 @@ export function ApprovalsPage() {
 
             {visibleTools.length > 0 && (
               <Section title="Tool calls awaiting permission" count={visibleTools.length}>
-                <ul className="divide-y divide-border-subtle rounded-xl border border-border-subtle overflow-hidden">
+                <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
                   {visibleTools.map((approval) => (
                     <RowCard
                       key={approval.id}
@@ -448,7 +440,7 @@ export function ApprovalsPage() {
           </div>
         )}
       </div>
-    </div>
+    </PageFrame>
   );
 }
 

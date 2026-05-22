@@ -10,11 +10,20 @@ import { useI18n } from "@/providers/I18nProvider";
 
 interface Hit {
   id: string;
-  kind: "issue" | "workspace" | "project" | "nav" | "artifact" | "knowledge-link";
+  kind:
+    | "issue"
+    | "workspace"
+    | "project"
+    | "nav"
+    | "artifact"
+    | "knowledge-link"
+    | "action";
   label: string;
   hint?: string;
   href: string;
   snippet?: string;
+  actionLabel?: string;
+  actionTone?: "primary" | "warning" | "danger" | "neutral";
 }
 
 const NAV_ITEMS = [
@@ -47,11 +56,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const [ftsArtifactHits, setFtsArtifactHits] = useState<Hit[]>([]);
   const fetchedRef = useRef(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
   const ftsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Lazy fetch on first open.
   useEffect(() => {
     if (!open) return;
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     setQuery("");
     setSelectedIdx(0);
     if (fetchedRef.current) return;
@@ -70,6 +83,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [open]);
+
+  const closeAndRestoreFocus = () => {
+    onClose();
+    window.setTimeout(() => restoreFocusRef.current?.focus(), 0);
+  };
 
   useEffect(() => {
     if (open) {
@@ -137,6 +155,40 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         hint: i.git_branch ?? undefined,
         href: `/issues/${i.id}`,
       }));
+    const issueActionHits: Hit[] = issues
+      .flatMap((i) => {
+        const label = i.title || i.id.slice(0, 8);
+        const rows: Hit[] = [];
+        if (
+          i.status === "awaiting_approval" ||
+          i.status === "awaiting_review"
+        ) {
+          rows.push({
+            id: `action-review-${i.id}`,
+            kind: "action",
+            label,
+            hint: "Human review required",
+            href: `/issues/${i.id}?tab=diff`,
+            actionLabel: "Review",
+            actionTone: "primary",
+          });
+        }
+        if (i.status === "failed") {
+          rows.push({
+            id: `action-rerun-${i.id}`,
+            kind: "action",
+            label,
+            hint: "Open recovery actions",
+            href: `/issues/${i.id}?tab=tasks`,
+            actionLabel: "Rerun / recover",
+            actionTone: "warning",
+          });
+        }
+        return rows.filter(
+          (row) => match(row.label) || match(row.hint ?? "") || match(row.actionLabel ?? ""),
+        );
+      })
+      .slice(0, 8);
     const wsHits: Hit[] = workspaces
       .filter((w) => match(w.title || "") || match(w.id))
       .slice(0, 6)
@@ -166,7 +218,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     // Merge FTS hits in front of local fuzzy hits, dedup by id.
     const seen = new Set<string>();
     const merged: Hit[] = [];
-    for (const h of [...ftsIssueHits, ...issueHits, ...ftsArtifactHits]) {
+    for (const h of [
+      ...issueActionHits,
+      ...ftsIssueHits,
+      ...issueHits,
+      ...ftsArtifactHits,
+    ]) {
       const key = h.kind + ":" + h.href;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -209,14 +266,17 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         onClose();
       }
     } else if (e.key === "Escape") {
-      onClose();
+      closeAndRestoreFocus();
     }
   };
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
       className="fixed inset-0 z-[200] flex items-start justify-center pt-24 bg-black/40 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={closeAndRestoreFocus}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -237,7 +297,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             esc
           </kbd>
         </div>
-        <div className="max-h-[60vh] overflow-auto py-1">
+        <div
+          role="listbox"
+          aria-label="Command results"
+          className="max-h-[60vh] overflow-auto py-1"
+        >
           {hits.length === 0 && (
             <div className="px-3 py-6 text-center text-sm text-text-muted">
               {loading ? "Loading…" : "Nothing matches."}
@@ -247,10 +311,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             <button
               key={hit.id}
               type="button"
+              role="option"
+              aria-selected={i === selectedIdx}
               onMouseEnter={() => setSelectedIdx(i)}
               onClick={() => {
                 router.push(hit.href);
-                onClose();
+                closeAndRestoreFocus();
               }}
               className={cn(
                 "w-full px-3 py-2 flex items-center gap-2.5 text-left text-[13px]",
@@ -269,11 +335,25 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               <span className="text-[10px] uppercase tracking-wider text-text-muted shrink-0">
                 {hit.kind}
               </span>
+              {hit.actionLabel && (
+                <span
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10px] font-semibold shrink-0",
+                    hit.actionTone === "warning"
+                      ? "border-warning/30 bg-warning/10 text-warning"
+                      : hit.actionTone === "danger"
+                        ? "border-error/30 bg-error/10 text-error"
+                        : "border-brand/30 bg-brand/10 text-brand",
+                  )}
+                >
+                  {hit.actionLabel}
+                </span>
+              )}
             </button>
           ))}
         </div>
         <div className="px-3 py-1.5 border-t border-border-subtle text-[10px] text-text-muted flex justify-between">
-          <span>↑↓ navigate · ↵ open · esc close</span>
+          <span>Enter to open · Esc to close · type review, failed, or an issue title</span>
           <span>{hits.length} {hits.length === 1 ? "result" : "results"}</span>
         </div>
       </div>
@@ -288,6 +368,7 @@ function HitIcon({ kind }: { kind: Hit["kind"] }) {
   if (kind === "project") return <FileBox size={13} className={cls} />;
   if (kind === "artifact") return <FileText size={13} className={cls} />;
   if (kind === "knowledge-link") return <Library size={13} className={cls} />;
+  if (kind === "action") return <ShieldCheck size={13} className={cls} />;
   if (kind === "nav") {
     return <Users size={13} className={cls} />;
   }

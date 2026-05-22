@@ -74,6 +74,17 @@ export function DagTab({ issueId }: Props) {
     void loadGraph();
   }, [loadGraph]);
 
+  useEffect(() => {
+    const onOpenConductorLog = (event: Event) => {
+      const detail = (event as CustomEvent<{ issueId?: string }>).detail;
+      if (detail?.issueId !== issueId) return;
+      setConductorPanelOpen(true);
+    };
+    window.addEventListener("open-conductor-log", onOpenConductorLog);
+    return () =>
+      window.removeEventListener("open-conductor-log", onOpenConductorLog);
+  }, [issueId]);
+
   // Event-driven graph refresh. workflow_node_updated fires on every node
   // transition; task_status fires terminal events. We refetch in either case
   // so the UI flips state in the same tick the scheduler updates the DB.

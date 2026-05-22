@@ -3,16 +3,23 @@
 import type { ExecutionProcess, CodexTaskMessage, LogEvent } from "@/lib/types";
 import { AgentCoordinationPanel } from "@/features/agents/AgentCoordinationPanel";
 import { RunDetail } from "@/features/runs/RunDetail";
+import { RunRecoveryPanel } from "@/features/runs/components/RunRecoveryPanel";
 import { ArtifactPanel } from "@/features/artifacts/ArtifactPanel";
 import { useI18n } from "@/providers/I18nProvider";
+import { useToast } from "@/components/ui/toast";
 import { Terminal } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { updateCodexTask, runCodexTask, deleteCodexTask, terminateCodexTask, rerunCodexTask } from "@/lib/api";
 import { useWorkbenchStore, selectCurrentTask, selectCurrentIssue, selectSelectedProcess } from "@/store/workbenchStore";
 import { useMemo } from "react";
+import {
+  deriveRunRecoveryActions,
+  type RecoveryAction,
+} from "@/features/workbench/interaction/interactionState";
 
 export function TaskExecutionSheet() {
   const { t } = useI18n();
+  const { addToast } = useToast();
 
   const currentTaskId = useWorkbenchStore((s) => s.currentTaskId);
   const setCurrentTaskId = useWorkbenchStore((s) => s.setCurrentTaskId);
@@ -85,8 +92,15 @@ export function TaskExecutionSheet() {
     }
   }, [artifacts]);
 
-  const liveProcessLogs = selectedProcess?.logs ?? [];
-  const liveProcessMessages = selectedProcess?.messages ? Object.values(selectedProcess.messages) : [];
+  const liveProcessLogs = useMemo(
+    () => selectedProcess?.logs ?? [],
+    [selectedProcess?.logs],
+  );
+  const liveProcessMessages = useMemo(
+    () =>
+      selectedProcess?.messages ? Object.values(selectedProcess.messages) : [],
+    [selectedProcess?.messages],
+  );
 
   const displayedProcessLogs = useMemo(() => {
     const byId = new Map<string, LogEvent>();
@@ -111,6 +125,64 @@ export function TaskExecutionSheet() {
       return left - right;
     });
   }, [processMessages, liveProcessMessages]);
+
+  const recoveryActions = useMemo(
+    () =>
+      deriveRunRecoveryActions({
+        task: currentTask,
+        process: selectedProcess ?? null,
+      }),
+    [currentTask, selectedProcess],
+  );
+
+  const handleRecoveryAction = async (id: RecoveryAction["id"]) => {
+    if (!currentTask) return;
+    try {
+      if (id === "open_logs") {
+        return;
+      }
+      if (id === "rerun_same") {
+        const result = await rerunCodexTask(currentTask.id, {
+          executor: currentTask.executor,
+          provider: currentTask.provider ?? undefined,
+          model: currentTask.model ?? undefined,
+        });
+        if (result.execution_process?.id) {
+          useWorkbenchStore
+            .getState()
+            .setOptimisticProcess(result.execution_process as ExecutionProcess);
+          setSelectedProcessId(result.execution_process.id);
+        }
+        addToast({ type: "success", title: "Rerun started" });
+        return;
+      }
+      if (id === "change_executor") {
+        addToast({
+          type: "info",
+          title: "Choose a runtime below",
+          message: "Use the run controls to switch executor, provider, or model.",
+        });
+        return;
+      }
+      if (id === "stop_run") {
+        await terminateCodexTask(currentTask.id);
+        addToast({ type: "success", title: "Run termination requested" });
+        return;
+      }
+      if (id === "submit_review") {
+        const { submitCodexTask } = await import("@/lib/api");
+        const updated = await submitCodexTask(currentTask.id);
+        useWorkbenchStore.getState().updateTask(updated.id, updated);
+        addToast({ type: "success", title: "Submitted for review" });
+      }
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: "Recovery action failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
 
   if (!currentTaskId || !currentTask) return null;
 
@@ -180,6 +252,14 @@ export function TaskExecutionSheet() {
 
           <div className="flex-1 min-h-0">
             <TabsContent value="run-detail" className="h-full m-0 flex flex-col">
+              <div className="px-4 pt-4">
+                <RunRecoveryPanel
+                  actions={recoveryActions}
+                  onAction={(id) => {
+                    void handleRecoveryAction(id);
+                  }}
+                />
+              </div>
               <RunDetail
                 process={selectedProcess ?? null}
                 isLoadingProcess={isLoadingProcess}
@@ -194,7 +274,11 @@ export function TaskExecutionSheet() {
                     const updated = await submitCodexTask(currentTaskId);
                     useWorkbenchStore.getState().updateTask(updated.id, updated);
                   } catch (err) {
-                    console.error("Failed to submit:", err);
+                    addToast({
+                      type: "error",
+                      title: "Failed to submit",
+                      message: err instanceof Error ? err.message : String(err),
+                    });
                   }
                 }}
                 onReview={async (decision, comment) => {
@@ -203,7 +287,11 @@ export function TaskExecutionSheet() {
                     const updated = await reviewCodexTask(currentTaskId, decision, comment);
                     useWorkbenchStore.getState().updateTask(updated.id, updated);
                   } catch (err) {
-                    console.error("Failed to review:", err);
+                    addToast({
+                      type: "error",
+                      title: "Failed to review",
+                      message: err instanceof Error ? err.message : String(err),
+                    });
                   }
                 }}
                 onRunInitial={async (executor, provider, model) => {
@@ -213,7 +301,11 @@ export function TaskExecutionSheet() {
                     setSelectedProcessId(newProcess.id);
                     if (currentWorkspaceId) useWorkbenchStore.getState().setIsLoadingIssues(true);
                   } catch (err) {
-                    console.error("Failed to run:", err);
+                    addToast({
+                      type: "error",
+                      title: "Failed to run",
+                      message: err instanceof Error ? err.message : String(err),
+                    });
                   }
                 }}
                 onRunAgain={async (executor, provider, model) => {
@@ -225,7 +317,11 @@ export function TaskExecutionSheet() {
                         setSelectedProcessId(rerunResult.execution_process.id);
                       }
                     } catch (err) {
-                      console.error("Failed to rerun:", err);
+                      addToast({
+                        type: "error",
+                        title: "Failed to rerun",
+                        message: err instanceof Error ? err.message : String(err),
+                      });
                     }
                   }
                 }}
@@ -235,7 +331,11 @@ export function TaskExecutionSheet() {
                       await deleteCodexTask(selectedProcess.task_id);
                       setSelectedProcessId(null);
                     } catch (err) {
-                      console.error("Failed to delete:", err);
+                      addToast({
+                        type: "error",
+                        title: "Failed to delete",
+                        message: err instanceof Error ? err.message : String(err),
+                      });
                     }
                   }
                 }}
@@ -243,7 +343,11 @@ export function TaskExecutionSheet() {
                   try {
                     await useWorkbenchStore.getState().sendMessage(currentTaskId, content, mode);
                   } catch (err) {
-                    console.error("Failed to send:", err);
+                    addToast({
+                      type: "error",
+                      title: "Failed to send",
+                      message: err instanceof Error ? err.message : String(err),
+                    });
                   }
                 }}
                 allTasks={tasks}
@@ -287,7 +391,11 @@ export function TaskExecutionSheet() {
                   try {
                     await terminateCodexTask(currentTaskId);
                   } catch (err) {
-                    console.error("Failed to terminate:", err);
+                    addToast({
+                      type: "error",
+                      title: "Failed to terminate",
+                      message: err instanceof Error ? err.message : String(err),
+                    });
                   }
                 }}
               />

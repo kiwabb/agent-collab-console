@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GitBranch, GitFork, MessageSquarePlus, Loader2 } from "lucide-react";
 import { useI18n } from "@/providers/I18nProvider";
@@ -11,6 +11,8 @@ import {
   getCodexIssueChecklist,
   qaReviewCodexIssue,
   steerCodexIssue,
+  getCodexIssueArtifacts,
+  getCodexTasks,
   getSubAgentResults,
   getAgentMesh,
   getConductorState,
@@ -19,7 +21,7 @@ import {
   type AgentMessage,
   type ConductorStatePayload,
 } from "@/lib/api";
-import type { CodexIssue } from "@/lib/types";
+import type { Artifact, CodexIssue, CodexTask } from "@/lib/types";
 import { SubAgentResultCard } from "./components/SubAgentResultCard";
 import { AgentMeshGraph } from "./components/AgentMeshGraph";
 import { ConductorChatBar } from "./components/ConductorChatBar";
@@ -42,12 +44,14 @@ import { ArtifactsTab } from "./tabs/ArtifactsTab";
 import { DiffMergeTab } from "./tabs/DiffMergeTab";
 import { CollabFeedTab } from "./tabs/CollabFeedTab";
 import { IssuePipelineTrace } from "./components/IssuePipelineTrace";
+import { IssueActionStrip } from "./components/IssueActionStrip";
 import { IssueSideStack } from "./components/IssueSideStack";
 import { IssueActivityTimelineHorizontal } from "./components/IssueActivityTimelineHorizontal";
 import { FloatingIssueChip } from "./components/FloatingIssueChip";
 import { LiveThinkingDock } from "./components/LiveThinkingDock";
 import type { BusConductorFailedEvent, BusConductorStateViolationEvent } from "@/contexts/ExecutionProcessesContext";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
+import { deriveIssueNextAction } from "@/features/workbench/interaction/interactionState";
 
 interface Props {
   issueId: string;
@@ -111,6 +115,8 @@ export function IssueDetailPage({ issueId }: Props) {
   const [subAgentResults, setSubAgentResults] = useState<SubAgentResultPayload[]>([]);
   const [agentMeshMessages, setAgentMeshMessages] = useState<AgentMessage[]>([]);
   const [conductorState, setConductorState] = useState<ConductorStatePayload | null>(null);
+  const [issueTasks, setIssueTasks] = useState<CodexTask[]>([]);
+  const [issueArtifacts, setIssueArtifacts] = useState<Artifact[]>([]);
 
   const handleFork = useCallback(async () => {
     setForking(true);
@@ -131,7 +137,7 @@ export function IssueDetailPage({ issueId }: Props) {
     } finally {
       setForking(false);
     }
-  }, [issueId, addToast, router]);
+  }, [issueId, addToast, router, t]);
 
   const handleSendSteer = useCallback(async () => {
     const msg = steerDraft.trim();
@@ -155,7 +161,7 @@ export function IssueDetailPage({ issueId }: Props) {
     } finally {
       setSteerSending(false);
     }
-  }, [issueId, steerDraft, addToast]);
+  }, [issueId, steerDraft, addToast, t]);
 
   const loadIssue = useCallback(async () => {
     try {
@@ -189,6 +195,35 @@ export function IssueDetailPage({ issueId }: Props) {
     ),
     onEvent: () => { void loadIssue(); },
     throttleMs: 300,
+  });
+
+  const refreshInteractionContext = useCallback(async () => {
+    const [tasks, artifacts] = await Promise.all([
+      getCodexTasks(null, issueId).catch(() => []),
+      getCodexIssueArtifacts(issueId).catch(() => []),
+    ]);
+    setIssueTasks(tasks);
+    setIssueArtifacts(artifacts);
+  }, [issueId]);
+
+  useEffect(() => {
+    void refreshInteractionContext();
+  }, [refreshInteractionContext]);
+
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn(
+        "task_status",
+        "task_created",
+        "workflow_node_updated",
+        "issue_updated",
+      ),
+    ),
+    onEvent: () => {
+      void refreshInteractionContext();
+    },
+    throttleMs: 800,
   });
 
   // Slow fallback poll for cases where events don't reach us (no WS scope,
@@ -319,13 +354,13 @@ export function IssueDetailPage({ issueId }: Props) {
     if (tab === "agent") void loadAgentTab();
   }, [tab, issueId, loadAgentTab]);
 
-  const onTabChange = (next: string) => {
+  const onTabChange = useCallback((next: string) => {
     if (!isTab(next)) return;
     setTab(next);
     const sp = new URLSearchParams(params.toString());
     sp.set("tab", next);
     router.replace(`?${sp.toString()}`, { scroll: false });
-  };
+  }, [params, router]);
 
   const handleApprovePlan = useCallback(async () => {
     const draft = planDraft.trim();
@@ -385,14 +420,35 @@ export function IssueDetailPage({ issueId }: Props) {
   const statusLabel = effectiveStatus
     ? STATUS_LABEL[effectiveStatus] ?? effectiveStatus
     : "—";
+  const nextAction = useMemo(
+    () =>
+      deriveIssueNextAction({
+        issue,
+        tasks: issueTasks,
+        artifacts: issueArtifacts,
+      }),
+    [issue, issueTasks, issueArtifacts],
+  );
+
+  const handleIssuePrimaryAction = useCallback(() => {
+    if (nextAction.id === "approve_plan" || nextAction.id === "review_qa") {
+      const element = document.querySelector<HTMLElement>("[data-issue-review-panel]");
+      element?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    if (nextAction.id === "run_phase" || nextAction.id === "open_tasks") {
+      onTabChange("tasks");
+    }
+  }, [nextAction.id, onTabChange]);
 
   return (
     // Single scroll container so Hero + Pipeline trace scroll together
     // with the tabs/side-stack body instead of sticking at the top.
     <div className="h-full overflow-y-auto">
       {/* === HERO === */}
-      <section className="px-8 pt-6 pb-4 max-w-[1640px] w-full mx-auto">
-        <div className="flex items-end justify-between gap-6">
+      <section className="px-6 pt-5 pb-4 max-w-[1640px] w-full mx-auto">
+        <div className="enterprise-panel relative overflow-hidden flex items-end justify-between gap-6 rounded-[30px] px-6 py-5">
+          <div aria-hidden className="agent-mesh-grid pointer-events-none absolute inset-0 opacity-[0.12]" />
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-[11.5px] font-mono text-text-muted mb-2">
               <StatusBadge kind={kind} label={statusLabel} />
@@ -473,8 +529,15 @@ export function IssueDetailPage({ issueId }: Props) {
           </div>
         </div>
 
+        <div className="mt-4">
+          <IssueActionStrip
+            action={nextAction}
+            onPrimary={handleIssuePrimaryAction}
+          />
+        </div>
+
         {/* Pipeline trace immediately under hero */}
-        <div className="mt-5">
+        <div className="mt-4">
           <IssuePipelineTrace
             issueId={issueId}
             reloadKey={issue?.updated_at ?? undefined}
@@ -482,133 +545,135 @@ export function IssueDetailPage({ issueId }: Props) {
         </div>
       </section>
 
-        {/* Conductor banner — only when there's a recent (< 60s) non-proceed
-            decision. We avoid showing "proceed" to keep it from being noise. */}
-        {conductorDecision && Date.now() - conductorDecision.receivedAt < 60000 && conductorDecision.action !== "proceed" && (
-          <div className={cn(
-            "mx-8 mt-3 rounded-lg border px-3 py-2 text-[12px] flex items-start gap-2",
-            conductorDecision.action === "escalate"
-              ? "border-warning/40 bg-warning/10 text-warning"
-              : "border-info/30 bg-info/[0.06] text-foreground",
-          )}>
-            <span aria-hidden className="font-mono text-base leading-none">🎙️</span>
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold">
-                {conductorDecision.action === "escalate" ? t("conductor.bannerEscalate") : t("conductor.bannerNote")}
+        <div className="px-6">
+          {/* Conductor banner — only when there's a recent (< 60s) non-proceed
+              decision. We avoid showing "proceed" to keep it from being noise. */}
+          {conductorDecision && Date.now() - conductorDecision.receivedAt < 60000 && conductorDecision.action !== "proceed" && (
+            <div className={cn(
+              "mt-3 rounded-xl border px-3 py-2 text-[12px] flex items-start gap-2",
+              conductorDecision.action === "escalate"
+                ? "border-warning/40 bg-warning/10 text-warning"
+                : "border-info/30 bg-info/[0.06] text-foreground",
+            )}>
+              <span aria-hidden className="font-mono text-base leading-none">🎙️</span>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold">
+                  {conductorDecision.action === "escalate" ? t("conductor.bannerEscalate") : t("conductor.bannerNote")}
+                </div>
+                <div className="text-text-muted">
+                  {conductorDecision.note || conductorDecision.reason}
+                </div>
               </div>
-              <div className="text-text-muted">
-                {conductorDecision.note || conductorDecision.reason}
-              </div>
+              <button
+                type="button"
+                onClick={() => setConductorDecision(null)}
+                aria-label="dismiss"
+                className="shrink-0 text-text-muted hover:text-foreground"
+              >
+                ✕
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setConductorDecision(null)}
-              aria-label="dismiss"
-              className="shrink-0 text-text-muted hover:text-foreground"
-            >
-              ✕
-            </button>
-          </div>
-        )}
+          )}
 
-        {issue?.status === "awaiting_review" && (
-          <div className="mt-4 mx-8 rounded-xl border border-success/40 bg-success/[0.04] p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-success">
-                  {t("issue.qaReview.title")}
-                </h2>
-                <p className="text-[12px] text-text-muted mt-0.5">
-                  {t("issue.qaReview.description")}
-                </p>
+          {issue?.status === "awaiting_review" && (
+            <div data-issue-review-panel className="mt-4 rounded-2xl border border-success/35 bg-success/[0.04] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-success">
+                    {t("issue.qaReview.title")}
+                  </h2>
+                  <p className="text-[12px] text-text-muted mt-0.5">
+                    {t("issue.qaReview.description")}
+                  </p>
+                </div>
+                <StatusBadge kind="awaiting" label={t("issue.status.awaitingReview")} />
               </div>
-              <StatusBadge kind="awaiting" label={t("issue.status.awaitingReview")} />
+              <textarea
+                value={qaRejectDraft}
+                onChange={(e) => setQaRejectDraft(e.target.value)}
+                rows={4}
+                placeholder={t("issue.qaReview.rejectPlaceholder")}
+                className="mt-3 w-full rounded-md border border-border-subtle bg-background px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-success/40"
+              />
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleQaReview("reject")}
+                  disabled={qaReviewBusy !== null}
+                  className="gap-1.5"
+                >
+                  {qaReviewBusy === "reject" ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 size={12} className="animate-spin" />
+                      {t("issue.qaReview.rejectBusy")}
+                    </span>
+                  ) : (
+                    t("issue.qaReview.reject")
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => void handleQaReview("approve")}
+                  disabled={qaReviewBusy !== null}
+                  className="gap-1.5 bg-success text-black hover:bg-success/90 font-semibold"
+                >
+                  {qaReviewBusy === "approve" ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 size={12} className="animate-spin" />
+                      {t("issue.qaReview.approveBusy")}
+                    </span>
+                  ) : (
+                    t("issue.qaReview.approve")
+                  )}
+                </Button>
+              </div>
             </div>
-            <textarea
-              value={qaRejectDraft}
-              onChange={(e) => setQaRejectDraft(e.target.value)}
-              rows={4}
-              placeholder={t("issue.qaReview.rejectPlaceholder")}
-              className="mt-3 w-full rounded-md border border-border-subtle bg-background px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-success/40"
-            />
-            <div className="mt-3 flex items-center justify-end gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void handleQaReview("reject")}
-                disabled={qaReviewBusy !== null}
-                className="gap-1.5"
-              >
-                {qaReviewBusy === "reject" ? (
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 size={12} className="animate-spin" />
-                    {t("issue.qaReview.rejectBusy")}
-                  </span>
-                ) : (
-                  t("issue.qaReview.reject")
-                )}
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => void handleQaReview("approve")}
-                disabled={qaReviewBusy !== null}
-                className="gap-1.5 bg-success text-black hover:bg-success/90 font-semibold"
-              >
-                {qaReviewBusy === "approve" ? (
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 size={12} className="animate-spin" />
-                    {t("issue.qaReview.approveBusy")}
-                  </span>
-                ) : (
-                  t("issue.qaReview.approve")
-                )}
-              </Button>
-            </div>
-          </div>
-        )}
+          )}
 
-        {issue?.status === "awaiting_approval" && (
-          <div className="mt-4 max-w-3xl rounded-xl border border-brand/40 bg-brand/[0.04] p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-brand">
-                  {t("issue.planApproval.title")}
-                </h2>
-                <p className="text-[12px] text-text-muted mt-0.5">
-                  {t("issue.planApproval.description")}
-                </p>
+          {issue?.status === "awaiting_approval" && (
+            <div data-issue-review-panel className="mt-4 max-w-3xl rounded-2xl border border-brand/35 bg-brand/[0.04] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-brand">
+                    {t("issue.planApproval.title")}
+                  </h2>
+                  <p className="text-[12px] text-text-muted mt-0.5">
+                    {t("issue.planApproval.description")}
+                  </p>
+                </div>
+                <StatusBadge kind="awaiting" label={t("workspace.console.status.awaitingApproval")} />
               </div>
-              <StatusBadge kind="awaiting" label={t("workspace.console.status.awaitingApproval")} />
+              <textarea
+                value={planDraft}
+                onChange={(e) => setPlanDraft(e.target.value)}
+                rows={7}
+                placeholder={t("issue.planApproval.placeholder")}
+                className="mt-3 w-full rounded-md border border-border-subtle bg-background px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-brand/50"
+              />
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <p className="text-[12px] text-text-muted">
+                  {t("issue.planApproval.helper")}
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() => void handleApprovePlan()}
+                  disabled={approvingPlan || (!planDraft.trim() && !(issue.review_comment || "").trim())}
+                  className="gap-1.5 bg-brand hover:bg-brand-strong text-black font-semibold"
+                >
+                  {approvingPlan ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 size={12} className="animate-spin" />
+                      {t("issue.planApproval.saving")}
+                    </span>
+                  ) : (
+                    t("issue.planApproval.approve")
+                  )}
+                </Button>
+              </div>
             </div>
-            <textarea
-              value={planDraft}
-              onChange={(e) => setPlanDraft(e.target.value)}
-              rows={7}
-              placeholder={t("issue.planApproval.placeholder")}
-              className="mt-3 w-full rounded-md border border-border-subtle bg-background px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-brand/50"
-            />
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <p className="text-[12px] text-text-muted">
-                {t("issue.planApproval.helper")}
-              </p>
-              <Button
-                size="sm"
-                onClick={() => void handleApprovePlan()}
-                disabled={approvingPlan || (!planDraft.trim() && !(issue.review_comment || "").trim())}
-                className="gap-1.5 bg-brand hover:bg-brand-strong text-black font-semibold"
-              >
-                {approvingPlan ? (
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 size={12} className="animate-spin" />
-                    {t("issue.planApproval.saving")}
-                  </span>
-                ) : (
-                  t("issue.planApproval.approve")
-                )}
-              </Button>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       <Dialog open={steerOpen} onOpenChange={setSteerOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -651,11 +716,11 @@ export function IssueDetailPage({ issueId }: Props) {
       </Dialog>
 
       {/* === BODY GRID: tabs panel + right-side stack === */}
-      <div className="px-8 pb-16">
-        <div className="max-w-[1640px] w-full mx-auto grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-5 items-start">
+      <div className="px-6 pb-12">
+        <div className="max-w-[1640px] w-full mx-auto grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4 items-start">
           {/* LEFT panel — tabs. Explicit min-height keeps ReactFlow / Gantt /
               Diff split views from collapsing to 0 inside the body grid. */}
-          <div className="min-w-0 min-h-[640px] rounded-2xl border border-border-subtle bg-surface overflow-hidden flex flex-col">
+          <div className="enterprise-panel min-w-0 min-h-[640px] rounded-[30px] overflow-hidden flex flex-col">
             <Tabs
               value={tab}
               onValueChange={onTabChange}
@@ -663,7 +728,7 @@ export function IssueDetailPage({ issueId }: Props) {
             >
               <TabsList
                 variant="line"
-                className="px-2 pt-2 self-stretch border-b border-border-subtle gap-0.5 shrink-0"
+                className="px-3 pt-2 self-stretch border-b border-border-subtle gap-0.5 shrink-0 bg-surface/70 backdrop-blur-sm"
               >
                 <UnderlineTab value="agent" label="Agent" />
                 <UnderlineTab value="dag" label="DAG" />
@@ -737,7 +802,7 @@ export function IssueDetailPage({ issueId }: Props) {
         </div>
         {/* Horizontal activity timeline spanning the full width below
             the tabs/sidebar grid. Replaces the in-sidebar ActivityCard. */}
-        <div className="max-w-[1640px] w-full mx-auto">
+        <div className="max-w-[1640px] w-full mx-auto mt-4">
           <IssueActivityTimelineHorizontal
             issueId={issueId}
             reloadKey={issue?.updated_at ?? undefined}

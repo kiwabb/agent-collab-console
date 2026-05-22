@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Library, Search, RefreshCw, FileText, Hash } from "lucide-react";
+import { Search, RefreshCw, FileText, Hash } from "lucide-react";
 import {
   getEmbeddingStatus,
   listProjects,
@@ -16,6 +16,11 @@ import {
 import type { Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { TeamNotesEditor } from "./TeamNotesEditor";
+import { PageFrame } from "@/features/workbench/components/PageFrame";
+import {
+  EmptyStateAction,
+  InteractionEmptyState,
+} from "@/components/ui/interaction-empty-state";
 
 type Tab = "search" | "team-notes";
 
@@ -108,21 +113,17 @@ export function KnowledgePage() {
   const total = (results?.issues.length || 0) + (results?.artifacts.length || 0);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-4">
-      <header className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold">
-            <Library size={18} className="text-brand" />
-            {t("knowledge.title")}
-          </h1>
-          <p className="text-xs text-text-muted">{t("knowledge.subtitle")}</p>
-        </div>
-        <div className="flex items-center gap-2 text-xs">
+    <PageFrame
+      eyebrow={t("knowledge.title")}
+      title={t("knowledge.title")}
+      description={t("knowledge.subtitle")}
+      actions={(
+        <>
           <span
             className={
               embedding?.enabled
-                ? "inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-emerald-400"
-                : "inline-flex items-center gap-1 rounded-full bg-zinc-500/15 px-2 py-0.5 text-text-muted"
+                ? "inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-emerald-400 text-xs"
+                : "inline-flex items-center gap-1 rounded-full bg-zinc-500/15 px-2 py-0.5 text-text-muted text-xs"
             }
             title={embedding?.model || ""}
           >
@@ -135,15 +136,16 @@ export function KnowledgePage() {
             type="button"
             onClick={handleReindex}
             disabled={reindexing}
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 hover:bg-surface-hover disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 text-xs hover:bg-surface-hover disabled:opacity-50"
           >
             <RefreshCw size={12} className={reindexing ? "animate-spin" : ""} />
             {t("knowledge.reindex")}
           </button>
-        </div>
-      </header>
-
-      <nav className="flex items-center gap-2 border-b border-border text-xs">
+        </>
+      )}
+      contentClassName="space-y-4"
+    >
+      <nav className="enterprise-card flex items-center gap-2 rounded-2xl px-2 text-xs">
         <TabButton active={tab === "search"} onClick={() => setTab("search")}>
           {t("knowledge.tab.search")}
         </TabButton>
@@ -159,8 +161,8 @@ export function KnowledgePage() {
 
       {tab === "search" ? (
         <div className="flex min-h-0 flex-1 flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-1 items-center gap-2 rounded-md border border-border bg-surface px-2 py-1.5 min-w-[260px]">
+          <div className="enterprise-card flex flex-wrap items-center gap-2 rounded-2xl p-2">
+            <div className="flex flex-1 items-center gap-2 rounded-xl border border-border-subtle bg-surface-input/80 px-3 py-2 min-w-[260px]">
               <Search size={14} className="text-text-muted" />
               <input
                 value={query}
@@ -173,7 +175,7 @@ export function KnowledgePage() {
             <select
               value={projectFilter}
               onChange={(e) => setProjectFilter(e.target.value)}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-xs"
+              className="rounded-xl border border-border-subtle bg-surface-input px-2 py-2 text-xs"
             >
               <option value="">{t("knowledge.allProjects")}</option>
               {projects.map((p) => (
@@ -182,7 +184,7 @@ export function KnowledgePage() {
                 </option>
               ))}
             </select>
-            <div className="flex items-center gap-1 rounded-md border border-border p-0.5 text-[11px]">
+            <div className="flex items-center gap-1 rounded-xl border border-border-subtle bg-surface/70 p-0.5 text-[11px]">
               {SCOPES.map((s) => (
                 <button
                   key={s.value}
@@ -197,7 +199,7 @@ export function KnowledgePage() {
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-1 rounded-md border border-border p-0.5 text-[11px]">
+            <div className="flex items-center gap-1 rounded-xl border border-border-subtle bg-surface/70 p-0.5 text-[11px]">
               {MODES.map((m) => (
                 <button
                   key={m.value}
@@ -221,11 +223,28 @@ export function KnowledgePage() {
           </div>
 
           <div className="flex min-h-0 flex-1 gap-3">
-            <section className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-surface">
+            <section className="enterprise-panel min-h-0 flex-1 overflow-auto rounded-2xl">
               {!query.trim() ? (
-                <EmptyState text={t("knowledge.emptyHint")} />
+                <InteractionEmptyState
+                  title={t("knowledge.emptyHint")}
+                  description="Search issues, artifacts, and team notes from one place."
+                  action={
+                    <EmptyStateAction onClick={() => void handleReindex()}>
+                      {t("knowledge.reindex")}
+                    </EmptyStateAction>
+                  }
+                />
               ) : !results || total === 0 ? (
-                <EmptyState text={loading ? t("knowledge.loading") : t("knowledge.noResults")} />
+                <InteractionEmptyState
+                  tone={loading ? "loading" : "empty"}
+                  title={loading ? t("knowledge.loading") : t("knowledge.noResults")}
+                  description="Try a broader query, switch search mode, or reindex project knowledge."
+                  action={
+                    <EmptyStateAction onClick={() => setQuery("")}>
+                      Clear query
+                    </EmptyStateAction>
+                  }
+                />
               ) : (
                 <ul className="divide-y divide-border text-sm">
                   {results.issues.map((hit) => (
@@ -295,7 +314,7 @@ export function KnowledgePage() {
           onProjectChange={setProjectFilter}
         />
       )}
-    </div>
+    </PageFrame>
   );
 }
 
@@ -320,14 +339,6 @@ function TabButton({
     >
       {children}
     </button>
-  );
-}
-
-function EmptyState({ text }: { text: string }) {
-  return (
-    <div className="flex h-full items-center justify-center p-6 text-sm text-text-muted">
-      {text}
-    </div>
   );
 }
 

@@ -67,7 +67,7 @@ export function AppStatusBar() {
         : "text-status-failed";
 
   return (
-    <footer className="h-6 shrink-0 border-t border-border-subtle bg-surface flex items-center px-4 text-[11px] font-mono leading-none">
+    <footer className="h-7 shrink-0 border-t border-border-subtle/80 bg-surface/90 backdrop-blur-sm flex items-center px-4 text-[11px] font-mono leading-none">
       <div className="flex items-center gap-4 text-text-muted">
         <span className="flex items-center gap-1.5">
           <span

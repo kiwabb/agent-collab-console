@@ -52,9 +52,9 @@ export function IssueDetailPanel({
   const otherArtifacts = artifacts.filter((a) => !shownArtifactNames.has(a.name || a.id));
 
   return (
-    <div className="flex flex-col h-full bg-surface-raised/20 overflow-hidden">
+    <div className="flex flex-col h-full bg-surface-raised/15 overflow-hidden">
       {/* Header Section */}
-      <div className="p-6 border-b border-border-subtle bg-surface/40 backdrop-blur-md">
+      <div className="p-6 border-b border-border-subtle bg-surface/70 backdrop-blur-md">
         <div className="flex items-start justify-between gap-4 mb-4">
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-bold tracking-tight text-foreground leading-snug">{issue.title}</h2>
@@ -78,7 +78,7 @@ export function IssueDetailPanel({
         </div>
 
         {/* Phase Selector Grid */}
-        <div className="grid grid-cols-2 gap-1.5 p-1 bg-surface-input/50 rounded-xl border border-border-subtle">
+        <div className="grid grid-cols-2 gap-1.5 p-1 bg-surface-input/55 rounded-xl border border-border-subtle">
           {PHASES.map((p) => {
             const c = PHASE_CONFIG[p];
             const isActive = p === phase;
@@ -101,12 +101,12 @@ export function IssueDetailPanel({
       </div>
 
       {/* Tabs Section */}
-      <div className="px-6 bg-surface/10 border-b border-border-subtle">
+      <div className="px-6 bg-surface/40 border-b border-border-subtle">
         <div className="flex gap-8">
           <button
             onClick={() => setActiveTab("tasks")}
             className={cn(
-              "relative py-4 text-[10.5px] font-bold uppercase tracking-[0.15em] transition-all",
+                "relative py-4 text-[10.5px] font-bold uppercase tracking-[0.15em] transition-all",
               activeTab === "tasks" ? "text-brand" : "text-text-muted hover:text-foreground"
             )}
           >
@@ -149,7 +149,7 @@ export function IssueDetailPanel({
               issueTasks.map((task) => (
                 <div
                   key={task.id}
-                  className="p-5 rounded-2xl border border-border-subtle bg-surface-raised/40 hover:border-border-strong hover:bg-surface-raised/60 transition-all group animate-in fade-in duration-500"
+                  className="p-5 rounded-2xl border border-border-subtle bg-surface-raised/55 hover:border-border-strong hover:bg-surface-raised/80 transition-all group animate-in fade-in duration-500 shadow-[0_10px_24px_-22px_rgba(0,0,0,0.65)]"
                 >
                   <div className="flex items-center justify-between gap-4 mb-3">
                     <span className="text-[13.5px] font-bold tracking-tight text-foreground/90 truncate flex-1">{task.title}</span>
@@ -188,7 +188,7 @@ export function IssueDetailPanel({
       </div>
 
       {/* Footer Action */}
-      <div className="p-6 border-t border-border-subtle bg-surface/60 backdrop-blur-xl">
+      <div className="p-6 border-t border-border-subtle bg-surface/72 backdrop-blur-xl">
         <button
           onClick={() => onRunPhaseRole(phase, config.role)}
           disabled={isRunning}

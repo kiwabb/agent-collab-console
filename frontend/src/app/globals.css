@@ -9,10 +9,10 @@
   --color-background: #0b0b0c;
   --color-foreground: #f4f4f5;
 
-  --color-surface: #111113;       /* panel walls (sidebar, right detail) */
-  --color-surface-raised: #161618;/* cards, popovers */
-  --color-surface-input: #1e1e21; /* inputs, kbd chips */
-  --color-surface-hover: #18181b; /* row hover */
+  --color-surface: #0f1115;       /* panel walls (sidebar, right detail) */
+  --color-surface-raised: #161a21;/* cards, popovers */
+  --color-surface-input: #1b2230; /* inputs, kbd chips */
+  --color-surface-hover: #181e29; /* row hover */
 
   /* Orange accent — primary CTA, brand mark, active states */
   --color-brand: #e69552;
@@ -21,14 +21,14 @@
 
   /* Type ramp */
   --color-text-primary: #f4f4f5;
-  --color-text-secondary: #a1a1aa;
-  --color-text-muted: #71717a;
-  --color-text-faint: #52525b;   /* design ref --text-4: extra-dim labels */
+  --color-text-secondary: #b0bac8;
+  --color-text-muted: #7f8a99;
+  --color-text-faint: #596579;   /* design ref --text-4: extra-dim labels */
 
   /* Borders */
-  --color-border-subtle: #1f1f22;
-  --color-border-muted: #2a2a2e;
-  --color-border-strong: #3a3a40;
+  --color-border-subtle: #232a38;
+  --color-border-muted: #2e3647;
+  --color-border-strong: #3d4961;
 
   /* Status family — dot colors visible in reference */
   --color-status-done: #4ade80;
@@ -114,17 +114,17 @@
   :root {
     --background: var(--color-background);
     --foreground: var(--color-foreground);
-    --card: var(--color-surface-raised);
+    --card: color-mix(in srgb, var(--color-surface-raised) 92%, white 8%);
     --card-foreground: var(--color-text-primary);
-    --popover: var(--color-surface);
+    --popover: color-mix(in srgb, var(--color-surface) 96%, white 4%);
     --popover-foreground: var(--color-text-primary);
     --primary: var(--color-brand);
     --primary-foreground: var(--color-background);
     --secondary: var(--color-surface-input);
     --secondary-foreground: var(--color-text-primary);
-    --muted: var(--color-surface-input);
+    --muted: color-mix(in srgb, var(--color-surface-input) 88%, white 12%);
     --muted-foreground: var(--color-text-secondary);
-    --accent: var(--color-surface-hover);
+    --accent: color-mix(in srgb, var(--color-surface-hover) 90%, white 10%);
     --accent-foreground: var(--color-text-primary);
     --destructive: var(--color-error);
     --destructive-foreground: #ffffff;
@@ -181,6 +181,54 @@
 }
 
 @layer utilities {
+  .enterprise-page {
+    background:
+      radial-gradient(900px 420px at 8% -12%, rgba(230, 149, 82, 0.08), transparent 60%),
+      radial-gradient(820px 380px at 96% 8%, rgba(96, 165, 250, 0.075), transparent 58%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 22%);
+  }
+
+  .enterprise-panel {
+    border: 1px solid var(--color-border-subtle);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--color-surface-raised) 82%, white 7%), color-mix(in srgb, var(--color-surface) 94%, black 6%));
+    box-shadow: 0 18px 46px -36px rgba(0, 0, 0, 0.82);
+    backdrop-filter: blur(14px);
+  }
+
+  .enterprise-card {
+    border: 1px solid var(--color-border-subtle);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012)),
+      var(--color-surface-raised);
+    box-shadow: 0 14px 34px -30px rgba(0, 0, 0, 0.86);
+  }
+
+  .agent-mesh-grid {
+    background-image:
+      linear-gradient(rgba(255,255,255,0.055) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.055) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: radial-gradient(ellipse 75% 70% at 50% 0%, #000 20%, transparent 82%);
+    -webkit-mask-image: radial-gradient(ellipse 75% 70% at 50% 0%, #000 20%, transparent 82%);
+  }
+
+  .agent-orb {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    background: var(--color-brand);
+    box-shadow:
+      0 0 0 4px var(--color-brand-bg),
+      0 0 24px var(--color-brand-ring);
+  }
+
+  .agent-rail {
+    background:
+      linear-gradient(90deg, transparent, var(--color-brand-ring), transparent),
+      linear-gradient(90deg, rgba(96,165,250,0.04), rgba(230,149,82,0.06));
+  }
+
   .cc-glass {
     background: rgba(13, 15, 20, 0.7);
     backdrop-filter: blur(12px);

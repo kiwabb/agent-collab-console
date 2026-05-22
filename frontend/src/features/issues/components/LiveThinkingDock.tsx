@@ -27,7 +27,9 @@ function roleLabel(role: string): string {
 }
 
 export function LiveThinkingDock({ issueId }: Props) {
+  const dismissedKey = `live-thinking-dismissed:${issueId}`;
   const [expanded, setExpanded] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
   const [activeRole, setActiveRole] = useState<string | null>(null);
   // role → accumulated text buffer
   const [buffers, setBuffers] = useState<Record<string, string>>({});
@@ -41,10 +43,13 @@ export function LiveThinkingDock({ issueId }: Props) {
   const lastEvent = useWorkbenchStore((s) => s.lastEvent);
   const tasks = useWorkbenchStore((s) => s.tasks);
 
+  useEffect(() => {
+    setDismissed(window.sessionStorage.getItem(dismissedKey) === "1");
+  }, [dismissedKey]);
+
   // ── React to incoming bus events ──────────────────────────────────────────
   useEffect(() => {
     if (!lastEvent) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const evt = lastEvent as any;
 
     if (evt.type === "message_delta" && evt.task_id && evt.delta_text) {
@@ -66,6 +71,10 @@ export function LiveThinkingDock({ issueId }: Props) {
       setSeenRoles((prev) =>
         prev.includes(role) ? prev : [...prev, role],
       );
+      if (dismissed) {
+        window.sessionStorage.removeItem(dismissedKey);
+        setDismissed(false);
+      }
       // Auto-open when first delta arrives
       setExpanded(true);
       setActiveRole((prev) => prev ?? role);
@@ -89,7 +98,16 @@ export function LiveThinkingDock({ issueId }: Props) {
         }
       }
     }
-  }, [lastEvent, tasks, issueId]);
+  }, [lastEvent, tasks, issueId, dismissed, dismissedKey]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [expanded]);
 
   // Auto-scroll to bottom when active tab's buffer grows
   useEffect(() => {
@@ -109,6 +127,7 @@ export function LiveThinkingDock({ issueId }: Props) {
 
   // Nothing to show yet — render nothing until at least one delta arrives
   if (seenRoles.length === 0) return null;
+  if (dismissed && runningRoles.size === 0) return null;
 
   const activeBuffer = activeRole ? (buffers[activeRole] ?? "") : "";
 
@@ -117,13 +136,11 @@ export function LiveThinkingDock({ issueId }: Props) {
       aria-live="polite"
       aria-label="Live agent thinking stream"
       className={cn(
-        "fixed bottom-0 left-0 right-0 z-50",
-        "border-t border-border-subtle",
-        "bg-surface/95 backdrop-blur-sm",
+        "fixed bottom-3 left-3 right-3 z-50",
+        "enterprise-panel rounded-[26px]",
         "transition-all duration-200 ease-in-out",
         expanded ? "h-[220px]" : "h-[40px]",
         "flex flex-col",
-        "shadow-[0_-4px_24px_-4px_rgba(0,0,0,0.35)]",
       )}
     >
       {/* ── Header bar ─────────────────────────────────────────────────────── */}
@@ -142,7 +159,7 @@ export function LiveThinkingDock({ issueId }: Props) {
                   setExpanded(true);
                 }}
                 className={cn(
-                  "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium transition-colors shrink-0",
+                    "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium transition-colors shrink-0",
                   isActive
                     ? "bg-surface-raised text-foreground"
                     : "text-text-muted hover:text-foreground hover:bg-surface-raised/60",
@@ -169,8 +186,31 @@ export function LiveThinkingDock({ issueId }: Props) {
         {/* Collapse/expand toggle */}
         <button
           type="button"
+          onClick={() => {
+            window.dispatchEvent(
+              new CustomEvent("open-conductor-log", { detail: { issueId } }),
+            );
+          }}
+          className="ml-2 shrink-0 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:text-foreground"
+        >
+          Open log
+        </button>
+        {runningRoles.size === 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              window.sessionStorage.setItem(dismissedKey, "1");
+              setDismissed(true);
+            }}
+            className="shrink-0 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:text-foreground"
+          >
+            Dismiss
+          </button>
+        )}
+        <button
+          type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="ml-2 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-text-muted hover:text-foreground transition-colors text-[11px]"
+          className="ml-2 shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-text-muted hover:text-foreground transition-colors text-[11px]"
           aria-label={expanded ? "Collapse thinking dock" : "Expand thinking dock"}
         >
           {expanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}

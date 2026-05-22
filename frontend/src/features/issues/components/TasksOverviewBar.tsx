@@ -115,7 +115,7 @@ export function TasksOverviewBar({ issueId }: Props) {
   const stages = pipeline?.stages ?? [];
 
   return (
-    <div className="shrink-0 border-b border-border-subtle bg-surface">
+    <div className="shrink-0 border-b border-border-subtle bg-surface/86 backdrop-blur-sm">
       <div className="flex items-center justify-between gap-3.5 px-4 py-3 font-mono text-[12px] text-text-muted flex-wrap">
         <div className="flex items-center gap-3.5 flex-wrap">
           <span>
@@ -159,7 +159,7 @@ export function TasksOverviewBar({ issueId }: Props) {
 
       {/* Gantt */}
       <div
-        className="px-4 py-3.5 border-t border-border-subtle"
+        className="px-4 py-3.5 border-t border-border-subtle bg-surface/40"
         style={{
           background:
             "linear-gradient(180deg, color-mix(in srgb, var(--color-surface-raised) 50%, transparent), transparent)",
@@ -184,7 +184,7 @@ export function TasksOverviewBar({ issueId }: Props) {
 
       {/* runs-list — per-role row mirroring design handoff */}
       {stages.length > 0 && (
-        <div className="border-t border-border-subtle">
+        <div className="border-t border-border-subtle bg-surface/35">
           {graphStats?.conductor && (
             <RunsListRow
               role="conductor"
@@ -257,7 +257,7 @@ function RunsListRow({
 
   return (
     <div
-      className="grid grid-cols-[24px_140px_minmax(0,1fr)_90px_100px_80px_24px] items-center gap-3 px-4 py-2.5 border-b border-border-subtle last:border-b-0 hover:bg-surface-hover transition-colors"
+      className="grid grid-cols-[24px_140px_minmax(0,1fr)_90px_100px_80px_24px] items-center gap-3 px-4 py-2.5 border-b border-border-subtle last:border-b-0 hover:bg-surface-hover/60 transition-colors"
     >
       <span
         className="size-[18px] rounded-full flex items-center justify-center justify-self-center"

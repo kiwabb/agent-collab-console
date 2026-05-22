@@ -78,12 +78,12 @@ export function IssuePipelineTrace({ issueId, reloadKey }: Props) {
   return (
     <section
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-border-subtle",
+        "enterprise-panel relative overflow-hidden rounded-[26px]",
         "px-5 pt-5 pb-4",
       )}
       style={{
         background:
-          "linear-gradient(180deg, color-mix(in srgb, var(--color-surface-raised) 80%, transparent) 0%, var(--color-surface) 100%)",
+          "linear-gradient(180deg, color-mix(in srgb, var(--color-surface-raised) 92%, white 8%) 0%, var(--color-surface) 100%)",
       }}
     >
       <div
@@ -101,7 +101,7 @@ export function IssuePipelineTrace({ issueId, reloadKey }: Props) {
       />
       <header className="relative flex items-center justify-between mb-4">
         <div className="flex items-center gap-2.5">
-          <span className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-text-secondary font-semibold">
+          <span className="inline-flex items-center rounded-full border border-brand/20 bg-brand/10 px-2 py-0.5 font-mono text-[10.5px] uppercase tracking-[0.12em] text-brand font-semibold">
             {t("issue.trace.pipelineAgents", { n: String(stages.length) })}
           </span>
         </div>
@@ -187,12 +187,12 @@ function Station({
   const tone = stationTone(stage.status);
 
   return (
-    <div className="relative px-3.5 flex flex-col items-center text-center min-w-0">
+      <div className="relative px-3.5 flex flex-col items-center text-center min-w-0">
       <div
         className={cn(
           // bg-surface-raised covers the connecting rail line so it
           // doesn't visually cut through the icon tile.
-          "relative w-[60px] h-[60px] rounded-2xl flex items-center justify-center mb-3.5 z-[1]",
+          "relative w-[60px] h-[60px] rounded-2xl flex items-center justify-center mb-3.5 z-[1] shadow-[0_10px_24px_-20px_rgba(0,0,0,0.75)]",
           "border bg-surface-raised",
           tone.nodeBorder,
           tone.nodeBg,

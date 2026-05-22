@@ -12,6 +12,7 @@ import {
 import type { Agent, CreateAgentRequest, UpdateAgentRequest } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InteractionEmptyState } from "@/components/ui/interaction-empty-state";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +25,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
+import { PageFrame } from "@/features/workbench/components/PageFrame";
 
 /**
  * Agent library — CRUD UI for the agents table. Built-in agents
@@ -83,14 +85,11 @@ export function AgentLibraryPage() {
 
   return (
     <WorkbenchShell breadcrumbs={[{ label: t("agents.pageTitle") }]}>
-      <div className="px-8 py-6 max-w-[1280px] mx-auto space-y-4">
-        <div className="flex items-end justify-between gap-3 border-b border-border-subtle pb-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">{t("agents.pageTitle")}</h1>
-            <p className="text-[12px] text-text-muted mt-1">
-              {t("agents.pageSubtitle")}
-            </p>
-          </div>
+      <PageFrame
+        eyebrow={t("agents.pageTitle")}
+        title={t("agents.pageTitle")}
+        description={t("agents.pageSubtitle")}
+        actions={(
           <Button
             size="sm"
             onClick={() => {
@@ -101,9 +100,17 @@ export function AgentLibraryPage() {
           >
             <Plus size={14} /> New agent
           </Button>
-        </div>
+        )}
+        contentClassName="space-y-4"
+      >
 
-        {loading && <div className="text-sm text-text-muted">Loading…</div>}
+        {loading && (
+          <InteractionEmptyState
+            tone="loading"
+            title="Loading agents"
+            description="Preparing built-in and custom multi-agent roles."
+          />
+        )}
         {error && (
           <div className="rounded-md border border-error/40 bg-error/10 text-error text-sm p-3">
             {error}
@@ -111,10 +118,13 @@ export function AgentLibraryPage() {
         )}
 
         {!loading && !error && (
-          <ul className="rounded-xl border border-border-subtle bg-surface-raised divide-y divide-border-subtle overflow-hidden">
+          <ul className="enterprise-panel rounded-2xl divide-y divide-border-subtle overflow-hidden">
             {agents.length === 0 && (
-              <li className="py-10 text-center text-sm text-text-muted">
-                No agents yet — built-in roles will be seeded on backend startup.
+              <li className="p-4">
+                <InteractionEmptyState
+                  title="No agents yet"
+                  description="Built-in roles will be seeded on backend startup. Custom specialist agents will appear here after creation."
+                />
               </li>
             )}
             {agents.map((a) => (
@@ -193,7 +203,7 @@ export function AgentLibraryPage() {
           isLoading={busy}
           onConfirm={() => void handleDelete()}
         />
-      </div>
+      </PageFrame>
     </WorkbenchShell>
   );
 }

@@ -493,12 +493,12 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="right" className="w-[480px] sm:w-[540px] flex flex-col gap-0 p-0">
-        <SheetHeader className="px-5 pt-4 pb-3 shrink-0 border-b border-border-subtle">
+      <SheetContent side="right" className="w-[480px] sm:w-[560px] flex flex-col gap-0 p-0">
+        <SheetHeader className="px-5 pt-4 pb-4 shrink-0 border-b border-border-subtle bg-surface/80 backdrop-blur-sm">
           <div className="flex items-start gap-3">
             <SheetTitle className="flex items-center gap-3 text-lg">
               <span
-                className="w-10 h-10 rounded-full flex items-center justify-center text-2xl border-2"
+                className="w-10 h-10 rounded-2xl flex items-center justify-center text-2xl border"
                 style={{ borderColor: persona.color, background: `${persona.color}11` }}
                 aria-hidden
               >
@@ -516,12 +516,12 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
           {(conductorPhase || conductorDetail || streamingPreview) && (
             <div
               className={cn(
-                "mt-3 rounded-2xl border px-3 py-2 text-xs",
-                stuck ? "border-warning/50 bg-warning/10 text-warning" : "border-border-subtle bg-surface-raised text-text-secondary",
+                "mt-3 rounded-2xl border px-3 py-3 text-xs",
+                stuck ? "border-warning/50 bg-warning/10 text-warning" : "border-border-subtle bg-surface-raised/80 text-text-secondary",
               )}
             >
               {conductorPhase && (
-                <div className="font-mono text-[11px] uppercase tracking-wider">
+                <div className="font-mono text-[11px] uppercase tracking-[0.18em]">
                   {conductorPhase}
                 </div>
               )}
@@ -542,7 +542,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                 <span>{timelineNodes.length}</span>
               </div>
               <div className="overflow-x-auto pb-1">
-                <div className="flex min-w-max items-start gap-3">
+                <div className="flex min-w-max items-start gap-2.5">
                   <AnimatePresence initial={false}>
                     {timelineNodes.map((node) => {
                       const Icon = node.isFailed ? XCircle : node.isPaused ? PauseCircle : Circle;
@@ -563,7 +563,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                           transition={{ type: "spring", stiffness: 320, damping: 24, mass: 0.7 }}
                           className="relative flex items-start gap-3"
                         >
-                          <div className={cn("flex w-[148px] shrink-0 flex-col rounded-2xl border px-3 py-2", nodeTone)}>
+                          <div className={cn("flex w-[154px] shrink-0 flex-col rounded-2xl border px-3 py-2.5", nodeTone)}>
                             <div className="flex items-center gap-2">
                               <Icon className={cn("h-3.5 w-3.5", node.isCurrent && !node.isPaused && "animate-pulse")} />
                               <span className="font-mono text-[11px] uppercase tracking-wider">{node.phase}</span>
@@ -679,15 +679,15 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
           </div>
         )}
 
-        <div className="flex border-b border-border-subtle shrink-0">
+        <div className="flex border-b border-border-subtle shrink-0 px-2 pt-2 gap-1 bg-surface/70 backdrop-blur-sm">
           {(["thread", "log", "turns"] as TabId[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
-                "px-5 py-2.5 text-[11px] font-black uppercase tracking-widest transition-colors",
+                "px-4 py-2 text-[11px] font-black uppercase tracking-widest rounded-t-xl transition-colors",
                 activeTab === tab
-                  ? "border-b-2 text-brand"
+                  ? "bg-surface-raised text-brand"
                   : "text-text-muted hover:text-text-secondary",
               )}
               style={activeTab === tab ? { borderBottomColor: persona.color } : {}}
@@ -882,7 +882,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
           )}
         </div>
 
-        <div className="shrink-0 border-t border-border-subtle px-5 py-4">
+        <div className="shrink-0 border-t border-border-subtle px-5 py-4 bg-surface/80 backdrop-blur-sm">
           <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-text-muted">
             {t("conductor.panel.messageConductor")}
           </div>

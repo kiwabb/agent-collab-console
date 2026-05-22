@@ -172,12 +172,19 @@ export function AppSidebar() {
   }, [issuesByWs]);
 
   return (
-    <aside className="w-60 shrink-0 h-full border-r border-border-subtle bg-surface flex flex-col">
+    <aside className="enterprise-panel w-64 shrink-0 h-full rounded-[30px] flex flex-col overflow-hidden">
       {/* PROJECT SELECTOR */}
-      <div className="p-2 border-b border-border-subtle mb-1">
+      <div className="p-3">
+        <div className="mb-2 rounded-2xl border border-border-subtle bg-surface/50 px-3 py-2">
+          <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-[0.18em] text-text-muted">
+            <span>multi-agent ops</span>
+            <span className="agent-orb" />
+          </div>
+          <div className="agent-rail mt-2 h-px opacity-80" />
+        </div>
         <DropdownMenu>
-          <DropdownMenuTrigger className="w-full flex items-center gap-2.5 p-1.5 rounded-md hover:bg-surface-hover transition-colors text-left outline-none cursor-default">
-            <div className="size-6 shrink-0 rounded bg-brand/20 flex items-center justify-center text-brand font-bold text-xs uppercase">
+          <DropdownMenuTrigger className="w-full flex items-center gap-3 p-2 rounded-2xl border border-border-subtle bg-surface-raised/80 hover:bg-surface-hover transition-colors text-left outline-none cursor-default">
+            <div className="size-8 shrink-0 rounded-xl bg-brand/15 flex items-center justify-center text-brand font-bold text-xs uppercase">
               {(projects.find(p => p.id === projectId)?.name || "P").charAt(0)}
             </div>
             <div className="flex-1 min-w-0">
@@ -221,7 +228,7 @@ export function AppSidebar() {
 
       {/* WORKSPACE section */}
       <SectionHeader label={t("sidebar.workspace")} />
-      <div className="px-2 flex flex-col gap-0.5">
+      <div className="px-3 flex flex-col gap-1">
         <NavRow
           icon={<Inbox size={13} />}
           label={t("sidebar.inbox")}
@@ -286,7 +293,7 @@ export function AppSidebar() {
 
       {/* SESSIONS section */}
       <SectionHeader label={t("sidebar.sessions")} className="mt-3" />
-      <div className="px-2 flex-1 overflow-auto flex flex-col gap-0.5">
+      <div className="px-3 flex-1 overflow-auto flex flex-col gap-1 pb-2">
         {workspaces.length === 0 && (
           <div className="px-3 py-2 text-xs text-text-muted">{t("sidebar.noSessionsYet")}</div>
         )}
@@ -298,7 +305,7 @@ export function AppSidebar() {
             <div key={ws.id}>
               <div
                 className={cn(
-                  "w-full flex items-center px-2 py-1.5 rounded-md text-[13px] transition-colors",
+                  "w-full flex items-center px-2 py-1.5 rounded-xl text-[13px] transition-colors",
                   isActiveWs
                     ? "text-foreground font-semibold"
                     : "text-text-secondary hover:text-foreground hover:bg-surface-hover",
@@ -340,7 +347,7 @@ export function AppSidebar() {
                         type="button"
                         onClick={() => router.push(`/issues/${issue.id}`)}
                         className={cn(
-                          "flex items-center gap-1.5 px-2 py-1 rounded-md text-[12px] transition-colors text-left",
+                          "flex items-center gap-1.5 px-2 py-1 rounded-lg text-[12px] transition-colors text-left",
                           active
                             ? "text-foreground font-medium"
                             : "text-text-muted hover:text-foreground hover:bg-surface-hover",
@@ -368,7 +375,7 @@ export function AppSidebar() {
       </div>
 
       {/* Bottom strip */}
-      <div className="border-t border-border-subtle p-2 flex flex-col gap-0.5">
+      <div className="border-t border-border-subtle p-3 flex flex-col gap-1">
         <NavRow
           icon={<Settings size={13} />}
           label={t("sidebar.settings")}
@@ -390,7 +397,7 @@ function SectionHeader({ label, className }: { label: string; className?: string
   return (
     <div
       className={cn(
-        "px-4 pt-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted",
+        "px-4 pt-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted",
         className,
       )}
     >
@@ -420,7 +427,7 @@ function NavRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "relative group w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[13px] transition-colors",
+        "relative group w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-[13px] transition-colors",
         active
           ? highlightActive
             ? "text-brand-strong font-medium"

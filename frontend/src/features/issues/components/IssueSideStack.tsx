@@ -113,8 +113,8 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-border-subtle bg-surface overflow-hidden">
-      <div className="px-4 py-3.5 flex items-center gap-2.5 border-b border-border-subtle">
+    <div className="enterprise-panel rounded-[24px] overflow-hidden">
+      <div className="px-4 py-3.5 flex items-center gap-2.5 border-b border-border-subtle bg-surface/60">
         <Icon size={14} className={cn("text-text-muted", iconClass)} />
         <span className="text-[13px] font-semibold text-foreground">
           {title}
@@ -149,14 +149,14 @@ function AcceptanceCard({
       icon={CheckCircle2}
       iconClass="text-status-done"
     >
-      <div className="px-4 py-3 flex items-center gap-3">
+      <div className="px-4 py-3.5 flex items-center gap-3">
         <span className="font-mono text-[22px] font-semibold tracking-tight leading-none text-foreground tabular-nums">
           {covered}
           <em className="not-italic text-text-muted font-normal">
             /{total}
           </em>
         </span>
-        <div className="flex-1 h-[5px] bg-surface-input rounded-full overflow-hidden relative">
+        <div className="flex-1 h-[6px] bg-surface-input rounded-full overflow-hidden relative">
           <span
             className="block h-full rounded-full"
             style={{
@@ -177,11 +177,11 @@ function AcceptanceCard({
           {t("issue.side.acceptanceEmpty")}
         </div>
       ) : (
-        <ul className="px-1.5 pb-2 flex flex-col">
+        <ul className="px-1.5 pb-2.5 flex flex-col">
           {criteria.map((c, i) => (
             <li
               key={i}
-              className="flex items-start gap-2.5 px-2.5 py-2 rounded-xl hover:bg-surface-hover"
+              className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl hover:bg-surface-hover/70"
             >
               <span
                 className={cn(
@@ -363,7 +363,7 @@ function TeleCell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="p-3 rounded-xl bg-surface-raised border border-border-subtle">
+    <div className="p-3 rounded-xl bg-surface-raised/80 border border-border-subtle">
       <div className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-text-muted">
         {label}
       </div>

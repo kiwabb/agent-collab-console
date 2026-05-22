@@ -7,6 +7,7 @@ import { ChevronLeft, GitBranch as GitBranchIcon, Plus, Trash2, Wrench } from "l
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { InteractionEmptyState } from "@/components/ui/interaction-empty-state";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -16,6 +17,7 @@ import { emitDataEvent } from "@/lib/dataEvents";
 import type { ProjectAuditEntry, ProjectStats } from "@/lib/types";
 import { Textarea } from "@/components/ui/textarea";
 import type { GitBranch, Project } from "@/lib/types";
+import { PageFrame } from "@/features/workbench/components/PageFrame";
 
 import { CreateProjectDialog } from "./CreateProjectDialog";
 import { BranchListView } from "./BranchListView";
@@ -54,7 +56,7 @@ function SetupScriptCard({
   }
 
   return (
-    <Card>
+    <Card className="enterprise-card rounded-2xl overflow-hidden">
       <CardHeader>
         <CardTitle className="text-base">{t("projects.setupScript")}</CardTitle>
         <CardDescription>{t("projects.setupScriptHelp")}</CardDescription>
@@ -250,75 +252,78 @@ export function ProjectsPage() {
   );
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b sticky top-0 z-10 bg-background/95 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => {
+    <PageFrame
+      eyebrow={t("projects.title")}
+      title={t("projects.title")}
+      description={t("projects.listHeading")}
+      actions={(
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
               const pid = selectedProjectId();
               if (pid) router.push(`/projects/${pid}`);
               else router.push("/projects");
-            }} aria-label={t("projects.backToWorkbench")}>
-              <ChevronLeft size={16} />
-              <span className="ml-1">{t("projects.backToWorkbench")}</span>
-            </Button>
-            <h1 className="text-lg font-semibold ml-2">{t("projects.title")}</h1>
-          </div>
+            }}
+            aria-label={t("projects.backToWorkbench")}
+          >
+            <ChevronLeft size={16} className="mr-1" />
+            {t("projects.backToWorkbench")}
+          </Button>
           <Button onClick={() => setCreateOpen(true)} size="sm">
             <Plus size={16} className="mr-1" />
             {t("projects.create")}
           </Button>
-        </div>
-      </header>
-
-      <main className="max-w-6xl mx-auto px-6 py-6 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6 items-start">
-        <aside className="md:sticky md:top-20 md:self-start">
-          <div className="bg-surface-raised border border-border-subtle rounded-lg p-3 space-y-2 min-h-[calc(100vh-9rem)]">
-            <h2 className="text-xs uppercase tracking-wider text-muted-foreground px-1">
-              {t("projects.listHeading")}
-            </h2>
-            {projects && projects.length > 3 && (
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={t("projects.searchPlaceholder")}
-                className="w-full text-xs px-2 py-1.5 rounded border border-border-subtle bg-surface-input outline-none focus:border-brand"
-              />
-            )}
-            {visibleProjects === null ? (
-              <div className="space-y-2">
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-12 w-full" />
-              </div>
-            ) : visibleProjects.length === 0 ? (
-              <p className="text-sm text-muted-foreground px-2">{t("projects.empty")}</p>
-            ) : (
-              <ul className="space-y-1">
-                {visibleProjects.map((p) => (
-                  <li key={p.id}>
-                    <button
-                      type="button"
-                      onClick={() => setActiveId(p.id)}
-                      className={cn(
-                        "w-full text-left px-3 py-2 rounded-md text-sm hover:bg-muted transition",
-                        activeId === p.id && "bg-muted font-medium",
-                      )}
-                    >
-                      <div className="truncate">{p.name}</div>
-                      <div className="text-xs text-muted-foreground truncate">{p.repo_path}</div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+        </>
+      )}
+      contentClassName="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6"
+    >
+        <aside className="enterprise-panel rounded-2xl p-3 space-y-2 self-start">
+          <h2 className="text-xs uppercase tracking-wider text-muted-foreground px-2">
+            {t("projects.listHeading")}
+          </h2>
+          {projects && projects.length > 3 && (
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t("projects.searchPlaceholder")}
+              className="w-full text-xs px-2 py-1.5 rounded border border-border-subtle bg-surface-input outline-none focus:border-brand"
+            />
+          )}
+          {visibleProjects === null ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : visibleProjects.length === 0 ? (
+            <p className="text-sm text-muted-foreground px-2">{t("projects.empty")}</p>
+          ) : (
+            <ul className="space-y-1">
+              {visibleProjects.map((p) => (
+                <li key={p.id}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveId(p.id)}
+                    className={cn(
+                      "w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-surface-hover transition",
+                      activeId === p.id && "bg-brand/10 text-brand font-medium",
+                    )}
+                  >
+                    <div className="truncate">{p.name}</div>
+                    <div className="text-xs text-muted-foreground truncate">{p.repo_path}</div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </aside>
 
         <section>
           {activeProject ? (
             <div className="space-y-4">
-              <Card>
+              <Card className="enterprise-card rounded-2xl overflow-hidden">
                 <CardHeader className="flex flex-row items-start justify-between space-y-0">
                   <div>
                     <CardTitle>{activeProject.name}</CardTitle>
@@ -398,7 +403,7 @@ export function ProjectsPage() {
                   setProjects((prev) => (prev ?? []).map((p) => (p.id === next.id ? next : p)));
                 }}
               />
-              <Card>
+              <Card className="enterprise-card rounded-2xl overflow-hidden">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-base">
                     <GitBranchIcon size={16} />
@@ -414,7 +419,7 @@ export function ProjectsPage() {
                 </CardContent>
               </Card>
               {audit.length > 0 && (
-                <Card>
+                <Card className="enterprise-card rounded-2xl overflow-hidden">
                   <CardHeader>
                     <CardTitle className="text-base">{t("projects.recentActivity")}</CardTitle>
                   </CardHeader>
@@ -456,12 +461,15 @@ export function ProjectsPage() {
             </div>
           ) : (
             <Card>
-              <CardContent className="py-12 text-center text-muted-foreground">{t("projects.selectHint")}</CardContent>
+              <CardContent className="p-4">
+                <InteractionEmptyState
+                  title={t("projects.selectHint")}
+                  description="Select a project from the left rail or create a new project to start an agent workspace."
+                />
+              </CardContent>
             </Card>
           )}
         </section>
-      </main>
-
       <CreateProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
@@ -502,6 +510,6 @@ export function ProjectsPage() {
         isLoading={deletingProject}
         onConfirm={() => void handleCascadeConfirm()}
       />
-    </div>
+    </PageFrame>
   );
 }

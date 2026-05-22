@@ -8,8 +8,13 @@ import { getCodexIssueArtifacts, getCodexIssues } from "@/lib/api";
 import type { Artifact, CodexIssue } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  EmptyStateAction,
+  InteractionEmptyState,
+} from "@/components/ui/interaction-empty-state";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { PageFrame } from "@/features/workbench/components/PageFrame";
 
 interface IssueWithArtifacts {
   issue: CodexIssue;
@@ -78,43 +83,24 @@ export function ArtifactsHubPage() {
   );
 
   return (
-    <div className="min-h-full">
-      <div className="relative overflow-hidden border-b border-border-subtle">
-        <div
-          aria-hidden
-          className="absolute inset-0 opacity-[0.30] pointer-events-none"
-          style={{
-            background:
-              "radial-gradient(900px 300px at 12% -10%, rgba(34,197,94,0.20), transparent 60%), radial-gradient(700px 240px at 90% -10%, rgba(96,165,250,0.18), transparent 60%)",
-          }}
-        />
-        <div className="relative px-8 pt-7 pb-6 max-w-[1280px] mx-auto">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="size-9 rounded-xl bg-gradient-to-br from-success to-success/60 flex items-center justify-center shadow-lg shadow-success/30">
-              <FileBox size={18} className="text-black" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h1 className="text-2xl font-bold tracking-tight">Artifacts</h1>
-              <p className="text-[12px] text-text-muted">
-                {totalArtifacts} files across {rows.length} {rows.length === 1 ? "issue" : "issues"} · scanning the
-                latest {MAX_SCAN} issues
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={refreshing}
-              onClick={() => void load("refresh")}
-            >
-              <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
-              Refresh
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-8 py-6 max-w-[1280px] mx-auto space-y-5">
-        <div className="relative max-w-md">
+    <PageFrame
+      eyebrow="artifacts"
+      title="Artifacts"
+      description={`${totalArtifacts} files across ${rows.length} ${rows.length === 1 ? "issue" : "issues"} · scanning the latest ${MAX_SCAN} issues`}
+      actions={(
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={refreshing}
+          onClick={() => void load("refresh")}
+        >
+          <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
+          Refresh
+        </Button>
+      )}
+      contentClassName="space-y-5"
+    >
+        <div className="enterprise-card relative max-w-md rounded-2xl p-1">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
           <Input
             value={query}
@@ -125,25 +111,37 @@ export function ArtifactsHubPage() {
         </div>
 
         {loading ? (
-          <div className="py-16 text-center text-sm text-text-muted">Loading…</div>
+          <InteractionEmptyState
+            tone="loading"
+            title="Loading artifacts"
+            description="Scanning recent issues for PRDs, designs, QA reports, and execution outputs."
+          />
         ) : filtered.length === 0 ? (
-          <div className="py-20 text-center">
-            <div className="inline-flex size-12 rounded-full bg-info/10 items-center justify-center mb-3">
-              <FileBox size={20} className="text-info" />
-            </div>
-            <h2 className="text-base font-semibold">
-              {query ? "No artifacts match your search." : "No artifacts produced yet."}
-            </h2>
-            <p className="text-sm text-text-muted mt-1">
-              Run an issue through the workflow to produce PRD, design, and QA reports.
-            </p>
-          </div>
+          <InteractionEmptyState
+            title={query ? "No artifacts match your search." : "No artifacts produced yet."}
+            description={
+              query
+                ? "Try a different filename, issue title, or clear the search query."
+                : "Run an issue through the workflow to produce PRD, design, and QA reports."
+            }
+            action={
+              query ? (
+                <EmptyStateAction onClick={() => setQuery("")}>
+                  Clear search
+                </EmptyStateAction>
+              ) : (
+                <EmptyStateAction onClick={() => router.push("/")}>
+                  Open Inbox
+                </EmptyStateAction>
+              )
+            }
+          />
         ) : (
           <ul className="space-y-3">
             {filtered.map(({ issue, artifacts }) => (
               <li
                 key={issue.id}
-                className="rounded-xl border border-border-subtle bg-surface-raised overflow-hidden hover:border-border-strong transition-colors"
+              className="enterprise-card overflow-hidden rounded-2xl hover:border-border-strong transition-colors"
               >
                 <button
                   type="button"
@@ -184,7 +182,6 @@ export function ArtifactsHubPage() {
             ))}
           </ul>
         )}
-      </div>
-    </div>
+    </PageFrame>
   );
 }

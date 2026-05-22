@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/providers/I18nProvider";
+import { PageFrame } from "@/features/workbench/components/PageFrame";
 
 /**
  * One-stop "how do I use this thing" page.
@@ -37,32 +38,21 @@ export function HelpPage() {
   const router = useRouter();
 
   return (
-    <div className="min-h-full">
-      <div className="relative overflow-hidden border-b border-border-subtle">
-        <div
-          aria-hidden
-          className="absolute inset-0 opacity-[0.30] pointer-events-none"
-          style={{
-            background:
-              "radial-gradient(900px 300px at 12% -10%, rgba(230,149,82,0.30), transparent 60%), radial-gradient(700px 240px at 90% -10%, rgba(96,165,250,0.18), transparent 60%)",
-          }}
-        />
-        <div className="relative px-8 pt-7 pb-6 max-w-[1080px] mx-auto">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="size-9 rounded-xl bg-gradient-to-br from-brand to-brand-strong flex items-center justify-center shadow-lg shadow-brand/30">
-              <HelpCircle size={18} className="text-black" />
-            </span>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight">{t("help.gettingStarted")}</h1>
-              <p className="text-[12px] text-text-muted">
-                {t("help.gettingStartedDesc")}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-8 py-8 max-w-[1080px] mx-auto space-y-12">
+    <PageFrame
+      eyebrow={t("help.gettingStarted")}
+      title={t("help.gettingStarted")}
+      description={t("help.gettingStartedDesc")}
+      maxWidthClassName="max-w-[1080px]"
+      contentClassName="space-y-12"
+      actions={(
+        <Button
+          onClick={() => router.push("/")}
+          className="bg-brand hover:bg-brand-strong text-black font-semibold"
+        >
+          {t("help.backToInbox")}
+        </Button>
+      )}
+    >
         {/* Quick start */}
         <section>
           <h2 className="text-xs font-black uppercase tracking-widest text-text-muted mb-4">
@@ -242,16 +232,7 @@ export function HelpPage() {
           </ul>
         </section>
 
-        <div className="pt-2">
-          <Button
-            onClick={() => router.push("/")}
-            className="bg-brand hover:bg-brand-strong text-black font-semibold"
-          >
-            {t("help.backToInbox")}
-          </Button>
-        </div>
-      </div>
-    </div>
+    </PageFrame>
   );
 }
 
@@ -269,7 +250,7 @@ function Step({
   cta?: { label: string; onClick: () => void };
 }) {
   return (
-    <li className="rounded-xl border border-border-subtle bg-surface-raised p-4 flex gap-4">
+    <li className="enterprise-card rounded-2xl p-4 flex gap-4">
       <div className="size-8 rounded-full bg-brand/10 text-brand flex items-center justify-center font-black tabular-nums shrink-0">
         {n}
       </div>
@@ -310,7 +291,7 @@ function PageRow({
     <button
       type="button"
       onClick={() => router.push(href)}
-      className="text-left rounded-xl border border-border-subtle bg-surface px-3.5 py-3 hover:border-brand/40 hover:bg-surface-hover transition-colors flex items-start gap-3"
+      className="enterprise-card text-left rounded-2xl px-3.5 py-3 hover:border-brand/40 hover:bg-surface-hover transition-colors flex items-start gap-3"
     >
       <span className="size-7 rounded-md bg-surface-input text-text-muted flex items-center justify-center shrink-0 mt-0.5">
         {icon}
@@ -333,7 +314,7 @@ function FeatureRow({
   body: string;
 }) {
   return (
-    <div className="rounded-lg border border-border-subtle bg-surface px-3.5 py-2.5 flex items-start gap-3">
+    <div className="enterprise-card rounded-2xl px-3.5 py-2.5 flex items-start gap-3">
       <span className="size-6 rounded-md bg-surface-input text-text-muted flex items-center justify-center shrink-0 mt-0.5">
         {icon}
       </span>

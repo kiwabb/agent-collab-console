@@ -52,11 +52,11 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
 
   return (
     <>
-      <header className="h-12 shrink-0 border-b border-border-subtle bg-surface flex items-center gap-3.5 px-4 relative z-10">
+      <header className="h-14 shrink-0 border-b border-border-subtle/80 bg-surface/85 backdrop-blur-md flex items-center gap-3.5 px-4 relative z-10">
         <Link
           href="/"
           aria-label="Home"
-          className="flex items-center justify-center size-[26px] rounded-[7px] font-mono font-bold text-[14px] shrink-0 transition-transform hover:scale-[1.04]"
+          className="flex items-center justify-center size-[28px] rounded-[9px] font-mono font-bold text-[14px] shrink-0 transition-transform hover:scale-[1.04]"
           style={{
             background: "linear-gradient(135deg, var(--color-brand-strong), #cf7838)",
             color: "#1a0e05",
@@ -67,7 +67,7 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
           C
         </Link>
         <Breadcrumbs items={allCrumbs} />
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2.5">
           {right}
           <SearchInput onOpen={() => setPaletteOpen(true)} t={t} />
           <HelpButton />
@@ -118,7 +118,7 @@ function HelpButton() {
       onClick={() => router.push("/help")}
       title="How does this work? (?)"
       className={cn(
-        "size-7 rounded-md flex items-center justify-center text-text-muted",
+        "size-8 rounded-lg flex items-center justify-center text-text-muted",
         "hover:bg-surface-hover hover:text-foreground transition-colors",
       )}
       aria-label="Help"
@@ -140,8 +140,8 @@ function SearchInput({ onOpen, t }: { onOpen: () => void; t: (key: string) => st
       type="button"
       onClick={onOpen}
       className={cn(
-        "relative w-[380px] max-w-[42vw] h-[30px] pl-7 pr-12 rounded-[7px] text-[12.5px] text-left outline-none",
-        "bg-surface-input border border-border-muted",
+        "relative w-[360px] max-w-[42vw] h-[34px] pl-8 pr-12 rounded-[10px] text-[12.5px] text-left outline-none",
+        "bg-surface-input/90 border border-border-muted shadow-sm",
         "text-text-muted hover:border-border-strong hover:text-foreground transition-colors",
       )}
     >
