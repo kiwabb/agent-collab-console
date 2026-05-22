@@ -9,6 +9,8 @@ This module provides:
 
 Based on the Rust implementation in vibe-kanban/crates/executors/src/executors/codex/
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import threading

@@ -1,12 +1,10 @@
-version: '3.8'
-
 services:
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8001:8000"
+      - "9000:9000"
     environment:
       - REAL_CLI=false
     networks:
@@ -17,7 +15,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "5173:5173"
+      - "4000:4000"
+    environment:
+      - BACKEND_API_BASE=http://backend:9000
+      - NEXT_PUBLIC_WS_BASE=ws://localhost:9000
     depends_on:
       - backend
     networks:

@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+const backendApiBase = process.env.BACKEND_API_BASE ?? "http://localhost:9000";
+
 const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
@@ -8,7 +10,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: "http://localhost:9000/api/:path*",
+        destination: `${backendApiBase}/api/:path*`,
       },
     ];
   },

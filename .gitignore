@@ -1,14 +1,30 @@
 # Dependencies
 frontend/.next/
 frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
 backend/.venv/
+backend/.venv314/
 backend/__pycache__/
 backend/**/*.pyc
+backend/**/__pycache__/
 
 # Database
 backend/console.db
 backend/console.db-shm
 backend/console.db-wal
+backend/codex.db
+backend/codex.db-shm
+backend/codex.db-wal
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+
+# Local Trellis / agent runtime state
+.trellis/.developer
+.trellis/.runtime/
+.agents/
+.claude/
+.codex/
 
 # IDE
 .idea/

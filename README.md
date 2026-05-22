@@ -1,329 +1,177 @@
-# Codex Task Workspace
+# Agent Collaboration Console
 
-> **Product model**: This MVP is a Codex task workspace, not a general-purpose Codex chat client. A task owns its prompt, execution status, logs, and result. Each task run is an isolated `codex exec --json` execution. Sessions are workspaces that group related tasks together.
+Enterprise-oriented, local-first multi-agent workbench for planning, running, observing, and recovering AI coding workflows.
 
-A local-first web console for creating Codex tasks, executing them, and observing results. The backend accesses your local `codex` command directly.
+The product model is a **local operations console**: the browser talks to a local FastAPI backend, and the backend can execute local CLI tools such as Codex and Claude against local repositories. This is powerful by design, so the repository treats local trust boundaries, runtime state, and recovery workflows as first-class concerns.
 
 ## Architecture
 
-- **Backend**: Python, FastAPI, Pydantic
-- **Frontend**: React, Vite
-- **Persistence**: SQLite for task workspaces, Codex sessions, and execution log history
-- **Execution**: Each task run = one `codex exec --json "<prompt>"` subprocess; prompts are passed as command arguments (not stdin), using pipes for stdout/stderr
+- **Backend**: Python, FastAPI, Pydantic, SQLite
+- **Frontend**: Next.js, React, TypeScript, Tailwind
+- **Live updates**: WebSocket event streams
+- **Persistence**: SQLite for projects, issues, tasks, execution processes, logs, and artifacts
+- **Execution**: Local process runtimes for Codex, Claude, and configured executors
 
-## Recommended Run Mode
+## Ports
 
-Use local startup by default.
+| Service | Default URL | Source |
+| --- | --- | --- |
+| Frontend | `http://localhost:4000` | `frontend/package.json`, `dev-local.sh` |
+| Backend | `http://localhost:9000` | `backend/Dockerfile`, `dev-local.sh` |
+| Backend API via frontend rewrites | `/api/*` -> `http://localhost:9000/api/*` | `frontend/next.config.ts` |
 
-This project currently works best when:
+## Recommended Local Startup
 
-- the backend runs on your host machine
-- the frontend runs on your host machine
-- the backend can execute your local `codex` command directly
-
-Docker is no longer the recommended primary workflow for Codex terminal usage, because a backend container does not automatically have access to your host `codex` binary.
-
-## One-Command Local Startup
-
-From the project root:
+From the repository root:
 
 ```bash
-cd /Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console
 ./dev-local.sh
 ```
 
-The script will:
+The script:
 
-- verify that `codex`, `uvicorn`, and `npm` are available
-- start the backend on `http://localhost:8000`
-- start the frontend on `http://localhost:5173`
-- keep both processes in the foreground
-- stop both processes when you press `Ctrl+C`
+- checks that `codex`, Node/npm, and a backend Python runtime are available;
+- starts the backend on `http://localhost:9000`;
+- starts the frontend on `http://localhost:4000`;
+- frees those ports before startup;
+- keeps both processes in the foreground;
+- stops both services when you press `Ctrl+C`.
 
-Before using it, make sure:
-
-```bash
-which codex
-cd /Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/frontend && npm install
-cd /Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/backend && pip install -r requirements.txt
-```
-
-**Port conflicts:** If ports 8000 or 5173 are already in use, the script exits with an error. Port 8000 conflict is especially important — the Vite dev server proxies `/api` to `localhost:8000`, so if another service is running on 8000 the frontend will silently connect to the wrong backend and the page may go blank or show errors.
-
-## Codex Availability
-
-The task workspace depends on the backend being able to run:
+By default, `REAL_CLI=true`, so agent runs can call real local tools. For demo/offline mode:
 
 ```bash
-codex
+REAL_CLI=false ./dev-local.sh
 ```
 
-If this command is not available in your local shell, the UI will show Codex as unavailable and task execution will fail.
-
-## Worker Adapter Configuration
-
-By default, the system runs with **FakeClaudeAdapter** and **FakeCodexAdapter** that return mock results for safe demo/testing.
-
-To enable real CLI execution:
-
-```bash
-REAL_CLI=true uvicorn app.main:app --reload --port 8000
-```
-
-With `REAL_CLI=true`, both adapters use subprocess execution. Configure their commands via environment variables:
-
-```bash
-# Configure the worker (Claude Code) command
-export CLAUDE_CMD="python3 -c \"print('task completed')\""
-
-# Configure the master (Codex) command
-export CODEX_CMD="python3 -c \"print('planned')\""
-
-# Start with real adapters
-REAL_CLI=true uvicorn app.main:app --reload --port 8000
-```
-
-The `CLAUDE_CMD` and `CODEX_CMD` values are shell-style command strings (parsed with `shlex.split`), so quotes and arguments work as expected.
-
-## Manual Local Run
+## Manual Local Startup
 
 ### Backend
 
 ```bash
-cd /Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/backend
+cd backend
+python3 -m venv .venv
+. .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 9000
 ```
 
 ### Frontend
 
 ```bash
-cd /Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/frontend
+cd frontend
 npm install
 npm run dev
 ```
 
-## Local Demo
+Open `http://localhost:4000`.
 
-Happy path — create and run a task:
+## Quality Gates
 
-1. Start both services: `./dev-local.sh` (or run backend + frontend manually).
-2. Open [http://localhost:5173](http://localhost:5173).
-3. The page shows `Codex Task Workspace`.
-4. In the sidebar, click **+ New Session** to create a workspace.
-5. Click **+ New Task** in the task panel.
-6. Enter a **title** (e.g., "Plan auth module") and a **prompt** (e.g., "Write a small Python auth module with JWT support").
-7. Click **Create Task**.
-8. Click **Run** on the task card — the backend executes `codex exec --json "<prompt>"`.
-9. Watch **Logs** stream in the detail panel.
-10. When the task completes, the **Result** panel shows the final output.
-11. Optionally click **Continue** on a completed task to create a follow-up task with the previous result pre-filled.
+Run these before committing user-facing changes:
 
-In a healthy local path, Codex produces output in about 20-30 seconds (model loading, skill loading are the main factors).
-
-## Troubleshooting
-
-### Page is blank or shows a backend error
-
-The frontend proxies `/api` to `localhost:8000`. If another service is running on port 8000, the frontend connects to the wrong backend and the page may go blank.
-
-**Check who is on port 8000:**
 ```bash
-lsof -nP -iTCP:8000 -sTCP:LISTEN
+cd frontend
+npx tsc --noEmit --pretty false
+npm run test
+npm run lint
 ```
-
-**Fix:** Stop the conflicting service on port 8000, or run the backend on a different port and update the Vite proxy target.
-
-### Backend unreachable
-
-The page shows a "Backend unreachable" diagnostic. The backend is not running or port 8000 is blocked.
-
-**Check if backend is running:**
-```bash
-lsof -nP -iTCP:8000 -sTCP:LISTEN
-```
-
-**Fix:** Run `./dev-local.sh` (or start the backend manually on port 8000).
-
-### Wrong backend service
-
-The page shows "Wrong Backend Service". The service at port 8000 exists but is not the Agent Collaboration Console backend.
-
-**Verify the backend is correct:**
-```bash
-curl http://localhost:8000/api/health
-# Should return: {"service": "agent-collab-console", "version": "1.0"}
-```
-
-**Fix:** Make sure only one service is running on port 8000 — the correct backend. Restart the backend.
-
-### Codex not available
-
-The workspace shows "Codex not available" in blue. The backend is reachable but the `codex` command is not found in the shell environment.
-
-**Check if `codex` is in your PATH:**
-```bash
-which codex
-```
-
-**Fix:** Install `codex` and make sure it is in your `PATH`.
-
-### Port 8000 or 5173 already in use
-
-The startup script exits with a port conflict error before starting.
-
-**Check port 8000:**
-```bash
-lsof -nP -iTCP:8000 -sTCP:LISTEN
-```
-
-**Check port 5173:**
-```bash
-lsof -nP -iTCP:5173 -sTCP:LISTEN
-```
-
-**Fix:** Stop the existing service on the conflicting port, or run that service on a different port.
-
-### Session list is empty
-
-The sidebar shows "No sessions" even after the backend is running.
-
-**Check if the backend is correct:**
-```bash
-curl http://localhost:8000/api/health
-```
-
-**Check if the SQLite store has sessions:**
-```bash
-curl http://localhost:8000/api/codex/sessions
-```
-
-**Fix:** If the backend is wrong (not agent-collab-console), restart on port 8000 with the correct backend. If the backend is correct but sessions are still empty, the store may be fresh — create a new session.
-
-### Task execution fails
-
-Task stays in "running" and then shows "failed", or no logs appear.
-
-**Check `codex` availability:**
-```bash
-which codex
-```
-
-**Fix:** Make sure `codex` is available in your shell environment.
-
-### Logs not appearing
-
-Logs pane stays empty after running a task.
-
-**Check WebSocket connection:** The log stream should show live output as Codex produces it.
-
-**Fix:** Refresh the task to re-fetch logs, or check the backend logs for errors.
-
-## API Endpoints
-
-### Collaboration (legacy)
-- `POST /api/sessions` - Create a new session
-- `POST /api/sessions/{session_id}/tasks` - Add a task to a session
-- `POST /api/tasks/{task_id}/run` - Execute a task
-- `POST /api/tasks/{task_id}/approval` - Request approval for a task
-
-### Codex Task Workspace
-- `POST /api/codex/sessions` - Create a new task workspace
-- `GET /api/codex/sessions` - List all workspaces
-- `POST /api/codex/tasks` - Create a new task in a workspace (`parent_task_id` optional for continuations)
-- `GET /api/codex/tasks` - List all tasks (optional `?session_id=` filter)
-- `POST /api/codex/tasks/{task_id}/run` - Execute a task (blocks until completion)
-- `GET /api/codex/tasks/{task_id}/logs` - Get logs for a task run
-
-## Testing
-
-### Running Tests
 
 ```bash
 cd backend
-python3 -m pytest -v
+pytest
 ```
 
-### Test Safety Guarantee
-
-Ordinary pytest runs (`python3 -m pytest`) are fully test-safe and **never touch the real Codex runtime**:
-
-- **Process isolation** — `CODEX_LAUNCH_ENABLED=false` forces `MockCodexProcessManager` in all tests. No real `codex` subprocess is ever spawned.
-- **Availability isolation** — `force_codex_available` fixture patches `check_codex_available()` to always return `True`. Tests do not skip based on whether `codex` is installed on the host machine.
-
-This means tests run identically on machines with or without `codex` installed. The two-layer isolation guarantees that even if a test calls `POST /api/codex/sessions`, it will use the mock process manager and not the real one.
-
-### Future Integration Tests
-
-Tests that need to exercise the real `CodexProcessManager` with actual `codex` subprocesses (end-to-end or smoke tests) should be placed in a separate `tests/integration/` directory and run with `CODEX_LAUNCH_ENABLED=true REAL_CLI=true`. These are not run by the default `python3 -m pytest` command.
-
-### `verify_happy_path.py` Is a Manual Smoke Check
-
-`backend/verify_happy_path.py` is **not** part of the normal test suite.
-
-Use it only when you explicitly want to verify the real Codex runtime path end to end:
-
-- create/open a session
-- send one prompt
-- wait for a real Codex reply
-
-This script is intentionally slower than ordinary tests because it talks to the real `codex` runtime and may take tens of seconds or longer depending on upstream conditions.
-
-Recommended workflow:
-
-1. During normal development, run only:
-   ```bash
-   cd backend
-   python3 -m pytest -v
-   ```
-2. Only when validating the real Codex path, run:
-   ```bash
-   cd backend
-   CODEX_LAUNCH_ENABLED=true python3 verify_happy_path.py
-   ```
-
-Do **not** treat `verify_happy_path.py` as a must-run step for every code change.
-
-### Orphan Process Recovery
-
-Each task run spawns one `codex exec --json` subprocess. If a subprocess escapes its lifecycle (e.g., due to an interrupted backend or a long-running task that exceeds the 600s timeout), it may appear as a leftover process.
+Backend tests marked `slow` are skipped by default via `backend/pytest.ini`. To run slow tests too:
 
 ```bash
-# Find orphan codex processes
-ps -Ao pid,ppid,stat,%cpu,command | rg '/Users/zhoujiaangyao/.npm-global/bin/codex|codex-darwin-arm64/vendor/.*/codex/codex'
-
-# Kill by exact path
-pkill -f '/Users/zhoujiaangyao/.npm-global/bin/codex'
-pkill -f 'codex-darwin-arm64/vendor/.*/codex/codex'
+cd backend
+pytest -m "slow"
 ```
 
-Since tests use `MockCodexProcessManager`, ordinary pytest runs cannot create orphans. These commands are for recovering after running the backend with real Codex execution.
+## Docker
 
-## Docker Status
+Docker is useful for smoke checks and isolated demos, but real local CLI execution usually works best on the host because containers do not automatically have access to your host Codex/Claude credentials, shell configuration, repositories, or SSH agent.
 
-Docker files are still present for experimentation, but Docker is not the recommended runtime for real local Codex execution.
+Build and run:
 
-Why:
-
-- the backend container does not automatically have your host `codex` binary
-- terminal WebSocket behavior needs separate Docker-specific proxy handling
-- local startup gives the most reliable Codex experience right now
-
-## Project Structure
-
+```bash
+docker compose up --build
 ```
-agent-collab-console/
-├── backend/
-│   ├── app/
-│   │   ├── domain/         # Session and log models
-│   │   ├── application/    # Codex process lifecycle
-│   │   ├── adapters/       # SQLite persistence and CLI adapters
-│   │   └── interfaces/     # FastAPI routes and WebSocket streaming
-│   └── tests/
-├── frontend/
-│   └── src/
-│       └── components/     # Codex terminal workspace UI
-├── dev-local.sh
-├── docker-compose.yml
-└── README.md
+
+Compose exposes:
+
+- frontend: `http://localhost:4000`
+- backend: `http://localhost:9000`
+
+The compose default uses `REAL_CLI=false` to avoid pretending the container can control host-local tools.
+
+## Local-First Trust Boundaries
+
+The backend may access:
+
+- local repositories configured as projects;
+- local worktrees created for issues/tasks;
+- local Codex/Claude commands;
+- local SQLite databases and logs;
+- environment variables used by model providers and runtimes.
+
+Do not commit local runtime data. The repository ignores generated caches, local SQLite databases, Trellis runtime sessions, and local agent configuration directories.
+
+## Important Environment Variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `REAL_CLI` | `true` in `dev-local.sh`, `false` in compose | Enables real local CLI execution instead of fake adapters |
+| `CODEX_LAUNCH_ENABLED` | `true` | Allows Codex process runtime launch |
+| `CODEX_SOURCE_ROOT` | repository root | Source root for local task execution |
+| `CODEX_WORKSPACE_ROOT` | `/tmp/agent-collab-console-workspaces` | Local task worktree root |
+| `CLAUDE_CMD` | runtime default | Override Claude command |
+| `CODEX_CMD` | runtime default | Override Codex command |
+| `BACKEND_API_BASE` | `http://localhost:9000` | Next.js server-side rewrite target; compose uses `http://backend:9000` |
+| `NEXT_PUBLIC_WS_BASE` | `ws://localhost:9000` | Frontend WebSocket base URL |
+
+## Troubleshooting
+
+### Frontend cannot reach backend
+
+Check the backend:
+
+```bash
+curl http://localhost:9000/api/health
 ```
+
+If another service owns port 9000, stop it or change the backend/frontend rewrite configuration together.
+
+### Codex or Claude unavailable
+
+Check host commands:
+
+```bash
+which codex
+which claude
+```
+
+If `REAL_CLI=true`, missing CLI tools will cause real executor runs to fail. Use `REAL_CLI=false` for demo mode.
+
+### Local state appears in `git status`
+
+Generated/runtime files should usually be ignored. If new runtime files appear, update `.gitignore` rather than committing local machine state.
+
+Expected local-only examples:
+
+- `backend/*.db`
+- `frontend/tsconfig.tsbuildinfo`
+- `.trellis/.runtime/`
+- `.agents/`, `.claude/`, `.codex/`
+
+## Enterprise Roadmap
+
+See [`docs/enterprise/roadmap.md`](docs/enterprise/roadmap.md).
+
+Current hardening priorities:
+
+1. repository trust: current docs, CI, ignore policy, Docker metadata;
+2. operational trust: structured logs, diagnostics, WebSocket health, golden signals;
+3. data trust: backup/export/import, migration checks, retention, audit trail;
+4. security trust: trust boundaries, dependency automation, SBOM, future permissions;
+5. UX trust: accessibility, performance budgets, first-run guidance.
