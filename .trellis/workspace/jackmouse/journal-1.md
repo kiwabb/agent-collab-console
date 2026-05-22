@@ -73,3 +73,38 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: pytest 提速 + Conductor consumed_at hotfix
+
+**Date**: 2026-05-22
+**Task**: pytest 提速 + Conductor consumed_at hotfix
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+(1) Hotfix: 01454d4 把 conductor_turns consumed_at ALTER TABLE 移到 CREATE INDEX 之前，老 DB 启动不再炸。(2) e30653c 加 @pytest.mark.slow + addopts 默认跳过 + conftest.py 实现 --runslow flag，老 DB → 355/410，--runslow → 410，显式 path 仍跑全量。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `01454d4` | (see git log) |
+| `e30653c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
