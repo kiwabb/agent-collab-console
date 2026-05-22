@@ -736,6 +736,13 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_session_id ON log_events(session_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_task_id ON log_events(task_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)")
+        # Must run BEFORE idx_conductor_turns_inbox below; the index
+        # references consumed_at, and on an existing DB without the column
+        # the CREATE INDEX otherwise raises and crashes _init_db().
+        try:
+            await conn.execute("ALTER TABLE conductor_turns ADD COLUMN consumed_at TEXT")
+        except aiosqlite.OperationalError:
+            pass
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
@@ -768,10 +775,6 @@ class AsyncSQLiteStore:
             await conn.execute(
                 "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
             )
-        except aiosqlite.OperationalError:
-            pass
-        try:
-            await conn.execute("ALTER TABLE conductor_turns ADD COLUMN consumed_at TEXT")
         except aiosqlite.OperationalError:
             pass
         await conn.commit()

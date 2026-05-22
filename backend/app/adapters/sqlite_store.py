@@ -699,10 +699,6 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_id ON conductor_tasks(project_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
             # Phase 4: add instance_index to workflow_nodes for existing DBs
             try:
                 conn.execute(
@@ -710,10 +706,18 @@ class SQLiteStore:
                 )
             except sqlite3.OperationalError:
                 pass
+            # Must run BEFORE idx_conductor_turns_inbox below; the index
+            # references consumed_at, and on an existing DB without the column
+            # the CREATE INDEX otherwise raises sqlite3.OperationalError and
+            # tanks the whole _init_db().
             try:
                 conn.execute("ALTER TABLE conductor_turns ADD COLUMN consumed_at TEXT")
             except sqlite3.OperationalError:
                 pass
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database initialization error: %s", e)
