@@ -32,6 +32,7 @@ export type BusEventType =
   | "conductor_turn_delta"
   | "conductor_failed"
   | "conductor_status"
+  | "conductor_state_violation"
   | "agent_message_posted";
 
 export interface BusIssueMergedEvent {
@@ -164,6 +165,18 @@ export interface BusConductorStatusEvent {
   updated_at?: string | null;
 }
 
+export interface BusConductorStateViolationEvent {
+  type: "conductor_state_violation";
+  issue_id: string;
+  session_id?: string;
+  conductor_task_id: string;
+  from_phase?: string | null;
+  to_phase: string;
+  from_detail?: string | null;
+  to_detail?: string | null;
+  transition_at?: string | null;
+}
+
 export function isBusIssueMergedEvent(event: BusEvent): event is BusIssueMergedEvent {
   return event.type === "issue_merged";
 }
@@ -218,6 +231,7 @@ export type BusEvent =
   | BusConductorTurnDeltaEvent
   | BusConductorFailedEvent
   | BusConductorStatusEvent
+  | BusConductorStateViolationEvent
   | (LogEvent & { type?: BusEventType });
 
 export interface ExecutionProcessesContextValue {

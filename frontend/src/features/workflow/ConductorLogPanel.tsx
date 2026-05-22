@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Pause, Play, SendHorizontal } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { AlertTriangle, Circle, HelpCircle, Loader2, Pause, PauseCircle, Play, SendHorizontal, XCircle } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -11,21 +12,26 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   getConductorLog,
+  getConductorPhaseEstimates,
+  getConductorStateLog,
   getConductorState,
   getConductorTurns,
   pauseConductor,
   resumeConductor,
   sendConductorMessage,
   type ConductorDecision,
+  type ConductorPhaseEstimate,
+  type ConductorStateLogEntry,
   type ConductorStatePayload,
   type ConductorTurn,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { HistoryEntry } from "@/features/agents/dock/agentBus";
 import { PERSONAS } from "@/features/agents/dock/personas";
-import type { BusConductorStatusEvent, BusConductorTurnDeltaEvent, BusConductorTurnEvent } from "@/contexts/ExecutionProcessesContext";
+import type { BusConductorStateViolationEvent, BusConductorStatusEvent, BusConductorTurnDeltaEvent, BusConductorTurnEvent } from "@/contexts/ExecutionProcessesContext";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 
@@ -38,6 +44,18 @@ interface Props {
 
 type TabId = "thread" | "log" | "turns";
 type StreamingBufferMap = Record<string, { turnIndex: number; contentBlockIndex: number; kind: "text" | "tool_input_json"; chunk: string }>;
+type TimelineNode = {
+  key: string;
+  phase: string;
+  detail: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  isCurrent: boolean;
+  isLegal: boolean;
+  isPaused: boolean;
+  isFailed: boolean;
+};
 
 function getThreadActionStyles(t: (key: string) => string): Record<string, { label: string; cls: string }> {
   return {
@@ -92,6 +110,72 @@ function relTime(iso: string | null): string {
   return `${Math.floor(ms / 3_600_000)}h ago`;
 }
 
+function formatDuration(ms: number | null): string {
+  if (ms == null) return "—";
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function buildTimelineNodes(
+  entries: ConductorStateLogEntry[],
+  currentPhase: string | null,
+  currentDetail: string | null,
+  nowMs: number,
+): TimelineNode[] {
+  const ascending = [...entries].sort((a, b) => {
+    const aMs = a.transition_at ? new Date(a.transition_at).getTime() : 0;
+    const bMs = b.transition_at ? new Date(b.transition_at).getTime() : 0;
+    return aMs - bMs;
+  });
+  const nodes: TimelineNode[] = [];
+  for (let index = 0; index < ascending.length; index += 1) {
+    const entry = ascending[index];
+    const next = ascending[index + 1];
+    const isResumeEcho = index > 0
+      && ascending[index - 1]?.to_phase === "paused"
+      && entry.from_phase === "paused"
+      && entry.to_phase === ascending[index - 1]?.from_phase;
+    if (isResumeEcho) continue;
+    const startedAtMs = entry.transition_at ? new Date(entry.transition_at).getTime() : null;
+    const endedAtMs = next?.transition_at ? new Date(next.transition_at).getTime() : null;
+    const isCurrent = !next && currentPhase === entry.to_phase;
+    nodes.push({
+      key: entry.id,
+      phase: entry.to_phase,
+      detail: isCurrent ? currentDetail : (entry.to_detail ?? null),
+      startedAt: entry.transition_at,
+      endedAt: next?.transition_at ?? null,
+      durationMs: endedAtMs != null && startedAtMs != null
+        ? Math.max(1, endedAtMs - startedAtMs)
+        : isCurrent && startedAtMs != null
+          ? Math.max(0, nowMs - startedAtMs)
+          : entry.duration_ms,
+      isCurrent,
+      isLegal: entry.is_legal,
+      isPaused: entry.to_phase === "paused",
+      isFailed: entry.to_phase === "failed",
+    });
+  }
+  if (nodes.length === 0 && currentPhase) {
+    nodes.push({
+      key: `live-${currentPhase}`,
+      phase: currentPhase,
+      detail: currentDetail,
+      startedAt: null,
+      endedAt: null,
+      durationMs: null,
+      isCurrent: true,
+      isLegal: true,
+      isPaused: currentPhase === "paused",
+      isFailed: currentPhase === "failed",
+    });
+  }
+  return nodes;
+}
+
 function isConductorTurnEvent(evt: unknown): evt is BusConductorTurnEvent {
   if (!evt || typeof evt !== "object") return false;
   const record = evt as Record<string, unknown>;
@@ -134,16 +218,30 @@ function isConductorTurnDeltaEvent(evt: unknown): evt is BusConductorTurnDeltaEv
   );
 }
 
+function isConductorStateViolationEvent(evt: unknown): evt is BusConductorStateViolationEvent {
+  if (!evt || typeof evt !== "object") return false;
+  const record = evt as Record<string, unknown>;
+  return (
+    record.type === "conductor_state_violation" &&
+    typeof record.issue_id === "string" &&
+    typeof record.conductor_task_id === "string" &&
+    typeof record.to_phase === "string"
+  );
+}
+
 export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props) {
   const [decisions, setDecisions] = useState<ConductorDecision[]>([]);
   const [turns, setTurns] = useState<ConductorTurn[]>([]);
   const [conductorState, setConductorState] = useState<ConductorStatePayload | null>(null);
+  const [stateLog, setStateLog] = useState<ConductorStateLogEntry[]>([]);
+  const [phaseEstimates, setPhaseEstimates] = useState<Record<string, ConductorPhaseEstimate>>({});
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("thread");
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
   const [statusBusy, setStatusBusy] = useState<"pause" | "resume" | null>(null);
   const [streamingBuffers, setStreamingBuffers] = useState<StreamingBufferMap>({});
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const persona = PERSONAS["conductor"];
   const { t } = useI18n();
   const translatedName = t(persona.nameKey);
@@ -160,12 +258,20 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
       getConductorLog(issueId).then((d) => setDecisions([...d].reverse())).catch(() => setDecisions([])),
       getConductorState(issueId).then(setConductorState).catch(() => setConductorState(null)),
       getConductorTurns(issueId).then(setTurns).catch(() => setTurns([])),
+      getConductorStateLog(issueId, { limit: 200 }).then((entries) => setStateLog(entries)).catch(() => setStateLog([])),
+      getConductorPhaseEstimates(issueId).then(setPhaseEstimates).catch(() => setPhaseEstimates({})),
     ]).finally(() => setLoading(false));
   }, [issueId, open]);
 
   useEffect(() => {
     reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [open]);
 
   useBusEventEffect({
     match: busEventMatchers.all(
@@ -265,6 +371,50 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
         phase: evt.phase ?? prev?.phase ?? null,
         detail: evt.detail ?? prev?.detail ?? null,
       }));
+      if (!evt.phase || !evt.updated_at) return;
+      const nextPhase = evt.phase;
+      const updatedAt = evt.updated_at;
+      setStateLog((prev) => {
+        const existing = prev[0];
+        if (
+          existing &&
+          existing.transition_at === updatedAt &&
+          existing.to_phase === nextPhase &&
+          (existing.to_detail ?? null) === (evt.detail ?? null)
+        ) {
+          return prev;
+        }
+        const nextEntry: ConductorStateLogEntry = {
+          id: `live-${evt.conductor_task_id}-${updatedAt}`,
+          issue_id: issueId,
+          from_phase: existing?.to_phase ?? null,
+          to_phase: nextPhase,
+          from_detail: existing?.to_detail ?? null,
+          to_detail: evt.detail ?? null,
+          transition_at: updatedAt,
+          duration_ms: existing?.transition_at
+            ? Math.max(1, new Date(updatedAt).getTime() - new Date(existing.transition_at).getTime())
+            : null,
+          is_legal: true,
+        };
+        return [nextEntry, ...prev];
+      });
+    },
+    enabled: open,
+  });
+
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("conductor_state_violation"),
+    ),
+    onEvent: (evt) => {
+      if (!isConductorStateViolationEvent(evt)) return;
+      setStateLog((prev) => prev.map((entry, index) => (
+        index === 0 && entry.to_phase === evt.to_phase
+          ? { ...entry, is_legal: false }
+          : entry
+      )));
     },
     enabled: open,
   });
@@ -274,7 +424,8 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
   const conductorStatus = conductorState?.conductor_status ?? "idle";
   const conductorPhase = conductorState?.phase ?? null;
   const phaseStartedAt = conductorState?.updated_at ? new Date(conductorState.updated_at).getTime() : null;
-  const phaseElapsedSeconds = phaseStartedAt ? Math.max(0, Math.floor((Date.now() - phaseStartedAt) / 1000)) : 0;
+  const phaseElapsedMs = phaseStartedAt ? Math.max(0, nowMs - phaseStartedAt) : 0;
+  const phaseElapsedSeconds = Math.floor(phaseElapsedMs / 1000);
   const conductorDetail = conductorPhase === "awaiting_subagent" && conductorState?.detail
     ? `${conductorState.detail} (${phaseElapsedSeconds}s)`
     : (conductorState?.detail ?? null);
@@ -287,6 +438,16 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
     .map((entry) => entry.chunk)
     .join("");
   const stuck = conductorPhase === "awaiting_subagent" && phaseElapsedSeconds > 30;
+  const timelineNodes = buildTimelineNodes(stateLog, conductorPhase, conductorState?.detail ?? null, nowMs);
+  const currentEstimate = conductorPhase ? phaseEstimates[conductorPhase] : undefined;
+  const estimateLabel = currentEstimate?.p50_ms != null
+    ? `${currentEstimate.n_samples < 5 ? "~" : ""}${formatDuration(currentEstimate.p50_ms)}`
+    : "—";
+  const estimateTone = currentEstimate?.n_samples && currentEstimate.n_samples < 5
+    ? "text-text-muted"
+    : "text-text-secondary";
+  const isSlowerThanP95 = currentEstimate?.p95_ms != null && phaseElapsedMs > currentEstimate.p95_ms;
+  const progressMax = currentEstimate?.p50_ms ?? 1;
 
   const handleSend = useCallback(async () => {
     const message = composer.trim();
@@ -364,6 +525,113 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                 <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] text-text-primary">
                   {streamingPreview}
                 </pre>
+              )}
+            </div>
+          )}
+          {timelineNodes.length > 0 && (
+            <div className="mt-3 rounded-2xl border border-border-subtle bg-background/60 px-3 py-3">
+              <div className="mb-2 flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-text-muted">
+                <span>{t("conductor.panel.timeline")}</span>
+                <span>{timelineNodes.length}</span>
+              </div>
+              <div className="overflow-x-auto pb-1">
+                <div className="flex min-w-max items-start gap-3">
+                  <AnimatePresence initial={false}>
+                    {timelineNodes.map((node) => {
+                      const Icon = node.isFailed ? XCircle : node.isPaused ? PauseCircle : Circle;
+                      const nodeTone = node.isFailed
+                        ? "border-error/40 bg-error/10 text-error"
+                        : !node.isLegal
+                          ? "border-warning/40 bg-warning/10 text-warning"
+                          : node.isCurrent
+                            ? "border-brand/40 bg-brand/10 text-brand"
+                            : "border-border-subtle bg-surface-raised text-text-secondary";
+                      return (
+                        <motion.div
+                          key={node.key}
+                          layout
+                          initial={{ opacity: 0, scale: 0.85, y: 8 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.85, y: 8 }}
+                          transition={{ type: "spring", stiffness: 320, damping: 24, mass: 0.7 }}
+                          className="relative flex items-start gap-3"
+                        >
+                          <div className={cn("flex w-[148px] shrink-0 flex-col rounded-2xl border px-3 py-2", nodeTone)}>
+                            <div className="flex items-center gap-2">
+                              <Icon className={cn("h-3.5 w-3.5", node.isCurrent && !node.isPaused && "animate-pulse")} />
+                              <span className="font-mono text-[11px] uppercase tracking-wider">{node.phase}</span>
+                            </div>
+                            <div className="mt-1 text-[10px] leading-relaxed text-text-muted">
+                              {node.detail || "—"}
+                            </div>
+                            <div className="mt-2 text-[10px] font-semibold">
+                              {formatDuration(node.durationMs)}
+                            </div>
+                            {node.isPaused && (
+                              <div className="mt-1 flex items-center gap-1 text-[10px] text-warning">
+                                <PauseCircle className="h-3 w-3" />
+                                <span>{t("conductor.panel.pauseMerged")}</span>
+                              </div>
+                            )}
+                            {!node.isLegal && (
+                              <div className="mt-1 flex items-center gap-1 text-[10px] text-warning">
+                                <AlertTriangle className="h-3 w-3" />
+                                <span>{t("conductor.panel.illegalTransition")}</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="mt-6 h-px w-6 shrink-0 bg-border-subtle last:hidden" />
+                        </motion.div>
+                      );
+                    })}
+                  </AnimatePresence>
+                </div>
+              </div>
+            </div>
+          )}
+          {conductorPhase && (
+            <div className="mt-3 rounded-2xl border border-border-subtle bg-surface-raised px-3 py-3 text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-text-muted">
+                    {t("conductor.panel.estimate")}
+                  </div>
+                  <div className="mt-1 flex items-center gap-2 text-sm text-text-secondary">
+                    <span>{t("conductor.panel.elapsedEstimate", { elapsed: formatDuration(phaseElapsedMs), estimate: estimateLabel })}</span>
+                    {currentEstimate?.n_samples != null && currentEstimate.n_samples < 5 && (
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <HelpCircle className={cn("h-3.5 w-3.5", estimateTone)} />
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          {t("conductor.panel.lowConfidence", { count: currentEstimate.n_samples })}
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+                </div>
+                <div className={cn("text-[10px] font-semibold", estimateTone)}>
+                  N={currentEstimate?.n_samples ?? 0}
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-input">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all duration-300 ease-out",
+                      isSlowerThanP95 ? "bg-warning" : "bg-brand",
+                    )}
+                    style={{ width: `${Math.min(100, Math.max(0, (phaseElapsedMs / progressMax) * 100))}%` }}
+                  />
+                </div>
+                <span className="min-w-[3rem] text-right text-[10px] font-bold text-text-muted">
+                  {`${Math.min(999, Math.round((phaseElapsedMs / progressMax) * 100))}%`}
+                </span>
+              </div>
+              {isSlowerThanP95 && (
+                <div className="mt-2 text-[10px] font-semibold text-warning">
+                  {t("conductor.panel.slowerThanP95")}
+                </div>
               )}
             </div>
           )}

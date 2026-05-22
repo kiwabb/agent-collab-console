@@ -319,6 +319,8 @@ export const dictionaries = {
     "conductor.toastEscalate": "Conductor 警告：需人工关注",
     "conductor.toastFailed": "Conductor 已崩溃",
     "conductor.toastFailedHint": "请打开 DAG 并点击 Conductor 查看 traceback 与决策时间线。",
+    "conductor.toastStateViolation": "Conductor 非法状态跳变",
+    "conductor.toastStateViolationMessage": "非法 phase 跳变：{from} → {to}",
 
     // === ConductorLogPanel ===
     "conductor.panel.threadTab": "Conductor 线程 ({count})",
@@ -343,6 +345,13 @@ export const dictionaries = {
     "conductor.panel.send": "发送",
     "conductor.panel.resume": "继续",
     "conductor.panel.pause": "暂停",
+    "conductor.panel.timeline": "状态时间线",
+    "conductor.panel.estimate": "阶段估时",
+    "conductor.panel.elapsedEstimate": "已 {elapsed} / 预估 {estimate}",
+    "conductor.panel.lowConfidence": "基于 N={count} 历史样本，置信度低",
+    "conductor.panel.slowerThanP95": "比 95% 历史样本更慢",
+    "conductor.panel.pauseMerged": "Pause/Resume 已合并",
+    "conductor.panel.illegalTransition": "非法跳变",
     // Action labels
     "conductor.action.proceed": "继续",
     "conductor.action.note": "备注",
@@ -1361,6 +1370,8 @@ export const dictionaries = {
     "conductor.toastEscalate": "Conductor flagged: needs human attention",
     "conductor.toastFailed": "Conductor crashed",
     "conductor.toastFailedHint": "Open the DAG and click Conductor to inspect the traceback and turn timeline.",
+    "conductor.toastStateViolation": "Conductor illegal phase transition",
+    "conductor.toastStateViolationMessage": "Illegal phase transition: {from} → {to}",
 
     // === ConductorLogPanel ===
     "conductor.panel.threadTab": "Conductor Thread ({count})",
@@ -1385,6 +1396,13 @@ export const dictionaries = {
     "conductor.panel.send": "Send",
     "conductor.panel.resume": "Resume",
     "conductor.panel.pause": "Pause",
+    "conductor.panel.timeline": "Phase Timeline",
+    "conductor.panel.estimate": "Phase Estimate",
+    "conductor.panel.elapsedEstimate": "{elapsed} elapsed / {estimate} estimate",
+    "conductor.panel.lowConfidence": "Based on N={count} historical samples, confidence is low.",
+    "conductor.panel.slowerThanP95": "Slower than 95% of historical samples",
+    "conductor.panel.pauseMerged": "Pause/Resume merged",
+    "conductor.panel.illegalTransition": "Illegal transition",
     // Action labels
     "conductor.action.proceed": "Proceed",
     "conductor.action.note": "Note",

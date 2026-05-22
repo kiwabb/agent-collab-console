@@ -1410,10 +1410,48 @@ export interface ConductorStatePayload {
   updated_at?: string | null;
 }
 
+export interface ConductorStateLogEntry {
+  id: string;
+  issue_id: string;
+  from_phase: string | null;
+  to_phase: string;
+  from_detail: string | null;
+  to_detail: string | null;
+  transition_at: string | null;
+  duration_ms: number | null;
+  is_legal: boolean;
+}
+
+export interface ConductorPhaseEstimate {
+  p50_ms: number | null;
+  p95_ms: number | null;
+  n_samples: number;
+}
+
 export async function getConductorState(issueId: string): Promise<ConductorStatePayload | null> {
   const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-state`);
   if (!res.ok) return null;
   return (await res.json()) as ConductorStatePayload;
+}
+
+export async function getConductorStateLog(
+  issueId: string,
+  opts?: { limit?: number },
+): Promise<ConductorStateLogEntry[]> {
+  const sp = new URLSearchParams();
+  if (opts?.limit) sp.set("limit", String(opts.limit));
+  const suffix = sp.size > 0 ? `?${sp.toString()}` : "";
+  const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-state-log${suffix}`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { entries: ConductorStateLogEntry[] };
+  return data.entries ?? [];
+}
+
+export async function getConductorPhaseEstimates(issueId: string): Promise<Record<string, ConductorPhaseEstimate>> {
+  const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-phase-estimates`);
+  if (!res.ok) return {};
+  const data = (await res.json()) as { estimates: Record<string, ConductorPhaseEstimate> };
+  return data.estimates ?? {};
 }
 
 export async function sendConductorMessage(issueId: string, message: string): Promise<{ ok: boolean; status: string; conductor_task_id: string }> {

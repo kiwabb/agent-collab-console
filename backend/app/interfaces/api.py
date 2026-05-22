@@ -17,6 +17,7 @@ from app.bootstrap import session_service, orchestration_service, approval_servi
 from app.domain.models import CodexIssue, ConductorTask, Project
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
+from app.application.phase_duration_estimator import get_phase_duration_estimator
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.process_runtime_common import is_agent_message_item_type
 from app.application.project_service import ProjectError
@@ -4768,6 +4769,32 @@ async def codex_issue_conductor_turns(
     return {"turns": payload}
 
 
+@router.get("/codex/issues/{issue_id}/conductor-state-log")
+async def codex_issue_conductor_state_log(issue_id: str, limit: int = 200):
+    """Return persisted conductor phase transitions for this issue."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    if not hasattr(codex_store, "list_conductor_state_logs"):
+        return {"entries": []}
+    entries = await codex_store.list_conductor_state_logs(issue_id, limit=limit, descending=True)
+    return {
+        "entries": [
+            {
+                "id": entry.id,
+                "issue_id": entry.issue_id,
+                "from_phase": entry.from_phase,
+                "to_phase": entry.to_phase,
+                "from_detail": entry.from_detail,
+                "to_detail": entry.to_detail,
+                "transition_at": entry.transition_at.isoformat() if entry.transition_at else None,
+                "duration_ms": entry.duration_ms,
+                "is_legal": entry.is_legal,
+            }
+            for entry in entries
+        ]
+    }
+
+
 @router.post("/codex/issues/{issue_id}/conductor/message")
 async def codex_issue_conductor_message(issue_id: str, request: IssueConductorMessageRequest):
     """Queue a user interjection for the currently active issue conductor loop."""
@@ -4787,23 +4814,20 @@ async def codex_issue_conductor_message(issue_id: str, request: IssueConductorMe
     turn = await codex_store.enqueue_conductor_user_message(conductor_task.id, issue_id, text)
     if conductor_task.status == "paused":
         from app.application.conductor_pause_registry import ConductorPauseRegistry
+        from app.application.conductor_main_loop import transition_conductor_phase
 
-        conductor_task.status = "running"
-        conductor_task.updated_at = datetime.now()
-        await codex_store.save_conductor_task(conductor_task)
+        payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
+        await transition_conductor_phase(
+            store=codex_store,
+            event_bus=event_bus,
+            issue_id=issue_id,
+            conductor_task=conductor_task,
+            phase=str(payload.get("resume_phase") or "awaiting_llm"),
+            detail=str(payload.get("resume_detail")) if payload.get("resume_detail") else None,
+            status="running",
+            estimator=get_phase_duration_estimator(codex_store),
+        )
         await ConductorPauseRegistry.instance().resume(conductor_task.id)
-        if event_bus is not None and hasattr(event_bus, "append"):
-            await event_bus.append(
-                {
-                    "type": "conductor_status",
-                    "issue_id": issue_id,
-                    "conductor_task_id": conductor_task.id,
-                    "status": conductor_task.status,
-                    "phase": (conductor_task.payload or {}).get("phase"),
-                    "detail": (conductor_task.payload or {}).get("detail"),
-                    "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
-                }
-            )
     payload = {"text": text}
     if event_bus is not None and hasattr(event_bus, "append"):
         await event_bus.append(
@@ -4842,23 +4866,19 @@ async def codex_issue_conductor_pause(issue_id: str):
     if conductor_task.status != "running":
         raise HTTPException(status_code=409, detail="Conductor loop is not running")
     from app.application.conductor_pause_registry import ConductorPauseRegistry
+    from app.application.conductor_main_loop import transition_conductor_phase
 
     await ConductorPauseRegistry.instance().request_pause(conductor_task.id)
-    conductor_task.status = "paused"
-    conductor_task.updated_at = datetime.now()
-    await codex_store.save_conductor_task(conductor_task)
-    if event_bus is not None and hasattr(event_bus, "append"):
-        await event_bus.append(
-            {
-                "type": "conductor_status",
-                "issue_id": issue_id,
-                "conductor_task_id": conductor_task.id,
-                "status": conductor_task.status,
-                "phase": (conductor_task.payload or {}).get("phase"),
-                "detail": (conductor_task.payload or {}).get("detail"),
-                "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
-            }
-        )
+    await transition_conductor_phase(
+        store=codex_store,
+        event_bus=event_bus,
+        issue_id=issue_id,
+        conductor_task=conductor_task,
+        phase="paused",
+        detail=(conductor_task.payload or {}).get("detail"),
+        status="paused",
+        estimator=get_phase_duration_estimator(codex_store),
+    )
     return {"ok": True, "conductor_task_id": conductor_task.id, "status": conductor_task.status}
 
 
@@ -4876,23 +4896,20 @@ async def codex_issue_conductor_resume(issue_id: str):
     if conductor_task is None or conductor_task.status != "paused":
         raise HTTPException(status_code=409, detail="Conductor loop is not paused")
     from app.application.conductor_pause_registry import ConductorPauseRegistry
+    from app.application.conductor_main_loop import transition_conductor_phase
 
-    conductor_task.status = "running"
-    conductor_task.updated_at = datetime.now()
-    await codex_store.save_conductor_task(conductor_task)
+    payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
+    await transition_conductor_phase(
+        store=codex_store,
+        event_bus=event_bus,
+        issue_id=issue_id,
+        conductor_task=conductor_task,
+        phase=str(payload.get("resume_phase") or "awaiting_llm"),
+        detail=str(payload.get("resume_detail")) if payload.get("resume_detail") else None,
+        status="running",
+        estimator=get_phase_duration_estimator(codex_store),
+    )
     await ConductorPauseRegistry.instance().resume(conductor_task.id)
-    if event_bus is not None and hasattr(event_bus, "append"):
-        await event_bus.append(
-            {
-                "type": "conductor_status",
-                "issue_id": issue_id,
-                "conductor_task_id": conductor_task.id,
-                "status": conductor_task.status,
-                "phase": (conductor_task.payload or {}).get("phase"),
-                "detail": (conductor_task.payload or {}).get("detail"),
-                "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
-            }
-        )
     return {"ok": True, "conductor_task_id": conductor_task.id, "status": conductor_task.status}
 
 
@@ -4950,6 +4967,22 @@ async def codex_issue_conductor_state(issue_id: str):
         "conductor_status": conductor_task.status if conductor_task else None,
         "phase": (conductor_task.payload or {}).get("phase") if conductor_task else None,
         "detail": (conductor_task.payload or {}).get("detail") if conductor_task else None,
+    }
+
+
+@router.get("/codex/issues/{issue_id}/conductor-phase-estimates")
+async def codex_issue_conductor_phase_estimates(issue_id: str):
+    """Return conductor phase duration estimates aggregated from all history."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    estimator = get_phase_duration_estimator(codex_store)
+    estimates = await estimator.all_estimates()
+    return {
+        "issue_id": issue_id,
+        "estimates": {
+            phase: estimate.to_dict()
+            for phase, estimate in estimates.items()
+        },
     }
 
 

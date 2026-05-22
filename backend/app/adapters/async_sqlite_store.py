@@ -712,6 +712,19 @@ class AsyncSQLiteStore:
             )
         """)
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS conductor_state_log (
+                id TEXT PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                from_phase TEXT,
+                to_phase TEXT NOT NULL,
+                from_detail TEXT,
+                to_detail TEXT,
+                transition_at TEXT NOT NULL,
+                duration_ms INTEGER,
+                is_legal INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS project_memory_embeddings (
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
@@ -747,6 +760,7 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_state_log_issue_transition ON conductor_state_log(issue_id, transition_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_session_id ON execution_processes(session_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_task_id ON execution_processes(task_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)")
@@ -2518,6 +2532,68 @@ class AsyncSQLiteStore:
                 payload_json=row["payload_json"] or "{}",
                 created_at=self._parse_datetime(row["created_at"]),
                 consumed_at=self._parse_datetime(row["consumed_at"]) if "consumed_at" in row.keys() else None,
+            )
+            for row in rows
+        ]
+
+    async def save_conductor_state_log(self, entry: "ConductorStateLog") -> None:
+        from app.domain.models import ConductorStateLog  # noqa: F401
+
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """INSERT OR REPLACE INTO conductor_state_log
+               (id, issue_id, from_phase, to_phase, from_detail, to_detail, transition_at, duration_ms, is_legal)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                entry.id,
+                entry.issue_id,
+                entry.from_phase,
+                entry.to_phase,
+                entry.from_detail,
+                entry.to_detail,
+                self._format_datetime(entry.transition_at or datetime.now()),
+                entry.duration_ms,
+                1 if entry.is_legal else 0,
+            ),
+        )
+        await conn.commit()
+
+    async def list_conductor_state_logs(
+        self,
+        issue_id: str | None = None,
+        *,
+        limit: int = 200,
+        descending: bool = False,
+    ) -> list["ConductorStateLog"]:
+        from app.domain.models import ConductorStateLog
+
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM conductor_state_log"
+        params: list[object] = []
+        if issue_id is not None:
+            sql += " WHERE issue_id = ?"
+            params.append(issue_id)
+        order = "DESC" if descending else "ASC"
+        sql += f" ORDER BY transition_at {order}, id {order}"
+        if limit > 0:
+            sql += " LIMIT ?"
+            params.append(max(1, min(limit, 5000)))
+        async with conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        return [
+            ConductorStateLog(
+                id=row["id"],
+                issue_id=row["issue_id"],
+                from_phase=row["from_phase"],
+                to_phase=row["to_phase"],
+                from_detail=row["from_detail"],
+                to_detail=row["to_detail"],
+                transition_at=self._parse_datetime(row["transition_at"]),
+                duration_ms=int(row["duration_ms"]) if row["duration_ms"] is not None else None,
+                is_legal=bool(row["is_legal"]),
             )
             for row in rows
         ]

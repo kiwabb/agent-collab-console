@@ -46,7 +46,7 @@ import { IssueSideStack } from "./components/IssueSideStack";
 import { IssueActivityTimelineHorizontal } from "./components/IssueActivityTimelineHorizontal";
 import { FloatingIssueChip } from "./components/FloatingIssueChip";
 import { LiveThinkingDock } from "./components/LiveThinkingDock";
-import type { BusConductorFailedEvent } from "@/contexts/ExecutionProcessesContext";
+import type { BusConductorFailedEvent, BusConductorStateViolationEvent } from "@/contexts/ExecutionProcessesContext";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
@@ -64,6 +64,12 @@ function isConductorFailedEvent(evt: unknown): evt is BusConductorFailedEvent {
   if (!evt || typeof evt !== "object") return false;
   const record = evt as Record<string, unknown>;
   return record.type === "conductor_failed" && typeof record.issue_id === "string";
+}
+
+function isConductorStateViolationEvent(evt: unknown): evt is BusConductorStateViolationEvent {
+  if (!evt || typeof evt !== "object") return false;
+  const record = evt as Record<string, unknown>;
+  return record.type === "conductor_state_violation" && typeof record.issue_id === "string" && typeof record.to_phase === "string";
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -260,6 +266,24 @@ export function IssueDetailPage({ issueId }: Props) {
         message: evt.error_message || t("conductor.toastFailedHint"),
       });
       void loadIssue();
+    },
+  });
+
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("conductor_state_violation"),
+    ),
+    onEvent: (evt) => {
+      if (!isConductorStateViolationEvent(evt)) return;
+      addToast({
+        type: "warning",
+        title: t("conductor.toastStateViolation"),
+        message: t("conductor.toastStateViolationMessage", {
+          from: evt.from_phase ?? "unknown",
+          to: evt.to_phase,
+        }),
+      });
     },
   });
 

@@ -564,6 +564,21 @@ class ConductorTurn:
 
 
 @dataclass
+class ConductorStateLog:
+    """A persisted phase transition within an issue conductor loop."""
+
+    id: str
+    issue_id: str
+    from_phase: str | None
+    to_phase: str
+    from_detail: str | None = None
+    to_detail: str | None = None
+    transition_at: datetime | None = None
+    duration_ms: int | None = None
+    is_legal: bool = True
+
+
+@dataclass
 class ProjectMemoryEmbedding:
     """Cold-memory placeholder row; vector storage can be upgraded later."""
 

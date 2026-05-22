@@ -1,0 +1,6 @@
+{"file": "CLAUDE.md", "reason": "验证关键架构不变量 — dispatch_subagent 真实化、Tiered memory 注入、QA 真跑命令、conductor_turns/conductor_state_log 解耦、SSE 事件不重名，都不能因加 Stepper / 状态机而退化"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-conductor-streaming-and-live-status/prd.md", "reason": "回归 — 流式 conductor_turn_delta + llm_response 落盘 + 当前 phase 单点显示 + awaiting_subagent>30s stuck 提示 仍正常工作；Stepper 不能取代/破坏现有 phase 单点显示"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-conductor-steer-resume/prd.md", "reason": "回归 — Pause/Resume + mid-call cancel + [USER INTERJECTION] 在新状态机+state_log 下仍正确工作；Pause 进 conductor_state_log 是合法 transition；Resume 后能继续从 paused 回到上一个 phase"}
+{"file": ".trellis/tasks/archive/2026-05/05-21-conductor/prd.md", "reason": "回归 — conductor_failed SSE + done_callback 异常兜底 + 5 个 turn_recorder hook 点仍工作；新 conductor_state_violation SSE 不影响 conductor_failed 的处理路径；list_conductor_turns 查询不被 state_log 污染"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证 backend state_log INSERT → SSE 事件 → frontend Stepper 渲染 这条链路一致性 — phase 枚举值、SSE 事件名、payload schema、API response 字段在 backend/frontend 两端对齐，no typo"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "验证前端 Stepper 真的复用了 framer-motion + StatusBubble.tsx 的 AnimatePresence pattern，没有引入第二套动画库；后端 estimator 没引入第二个 LRU cache 实现"}

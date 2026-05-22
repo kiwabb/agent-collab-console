@@ -31,6 +31,7 @@ cd frontend && npm run build && npm run lint
 - 后台异常会把 `conductor_tasks.status` 标成 `failed`，并把错误摘要 + traceback 写进 `result_json`
 - 每轮完整 LLM 响应（`llm_response`）+ tool_use / tool_result / finalize 会落到 `conductor_turns`；流式打字中的增量只走实时事件 `conductor_turn_delta`，不写库
 - `conductor_status` 事件和 `/conductor-state` 现在除了旧 `status` 还带 `phase + detail`，可区分 `awaiting_llm` / `streaming_llm` / `awaiting_subagent` / `paused` 等现场
+- **Conductor 状态机 / state_log**: `conductor_main_loop.LEGAL_TRANSITIONS` 定义合法 phase 跳变；非法跳变只告警不阻塞，并额外发 `conductor_state_violation` SSE。所有 phase 变更都会写 `conductor_state_log`（issue_id, from/to phase/detail, transition_at, duration_ms, is_legal），前端 Stepper/估时 API 都以它为准；`paused` 会记录 `resume_phase/resume_detail`，Resume 时恢复到原 phase。
 - `./dev-local.sh` 会把后端日志同步写到 `/tmp/agent-collab-backend.log`，可直接 `tail -f /tmp/agent-collab-backend.log`
 
 **WorkflowGraph 现在是 Conductor 决策时间线的可视化**：每次 `dispatch_subagent` 加一个 node + 上一节点到当前节点的 sequence edge（`add_workflow_node` / `add_workflow_edge` 是 INSERT OR IGNORE，不破坏已存在的节点）。前端 DagTab 通过 `workflow_node_updated` / `task_status` / `task_created` SSE 事件实时增长画面。同一 role 多次调度的 node_key 加 `#N` 后缀（`engineer#1`、`engineer#2`），前端按前缀解析 role icon。

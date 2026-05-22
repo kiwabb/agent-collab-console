@@ -18,11 +18,12 @@ from uuid import uuid4
 
 from app.application.conductor_tools import build_conductor_tools
 from app.application.conductor_pause_registry import ConductorPauseRegistry
+from app.application.phase_duration_estimator import get_phase_duration_estimator
 from app.application.llm_runner import call_llm_with_tools, call_llm_with_tools_streaming, resolve_streaming_context
 from app.application.project_conductor import ProjectConductor
 from app.application.project_memory_service import record_project_memory
 from app.application.runtime_catalog_service import RuntimeCatalogService
-from app.domain.models import ConductorTask, ConductorTurn
+from app.domain.models import ConductorStateLog, ConductorTask, ConductorTurn
 
 
 ToolCallable = Callable[[dict[str, Any]], Union[Awaitable[Any], Any]]
@@ -39,6 +40,16 @@ TokenDeltaRecorder = Callable[..., Union[Awaitable[None], None]]
 
 _TURN_PAYLOAD_LIMIT = 32_768
 _TRACEBACK_LIMIT = 8_000
+LEGAL_TRANSITIONS: dict[str, set[str]] = {
+    "awaiting_llm": {"streaming_llm", "dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed"},
+    "streaming_llm": {"dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed"},
+    "dispatching_subagent": {"awaiting_subagent", "awaiting_llm", "paused", "failed"},
+    "awaiting_subagent": {"awaiting_llm", "paused", "failed"},
+    "awaiting_user_clarification": {"awaiting_llm", "paused", "failed"},
+    "paused": {"awaiting_llm", "streaming_llm", "dispatching_subagent", "awaiting_subagent", "awaiting_user_clarification", "done", "failed"},
+    "done": set(),
+    "failed": set(),
+}
 
 
 @dataclass
@@ -340,6 +351,7 @@ async def run_issue_conductor_loop(
         issue_id=issue.id,
         conductor_task=conductor_task,
     )
+    estimator = get_phase_duration_estimator(store)
 
     current_turn_index = -1
 
@@ -394,23 +406,15 @@ async def run_issue_conductor_loop(
         )
 
     async def set_phase(phase: str, detail: str | None = None, *, status: str | None = None) -> None:
-        new_status = status or conductor_task.status
-        current_phase = _conductor_phase(conductor_task)
-        current_detail = _conductor_detail(conductor_task)
-        if current_phase == phase and current_detail == detail and conductor_task.status == new_status:
-            return
-        conductor_task.status = new_status
-        conductor_task.payload = {
-            **(conductor_task.payload or {}),
-            "phase": phase,
-            "detail": detail,
-        }
-        conductor_task.updated_at = datetime.now()
-        await store.save_conductor_task(conductor_task)
-        await _emit_conductor_status(
-            event_bus,
+        await transition_conductor_phase(
+            store=store,
+            event_bus=event_bus,
             issue_id=issue.id,
             conductor_task=conductor_task,
+            phase=phase,
+            detail=detail,
+            status=status,
+            estimator=estimator,
         )
 
     async def drain_inbox_messages() -> list[str]:
@@ -433,11 +437,33 @@ async def run_issue_conductor_loop(
         is_paused = await pause_registry.is_paused(conductor_task.id)
         if not is_paused:
             return
-        if conductor_task.status != "paused" or _conductor_phase(conductor_task) != "paused":
+        latest_task = None
+        load_latest = getattr(store, "load_latest_conductor_task_for_issue", None)
+        if callable(load_latest):
+            latest_task = await _maybe_await(load_latest(issue.id))
+        if latest_task is not None and latest_task.id == conductor_task.id and (
+            latest_task.status == "paused" or _conductor_phase(latest_task) == "paused"
+        ):
+            conductor_task.status = latest_task.status
+            conductor_task.payload = latest_task.payload
+            conductor_task.updated_at = latest_task.updated_at
+        elif conductor_task.status != "paused" or _conductor_phase(conductor_task) != "paused":
             await set_phase("paused", _conductor_detail(conductor_task), status="paused")
         await pause_registry.wait_if_paused(conductor_task.id)
-        if conductor_task.status == "paused":
-            await set_phase("awaiting_llm", None, status="running")
+        latest_task = None
+        if callable(load_latest):
+            latest_task = await _maybe_await(load_latest(issue.id))
+        if latest_task is not None and latest_task.id == conductor_task.id and latest_task.status == "running":
+            conductor_task.status = latest_task.status
+            conductor_task.payload = latest_task.payload
+            conductor_task.updated_at = latest_task.updated_at
+        elif conductor_task.status == "paused":
+            payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
+            await set_phase(
+                str(payload.get("resume_phase") or "awaiting_llm"),
+                payload.get("resume_detail") if payload.get("resume_detail") else None,
+                status="running",
+            )
 
     try:
         registry = build_conductor_tools(
@@ -572,13 +598,16 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
             result_status=result.status,
         )
 
-        conductor_task.status = result.status
-        conductor_task.updated_at = datetime.now()
-        conductor_task.payload = {
-            **(conductor_task.payload or {}),
-            "phase": "done" if result.status != "failed" else "failed",
-            "detail": result.final_text[:160] if result.final_text else None,
-        }
+        await transition_conductor_phase(
+            store=store,
+            event_bus=event_bus,
+            issue_id=issue.id,
+            conductor_task=conductor_task,
+            phase="done" if result.status != "failed" else "failed",
+            detail=result.final_text[:160] if result.final_text else None,
+            status=result.status,
+            estimator=estimator,
+        )
         conductor_task.result_json = json.dumps(
             {
                 "status": result.status,
@@ -590,11 +619,6 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
             default=str,
         )
         await store.save_conductor_task(conductor_task)
-        await _emit_conductor_status(
-            event_bus,
-            issue_id=issue.id,
-            conductor_task=conductor_task,
-        )
         return result
     except Exception as exc:  # noqa: BLE001
         logger.exception("run_issue_conductor_loop failed for issue %s", issue.id)
@@ -642,6 +666,7 @@ async def recover_background_conductor_failure(
 async def _record_failure(*, store, issue, conductor_task: ConductorTask, event_bus, exc: BaseException) -> None:
     error_message = str(exc) or exc.__class__.__name__
     tb_text = _truncate_text("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), _TRACEBACK_LIMIT)
+    estimator = get_phase_duration_estimator(store)
     save_turn = getattr(store, "save_conductor_turn", None)
     if callable(save_turn):
         turn = ConductorTurn(
@@ -663,13 +688,16 @@ async def _record_failure(*, store, issue, conductor_task: ConductorTask, event_
             consumed_at=None,
         )
         await _maybe_await(save_turn(turn))
-    conductor_task.status = "failed"
-    conductor_task.payload = {
-        **(conductor_task.payload or {}),
-        "phase": "failed",
-        "detail": error_message[:160],
-    }
-    conductor_task.updated_at = datetime.now()
+    await transition_conductor_phase(
+        store=store,
+        event_bus=event_bus,
+        issue_id=issue.id,
+        conductor_task=conductor_task,
+        phase="failed",
+        detail=error_message[:160],
+        status="failed",
+        estimator=estimator,
+    )
     conductor_task.result_json = json.dumps(
         {
             "status": "failed",
@@ -690,11 +718,6 @@ async def _record_failure(*, store, issue, conductor_task: ConductorTask, event_
             "error_message": error_message,
             "traceback": tb_text,
         },
-    )
-    await _emit_conductor_status(
-        event_bus,
-        issue_id=issue.id,
-        conductor_task=conductor_task,
     )
     await _seal_graph_and_issue_status(
         store=store,
@@ -776,6 +799,118 @@ def _summarize_turn(kind: str, payload: dict[str, Any]) -> str:
     return kind
 
 
+async def transition_conductor_phase(
+    *,
+    store,
+    event_bus,
+    issue_id: str,
+    conductor_task: ConductorTask,
+    phase: str,
+    detail: str | None = None,
+    status: str | None = None,
+    estimator=None,
+) -> None:
+    new_status = status or conductor_task.status
+    current_phase = _conductor_phase(conductor_task)
+    current_detail = _conductor_detail(conductor_task)
+    if current_phase == phase and current_detail == detail and conductor_task.status == new_status:
+        return
+
+    payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
+    if phase == "paused" and current_phase and current_phase != "paused":
+        payload = {
+            **payload,
+            "resume_phase": current_phase,
+            "resume_detail": current_detail,
+        }
+    elif current_phase == "paused" and phase != "paused":
+        payload = {k: v for k, v in payload.items() if k not in {"resume_phase", "resume_detail"}}
+
+    is_legal = _is_legal_transition(current_phase, phase)
+    transition_at = datetime.now()
+    conductor_task.status = new_status
+    conductor_task.payload = {
+        **payload,
+        "phase": phase,
+        "detail": detail,
+    }
+    conductor_task.updated_at = transition_at
+    await store.save_conductor_task(conductor_task)
+    await _record_conductor_state_transition(
+        store=store,
+        issue_id=issue_id,
+        from_phase=current_phase,
+        to_phase=phase,
+        from_detail=current_detail,
+        to_detail=detail,
+        transition_at=transition_at,
+        is_legal=is_legal,
+        estimator=estimator,
+    )
+    if not is_legal:
+        logging.getLogger(__name__).warning("Illegal conductor phase transition for issue %s: %s -> %s", issue_id, current_phase, phase)
+        await _append_event(
+            event_bus,
+            {
+                "type": "conductor_state_violation",
+                "issue_id": issue_id,
+                "conductor_task_id": conductor_task.id,
+                "from_phase": current_phase,
+                "to_phase": phase,
+                "from_detail": current_detail,
+                "to_detail": detail,
+                "transition_at": transition_at.isoformat(),
+            },
+        )
+    await _emit_conductor_status(
+        event_bus,
+        issue_id=issue_id,
+        conductor_task=conductor_task,
+    )
+
+
+async def _record_conductor_state_transition(
+    *,
+    store,
+    issue_id: str,
+    from_phase: str | None,
+    to_phase: str,
+    from_detail: str | None,
+    to_detail: str | None,
+    transition_at: datetime,
+    is_legal: bool,
+    estimator=None,
+) -> None:
+    save_state_log = getattr(store, "save_conductor_state_log", None)
+    list_state_logs = getattr(store, "list_conductor_state_logs", None)
+    if not callable(save_state_log):
+        return
+    duration_ms = None
+    if callable(list_state_logs):
+        previous = await _maybe_await(list_state_logs(issue_id, limit=1, descending=True))
+        if previous:
+            previous_at = previous[0].transition_at
+            if previous_at is not None:
+                duration_ms = max(1, int((transition_at - previous_at).total_seconds() * 1000))
+    await _maybe_await(
+        save_state_log(
+            ConductorStateLog(
+                id=str(uuid4()),
+                issue_id=issue_id,
+                from_phase=from_phase,
+                to_phase=to_phase,
+                from_detail=from_detail,
+                to_detail=to_detail,
+                transition_at=transition_at,
+                duration_ms=duration_ms,
+                is_legal=is_legal,
+            )
+        )
+    )
+    if estimator is not None and hasattr(estimator, "invalidate"):
+        estimator.invalidate()
+
+
 async def _emit_conductor_status(event_bus, *, issue_id: str, conductor_task: ConductorTask) -> None:
     await _append_event(
         event_bus,
@@ -801,3 +936,9 @@ def _conductor_detail(conductor_task: ConductorTask) -> str | None:
     payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
     detail = payload.get("detail")
     return str(detail) if detail else None
+
+
+def _is_legal_transition(from_phase: str | None, to_phase: str) -> bool:
+    if from_phase is None or from_phase == to_phase:
+        return True
+    return to_phase in LEGAL_TRANSITIONS.get(from_phase, set())
