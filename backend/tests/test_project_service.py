@@ -18,7 +18,10 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git binary 
 async def store(tmp_path: Path) -> AsyncSQLiteStore:
     s = AsyncSQLiteStore(tmp_path / "test.db")
     await s._init_db()
-    return s
+    try:
+        yield s
+    finally:
+        await s.close()
 
 
 @pytest.fixture

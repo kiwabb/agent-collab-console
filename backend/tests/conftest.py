@@ -14,6 +14,7 @@ os.environ["CODEX_WORKSPACE_ROOT"] = _test_workspace_root
 shutil.rmtree(_test_workspace_root, ignore_errors=True)
 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
 
 
@@ -84,8 +85,8 @@ def reset_sqlite_store():
         pass
 
 
-@pytest.fixture(autouse=True)
-def reset_process_manager():
+@pytest_asyncio.fixture(autouse=True)
+async def reset_process_manager():
     """
     Resets the global codex_process_manager after each test to prevent cross-test pollution.
     Terminates all running sessions and clears _processes dict so each test
@@ -98,7 +99,7 @@ def reset_process_manager():
         if mgr is not None:
             # Terminate all sessions first (while _processes still populated),
             # then clear the dict so the next test gets a clean state
-            mgr.terminate_all()
+            await mgr.terminate_all()
             mgr._processes.clear()
     except Exception:
         pass

@@ -35,7 +35,10 @@ async def store():
     with tempfile.TemporaryDirectory() as td:
         s = AsyncSQLiteStore(Path(td) / "test.db")
         await s._init_db()
-        yield s
+        try:
+            yield s
+        finally:
+            await s.close()
 
 
 @pytest.fixture

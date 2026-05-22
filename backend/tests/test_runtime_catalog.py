@@ -35,7 +35,10 @@ class TestRuntimeCatalogService:
         """Create an in-memory AsyncSQLite store for testing."""
         store = AsyncSQLiteStore(Path(":memory:"))
         await store._init_db()
-        yield store
+        try:
+            yield store
+        finally:
+            await store.close()
 
     @pytest.fixture
     def service(self, store):

@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+import inspect
 import logging
 import sys
 import traceback as _traceback
@@ -111,7 +112,9 @@ async def lifespan(app: FastAPI):
     try:
         from app.bootstrap import codex_process_manager
         if codex_process_manager is not None:
-            codex_process_manager.terminate_all()
+            result = codex_process_manager.terminate_all()
+            if inspect.isawaitable(result):
+                await result
     except Exception:
         pass
     # Close async store connection to avoid "threads can only be started once" on restart

@@ -155,23 +155,26 @@ async def test_async_store_roundtrips_kind_and_triggering_message_id(tmp_path):
 
     db_path = tmp_path / "async_test.db"
     store = AsyncSQLiteStore(str(db_path))
-    now = datetime.now()
-    ep = ExecutionProcess(
-        id="ep-async-1",
-        task_id="t-1",
-        session_id="s-1",
-        status="Running",
-        kind="refine",
-        triggering_message_id="msg-async-9",
-        created_at=now,
-        updated_at=now,
-    )
-    await store.save_execution_process(ep)
+    try:
+        now = datetime.now()
+        ep = ExecutionProcess(
+            id="ep-async-1",
+            task_id="t-1",
+            session_id="s-1",
+            status="Running",
+            kind="refine",
+            triggering_message_id="msg-async-9",
+            created_at=now,
+            updated_at=now,
+        )
+        await store.save_execution_process(ep)
 
-    loaded = await store.load_execution_process("ep-async-1")
-    assert loaded is not None
-    assert loaded.kind == "refine"
-    assert loaded.triggering_message_id == "msg-async-9"
+        loaded = await store.load_execution_process("ep-async-1")
+        assert loaded is not None
+        assert loaded.kind == "refine"
+        assert loaded.triggering_message_id == "msg-async-9"
+    finally:
+        await store.close()
 
 
 @pytest.mark.asyncio
@@ -180,12 +183,15 @@ async def test_async_store_defaults_kind_to_initial_on_load(tmp_path):
 
     db_path = tmp_path / "async_test2.db"
     store = AsyncSQLiteStore(str(db_path))
-    now = datetime.now()
-    ep = ExecutionProcess(id="ep-async-2", task_id="t-1", session_id="s-1", created_at=now, updated_at=now)
-    await store.save_execution_process(ep)
-    loaded = await store.load_execution_process("ep-async-2")
-    assert loaded.kind == "initial"
-    assert loaded.triggering_message_id is None
+    try:
+        now = datetime.now()
+        ep = ExecutionProcess(id="ep-async-2", task_id="t-1", session_id="s-1", created_at=now, updated_at=now)
+        await store.save_execution_process(ep)
+        loaded = await store.load_execution_process("ep-async-2")
+        assert loaded.kind == "initial"
+        assert loaded.triggering_message_id is None
+    finally:
+        await store.close()
 
 
 @pytest.mark.asyncio
@@ -194,20 +200,23 @@ async def test_async_store_keeps_completed_at_null_for_running_status(tmp_path):
 
     db_path = tmp_path / "async_running.db"
     store = AsyncSQLiteStore(str(db_path))
-    now = datetime.now()
-    ep = ExecutionProcess(
-        id="ep-running-async",
-        task_id="t-1",
-        session_id="s-1",
-        status="Running",
-        created_at=now,
-        updated_at=now,
-    )
-    await store.save_execution_process(ep)
+    try:
+        now = datetime.now()
+        ep = ExecutionProcess(
+            id="ep-running-async",
+            task_id="t-1",
+            session_id="s-1",
+            status="Running",
+            created_at=now,
+            updated_at=now,
+        )
+        await store.save_execution_process(ep)
 
-    await store.update_execution_process_status("ep-running-async", "Running", exit_code=None, completed_at=None)
-    loaded = await store.load_execution_process("ep-running-async")
+        await store.update_execution_process_status("ep-running-async", "Running", exit_code=None, completed_at=None)
+        loaded = await store.load_execution_process("ep-running-async")
 
-    assert loaded is not None
-    assert loaded.status == "Running"
-    assert loaded.completed_at is None
+        assert loaded is not None
+        assert loaded.status == "Running"
+        assert loaded.completed_at is None
+    finally:
+        await store.close()
