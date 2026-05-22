@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import type { HistoryEntry } from "@/features/agents/dock/agentBus";
 import { PERSONAS } from "@/features/agents/dock/personas";
 import type { BusConductorStateViolationEvent, BusConductorStatusEvent, BusConductorTurnDeltaEvent, BusConductorTurnEvent } from "@/contexts/ExecutionProcessesContext";
+import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 
@@ -244,6 +245,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
   const [nowMs, setNowMs] = useState(() => Date.now());
   const persona = PERSONAS["conductor"];
   const { t } = useI18n();
+  const { resumeGapCount } = useExecutionProcessesContext();
   const translatedName = t(persona.nameKey);
   const translatedBlurb = t(persona.blurbKey);
 
@@ -266,6 +268,11 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
   useEffect(() => {
     reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!open || resumeGapCount === 0) return;
+    reload();
+  }, [open, reload, resumeGapCount]);
 
   useEffect(() => {
     if (!open) return undefined;

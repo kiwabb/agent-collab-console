@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { applyExecutionProcessPatch } from "@/lib/applyExecutionProcessPatch";
-import { API_BASE, getExecutionProcesses, getWorkspaceStreamUrl } from "@/lib/api";
+import { getExecutionProcesses, getGlobalEventsStreamUrl, getWorkspaceStreamUrl } from "@/lib/api";
 import type { ExecutionProcessesState, ExecutionProcess, LogEvent } from "@/lib/types";
 import type { BusEvent } from "@/contexts/ExecutionProcessesContext";
 import { useWorkbenchStore } from "@/store/workbenchStore";
@@ -19,7 +19,10 @@ interface UseExecutionProcessesResult {
   isInitialized: boolean;
   error: string | null;
   lastEvent: BusEvent | null;
+  resumeGapCount: number;
 }
+
+const LAST_EVENT_ID_KEY = "execution-processes:last-event-id";
 
 export function useExecutionProcesses(workspaceId: string | null, onEvent?: (event: LogEvent) => void): UseExecutionProcessesResult {
   const [data, setData] = useState<ExecutionProcessesState>(createEmptyExecutionProcesses);
@@ -27,92 +30,152 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
   const [isConnected, setIsConnected] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resumeGapCount, setResumeGapCount] = useState(0);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const workspaceWsRef = useRef<WebSocket | null>(null);
+  const globalWsRef = useRef<WebSocket | null>(null);
+  const workspaceConnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dataRef = useRef<ExecutionProcessesState>(createEmptyExecutionProcesses());
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryAttemptsRef = useRef(0);
-  const [retryNonce, setRetryNonce] = useState(0);
+  const globalRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const workspaceRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const globalRetryAttemptsRef = useRef(0);
+  const workspaceRetryAttemptsRef = useRef(0);
+  const lastSeenEventIdRef = useRef<string | null>(null);
+  const onEventRef = useRef(onEvent);
+  const [globalRetryNonce, setGlobalRetryNonce] = useState(0);
+  const [workspaceRetryNonce, setWorkspaceRetryNonce] = useState(0);
   const finishedRef = useRef(false);
 
-  const scheduleReconnect = useCallback(() => {
-    if (retryTimerRef.current) return;
-    const attempt = retryAttemptsRef.current;
-    const delay = Math.min(8000, 1000 * Math.pow(2, attempt));
-    retryTimerRef.current = setTimeout(() => {
-      retryTimerRef.current = null;
-      setRetryNonce((n) => n + 1);
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  }, [onEvent]);
+
+  const scheduleReconnect = useCallback((
+    attemptRef: MutableRefObject<number>,
+    timerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
+    bump: Dispatch<SetStateAction<number>>,
+  ) => {
+    if (timerRef.current) return;
+    const attempt = attemptRef.current;
+    const baseDelay = Math.min(8000, 1000 * Math.pow(2, attempt));
+    const jitter = Math.floor(Math.random() * 250);
+    const delay = baseDelay + jitter;
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      bump((n) => n + 1);
     }, delay);
   }, []);
 
-  // Global SSE fallback: pages without a workspace scope (e.g. /approvals, the
-  // sidebar) still need to react to backend events like task_status,
-  // session_created, issue_updated. When workspaceId is null we open an SSE
-  // connection to /api/events instead of the per-workspace WS, and we *only*
-  // forward events through lastEvent — execution_processes stays empty since
-  // there's no workspace to scope them to.
   useEffect(() => {
-    if (workspaceId) return;
     if (typeof window === "undefined") return;
-    setData(createEmptyExecutionProcesses());
-    setIsConnected(false);
-    setIsInitialized(true);
-    setError(null);
-    dataRef.current = createEmptyExecutionProcesses();
-    useWorkbenchStore.getState().setExecutionProcesses({});
-    useWorkbenchStore.getState().setIsConnected(false);
+    lastSeenEventIdRef.current = window.sessionStorage.getItem(LAST_EVENT_ID_KEY);
+  }, []);
 
-    // API_BASE is "/api" by default, "<host>/api" when explicitly set.
-    const url = `${API_BASE}/events`;
-    let es: EventSource | null = null;
-    try {
-      es = new EventSource(url);
-    } catch {
-      return;
-    }
-    es.onopen = () => {
-      setIsConnected(true);
-      useWorkbenchStore.getState().setIsConnected(true);
-    };
-    es.onmessage = (msg) => {
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+
+    function connectGlobal() {
+      if (cancelled || globalWsRef.current) return;
       try {
-        const evt = JSON.parse(msg.data as string) as BusEvent;
-        setLastEvent(evt);
-        useWorkbenchStore.getState().setLastEvent(evt);
-      } catch {
-        // ignore malformed
+        const ws = new WebSocket(getGlobalEventsStreamUrl(lastSeenEventIdRef.current));
+        globalWsRef.current = ws;
+
+        ws.onopen = () => {
+          setError(null);
+          setIsConnected(true);
+          setIsInitialized(true);
+          useWorkbenchStore.getState().setIsConnected(true);
+          globalRetryAttemptsRef.current = 0;
+          if (globalRetryTimerRef.current) {
+            clearTimeout(globalRetryTimerRef.current);
+            globalRetryTimerRef.current = null;
+          }
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const envelope = JSON.parse(String(event.data)) as {
+              v: number;
+              ts: string;
+              event_id: string;
+              type: string;
+              payload: Record<string, unknown>;
+            };
+            if (envelope.type === "ping") {
+              ws.send("pong");
+              return;
+            }
+            const nextEvent = { ...(envelope.payload ?? {}), type: envelope.type } as BusEvent;
+            if (envelope.type === "resume_gap") {
+              lastSeenEventIdRef.current = null;
+              window.sessionStorage.removeItem(LAST_EVENT_ID_KEY);
+              setResumeGapCount((count) => count + 1);
+            } else if (envelope.event_id) {
+              lastSeenEventIdRef.current = envelope.event_id;
+              window.sessionStorage.setItem(LAST_EVENT_ID_KEY, envelope.event_id);
+            }
+            setLastEvent(nextEvent);
+            useWorkbenchStore.getState().setLastEvent(nextEvent);
+          } catch (err) {
+            console.error("Failed to process global event stream message:", err);
+            setError("Failed to process event stream update");
+          }
+        };
+
+        ws.onclose = (evt) => {
+          globalWsRef.current = null;
+          setIsConnected(false);
+          useWorkbenchStore.getState().setIsConnected(false);
+          if (cancelled || (evt?.code === 1000 && evt?.wasClean)) return;
+          globalRetryAttemptsRef.current += 1;
+          scheduleReconnect(globalRetryAttemptsRef, globalRetryTimerRef, setGlobalRetryNonce);
+        };
+      } catch (err) {
+        console.error("Failed to open global event stream:", err);
+        globalRetryAttemptsRef.current += 1;
+        scheduleReconnect(globalRetryAttemptsRef, globalRetryTimerRef, setGlobalRetryNonce);
+      }
+    }
+
+    connectGlobal();
+    return () => {
+      cancelled = true;
+      if (globalRetryTimerRef.current) {
+        clearTimeout(globalRetryTimerRef.current);
+        globalRetryTimerRef.current = null;
+      }
+      if (globalWsRef.current) {
+        const ws = globalWsRef.current;
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        ws.close();
+        globalWsRef.current = null;
       }
     };
-    es.onerror = () => {
-      setIsConnected(false);
-      useWorkbenchStore.getState().setIsConnected(false);
-    };
-    return () => {
-      es?.close();
-      setIsConnected(false);
-    };
-  }, [workspaceId]);
+  }, [globalRetryNonce, scheduleReconnect]);
 
   useEffect(() => {
     if (!workspaceId) {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
+      if (workspaceWsRef.current) {
+        workspaceWsRef.current.close();
+        workspaceWsRef.current = null;
       }
-      if (connectTimerRef.current) {
-        clearTimeout(connectTimerRef.current);
-        connectTimerRef.current = null;
+      if (workspaceConnectTimerRef.current) {
+        clearTimeout(workspaceConnectTimerRef.current);
+        workspaceConnectTimerRef.current = null;
       }
-      if (retryTimerRef.current) {
-        clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
+      if (workspaceRetryTimerRef.current) {
+        clearTimeout(workspaceRetryTimerRef.current);
+        workspaceRetryTimerRef.current = null;
       }
-      retryAttemptsRef.current = 0;
+      workspaceRetryAttemptsRef.current = 0;
       finishedRef.current = false;
-      // Note: do NOT reset isInitialized/data here — the global SSE branch
-      // above already initialized them. Returning early lets that branch own
-      // lifecycle for the null-workspaceId case.
+      setData(createEmptyExecutionProcesses());
+      dataRef.current = createEmptyExecutionProcesses();
+      useWorkbenchStore.getState().setExecutionProcesses({});
       return;
     }
 
@@ -145,7 +208,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
     }
 
     function connect() {
-      if (wsRef.current || cancelled) return;
+      if (workspaceWsRef.current || cancelled) return;
       finishedRef.current = false;
       if (!workspaceId) return;
 
@@ -161,12 +224,10 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
 
         ws.onopen = () => {
           setError(null);
-          setIsConnected(true);
-          useWorkbenchStore.getState().setIsConnected(true);
-          retryAttemptsRef.current = 0;
-          if (retryTimerRef.current) {
-            clearTimeout(retryTimerRef.current);
-            retryTimerRef.current = null;
+          workspaceRetryAttemptsRef.current = 0;
+          if (workspaceRetryTimerRef.current) {
+            clearTimeout(workspaceRetryTimerRef.current);
+            workspaceRetryTimerRef.current = null;
           }
           const heartbeat = window.setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) ws.send("ping");
@@ -204,9 +265,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
 
             if (msg.Events) {
               msg.Events.forEach((evt) => {
-                setLastEvent(evt);
-                useWorkbenchStore.getState().setLastEvent(evt as BusEvent);
-                if (onEvent) onEvent(evt);
+                if (onEventRef.current) onEventRef.current(evt);
               });
             }
 
@@ -218,9 +277,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
             if (msg.finished) {
               finishedRef.current = true;
               ws.close(1000, "finished");
-              wsRef.current = null;
-              setIsConnected(false);
-              useWorkbenchStore.getState().setIsConnected(false);
+              workspaceWsRef.current = null;
             }
           } catch (err) {
             console.error("Failed to process WebSocket message:", err);
@@ -233,9 +290,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
         };
 
         ws.onclose = (evt) => {
-          setIsConnected(false);
-          useWorkbenchStore.getState().setIsConnected(false);
-          wsRef.current = null;
+          workspaceWsRef.current = null;
 
           if (
             cancelled ||
@@ -245,27 +300,27 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
             return;
           }
 
-          retryAttemptsRef.current += 1;
-          if (!dataRef.current && retryAttemptsRef.current > 6) {
+          workspaceRetryAttemptsRef.current += 1;
+          if (!dataRef.current && workspaceRetryAttemptsRef.current > 6) {
             setError("Connection failed");
           }
-          scheduleReconnect();
+          scheduleReconnect(workspaceRetryAttemptsRef, workspaceRetryTimerRef, setWorkspaceRetryNonce);
         };
 
-        wsRef.current = ws;
+        workspaceWsRef.current = ws;
       } catch (error) {
         if (cancelled) {
           return;
         }
         console.error("Failed to open WebSocket stream:", error);
-        retryAttemptsRef.current += 1;
-        scheduleReconnect();
+        workspaceRetryAttemptsRef.current += 1;
+        scheduleReconnect(workspaceRetryAttemptsRef, workspaceRetryTimerRef, setWorkspaceRetryNonce);
       }
     }
 
-    if (!wsRef.current && !connectTimerRef.current) {
-      connectTimerRef.current = setTimeout(() => {
-        connectTimerRef.current = null;
+    if (!workspaceWsRef.current && !workspaceConnectTimerRef.current) {
+      workspaceConnectTimerRef.current = setTimeout(() => {
+        workspaceConnectTimerRef.current = null;
         void loadInitialSnapshot().finally(() => {
           if (!cancelled) {
             connect();
@@ -276,29 +331,29 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
 
     return () => {
       cancelled = true;
-      if (connectTimerRef.current) {
-        clearTimeout(connectTimerRef.current);
-        connectTimerRef.current = null;
+      if (workspaceConnectTimerRef.current) {
+        clearTimeout(workspaceConnectTimerRef.current);
+        workspaceConnectTimerRef.current = null;
       }
-      if (wsRef.current) {
-        const ws = wsRef.current;
+      if (workspaceWsRef.current) {
+        const ws = workspaceWsRef.current;
         ws.onopen = null;
         ws.onmessage = null;
         ws.onerror = null;
         ws.onclose = null;
         ws.close();
-        wsRef.current = null;
+        workspaceWsRef.current = null;
       }
-      if (retryTimerRef.current) {
-        clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
+      if (workspaceRetryTimerRef.current) {
+        clearTimeout(workspaceRetryTimerRef.current);
+        workspaceRetryTimerRef.current = null;
       }
       finishedRef.current = false;
       dataRef.current = createEmptyExecutionProcesses();
       setData(createEmptyExecutionProcesses());
       setIsInitialized(false);
     };
-  }, [workspaceId, retryNonce, scheduleReconnect]);
+  }, [workspaceId, workspaceRetryNonce, scheduleReconnect]);
 
   const executionProcessesById = data.execution_processes || {};
   const executionProcesses = useMemo(() => {
@@ -321,5 +376,6 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
     isInitialized,
     error,
     lastEvent,
+    resumeGapCount,
   };
 }

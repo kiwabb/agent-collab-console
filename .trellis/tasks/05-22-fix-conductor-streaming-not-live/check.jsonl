@@ -1,0 +1,6 @@
+{"file": "CLAUDE.md", "reason": "验证 '实时通信' 段已更新为新协议；关键不变量 (dispatch_subagent / Tiered memory / QA 真跑 / specialist mesh) 都不受 WS 重构影响"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-conductor-streaming-and-live-status/prd.md", "reason": "回归 — 流式 conductor_turn_delta + llm_response 落盘 + phase/detail 单点显示 + awaiting_subagent>30s stuck 提示 仍正常工作；envelope unwrap 后 type 名一致"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-conductor-status-machine-and-animation/prd.md", "reason": "回归 — Stepper/Timeline 实时增长 + violation toast 实时弹 + PhaseEstimate 实时更新 + Pause/Resume / failed 节点外观；现在抽屉打开不关也能看到（修了原 bug）"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-conductor-steer-resume/prd.md", "reason": "回归 — pause/resume + mid-call cancel + [USER INTERJECTION] 在新 WS 通信下仍工作；conductor_failed SSE 事件改成 envelope 后仍能触发 toast"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证 backend envelope → WS 帧 → frontend envelope unwrap → busEventMatchers 这条链路一致 — v / ts / event_id / type / payload 字段名 + payload 字段名两端零 typo；resume_gap 协议两端语义一致；心跳 ping/pong 字段名一致"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "验证前端确实复用了现有 per-workspace WS reconnect 代码 (没引入第二套 retry 实现)；后端确实复用了 codex_ws.py 的 accept/receive 写法 (没引入第二套 WS endpoint 风格)"}

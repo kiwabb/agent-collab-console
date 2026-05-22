@@ -1147,6 +1147,13 @@ export function getWorkspaceStreamUrl(workspaceId: string): string {
   return `${WS_BASE}/api/workspaces/${workspaceId}/execution_processes/ws`;
 }
 
+export function getGlobalEventsStreamUrl(lastEventId?: string | null): string {
+  const sp = new URLSearchParams();
+  if (lastEventId) sp.set("last_event_id", lastEventId);
+  const suffix = sp.size > 0 ? `?${sp.toString()}` : "";
+  return `${WS_BASE}/api/ws/events${suffix}`;
+}
+
 export function getProcessLogsUrl(processId: string): string {
   return `${WS_BASE}/api/execution-processes/${processId}/logs/ws`;
 }

@@ -22,6 +22,7 @@ export function ExecutionProcessesProvider({ workspaceId, children }: ExecutionP
     isInitialized,
     error,
     lastEvent,
+    resumeGapCount,
   } = useExecutionProcesses(workspaceId);
 
   const visible = useMemo(() => executionProcesses, [executionProcesses]);
@@ -51,6 +52,7 @@ export function ExecutionProcessesProvider({ workspaceId, children }: ExecutionP
     isConnected,
     error,
     lastEvent,
+    resumeGapCount,
   }), [
     error,
     executionProcesses,
@@ -63,6 +65,7 @@ export function ExecutionProcessesProvider({ workspaceId, children }: ExecutionP
     workspaceId,
     visible,
     lastEvent,
+    resumeGapCount,
   ]);
 
   return (

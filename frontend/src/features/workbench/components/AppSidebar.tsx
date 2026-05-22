@@ -92,7 +92,7 @@ export function AppSidebar() {
 
   // Backend-driven sidebar refresh. The sidebar always lives inside
   // WorkbenchShell — when a workspace is selected we get per-workspace WS
-  // events, otherwise we get the global SSE stream. Either way the bus
+  // events, otherwise we get the global WS stream. Either way the bus
   // surfaces session_*/project_*/issue_* events.
   useBusEventEffect({
     match: busEventMatchers.typeIn(

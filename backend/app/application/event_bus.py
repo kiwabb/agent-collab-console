@@ -1,15 +1,20 @@
+from collections import deque
+from datetime import datetime
 from typing import Any
 import asyncio
+import os
 import threading
 import sys
 
 
 class EventBus:
     def __init__(self):
-        self.events: list[dict[str, Any]] = []
+        self._buffer_size = int(os.getenv("EVENT_BUS_BUFFER_SIZE", "1000"))
+        self.events: deque[dict[str, Any]] = deque(maxlen=max(1, self._buffer_size))
         self.subscribers: list[asyncio.Queue] = []
         self._loop = None
         self._lock = threading.Lock()
+        self._event_seq = 0
         self._log_store = None
         self._db_queue: asyncio.Queue = asyncio.Queue()
         self._db_worker_task: asyncio.Task | None = None
@@ -43,20 +48,21 @@ class EventBus:
             print(f"[EventBus] Error queuing log event: {e}", file=sys.stderr)
 
     async def append(self, event: dict[str, Any]) -> None:
-        self.events.append(event)
+        envelope = self._wrap_event(event)
+        self.events.append(envelope)
         
-        # Broadcast to asyncio queues for SSE/subscribers
+        # Broadcast envelopes to global WS subscribers.
         with self._lock:
             for queue in self.subscribers:
                 try:
-                    queue.put_nowait(event)
+                    queue.put_nowait(envelope)
                 except Exception as e:
                     print(f"[EventBus] Error putting event in queue: {e}", file=sys.stderr)
 
         # Broadcast to WebSocket managers
-        await self._broadcast_to_ws(event)
+        await self._broadcast_to_ws(event, envelope)
 
-    async def _broadcast_to_ws(self, event: dict[str, Any]):
+    async def _broadcast_to_ws(self, event: dict[str, Any], envelope: dict[str, Any] | None = None):
         """Broadcast events to WebSocket subscribers via JSON Patch."""
         try:
             from app.interfaces.codex_ws import message_stream_manager, raw_log_stream_manager, stream_manager
@@ -248,6 +254,35 @@ class EventBus:
         with self._lock:
             if queue in self.subscribers:
                 self.subscribers.remove(queue)
+
+    def replay_from(self, last_event_id: str | None) -> tuple[list[dict[str, Any]], bool]:
+        if not last_event_id:
+            return [], False
+        replay: list[dict[str, Any]] = []
+        found = False
+        for entry in self.events:
+            if found:
+                replay.append(entry)
+                continue
+            if entry.get("event_id") == last_event_id:
+                found = True
+        if found:
+            return replay, False
+        return [], True
+
+    def _wrap_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(event)
+        event_type = str(payload.pop("type", "unknown"))
+        with self._lock:
+            self._event_seq += 1
+            event_id = f"evt-{self._event_seq:08d}"
+        return {
+            "v": 1,
+            "ts": datetime.now().isoformat(),
+            "event_id": event_id,
+            "type": event_type,
+            "payload": payload,
+        }
 
 
 async def _workflow_task_dispatcher(task) -> None:

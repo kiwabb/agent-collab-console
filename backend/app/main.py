@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 from app.interfaces.api import router as api_router
 from app.interfaces.codex_ws import router as codex_ws_router
-from app.interfaces.sse import router as sse_router
+from app.interfaces.ws_events import router as ws_events_router
 
 
 @asynccontextmanager
@@ -145,4 +145,4 @@ async def general_exception_handler(request, exc):
 
 app.include_router(api_router)
 app.include_router(codex_ws_router, prefix="/api")  # Add prefix here
-app.include_router(sse_router)
+app.include_router(ws_events_router, prefix="/api")

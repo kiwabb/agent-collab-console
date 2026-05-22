@@ -33,6 +33,7 @@ export type BusEventType =
   | "conductor_failed"
   | "conductor_status"
   | "conductor_state_violation"
+  | "resume_gap"
   | "agent_message_posted";
 
 export interface BusIssueMergedEvent {
@@ -177,6 +178,12 @@ export interface BusConductorStateViolationEvent {
   transition_at?: string | null;
 }
 
+export interface BusResumeGapEvent {
+  type: "resume_gap";
+  from_event_id?: string | null;
+  reason: string;
+}
+
 export function isBusIssueMergedEvent(event: BusEvent): event is BusIssueMergedEvent {
   return event.type === "issue_merged";
 }
@@ -232,6 +239,7 @@ export type BusEvent =
   | BusConductorFailedEvent
   | BusConductorStatusEvent
   | BusConductorStateViolationEvent
+  | BusResumeGapEvent
   | (LogEvent & { type?: BusEventType });
 
 export interface ExecutionProcessesContextValue {
@@ -245,6 +253,7 @@ export interface ExecutionProcessesContextValue {
   isConnected: boolean;
   error: string | null;
   lastEvent: BusEvent | null;
+  resumeGapCount: number;
 }
 
 export const ExecutionProcessesContext = createContext<ExecutionProcessesContextValue | null>(null);

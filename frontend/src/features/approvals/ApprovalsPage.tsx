@@ -83,8 +83,8 @@ export function ApprovalsPage() {
   }, [load]);
 
   // Event-driven refresh. Approvals page has no workspace scope, so
-  // ExecutionProcessesProvider falls back to the global SSE stream
-  // (/api/events) which surfaces every event_bus event. Refetch whenever
+  // ExecutionProcessesProvider now consumes the global WS event stream
+  // (/api/ws/events) which surfaces every event_bus event. Refetch whenever
   // anything that could land in our inbox happens.
   useBusEventEffect({
     match: busEventMatchers.typeIn(
