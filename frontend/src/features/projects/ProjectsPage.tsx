@@ -271,46 +271,48 @@ export function ProjectsPage() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-6 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6">
-        <aside className="space-y-2">
-          <h2 className="text-xs uppercase tracking-wider text-muted-foreground px-2">
-            {t("projects.listHeading")}
-          </h2>
-          {projects && projects.length > 3 && (
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t("projects.searchPlaceholder")}
-              className="w-full text-xs px-2 py-1.5 rounded border border-border-subtle bg-surface-input outline-none focus:border-brand"
-            />
-          )}
-          {visibleProjects === null ? (
-            <div className="space-y-2">
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-            </div>
-          ) : visibleProjects.length === 0 ? (
-            <p className="text-sm text-muted-foreground px-2">{t("projects.empty")}</p>
-          ) : (
-            <ul className="space-y-1">
-              {visibleProjects.map((p) => (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    onClick={() => setActiveId(p.id)}
-                    className={cn(
-                      "w-full text-left px-3 py-2 rounded-md text-sm hover:bg-muted transition",
-                      activeId === p.id && "bg-muted font-medium",
-                    )}
-                  >
-                    <div className="truncate">{p.name}</div>
-                    <div className="text-xs text-muted-foreground truncate">{p.repo_path}</div>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+      <main className="max-w-6xl mx-auto px-6 py-6 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6 items-start">
+        <aside className="md:sticky md:top-20 md:self-start">
+          <div className="bg-surface-raised border border-border-subtle rounded-lg p-3 space-y-2 min-h-[calc(100vh-9rem)]">
+            <h2 className="text-xs uppercase tracking-wider text-muted-foreground px-1">
+              {t("projects.listHeading")}
+            </h2>
+            {projects && projects.length > 3 && (
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t("projects.searchPlaceholder")}
+                className="w-full text-xs px-2 py-1.5 rounded border border-border-subtle bg-surface-input outline-none focus:border-brand"
+              />
+            )}
+            {visibleProjects === null ? (
+              <div className="space-y-2">
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-12 w-full" />
+              </div>
+            ) : visibleProjects.length === 0 ? (
+              <p className="text-sm text-muted-foreground px-2">{t("projects.empty")}</p>
+            ) : (
+              <ul className="space-y-1">
+                {visibleProjects.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveId(p.id)}
+                      className={cn(
+                        "w-full text-left px-3 py-2 rounded-md text-sm hover:bg-muted transition",
+                        activeId === p.id && "bg-muted font-medium",
+                      )}
+                    >
+                      <div className="truncate">{p.name}</div>
+                      <div className="text-xs text-muted-foreground truncate">{p.repo_path}</div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </aside>
 
         <section>

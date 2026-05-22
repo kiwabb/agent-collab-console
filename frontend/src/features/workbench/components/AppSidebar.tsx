@@ -15,6 +15,7 @@ import {
   Users,
   ChevronsUpDown,
   Library,
+  Sparkles,
 } from "lucide-react";
 import { getCodexIssues, getWorkspaces, listProjects } from "@/lib/api";
 import type { CodexIssue, Project, Workspace } from "@/lib/types";
@@ -274,6 +275,12 @@ export function AppSidebar() {
           label={t("sidebar.agents")}
           active={pathname.startsWith("/agents")}
           onClick={() => router.push("/agents")}
+        />
+        <NavRow
+          icon={<Sparkles size={13} />}
+          label={t("sidebar.skills")}
+          active={pathname.startsWith("/skills")}
+          onClick={() => router.push("/skills")}
         />
       </div>
 

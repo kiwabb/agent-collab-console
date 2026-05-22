@@ -18,6 +18,7 @@ from app.application.help_orchestrator import HelpOrchestrator
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.git_service import GitService
 from app.application.project_service import ProjectService
+from app.application.skill_service import SkillService
 from app.application.worktree_manager import WorktreeManager
 
 
@@ -92,6 +93,7 @@ codex_store = effective_store  # Use async_store if available
 # Git project + worktree services.
 git_service = GitService()
 project_service = ProjectService(store=async_store, git=git_service) if async_store is not None else None
+skill_service = SkillService(store=async_store) if async_store is not None else None
 worktree_manager = WorktreeManager(git=git_service)
 
 # Codex process manager - lazy imported to avoid pty dependency on import

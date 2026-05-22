@@ -5,7 +5,7 @@ from pathlib import Path
 
 import aiosqlite
 
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, Project
+from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, Project, Skill
 
 
 class AsyncSQLiteStore:
@@ -469,6 +469,29 @@ class AsyncSQLiteStore:
             CREATE TABLE IF NOT EXISTS runtime_catalog_settings (
                 id TEXT PRIMARY KEY,
                 data TEXT NOT NULL
+            )
+        """)
+        # Skills library — references to externally hosted markdown playbooks.
+        # Body is not stored locally; UI fetches `link` via proxy on demand.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS skills (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                link TEXT NOT NULL,
+                description TEXT,
+                category TEXT,
+                tags TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(category)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name)")
+        # User-defined skill categories (allows pre-creating empty groups so
+        # the user can drag skills into them).
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS skill_categories (
+                name TEXT PRIMARY KEY
             )
         """)
         # Create artifact_paths table for tracking written artifacts
@@ -2391,3 +2414,120 @@ class AsyncSQLiteStore:
                 created_at=self._parse_datetime(r["created_at"]),
             ))
         return out
+
+    # --- Skill CRUD ---
+
+    def _row_to_skill(self, r) -> Skill:
+        tags_raw = r["tags"]
+        try:
+            tags = json.loads(tags_raw) if tags_raw else []
+        except (ValueError, TypeError):
+            tags = []
+        return Skill(
+            id=r["id"],
+            name=r["name"],
+            link=r["link"],
+            description=r["description"],
+            category=r["category"],
+            tags=tags,
+            created_at=self._parse_datetime(r["created_at"]),
+            updated_at=self._parse_datetime(r["updated_at"]),
+        )
+
+    async def save_skill(self, skill: Skill) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            "INSERT OR REPLACE INTO skills (id, name, link, description, category, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                skill.id,
+                skill.name,
+                skill.link,
+                skill.description,
+                skill.category,
+                json.dumps(skill.tags or []),
+                self._format_datetime(skill.created_at),
+                self._format_datetime(skill.updated_at),
+            ),
+        )
+        await conn.commit()
+
+    async def load_skill(self, skill_id: str) -> Skill | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM skills WHERE id = ?", (skill_id,)) as cur:
+            row = await cur.fetchone()
+        return self._row_to_skill(row) if row else None
+
+    async def list_skills(
+        self,
+        *,
+        search: str | None = None,
+        category: str | None = None,
+    ) -> list[Skill]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        clauses: list[str] = []
+        params: list = []
+        if search:
+            clauses.append("(name LIKE ? OR description LIKE ? OR tags LIKE ?)")
+            like = f"%{search}%"
+            params.extend([like, like, like])
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+        sql = "SELECT * FROM skills"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC"
+        async with conn.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+        return [self._row_to_skill(r) for r in rows]
+
+    async def list_skill_categories(self) -> list[str]:
+        """Union of (categories observed on skills) ∪ (user-pre-created empty
+        categories). Returned sorted alphabetically.
+        """
+        await self._ensure_db()
+        conn = await self._get_conn()
+        async with conn.execute(
+            "SELECT DISTINCT category FROM skills WHERE category IS NOT NULL AND category != ''"
+        ) as cur:
+            in_use = {r[0] for r in await cur.fetchall()}
+        async with conn.execute("SELECT name FROM skill_categories") as cur:
+            user_defined = {r[0] for r in await cur.fetchall()}
+        return sorted(in_use | user_defined)
+
+    async def add_skill_category(self, name: str) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            "INSERT OR IGNORE INTO skill_categories (name) VALUES (?)",
+            (name,),
+        )
+        await conn.commit()
+
+    async def delete_skill_category(self, name: str) -> int:
+        """Remove a user-defined empty category. Returns the number of skills
+        that still reference this category — caller decides whether to refuse
+        the delete or to cascade.
+        """
+        await self._ensure_db()
+        conn = await self._get_conn()
+        async with conn.execute(
+            "SELECT COUNT(*) FROM skills WHERE category = ?",
+            (name,),
+        ) as cur:
+            row = await cur.fetchone()
+            in_use = int(row[0]) if row else 0
+        await conn.execute("DELETE FROM skill_categories WHERE name = ?", (name,))
+        await conn.commit()
+        return in_use
+
+    async def delete_skill(self, skill_id: str) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
+        await conn.commit()
