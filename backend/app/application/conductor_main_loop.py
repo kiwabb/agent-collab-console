@@ -5,6 +5,7 @@ pass any LLM callable that returns Anthropic message-shaped dictionaries.
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -16,6 +17,7 @@ from typing import Any, Awaitable, Callable, Union
 from uuid import uuid4
 
 from app.application.conductor_tools import build_conductor_tools
+from app.application.conductor_pause_registry import ConductorPauseRegistry
 from app.application.llm_runner import call_llm_with_tools, resolve_streaming_context
 from app.application.project_conductor import ProjectConductor
 from app.application.project_memory_service import record_project_memory
@@ -29,6 +31,10 @@ LLMCallable = Callable[
     Union[Awaitable[dict[str, Any]], dict[str, Any]],
 ]
 TurnRecorder = Callable[..., Union[Awaitable[None], None]]
+InboxDrainer = Callable[[], Union[Awaitable[list[str]], list[str]]]
+PauseGate = Callable[[], Union[Awaitable[None], None]]
+PausePredicate = Callable[[], Union[Awaitable[bool], bool]]
+InflightTaskSetter = Callable[[asyncio.Task | None], Union[Awaitable[None], None]]
 
 _TURN_PAYLOAD_LIMIT = 32_768
 _TRACEBACK_LIMIT = 8_000
@@ -51,6 +57,10 @@ async def run_conductor_loop(
     tool_definitions: list[dict[str, Any]],
     max_turns: int = 8,
     turn_recorder: TurnRecorder | None = None,
+    inbox_drain: InboxDrainer | None = None,
+    wait_if_paused: PauseGate | None = None,
+    is_pause_requested: PausePredicate | None = None,
+    on_inflight_llm_task: InflightTaskSetter | None = None,
 ) -> ConductorLoopResult:
     """Run a conductor session until it reaches final text or a final tool."""
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
@@ -58,6 +68,14 @@ async def run_conductor_loop(
     final_text = ""
 
     for turn_index in range(max_turns):
+        if inbox_drain is not None:
+            injected_messages = await _maybe_await(inbox_drain())
+            for text in injected_messages:
+                cleaned = str(text).strip()
+                if cleaned:
+                    messages.append({"role": "user", "content": f"[USER INTERJECTION] {cleaned}"})
+        if wait_if_paused is not None:
+            await _maybe_await(wait_if_paused())
         await _record_turn(
             turn_recorder,
             turn_index=turn_index,
@@ -73,7 +91,22 @@ async def run_conductor_loop(
                 ],
             },
         )
-        response = await _maybe_await(llm(deepcopy(messages), tool_definitions))
+        llm_task = asyncio.create_task(_maybe_await(llm(deepcopy(messages), tool_definitions)))
+        if on_inflight_llm_task is not None:
+            await _maybe_await(on_inflight_llm_task(llm_task))
+        try:
+            response = await llm_task
+        except asyncio.CancelledError:
+            if on_inflight_llm_task is not None:
+                await _maybe_await(on_inflight_llm_task(None))
+            if is_pause_requested is not None and await _maybe_await(is_pause_requested()):
+                if wait_if_paused is not None:
+                    await _maybe_await(wait_if_paused())
+                continue
+            raise
+        finally:
+            if on_inflight_llm_task is not None and llm_task.done():
+                await _maybe_await(on_inflight_llm_task(None))
         content = _normalise_content(response.get("content"))
         messages.append({"role": "assistant", "content": content})
         final_text = _text_from_content(content) or final_text
@@ -249,6 +282,7 @@ async def run_issue_conductor_loop(
 ) -> ConductorLoopResult:
     """Entry point for Conductor-driven issue orchestration."""
     logger = logging.getLogger(__name__)
+    pause_registry = ConductorPauseRegistry.instance()
     conductor_task = ConductorTask(
         id=str(uuid4()),
         project_id=project_id,
@@ -260,6 +294,12 @@ async def run_issue_conductor_loop(
         updated_at=datetime.now(),
     )
     await store.save_conductor_task(conductor_task)
+    await pause_registry.register(conductor_task.id)
+    await _emit_conductor_status(
+        event_bus,
+        issue_id=issue.id,
+        conductor_task=conductor_task,
+    )
 
     async def persist_turn(*, turn_index: int, sub_index: int, kind: str, payload: dict[str, Any]) -> None:
         turn = ConductorTurn(
@@ -290,6 +330,46 @@ async def run_issue_conductor_loop(
                 "created_at": turn.created_at.isoformat() if turn.created_at else None,
             },
         )
+
+    async def drain_inbox_messages() -> list[str]:
+        drain_inbox = getattr(store, "drain_conductor_inbox", None)
+        if not callable(drain_inbox):
+            return []
+        drained = await _maybe_await(drain_inbox(conductor_task.id))
+        flushed: list[str] = []
+        for turn in drained or []:
+            try:
+                payload = json.loads(turn.payload_json or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            text = str(payload.get("text") or "").strip()
+            if text:
+                flushed.append(text)
+        return flushed
+
+    async def wait_until_resumed() -> None:
+        is_paused = await pause_registry.is_paused(conductor_task.id)
+        if not is_paused:
+            return
+        if conductor_task.status != "paused":
+            conductor_task.status = "paused"
+            conductor_task.updated_at = datetime.now()
+            await store.save_conductor_task(conductor_task)
+            await _emit_conductor_status(
+                event_bus,
+                issue_id=issue.id,
+                conductor_task=conductor_task,
+            )
+        await pause_registry.wait_if_paused(conductor_task.id)
+        if conductor_task.status == "paused":
+            conductor_task.status = "running"
+            conductor_task.updated_at = datetime.now()
+            await store.save_conductor_task(conductor_task)
+            await _emit_conductor_status(
+                event_bus,
+                issue_id=issue.id,
+                conductor_task=conductor_task,
+            )
 
     try:
         registry = build_conductor_tools(
@@ -343,6 +423,7 @@ You can also use specialist roles: security_reviewer, perf_reviewer, doc_writer,
 ## Important
 Think step by step. After each dispatch_subagent returns, analyze the result before deciding the next step.
 If something is unclear or blocked, use `request_user_clarification`.
+Users may inject `[USER INTERJECTION]` messages between turns. Treat them as authoritative steering for the next decision.
 """
 
         async def llm(messages, tools):
@@ -365,6 +446,10 @@ If something is unclear or blocked, use `request_user_clarification`.
             tool_definitions=registry.definitions,
             max_turns=30,
             turn_recorder=persist_turn,
+            inbox_drain=drain_inbox_messages,
+            wait_if_paused=wait_until_resumed,
+            is_pause_requested=lambda: pause_registry.is_paused(conductor_task.id),
+            on_inflight_llm_task=lambda task: pause_registry.set_inflight_llm_task(conductor_task.id, task),
         )
 
         try:
@@ -402,6 +487,11 @@ If something is unclear or blocked, use `request_user_clarification`.
             default=str,
         )
         await store.save_conductor_task(conductor_task)
+        await _emit_conductor_status(
+            event_bus,
+            issue_id=issue.id,
+            conductor_task=conductor_task,
+        )
         return result
     except Exception as exc:  # noqa: BLE001
         logger.exception("run_issue_conductor_loop failed for issue %s", issue.id)
@@ -419,6 +509,9 @@ If something is unclear or blocked, use `request_user_clarification`.
             tool_events=[],
             turn_count=0,
         )
+    finally:
+        await pause_registry.set_inflight_llm_task(conductor_task.id, None)
+        await pause_registry.unregister(conductor_task.id)
 
 
 async def recover_background_conductor_failure(
@@ -464,6 +557,7 @@ async def _record_failure(*, store, issue, conductor_task: ConductorTask, event_
                 ensure_ascii=False,
             ),
             created_at=datetime.now(),
+            consumed_at=None,
         )
         await _maybe_await(save_turn(turn))
     conductor_task.status = "failed"
@@ -488,6 +582,11 @@ async def _record_failure(*, store, issue, conductor_task: ConductorTask, event_
             "error_message": error_message,
             "traceback": tb_text,
         },
+    )
+    await _emit_conductor_status(
+        event_bus,
+        issue_id=issue.id,
+        conductor_task=conductor_task,
     )
     await _seal_graph_and_issue_status(
         store=store,
@@ -553,6 +652,8 @@ def _truncate_text(value: str, limit: int) -> str:
 def _summarize_turn(kind: str, payload: dict[str, Any]) -> str:
     if kind == "llm_request":
         return f"LLM request with {payload.get('message_count', 0)} messages"
+    if kind == "user_message":
+        return f"User interjection: {str(payload.get('text') or '')[:80]}"
     if kind == "tool_use":
         return f"Tool call: {payload.get('name') or 'unknown'}"
     if kind == "tool_result":
@@ -563,3 +664,16 @@ def _summarize_turn(kind: str, payload: dict[str, Any]) -> str:
     if kind == "error":
         return f"Error: {payload.get('message') or payload.get('error_class') or 'unknown'}"
     return kind
+
+
+async def _emit_conductor_status(event_bus, *, issue_id: str, conductor_task: ConductorTask) -> None:
+    await _append_event(
+        event_bus,
+        {
+            "type": "conductor_status",
+            "issue_id": issue_id,
+            "conductor_task_id": conductor_task.id,
+            "status": conductor_task.status,
+            "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
+        },
+    )

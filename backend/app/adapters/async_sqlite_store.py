@@ -706,7 +706,8 @@ class AsyncSQLiteStore:
                 sub_index INTEGER NOT NULL DEFAULT 0,
                 kind TEXT NOT NULL,
                 payload_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                consumed_at TEXT
             )
         """)
         await conn.execute("""
@@ -737,6 +738,7 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_session_id ON execution_processes(session_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_task_id ON execution_processes(task_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)")
@@ -766,6 +768,10 @@ class AsyncSQLiteStore:
             await conn.execute(
                 "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
             )
+        except aiosqlite.OperationalError:
+            pass
+        try:
+            await conn.execute("ALTER TABLE conductor_turns ADD COLUMN consumed_at TEXT")
         except aiosqlite.OperationalError:
             pass
         await conn.commit()
@@ -2398,8 +2404,8 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         await conn.execute(
             """INSERT OR REPLACE INTO conductor_turns
-               (id, conductor_task_id, issue_id, turn_index, sub_index, kind, payload_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, conductor_task_id, issue_id, turn_index, sub_index, kind, payload_json, created_at, consumed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 turn.id,
                 turn.conductor_task_id,
@@ -2409,9 +2415,72 @@ class AsyncSQLiteStore:
                 turn.kind,
                 turn.payload_json,
                 self._format_datetime(turn.created_at or datetime.now()),
+                self._format_datetime(turn.consumed_at),
             ),
         )
         await conn.commit()
+
+    async def enqueue_conductor_user_message(self, conductor_task_id: str, issue_id: str, text: str) -> "ConductorTurn":
+        from app.domain.models import ConductorTurn
+
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT COALESCE(MAX(turn_index), -1) AS max_turn_index FROM conductor_turns WHERE conductor_task_id = ?",
+            (conductor_task_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        next_turn_index = int((row["max_turn_index"] if row is not None else -1) or -1) + 1
+        turn = ConductorTurn(
+            id=str(uuid4()),
+            conductor_task_id=conductor_task_id,
+            issue_id=issue_id,
+            turn_index=next_turn_index,
+            sub_index=0,
+            kind="user_message",
+            payload_json=json.dumps({"text": text}, ensure_ascii=False),
+            created_at=datetime.now(),
+            consumed_at=None,
+        )
+        await self.save_conductor_turn(turn)
+        return turn
+
+    async def drain_conductor_inbox(self, conductor_task_id: str) -> list["ConductorTurn"]:
+        from app.domain.models import ConductorTurn
+
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """SELECT * FROM conductor_turns
+               WHERE conductor_task_id = ? AND kind = 'user_message' AND consumed_at IS NULL
+               ORDER BY created_at ASC, id ASC""",
+            (conductor_task_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        if not rows:
+            return []
+        consumed_at = datetime.now()
+        await conn.executemany(
+            "UPDATE conductor_turns SET consumed_at = ? WHERE id = ?",
+            [(self._format_datetime(consumed_at), row["id"]) for row in rows],
+        )
+        await conn.commit()
+        return [
+            ConductorTurn(
+                id=row["id"],
+                conductor_task_id=row["conductor_task_id"],
+                issue_id=row["issue_id"],
+                turn_index=int(row["turn_index"] or 0),
+                sub_index=int(row["sub_index"] or 0),
+                kind=row["kind"],
+                payload_json=row["payload_json"] or "{}",
+                created_at=self._parse_datetime(row["created_at"]),
+                consumed_at=consumed_at,
+            )
+            for row in rows
+        ]
 
     async def list_conductor_turns(
         self,
@@ -2444,6 +2513,7 @@ class AsyncSQLiteStore:
                 kind=row["kind"],
                 payload_json=row["payload_json"] or "{}",
                 created_at=self._parse_datetime(row["created_at"]),
+                consumed_at=self._parse_datetime(row["consumed_at"]) if "consumed_at" in row.keys() else None,
             )
             for row in rows
         ]

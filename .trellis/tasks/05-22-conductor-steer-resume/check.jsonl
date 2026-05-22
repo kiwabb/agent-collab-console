@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify the user-message round-trip across DB → Conductor messages → SSE → ConductorLogPanel really flows end-to-end; cross-layer is where this kind of feature breaks."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check the implementation didn't introduce a parallel queue/event mechanism when conductor_turns + event_bus could carry it."}
+{"file": ".trellis/spec/ccgui/frontend/index.md", "reason": "Verify the chat input UI in ConductorLogPanel follows project frontend conventions (Tailwind v4 tokens, i18n keys, Base UI components)."}
+{"file": ".trellis/tasks/05-22-conductor-steer-resume/prd.md", "reason": "Acceptance Criteria are in prd.md; the check sub-agent must verify each AC checkbox is actually green (manual reproduction in dev or test coverage)."}

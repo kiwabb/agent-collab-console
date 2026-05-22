@@ -239,3 +239,82 @@ async def test_loop_marks_failed_and_emits_failure_event():
     assert final_task.status == "failed"
     assert "\"status\": \"failed\"" in (final_task.result_json or "")
     assert any(call.args[0]["type"] == "conductor_failed" for call in event_bus.append.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_loop_pause_resume_cancels_inflight_llm_and_retries():
+    from app.application.conductor_main_loop import run_issue_conductor_loop
+    from app.application.conductor_pause_registry import ConductorPauseRegistry
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+    ConductorPauseRegistry._instance = None
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    store = _make_store(issue, graph)
+
+    registry = _make_noop_conductor_tools_registry()
+    mock_conductor = MagicMock()
+    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.append_hot_event = AsyncMock()
+
+    first_call_started = asyncio.Event()
+    llm_calls = 0
+
+    async def fake_llm(messages=None, tools=None, *args, **kwargs):
+        nonlocal llm_calls
+        llm_calls += 1
+        if llm_calls == 1:
+            first_call_started.set()
+            await asyncio.sleep(3600)
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "resumed cleanly"},
+                }
+            ],
+        }
+
+    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
+         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
+         patch("app.application.conductor_main_loop.call_llm_with_tools", side_effect=fake_llm), \
+         patch("app.application.conductor_main_loop.resolve_streaming_context", return_value=MagicMock()), \
+         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
+         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
+
+        mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
+        loop_task = asyncio.create_task(
+            run_issue_conductor_loop(
+                issue=issue,
+                project_id="proj-001",
+                store=store,
+                event_bus=None,
+                task_dispatcher_fn=None,
+            )
+        )
+
+        await first_call_started.wait()
+
+        while store.save_conductor_task.call_count == 0:
+            await asyncio.sleep(0)
+        conductor_task = store.save_conductor_task.call_args_list[0][0][0]
+        registry_instance = ConductorPauseRegistry.instance()
+        assert await registry_instance.request_pause(conductor_task.id) is True
+
+        for _ in range(50):
+            if any(call.args[0].status == "paused" for call in store.save_conductor_task.call_args_list):
+                break
+            await asyncio.sleep(0.01)
+        assert any(call.args[0].status == "paused" for call in store.save_conductor_task.call_args_list)
+
+        assert await registry_instance.resume(conductor_task.id) is True
+        result = await asyncio.wait_for(loop_task, timeout=3)
+
+    assert result.status == "done"
+    assert result.final_text == "resumed cleanly"
+    assert llm_calls >= 2

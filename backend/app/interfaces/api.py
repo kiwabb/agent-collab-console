@@ -2988,6 +2988,10 @@ class SteerRequest(BaseModel):
     message: str
 
 
+class IssueConductorMessageRequest(BaseModel):
+    message: str
+
+
 @router.post("/codex/issues/{issue_id}/steer")
 async def steer_codex_issue(issue_id: str, request: SteerRequest):
     """Inject a mid-run hint into the issue's worktree. The next time any
@@ -4758,9 +4762,132 @@ async def codex_issue_conductor_turns(
                 "kind": turn.kind,
                 "payload": turn_payload,
                 "created_at": turn.created_at.isoformat() if turn.created_at else None,
+                "consumed_at": turn.consumed_at.isoformat() if getattr(turn, "consumed_at", None) else None,
             }
         )
     return {"turns": payload}
+
+
+@router.post("/codex/issues/{issue_id}/conductor/message")
+async def codex_issue_conductor_message(issue_id: str, request: IssueConductorMessageRequest):
+    """Queue a user interjection for the currently active issue conductor loop."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if not hasattr(codex_store, "load_latest_conductor_task_for_issue") or not hasattr(codex_store, "enqueue_conductor_user_message"):
+        raise HTTPException(status_code=501, detail="Conductor inbox not supported by this store")
+    conductor_task = await codex_store.load_latest_conductor_task_for_issue(issue_id)
+    if conductor_task is None or conductor_task.status not in {"running", "paused"}:
+        raise HTTPException(status_code=409, detail="No active conductor loop for this issue")
+    text = request.message.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="message is required")
+    turn = await codex_store.enqueue_conductor_user_message(conductor_task.id, issue_id, text)
+    if conductor_task.status == "paused":
+        from app.application.conductor_pause_registry import ConductorPauseRegistry
+
+        conductor_task.status = "running"
+        conductor_task.updated_at = datetime.now()
+        await codex_store.save_conductor_task(conductor_task)
+        await ConductorPauseRegistry.instance().resume(conductor_task.id)
+        if event_bus is not None and hasattr(event_bus, "append"):
+            await event_bus.append(
+                {
+                    "type": "conductor_status",
+                    "issue_id": issue_id,
+                    "conductor_task_id": conductor_task.id,
+                    "status": conductor_task.status,
+                    "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
+                }
+            )
+    payload = {"text": text}
+    if event_bus is not None and hasattr(event_bus, "append"):
+        await event_bus.append(
+            {
+                "type": "conductor_turn",
+                "id": turn.id,
+                "issue_id": issue_id,
+                "conductor_task_id": conductor_task.id,
+                "turn_index": turn.turn_index,
+                "sub_index": turn.sub_index,
+                "kind": turn.kind,
+                "payload": payload,
+                "summary": f"User interjection: {text[:80]}",
+                "created_at": turn.created_at.isoformat() if turn.created_at else None,
+                "consumed_at": None,
+            }
+        )
+    return {"ok": True, "conductor_task_id": conductor_task.id, "status": conductor_task.status}
+
+
+@router.post("/codex/issues/{issue_id}/conductor/pause")
+async def codex_issue_conductor_pause(issue_id: str):
+    """Pause the currently active issue conductor loop."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if not hasattr(codex_store, "load_latest_conductor_task_for_issue"):
+        raise HTTPException(status_code=501, detail="Conductor pause not supported by this store")
+    conductor_task = await codex_store.load_latest_conductor_task_for_issue(issue_id)
+    if conductor_task is None:
+        raise HTTPException(status_code=409, detail="No active conductor loop for this issue")
+    if conductor_task.status == "paused":
+        return {"ok": True, "conductor_task_id": conductor_task.id, "status": conductor_task.status}
+    if conductor_task.status != "running":
+        raise HTTPException(status_code=409, detail="Conductor loop is not running")
+    from app.application.conductor_pause_registry import ConductorPauseRegistry
+
+    await ConductorPauseRegistry.instance().request_pause(conductor_task.id)
+    conductor_task.status = "paused"
+    conductor_task.updated_at = datetime.now()
+    await codex_store.save_conductor_task(conductor_task)
+    if event_bus is not None and hasattr(event_bus, "append"):
+        await event_bus.append(
+            {
+                "type": "conductor_status",
+                "issue_id": issue_id,
+                "conductor_task_id": conductor_task.id,
+                "status": conductor_task.status,
+                "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
+            }
+        )
+    return {"ok": True, "conductor_task_id": conductor_task.id, "status": conductor_task.status}
+
+
+@router.post("/codex/issues/{issue_id}/conductor/resume")
+async def codex_issue_conductor_resume(issue_id: str):
+    """Resume a paused issue conductor loop."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    if not hasattr(codex_store, "load_latest_conductor_task_for_issue"):
+        raise HTTPException(status_code=501, detail="Conductor resume not supported by this store")
+    conductor_task = await codex_store.load_latest_conductor_task_for_issue(issue_id)
+    if conductor_task is None or conductor_task.status != "paused":
+        raise HTTPException(status_code=409, detail="Conductor loop is not paused")
+    from app.application.conductor_pause_registry import ConductorPauseRegistry
+
+    conductor_task.status = "running"
+    conductor_task.updated_at = datetime.now()
+    await codex_store.save_conductor_task(conductor_task)
+    await ConductorPauseRegistry.instance().resume(conductor_task.id)
+    if event_bus is not None and hasattr(event_bus, "append"):
+        await event_bus.append(
+            {
+                "type": "conductor_status",
+                "issue_id": issue_id,
+                "conductor_task_id": conductor_task.id,
+                "status": conductor_task.status,
+                "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
+            }
+        )
+    return {"ok": True, "conductor_task_id": conductor_task.id, "status": conductor_task.status}
 
 
 @router.get("/codex/issues/{issue_id}/conductor-state")
@@ -4776,7 +4903,12 @@ async def codex_issue_conductor_state(issue_id: str):
             "scratchpad": "",
             "decision_count": 0,
             "updated_at": None,
+            "conductor_task_id": None,
+            "conductor_status": None,
         }
+    conductor_task = None
+    if hasattr(codex_store, "load_latest_conductor_task_for_issue"):
+        conductor_task = await codex_store.load_latest_conductor_task_for_issue(issue_id)
     state = await codex_store.load_conductor_state(issue_id)
     if state is None:
         return {
@@ -4786,6 +4918,8 @@ async def codex_issue_conductor_state(issue_id: str):
             "scratchpad": "",
             "decision_count": 0,
             "updated_at": None,
+            "conductor_task_id": conductor_task.id if conductor_task else None,
+            "conductor_status": conductor_task.status if conductor_task else None,
         }
     try:
         running_thread = json.loads(state.running_thread_json or "[]")
@@ -4802,6 +4936,8 @@ async def codex_issue_conductor_state(issue_id: str):
         "scratchpad": state.scratchpad,
         "decision_count": state.decision_count,
         "updated_at": state.updated_at.isoformat() if state.updated_at else None,
+        "conductor_task_id": conductor_task.id if conductor_task else None,
+        "conductor_status": conductor_task.status if conductor_task else None,
     }
 
 

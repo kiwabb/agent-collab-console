@@ -24,6 +24,7 @@ cd frontend && npm run build && npm run lint
   - `spawn_custom_subagent` — Conductor 自己注册项目专属 specialist agent。
   - `request_user_clarification` — Conductor 决定"PM 出完 PRD 要不要停"/"QA 通过要不要等用户审"等 gate，对接 Approvals 页 `awaiting_review` 状态。
   - `retrieve_cold_memory` / `finalize_task`。
+  - 用户可通过 `POST /api/codex/issues/{id}/conductor/message` 中途插话；消息以 `[USER INTERJECTION]` 注入下一轮 LLM call。`/conductor/pause` 与 `/conductor/resume` 可手动暂停/恢复 loop。
 
 **诊断 Conductor 崩溃**:
 - 后台异常会把 `conductor_tasks.status` 标成 `failed`，并把错误摘要 + traceback 写进 `result_json`

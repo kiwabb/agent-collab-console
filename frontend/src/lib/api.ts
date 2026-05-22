@@ -1363,9 +1363,10 @@ export interface ConductorTurn {
   issue_id: string;
   turn_index: number;
   sub_index: number;
-  kind: "llm_request" | "tool_use" | "tool_result" | "error" | "finalize";
+  kind: "llm_request" | "tool_use" | "tool_result" | "user_message" | "error" | "finalize";
   payload: Record<string, unknown>;
   created_at: string | null;
+  consumed_at?: string | null;
 }
 
 export async function getConductorTurns(
@@ -1384,6 +1385,8 @@ export async function getConductorTurns(
 
 export interface ConductorStatePayload {
   issue_id: string;
+  conductor_task_id?: string | null;
+  conductor_status?: string | null;
   running_thread: Array<{
     task_id: string;
     completed_node_key: string;
@@ -1409,6 +1412,29 @@ export async function getConductorState(issueId: string): Promise<ConductorState
   const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-state`);
   if (!res.ok) return null;
   return (await res.json()) as ConductorStatePayload;
+}
+
+export async function sendConductorMessage(issueId: string, message: string): Promise<{ ok: boolean; status: string; conductor_task_id: string }> {
+  const response = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor/message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  return handleResponse(response);
+}
+
+export async function pauseConductor(issueId: string): Promise<{ ok: boolean; status: string; conductor_task_id: string }> {
+  const response = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor/pause`, {
+    method: "POST",
+  });
+  return handleResponse(response);
+}
+
+export async function resumeConductor(issueId: string): Promise<{ ok: boolean; status: string; conductor_task_id: string }> {
+  const response = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor/resume`, {
+    method: "POST",
+  });
+  return handleResponse(response);
 }
 
 export interface SubAgentResultPayload {

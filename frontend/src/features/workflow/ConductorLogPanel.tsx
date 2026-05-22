@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Loader2, Pause, Play, SendHorizontal } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -8,10 +9,15 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   getConductorLog,
   getConductorState,
   getConductorTurns,
+  pauseConductor,
+  resumeConductor,
+  sendConductorMessage,
   type ConductorDecision,
   type ConductorStatePayload,
   type ConductorTurn,
@@ -19,6 +25,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { HistoryEntry } from "@/features/agents/dock/agentBus";
 import { PERSONAS } from "@/features/agents/dock/personas";
+import type { BusConductorStatusEvent, BusConductorTurnEvent } from "@/contexts/ExecutionProcessesContext";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
@@ -53,8 +60,18 @@ const TURN_STYLES: Record<ConductorTurn["kind"], { label: string; cls: string }>
   llm_request: { label: "LLM", cls: "bg-brand/10 text-brand border-brand/30" },
   tool_use: { label: "Tool", cls: "bg-warning/10 text-warning border-warning/30" },
   tool_result: { label: "Result", cls: "bg-success/10 text-success border-success/30" },
+  user_message: { label: "You", cls: "bg-info/10 text-info border-info/30" },
   error: { label: "Error", cls: "bg-error/10 text-error border-error/30" },
   finalize: { label: "Done", cls: "bg-surface-raised text-text-secondary border-border-subtle" },
+};
+
+const STATUS_STYLES: Record<string, string> = {
+  running: "bg-brand/10 text-brand border-brand/30",
+  paused: "bg-warning/10 text-warning border-warning/30",
+  failed: "bg-error/10 text-error border-error/30",
+  done: "bg-success/10 text-success border-success/30",
+  completed: "bg-success/10 text-success border-success/30",
+  max_turns: "bg-surface-raised text-text-secondary border-border-subtle",
 };
 
 function relTime(iso: string | null): string {
@@ -66,12 +83,42 @@ function relTime(iso: string | null): string {
   return `${Math.floor(ms / 3_600_000)}h ago`;
 }
 
+function isConductorTurnEvent(evt: unknown): evt is BusConductorTurnEvent {
+  if (!evt || typeof evt !== "object") return false;
+  const record = evt as Record<string, unknown>;
+  return (
+    record.type === "conductor_turn" &&
+    typeof record.id === "string" &&
+    typeof record.issue_id === "string" &&
+    typeof record.conductor_task_id === "string" &&
+    typeof record.turn_index === "number" &&
+    typeof record.sub_index === "number" &&
+    typeof record.kind === "string" &&
+    !!record.payload &&
+    typeof record.payload === "object"
+  );
+}
+
+function isConductorStatusEvent(evt: unknown): evt is BusConductorStatusEvent {
+  if (!evt || typeof evt !== "object") return false;
+  const record = evt as Record<string, unknown>;
+  return (
+    record.type === "conductor_status" &&
+    typeof record.issue_id === "string" &&
+    typeof record.conductor_task_id === "string" &&
+    typeof record.status === "string"
+  );
+}
+
 export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props) {
   const [decisions, setDecisions] = useState<ConductorDecision[]>([]);
   const [turns, setTurns] = useState<ConductorTurn[]>([]);
   const [conductorState, setConductorState] = useState<ConductorStatePayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("thread");
+  const [composer, setComposer] = useState("");
+  const [sending, setSending] = useState(false);
+  const [statusBusy, setStatusBusy] = useState<"pause" | "resume" | null>(null);
   const persona = PERSONAS["conductor"];
 
   const reload = useCallback(() => {
@@ -104,7 +151,17 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
       busEventMatchers.typeIn("conductor_turn"),
     ),
     onEvent: (evt) => {
-      const turn = evt as ConductorTurn;
+      if (!isConductorTurnEvent(evt)) return;
+      const turn: ConductorTurn = {
+        id: evt.id,
+        conductor_task_id: evt.conductor_task_id,
+        issue_id: evt.issue_id,
+        turn_index: evt.turn_index,
+        sub_index: evt.sub_index,
+        kind: evt.kind,
+        payload: evt.payload,
+        created_at: evt.created_at,
+      };
       setTurns((prev) => {
         if (prev.some((entry) => entry.id === turn.id)) return prev;
         return [...prev, turn];
@@ -123,26 +180,106 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
     enabled: open,
   });
 
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("conductor_status"),
+    ),
+    onEvent: (evt) => {
+      if (!isConductorStatusEvent(evt)) return;
+      setConductorState((prev) => ({
+        issue_id: prev?.issue_id ?? issueId,
+        running_thread: prev?.running_thread ?? [],
+        pending_dispatches: prev?.pending_dispatches ?? [],
+        scratchpad: prev?.scratchpad ?? "",
+        decision_count: prev?.decision_count ?? 0,
+        updated_at: evt.updated_at ?? prev?.updated_at ?? null,
+        conductor_task_id: evt.conductor_task_id,
+        conductor_status: evt.status,
+      }));
+    },
+    enabled: open,
+  });
+
   const thread = conductorState?.running_thread ?? [];
   const pending = conductorState?.pending_dispatches ?? [];
+  const conductorStatus = conductorState?.conductor_status ?? "idle";
+  const isPaused = conductorStatus === "paused";
+  const hasActiveLoop = Boolean(conductorState?.conductor_task_id) && !["done", "completed", "failed", "max_turns"].includes(conductorStatus);
+  const statusCls = STATUS_STYLES[conductorStatus] ?? "bg-surface-raised text-text-secondary border-border-subtle";
+
+  const handleSend = useCallback(async () => {
+    const message = composer.trim();
+    if (!message) return;
+    setSending(true);
+    try {
+      const result = await sendConductorMessage(issueId, message);
+      setComposer("");
+      setConductorState((prev) => prev ? {
+        ...prev,
+        conductor_task_id: result.conductor_task_id,
+        conductor_status: result.status,
+      } : prev);
+    } finally {
+      setSending(false);
+    }
+  }, [composer, issueId]);
+
+  const handlePauseResume = useCallback(async () => {
+    if (!conductorState?.conductor_task_id) return;
+    const nextMode = isPaused ? "resume" : "pause";
+    setStatusBusy(nextMode);
+    try {
+      const result = isPaused ? await resumeConductor(issueId) : await pauseConductor(issueId);
+      setConductorState((prev) => prev ? {
+        ...prev,
+        conductor_task_id: result.conductor_task_id,
+        conductor_status: result.status,
+      } : prev);
+    } finally {
+      setStatusBusy(null);
+    }
+  }, [conductorState?.conductor_task_id, isPaused, issueId]);
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="right" className="w-[480px] sm:w-[540px] flex flex-col gap-0 p-0">
         <SheetHeader className="px-5 pt-4 pb-3 shrink-0 border-b border-border-subtle">
-          <SheetTitle className="flex items-center gap-3 text-lg">
-            <span
-              className="w-10 h-10 rounded-full flex items-center justify-center text-2xl border-2"
-              style={{ borderColor: persona.color, background: `${persona.color}11` }}
-              aria-hidden
-            >
-              {persona.emoji}
+          <div className="flex items-start gap-3">
+            <SheetTitle className="flex items-center gap-3 text-lg">
+              <span
+                className="w-10 h-10 rounded-full flex items-center justify-center text-2xl border-2"
+                style={{ borderColor: persona.color, background: `${persona.color}11` }}
+                aria-hidden
+              >
+                {persona.emoji}
+              </span>
+              {persona.name}
+            </SheetTitle>
+            <span className={cn("ml-auto inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider", statusCls)}>
+              {conductorStatus}
             </span>
-            {persona.name}
-          </SheetTitle>
+          </div>
           <SheetDescription className="text-xs text-text-muted">
             {persona.blurb}
           </SheetDescription>
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!hasActiveLoop || !!statusBusy}
+              onClick={() => void handlePauseResume()}
+            >
+              {statusBusy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : isPaused ? (
+                <Play className="mr-1.5 h-3.5 w-3.5" />
+              ) : (
+                <Pause className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {isPaused ? "Resume" : "Pause"}
+            </Button>
+          </div>
         </SheetHeader>
 
         {liveHistory.length > 0 && (
@@ -328,7 +465,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                   {turns.map((turn) => {
                     const style = TURN_STYLES[turn.kind];
                     return (
-                      <li key={turn.id} className="pl-4">
+                      <li key={turn.id} className={cn("pl-4", turn.kind === "user_message" && "ml-8")}>
                         <span
                           className="absolute -left-1.5 w-3 h-3 rounded-full border-2 border-surface"
                           style={{ background: persona.color }}
@@ -337,9 +474,11 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                           <span className={cn("inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider", style.cls)}>
                             {style.label}
                           </span>
-                          <span className="font-mono text-[10px] text-text-secondary">
-                            turn {turn.turn_index + 1}.{turn.sub_index}
-                          </span>
+                          {turn.kind !== "user_message" && (
+                            <span className="font-mono text-[10px] text-text-secondary">
+                              turn {turn.turn_index + 1}.{turn.sub_index}
+                            </span>
+                          )}
                           <span className="text-[10px] text-text-faint ml-auto shrink-0">
                             {relTime(turn.created_at)}
                           </span>
@@ -363,6 +502,38 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
             </>
           )}
         </div>
+
+        <div className="shrink-0 border-t border-border-subtle px-5 py-4">
+          <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-text-muted">
+            Message Conductor
+          </div>
+          <Textarea
+            value={composer}
+            onChange={(e) => setComposer(e.target.value)}
+            placeholder="Change strategy, skip a role, or add a specialist. Cmd/Ctrl+Enter to send."
+            rows={3}
+            disabled={!hasActiveLoop || sending}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                void handleSend();
+              }
+            }}
+          />
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <p className="text-[11px] text-text-muted">
+              {hasActiveLoop ? "Queued notes land in the next LLM turn." : "Start an issue conductor loop to chat here."}
+            </p>
+            <Button onClick={() => void handleSend()} disabled={!hasActiveLoop || sending || !composer.trim()}>
+              {sending ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <SendHorizontal className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Send
+            </Button>
+          </div>
+        </div>
       </SheetContent>
     </Sheet>
   );
@@ -378,6 +549,9 @@ function formatTurnSummary(turn: ConductorTurn): string {
   }
   if (turn.kind === "tool_result") {
     return `${String(payload.name ?? "Tool")} returned ${payload.is_error ? "an error" : "a result"}.`;
+  }
+  if (turn.kind === "user_message") {
+    return String(payload.text ?? "User interjection queued.");
   }
   if (turn.kind === "error") {
     return String(payload.message ?? payload.error_class ?? "Conductor crashed.");

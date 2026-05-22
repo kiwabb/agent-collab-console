@@ -117,6 +117,53 @@ async def test_conductor_loop_records_turn_timeline():
 
 
 @pytest.mark.asyncio
+async def test_conductor_loop_injects_user_interjection_before_next_llm_call():
+    calls = []
+    pending_inbox = [["skip architect, go straight to engineer"], []]
+
+    async def fake_llm(messages, tools):
+        calls.append(messages)
+        if len(calls) == 1:
+            return {
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_memory",
+                        "name": "retrieve_cold_memory",
+                        "input": {"query": "plan"},
+                    }
+                ],
+            }
+        assert any(
+            entry.get("role") == "user"
+            and entry.get("content") == "[USER INTERJECTION] skip architect, go straight to engineer"
+            for entry in messages
+        )
+        return {
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "Skipping architect."}],
+        }
+
+    async def retrieve_cold_memory(tool_input):
+        return {"memories": ["plan"]}  # pragma: no cover - value asserted through flow
+
+    async def drain_inbox():
+        return pending_inbox.pop(0) if pending_inbox else []
+
+    result = await run_conductor_loop(
+        prompt="Plan this issue.",
+        llm=fake_llm,
+        tools={"retrieve_cold_memory": retrieve_cold_memory},
+        tool_definitions=[{"name": "retrieve_cold_memory"}],
+        inbox_drain=drain_inbox,
+    )
+
+    assert result.status == "done"
+    assert result.final_text == "Skipping architect."
+
+
+@pytest.mark.asyncio
 async def test_conductor_tools_expose_phase6_tool_schema_and_memory_lookup(tmp_path):
     from app.adapters.async_sqlite_store import AsyncSQLiteStore
 

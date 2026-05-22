@@ -28,6 +28,9 @@ export type BusEventType =
   | "workflow_node_updated"
   | "worktree_dirty"
   | "conductor_decision"
+  | "conductor_turn"
+  | "conductor_failed"
+  | "conductor_status"
   | "agent_message_posted";
 
 export interface BusIssueMergedEvent {
@@ -112,6 +115,39 @@ export interface BusConductorDecisionEvent {
   note?: string | null;
 }
 
+export interface BusConductorTurnEvent {
+  type: "conductor_turn";
+  id: string;
+  issue_id: string;
+  session_id?: string;
+  conductor_task_id: string;
+  turn_index: number;
+  sub_index: number;
+  kind: "llm_request" | "tool_use" | "tool_result" | "error" | "finalize";
+  payload: Record<string, unknown>;
+  summary?: string;
+  created_at: string | null;
+}
+
+export interface BusConductorFailedEvent {
+  type: "conductor_failed";
+  issue_id: string;
+  session_id?: string;
+  conductor_task_id: string;
+  error_class?: string;
+  error_message?: string;
+  traceback?: string;
+}
+
+export interface BusConductorStatusEvent {
+  type: "conductor_status";
+  issue_id: string;
+  session_id?: string;
+  conductor_task_id: string;
+  status: string;
+  updated_at?: string | null;
+}
+
 export function isBusIssueMergedEvent(event: BusEvent): event is BusIssueMergedEvent {
   return event.type === "issue_merged";
 }
@@ -162,6 +198,9 @@ export type BusEvent =
   | BusWorkflowNodeUpdatedEvent
   | BusWorktreeDirtyEvent
   | BusConductorDecisionEvent
+  | BusConductorTurnEvent
+  | BusConductorFailedEvent
+  | BusConductorStatusEvent
   | (LogEvent & { type?: BusEventType });
 
 export interface ExecutionProcessesContextValue {

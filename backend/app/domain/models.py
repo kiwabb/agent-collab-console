@@ -530,7 +530,7 @@ class ProjectConductorState:
 
 
 ConductorTaskKind = Literal["issue", "qa_question", "scheduled_review", "ad_hoc"]
-ConductorTurnKind = Literal["llm_request", "tool_use", "tool_result", "error", "finalize"]
+ConductorTurnKind = Literal["llm_request", "tool_use", "tool_result", "user_message", "error", "finalize"]
 
 
 @dataclass
@@ -560,6 +560,7 @@ class ConductorTurn:
     kind: ConductorTurnKind = "llm_request"
     payload_json: str = "{}"
     created_at: datetime | None = None
+    consumed_at: datetime | None = None
 
 
 @dataclass

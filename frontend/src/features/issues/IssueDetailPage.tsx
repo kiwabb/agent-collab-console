@@ -46,6 +46,7 @@ import { IssueSideStack } from "./components/IssueSideStack";
 import { IssueActivityTimelineHorizontal } from "./components/IssueActivityTimelineHorizontal";
 import { FloatingIssueChip } from "./components/FloatingIssueChip";
 import { LiveThinkingDock } from "./components/LiveThinkingDock";
+import type { BusConductorFailedEvent } from "@/contexts/ExecutionProcessesContext";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
 interface Props {
@@ -57,6 +58,12 @@ type TabId = (typeof TABS)[number];
 
 function isTab(s: string | null): s is TabId {
   return s !== null && (TABS as readonly string[]).includes(s);
+}
+
+function isConductorFailedEvent(evt: unknown): evt is BusConductorFailedEvent {
+  if (!evt || typeof evt !== "object") return false;
+  const record = evt as Record<string, unknown>;
+  return record.type === "conductor_failed" && typeof record.issue_id === "string";
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -246,11 +253,11 @@ export function IssueDetailPage({ issueId }: Props) {
       busEventMatchers.typeIn("conductor_failed"),
     ),
     onEvent: (evt) => {
-      const e = evt as { error_message?: string };
+      if (!isConductorFailedEvent(evt)) return;
       addToast({
         type: "error",
         title: t("conductor.toastFailed"),
-        message: e.error_message || t("conductor.toastFailedHint"),
+        message: evt.error_message || t("conductor.toastFailedHint"),
       });
       void loadIssue();
     },

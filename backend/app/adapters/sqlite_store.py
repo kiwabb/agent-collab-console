@@ -649,7 +649,8 @@ class SQLiteStore:
                     sub_index INTEGER NOT NULL DEFAULT 0,
                     kind TEXT NOT NULL,
                     payload_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    consumed_at TEXT
                 )
             """)
             conn.execute("""
@@ -700,12 +701,17 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
             # Phase 4: add instance_index to workflow_nodes for existing DBs
             try:
                 conn.execute(
                     "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
                 )
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE conductor_turns ADD COLUMN consumed_at TEXT")
             except sqlite3.OperationalError:
                 pass
             conn.commit()
@@ -1708,8 +1714,8 @@ class SQLiteStore:
         conn = self._get_conn()
         conn.execute(
             """INSERT OR REPLACE INTO conductor_turns
-               (id, conductor_task_id, issue_id, turn_index, sub_index, kind, payload_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, conductor_task_id, issue_id, turn_index, sub_index, kind, payload_json, created_at, consumed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 turn.id,
                 turn.conductor_task_id,
@@ -1719,10 +1725,90 @@ class SQLiteStore:
                 turn.kind,
                 turn.payload_json,
                 self._format_datetime(turn.created_at or datetime.now()),
+                self._format_datetime(turn.consumed_at),
             ),
         )
         conn.commit()
         conn.close()
+
+    def enqueue_conductor_user_message(self, conductor_task_id: str, issue_id: str, text: str) -> "ConductorTurn":
+        from app.domain.models import ConductorTurn
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT COALESCE(MAX(turn_index), -1) AS max_turn_index FROM conductor_turns WHERE conductor_task_id = ?",
+            (conductor_task_id,),
+        ).fetchone()
+        next_turn_index = int((row["max_turn_index"] if row is not None else -1) or -1) + 1
+        turn = ConductorTurn(
+            id=str(uuid4()),
+            conductor_task_id=conductor_task_id,
+            issue_id=issue_id,
+            turn_index=next_turn_index,
+            sub_index=0,
+            kind="user_message",
+            payload_json=json.dumps({"text": text}, ensure_ascii=False),
+            created_at=datetime.now(),
+            consumed_at=None,
+        )
+        conn.execute(
+            """INSERT OR REPLACE INTO conductor_turns
+               (id, conductor_task_id, issue_id, turn_index, sub_index, kind, payload_json, created_at, consumed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                turn.id,
+                turn.conductor_task_id,
+                turn.issue_id,
+                turn.turn_index,
+                turn.sub_index,
+                turn.kind,
+                turn.payload_json,
+                self._format_datetime(turn.created_at or datetime.now()),
+                None,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return turn
+
+    def drain_conductor_inbox(self, conductor_task_id: str) -> list["ConductorTurn"]:
+        from app.domain.models import ConductorTurn
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """SELECT * FROM conductor_turns
+               WHERE conductor_task_id = ? AND kind = 'user_message' AND consumed_at IS NULL
+               ORDER BY created_at ASC, id ASC""",
+            (conductor_task_id,),
+        ).fetchall()
+        if not rows:
+            conn.close()
+            return []
+        consumed_at = datetime.now()
+        conn.executemany(
+            "UPDATE conductor_turns SET consumed_at = ? WHERE id = ?",
+            [(self._format_datetime(consumed_at), row["id"]) for row in rows],
+        )
+        conn.commit()
+        conn.close()
+        return [
+            ConductorTurn(
+                id=row["id"],
+                conductor_task_id=row["conductor_task_id"],
+                issue_id=row["issue_id"],
+                turn_index=int(row["turn_index"] or 0),
+                sub_index=int(row["sub_index"] or 0),
+                kind=row["kind"],
+                payload_json=row["payload_json"] or "{}",
+                created_at=self._parse_datetime(row["created_at"]),
+                consumed_at=consumed_at,
+            )
+            for row in rows
+        ]
 
     def list_conductor_turns(
         self,
@@ -1755,6 +1841,7 @@ class SQLiteStore:
                 kind=row["kind"],
                 payload_json=row["payload_json"] or "{}",
                 created_at=self._parse_datetime(row["created_at"]),
+                consumed_at=self._parse_datetime(row["consumed_at"]) if "consumed_at" in row.keys() else None,
             )
             for row in rows
         ]
