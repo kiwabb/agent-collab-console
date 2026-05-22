@@ -79,6 +79,13 @@ function isDevelopmentTaskUnlocked(task: CodexTask, allTasks: CodexTask[]): bool
   return prevTask?.status === "done";
 }
 
+const BOARD_PHASES: { id: Phase; labelKey: string; color: string }[] = [
+  { id: "requirements", labelKey: "phase.requirements", color: "bg-text-muted" },
+  { id: "architecture", labelKey: "phase.architecture", color: "bg-warning" },
+  { id: "development", labelKey: "phase.development", color: "bg-brand" },
+  { id: "testing", labelKey: "phase.testing", color: "bg-success" },
+];
+
 interface TaskBoardProps {
   tasks: CodexTask[];
   executionProcesses: ExecutionProcess[];
@@ -261,12 +268,7 @@ export function TaskBoard({
     setExecutionConfig(defaultExecutionConfig);
   }, [defaultExecutionConfig]);
 
-  const boardPhases: { id: Phase; labelKey: string; color: string }[] = [
-    { id: "requirements", labelKey: "phase.requirements", color: "bg-text-muted" },
-    { id: "architecture", labelKey: "phase.architecture", color: "bg-warning" },
-    { id: "development", labelKey: "phase.development", color: "bg-brand" },
-    { id: "testing", labelKey: "phase.testing", color: "bg-success" },
-  ];
+  const boardPhases = BOARD_PHASES;
 
   const tasksByPhase = useMemo(() => boardPhases.reduce((acc, phase) => {
     let phaseTasks = tasks.filter((t) => t.phase === phase.id);
@@ -277,7 +279,7 @@ export function TaskBoard({
     }
     acc[phase.id] = phaseTasks;
     return acc;
-  }, {} as Record<Phase, CodexTask[]>), [tasks]);
+  }, {} as Record<Phase, CodexTask[]>), [boardPhases, tasks]);
 
   const handleDeleteIssue = useCallback(async () => {
     if (!onDeleteIssue) return;
@@ -295,7 +297,7 @@ export function TaskBoard({
     } finally {
       setIsDeletingIssue(false);
     }
-  }, [onDeleteIssue]);
+  }, [addToast, onDeleteIssue]);
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id as string);

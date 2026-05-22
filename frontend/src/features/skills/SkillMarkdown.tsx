@@ -52,6 +52,8 @@ const components: Components = {
     />
   ),
   img: ({ node, ...props }) => (
+    // Skill markdown can reference arbitrary local/remote images outside the Next Image allowlist.
+    // eslint-disable-next-line @next/next/no-img-element
     <img {...props} className="my-2 max-w-full rounded-md border border-border-subtle" alt={props.alt ?? ""} />
   ),
   table: ({ node, ...props }) => (

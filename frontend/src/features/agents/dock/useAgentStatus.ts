@@ -270,7 +270,6 @@ export function useAgentStatus(issueId: string): AgentStatusSnapshot {
     }
 
     return { byRole, activeRole, history: busState.history };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busState, graph, tasks, messages, pendingAssistant?.text]);
 
   return snapshot;

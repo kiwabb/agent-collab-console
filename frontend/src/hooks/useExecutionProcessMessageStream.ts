@@ -33,6 +33,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
   const retryAttemptsRef = useRef(0);
   const finishedRef = useRef(false);
   const messageIdsRef = useRef(new Set<string>());
+  const connectRef = useRef<() => void>(() => {});
 
   const scheduleReconnect = useCallback(() => {
     if (retryTimerRef.current || finishedRef.current) return;
@@ -40,7 +41,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
     const delay = Math.min(1500, 250 * (2 ** attempt));
     retryTimerRef.current = setTimeout(() => {
       retryTimerRef.current = null;
-      connect();
+      connectRef.current();
     }, delay);
   }, []);
 
@@ -63,7 +64,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
     });
   }
 
-  function connect() {
+  const connect = useCallback(() => {
     if (!processId) return;
     if (wsRef.current || finishedRef.current) return;
     const wsUrl = getProcessMessagesUrl(processId);
@@ -123,7 +124,11 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
       retryAttemptsRef.current += 1;
       scheduleReconnect();
     }
-  }
+  }, [processId, scheduleReconnect]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   useEffect(() => {
     if (!processId) {
@@ -158,7 +163,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
     connectTimerRef.current = setTimeout(() => {
       connectTimerRef.current = null;
       if (!cancelled) {
-        connect();
+        connectRef.current();
       }
     }, 0);
 
@@ -182,7 +187,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
         wsRef.current = null;
       }
     };
-  }, [processId, scheduleReconnect]);
+  }, [processId]);
 
   return { messages, pendingAssistant, error };
 }

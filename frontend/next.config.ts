@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const backendApiBase = process.env.BACKEND_API_BASE ?? "http://localhost:9000";
 
@@ -6,6 +7,7 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  outputFileTracingRoot: path.resolve(),
   async rewrites() {
     return [
       {

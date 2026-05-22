@@ -53,7 +53,6 @@ function tryParseJSON(line) {
  * @returns {string}
  */
 function stripAnsi(str) {
-  // eslint-disable-next-line no-control-regex
   return str.replace(/\x1B\[[0-9;]*[mK]/g, "");
 }
 

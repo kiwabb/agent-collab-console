@@ -35,6 +35,8 @@ export function VirtualizedTaskList({
 }: TaskListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
+  // TanStack Virtual intentionally returns imperative helpers; React Compiler cannot memoize it safely.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: tasks.length,
     getScrollElement: () => parentRef.current,

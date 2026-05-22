@@ -434,7 +434,7 @@ export function RunDetail({
                   className="mt-1 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl bg-error text-background hover:bg-error/90 transition-all shadow-md active:scale-[0.98]"
                 >
                   <RotateCcw size={13} />
-                  t("task.review.followSuggestion")
+                  {t("task.review.followSuggestion")}
                 </button>
               )}
             </div>

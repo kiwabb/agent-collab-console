@@ -226,7 +226,7 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         setBusy(null);
       }
     },
-    [issueId, addToast, load, t],
+    [issue?.project_id, issueId, addToast, router, t],
   );
 
   const handleCreatePR = useCallback(async () => {

@@ -49,6 +49,7 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
   const logIdsRef = useRef(new Set<string>());
   const streamingTextRef = useRef("");
   const streamingSeqRef = useRef(0);
+  const connectRef = useRef<() => void>(() => {});
 
   const scheduleReconnect = useCallback(() => {
     if (retryTimerRef.current || finishedRef.current) return;
@@ -56,7 +57,7 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
     const delay = Math.min(1500, 250 * (2 ** attempt));
     retryTimerRef.current = setTimeout(() => {
       retryTimerRef.current = null;
-      connect();
+      connectRef.current();
     }, delay);
   }, []);
 
@@ -66,7 +67,7 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
     setLogs((prev) => sortLogs([...prev, log]));
   }
 
-  function connect() {
+  const connect = useCallback(() => {
     if (!processId) return;
     if (wsRef.current || finishedRef.current) return;
     const wsUrl = getProcessLogsUrl(processId);
@@ -196,7 +197,11 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
       retryAttemptsRef.current += 1;
       scheduleReconnect();
     }
-  }
+  }, [processId, scheduleReconnect]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   useEffect(() => {
     if (!processId) {
@@ -241,7 +246,7 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
     connectTimerRef.current = setTimeout(() => {
       connectTimerRef.current = null;
       if (!cancelled) {
-        connect();
+        connectRef.current();
       }
     }, 0);
 
@@ -265,7 +270,7 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
         wsRef.current = null;
       }
     };
-  }, [processId, scheduleReconnect]);
+  }, [processId]);
 
   return { logs, error, streamingAssistant, heartbeat, finished, disconnected };
 }

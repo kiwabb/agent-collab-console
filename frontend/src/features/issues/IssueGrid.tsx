@@ -443,7 +443,9 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
             <div className="size-16 rounded-2xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-6 shadow-sm">
               <Search size={32} className="text-text-muted/40" />
             </div>
-            <p className="text-sm font-bold text-text-muted mb-6">No results for "{searchQuery}"</p>
+            <p className="text-sm font-bold text-text-muted mb-6">
+              No results for &quot;{searchQuery}&quot;
+            </p>
             <Button
               onClick={() => setSearchQuery("")}
               className="flex items-center gap-2"

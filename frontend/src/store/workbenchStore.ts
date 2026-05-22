@@ -5,12 +5,10 @@ import { immer } from 'zustand/middleware/immer';
 // buttons map onto a single action — kick the Conductor loop on the issue.
 // Conductor decides which agent to dispatch next; the phase label on the issue
 // updates as nodes complete.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function startGraphForIssue(get: any, set: any, flagKey: string, issueId: string, newPhase: string) {
-  set((state: any) => { state[flagKey] = true; });  // eslint-disable-line @typescript-eslint/no-explicit-any
+  set((state: any) => { state[flagKey] = true; });
   try {
     await autoStartIssueGraph(issueId);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const issue = get().issues.find((i: any) => i.id === issueId);
     if (issue && get().updateIssue) {
       get().updateIssue(issueId, { ...issue, current_phase: newPhase });
@@ -19,10 +17,10 @@ async function startGraphForIssue(get: any, set: any, flagKey: string, issueId: 
       await get().loadIssueArtifacts(issueId);
     }
   } catch (err) {
-    set((state: any) => { state.error = err instanceof Error ? err.message : 'Conductor start failed'; });  // eslint-disable-line @typescript-eslint/no-explicit-any
+    set((state: any) => { state.error = err instanceof Error ? err.message : 'Conductor start failed'; });
     throw err;
   } finally {
-    set((state: any) => { state[flagKey] = false; });  // eslint-disable-line @typescript-eslint/no-explicit-any
+    set((state: any) => { state[flagKey] = false; });
   }
 }
 import type {

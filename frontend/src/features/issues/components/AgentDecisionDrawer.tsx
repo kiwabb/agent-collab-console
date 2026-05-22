@@ -105,7 +105,7 @@ export function AgentDecisionDrawer({ taskId, open, onClose }: Props) {
           {!loading && task && sections.length === 0 && (
             <div className="text-sm text-text-muted py-6">
               No structured reasoning to show. The agent may still be running
-              or its output didn't parse as JSON. Check{" "}
+              or its output didn&apos;t parse as JSON. Check{" "}
               <a
                 href={`/issues/${task.issue_id}?tab=tasks&taskId=${task.id}`}
                 className="text-brand hover:underline"

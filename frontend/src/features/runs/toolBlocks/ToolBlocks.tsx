@@ -382,14 +382,14 @@ function TodoBlock({ entry }: ToolBlockProps) {
 function McpBlock({ entry }: ToolBlockProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const args = entry.args || {};
   const argsJson = useMemo(() => {
+    const args = entry.args || {};
     try {
       return JSON.stringify(args, null, 2);
     } catch {
       return "";
     }
-  }, [args]);
+  }, [entry.args]);
   return (
     <div className="rounded-xl border border-border-subtle bg-surface/40">
       <ToolHeader
@@ -428,14 +428,14 @@ function McpBlock({ entry }: ToolBlockProps) {
 function GenericBlock({ entry }: ToolBlockProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const args = entry.args || {};
   const argsJson = useMemo(() => {
+    const args = entry.args || {};
     try {
       return JSON.stringify(args, null, 2);
     } catch {
       return "";
     }
-  }, [args]);
+  }, [entry.args]);
   const title = entry.toolName || t("tools.result");
   return (
     <div className="rounded-xl border border-border-subtle bg-surface/40">

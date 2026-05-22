@@ -45,13 +45,7 @@ export function useTaskConversationDetail({
       .then((msgs) => {
         if (cancelled) return;
         setTaskMessages(msgs || []);
-        const next = buildTaskConversationDetail(msgs || [], executionProcesses);
-        setDetail({
-          messages: next.messages,
-          logs: next.logs,
-          loading: false,
-          error: null,
-        });
+        setDetail((prev) => ({ ...prev, loading: false, error: null }));
       })
       .catch((err) => {
         if (cancelled) return;

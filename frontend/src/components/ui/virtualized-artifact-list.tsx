@@ -280,6 +280,8 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
     return items;
   }, [allSections]);
 
+  // TanStack Virtual intentionally returns imperative helpers; React Compiler cannot memoize it safely.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement: () => parentRef.current,

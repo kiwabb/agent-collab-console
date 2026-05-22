@@ -70,7 +70,7 @@ export function AgentTimelinePanel({ open, role, history, onClose }: Props) {
               </div>
               {reversed.length === 0 ? (
                 <div className="text-sm text-text-muted py-6 text-center">
-                  No activity yet. {translatedName} hasn't spoken.
+                  No activity yet. {translatedName} hasn&apos;t spoken.
                 </div>
               ) : (
                 <ol className="relative border-l border-border-subtle ml-2 space-y-3">

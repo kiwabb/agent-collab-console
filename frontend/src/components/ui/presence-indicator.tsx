@@ -51,15 +51,17 @@ export function PresenceIndicator({ users = [], maxVisible = 4 }: PresenceIndica
             className={cn(
               "size-7 rounded-full border-2 border-background flex items-center justify-center text-[9px] font-black text-background shadow-md",
               user.color || PRESENCE_COLORS[i % PRESENCE_COLORS.length]
-            )}
-            title={user.name}
-            style={{ zIndex: maxVisible - i }}
-          >
-            {user.avatar ? (
-              <img src={user.avatar} alt={user.name} className="size-full rounded-full object-cover" />
-            ) : (
-              getInitials(user.name)
-            )}
+        )}
+        title={user.name}
+        style={{ zIndex: maxVisible - i }}
+      >
+        {user.avatar ? (
+          // Arbitrary local/profile avatar URLs are not guaranteed to fit Next Image remote allowlists.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={user.avatar} alt={user.name} className="size-full rounded-full object-cover" />
+        ) : (
+          getInitials(user.name)
+        )}
           </div>
         ))}
         {overflow > 0 && (
@@ -105,6 +107,8 @@ export function PresenceAvatar({ user, showStatus = true, size = "md" }: Presenc
         title={user.name}
       >
         {user.avatar ? (
+          // Arbitrary local/profile avatar URLs are not guaranteed to fit Next Image remote allowlists.
+          // eslint-disable-next-line @next/next/no-img-element
           <img src={user.avatar} alt={user.name} className="size-full rounded-full object-cover" />
         ) : (
           getInitials(user.name)
