@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from app.application.conductor_tools import build_conductor_tools
 from app.application.conductor_pause_registry import ConductorPauseRegistry
-from app.application.llm_runner import call_llm_with_tools, resolve_streaming_context
+from app.application.llm_runner import call_llm_with_tools, call_llm_with_tools_streaming, resolve_streaming_context
 from app.application.project_conductor import ProjectConductor
 from app.application.project_memory_service import record_project_memory
 from app.application.runtime_catalog_service import RuntimeCatalogService
@@ -35,6 +35,7 @@ InboxDrainer = Callable[[], Union[Awaitable[list[str]], list[str]]]
 PauseGate = Callable[[], Union[Awaitable[None], None]]
 PausePredicate = Callable[[], Union[Awaitable[bool], bool]]
 InflightTaskSetter = Callable[[asyncio.Task | None], Union[Awaitable[None], None]]
+TokenDeltaRecorder = Callable[..., Union[Awaitable[None], None]]
 
 _TURN_PAYLOAD_LIMIT = 32_768
 _TRACEBACK_LIMIT = 8_000
@@ -61,6 +62,7 @@ async def run_conductor_loop(
     wait_if_paused: PauseGate | None = None,
     is_pause_requested: PausePredicate | None = None,
     on_inflight_llm_task: InflightTaskSetter | None = None,
+    on_token_delta: TokenDeltaRecorder | None = None,
 ) -> ConductorLoopResult:
     """Run a conductor session until it reaches final text or a final tool."""
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
@@ -91,7 +93,14 @@ async def run_conductor_loop(
                 ],
             },
         )
-        llm_task = asyncio.create_task(_maybe_await(llm(deepcopy(messages), tool_definitions)))
+        llm_task = asyncio.create_task(
+            _call_llm_with_optional_delta(
+                llm,
+                messages=deepcopy(messages),
+                tool_definitions=tool_definitions,
+                on_token_delta=on_token_delta,
+            )
+        )
         if on_inflight_llm_task is not None:
             await _maybe_await(on_inflight_llm_task(llm_task))
         try:
@@ -110,6 +119,17 @@ async def run_conductor_loop(
         content = _normalise_content(response.get("content"))
         messages.append({"role": "assistant", "content": content})
         final_text = _text_from_content(content) or final_text
+        await _record_turn(
+            turn_recorder,
+            turn_index=turn_index,
+            sub_index=0,
+            kind="llm_response",
+            payload={
+                "content": deepcopy(content),
+                "stop_reason": response.get("stop_reason"),
+                "usage": response.get("usage") if isinstance(response.get("usage"), dict) else {},
+            },
+        )
 
         tool_uses = [block for block in content if block.get("type") == "tool_use"]
         if not tool_uses:
@@ -253,6 +273,21 @@ async def _maybe_await(value):
     return value
 
 
+async def _call_llm_with_optional_delta(
+    llm: LLMCallable,
+    *,
+    messages: list[dict[str, Any]],
+    tool_definitions: list[dict[str, Any]],
+    on_token_delta: TokenDeltaRecorder | None,
+):
+    params = inspect.signature(llm).parameters
+    if "on_token_delta" in params:
+        return await _maybe_await(
+            llm(messages, tool_definitions, on_token_delta=on_token_delta)
+        )
+    return await _maybe_await(llm(messages, tool_definitions))
+
+
 async def _record_turn(
     turn_recorder: TurnRecorder | None,
     *,
@@ -288,7 +323,12 @@ async def run_issue_conductor_loop(
         project_id=project_id,
         task_kind="issue",
         issue_id=issue.id,
-        payload={"mode": "conductor_loop", "issue_title": issue.title},
+        payload={
+            "mode": "conductor_loop",
+            "issue_title": issue.title,
+            "phase": "awaiting_llm",
+            "detail": None,
+        },
         status="running",
         created_at=datetime.now(),
         updated_at=datetime.now(),
@@ -301,7 +341,13 @@ async def run_issue_conductor_loop(
         conductor_task=conductor_task,
     )
 
+    current_turn_index = -1
+
     async def persist_turn(*, turn_index: int, sub_index: int, kind: str, payload: dict[str, Any]) -> None:
+        nonlocal current_turn_index
+        if kind == "llm_request":
+            current_turn_index = turn_index
+            await set_phase("awaiting_llm")
         turn = ConductorTurn(
             id=str(uuid4()),
             conductor_task_id=conductor_task.id,
@@ -331,6 +377,42 @@ async def run_issue_conductor_loop(
             },
         )
 
+    async def persist_delta(*, turn_index: int, sub_index: int, content_block_index: int, kind: str, chunk: str) -> None:
+        await _append_event(
+            event_bus,
+            {
+                "type": "conductor_turn_delta",
+                "issue_id": issue.id,
+                "conductor_task_id": conductor_task.id,
+                "turn_index": turn_index,
+                "sub_index": sub_index,
+                "kind": kind,
+                "chunk": chunk,
+                "content_block_index": content_block_index,
+                "created_at": datetime.now().isoformat(),
+            },
+        )
+
+    async def set_phase(phase: str, detail: str | None = None, *, status: str | None = None) -> None:
+        new_status = status or conductor_task.status
+        current_phase = _conductor_phase(conductor_task)
+        current_detail = _conductor_detail(conductor_task)
+        if current_phase == phase and current_detail == detail and conductor_task.status == new_status:
+            return
+        conductor_task.status = new_status
+        conductor_task.payload = {
+            **(conductor_task.payload or {}),
+            "phase": phase,
+            "detail": detail,
+        }
+        conductor_task.updated_at = datetime.now()
+        await store.save_conductor_task(conductor_task)
+        await _emit_conductor_status(
+            event_bus,
+            issue_id=issue.id,
+            conductor_task=conductor_task,
+        )
+
     async def drain_inbox_messages() -> list[str]:
         drain_inbox = getattr(store, "drain_conductor_inbox", None)
         if not callable(drain_inbox):
@@ -351,25 +433,11 @@ async def run_issue_conductor_loop(
         is_paused = await pause_registry.is_paused(conductor_task.id)
         if not is_paused:
             return
-        if conductor_task.status != "paused":
-            conductor_task.status = "paused"
-            conductor_task.updated_at = datetime.now()
-            await store.save_conductor_task(conductor_task)
-            await _emit_conductor_status(
-                event_bus,
-                issue_id=issue.id,
-                conductor_task=conductor_task,
-            )
+        if conductor_task.status != "paused" or _conductor_phase(conductor_task) != "paused":
+            await set_phase("paused", _conductor_detail(conductor_task), status="paused")
         await pause_registry.wait_if_paused(conductor_task.id)
         if conductor_task.status == "paused":
-            conductor_task.status = "running"
-            conductor_task.updated_at = datetime.now()
-            await store.save_conductor_task(conductor_task)
-            await _emit_conductor_status(
-                event_bus,
-                issue_id=issue.id,
-                conductor_task=conductor_task,
-            )
+            await set_phase("awaiting_llm", None, status="running")
 
     try:
         registry = build_conductor_tools(
@@ -378,6 +446,7 @@ async def run_issue_conductor_loop(
             event_bus=event_bus,
             task_dispatcher_fn=task_dispatcher_fn,
             issue_id=issue.id,
+            on_status=set_phase,
         )
 
         catalog = await RuntimeCatalogService(store).load_catalog()
@@ -426,7 +495,7 @@ If something is unclear or blocked, use `request_user_clarification`.
 Users may inject `[USER INTERJECTION]` messages between turns. Treat them as authoritative steering for the next decision.
 """
 
-        async def llm(messages, tools):
+        async def llm(messages, tools, on_token_delta=None):
             if ctx is None:
                 return {
                     "stop_reason": "tool_use",
@@ -437,6 +506,34 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
                         "input": {"status": "done", "answer": "LLM not configured; conductor loop skipped."},
                     }],
                 }
+            streamed = False
+
+            async def handle_delta(content_block_index: int, kind: str, chunk: str) -> None:
+                nonlocal streamed
+                if not streamed:
+                    streamed = True
+                    await set_phase("streaming_llm")
+                if on_token_delta is not None:
+                    await _maybe_await(
+                        on_token_delta(
+                            turn_index=current_turn_index,
+                            sub_index=0,
+                            content_block_index=content_block_index,
+                            kind=kind,
+                            chunk=chunk,
+                        )
+                    )
+
+            if on_token_delta is not None:
+                try:
+                    return await call_llm_with_tools_streaming(
+                        messages=messages,
+                        tools=tools,
+                        ctx=ctx,
+                        on_delta=handle_delta,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("conductor streaming fallback to non-streaming: %s", exc)
             return await call_llm_with_tools(messages=messages, tools=tools, ctx=ctx)
 
         result = await run_conductor_loop(
@@ -450,6 +547,7 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
             wait_if_paused=wait_until_resumed,
             is_pause_requested=lambda: pause_registry.is_paused(conductor_task.id),
             on_inflight_llm_task=lambda task: pause_registry.set_inflight_llm_task(conductor_task.id, task),
+            on_token_delta=persist_delta,
         )
 
         try:
@@ -476,6 +574,11 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
 
         conductor_task.status = result.status
         conductor_task.updated_at = datetime.now()
+        conductor_task.payload = {
+            **(conductor_task.payload or {}),
+            "phase": "done" if result.status != "failed" else "failed",
+            "detail": result.final_text[:160] if result.final_text else None,
+        }
         conductor_task.result_json = json.dumps(
             {
                 "status": result.status,
@@ -561,6 +664,11 @@ async def _record_failure(*, store, issue, conductor_task: ConductorTask, event_
         )
         await _maybe_await(save_turn(turn))
     conductor_task.status = "failed"
+    conductor_task.payload = {
+        **(conductor_task.payload or {}),
+        "phase": "failed",
+        "detail": error_message[:160],
+    }
     conductor_task.updated_at = datetime.now()
     conductor_task.result_json = json.dumps(
         {
@@ -652,6 +760,8 @@ def _truncate_text(value: str, limit: int) -> str:
 def _summarize_turn(kind: str, payload: dict[str, Any]) -> str:
     if kind == "llm_request":
         return f"LLM request with {payload.get('message_count', 0)} messages"
+    if kind == "llm_response":
+        return f"LLM response ({payload.get('stop_reason') or 'end_turn'})"
     if kind == "user_message":
         return f"User interjection: {str(payload.get('text') or '')[:80]}"
     if kind == "tool_use":
@@ -674,6 +784,20 @@ async def _emit_conductor_status(event_bus, *, issue_id: str, conductor_task: Co
             "issue_id": issue_id,
             "conductor_task_id": conductor_task.id,
             "status": conductor_task.status,
+            "phase": _conductor_phase(conductor_task),
+            "detail": _conductor_detail(conductor_task),
             "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
         },
     )
+
+
+def _conductor_phase(conductor_task: ConductorTask) -> str | None:
+    payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
+    phase = payload.get("phase")
+    return str(phase) if phase else None
+
+
+def _conductor_detail(conductor_task: ConductorTask) -> str | None:
+    payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
+    detail = payload.get("detail")
+    return str(detail) if detail else None

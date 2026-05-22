@@ -110,9 +110,52 @@ async def test_conductor_loop_records_turn_timeline():
 
     assert recorded == [
         ("llm_request", 0, 0),
+        ("llm_response", 0, 0),
         ("tool_use", 0, 1),
         ("tool_result", 0, 1),
         ("finalize", 0, 1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_conductor_loop_passes_token_delta_callback_to_llm():
+    deltas = []
+
+    async def fake_llm(messages, tools, on_token_delta=None):
+        assert on_token_delta is not None
+        await on_token_delta(
+            turn_index=0,
+            sub_index=0,
+            content_block_index=0,
+            kind="text",
+            chunk="hello",
+        )
+        return {
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "hello"}],
+            "usage": {"output_tokens": 1},
+        }
+
+    async def capture_delta(**payload):
+        deltas.append(payload)
+
+    result = await run_conductor_loop(
+        prompt="Stream a token.",
+        llm=fake_llm,
+        tools={},
+        tool_definitions=[],
+        on_token_delta=capture_delta,
+    )
+
+    assert result.status == "done"
+    assert deltas == [
+        {
+            "turn_index": 0,
+            "sub_index": 0,
+            "content_block_index": 0,
+            "kind": "text",
+            "chunk": "hello",
+        }
     ]
 
 

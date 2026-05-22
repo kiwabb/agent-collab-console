@@ -24,63 +24,64 @@ export type RoleId =
 
 export interface Persona {
   id: RoleId;
-  name: string;
+  /** i18n translation key for persona display name */
+  nameKey: string;
   emoji: string;
   /** Accent color used for glow ring, bubble border, active tint. */
   color: string;
-  /** One-line role description shown in the timeline panel header. */
-  blurb: string;
+  /** i18n translation key for one-line role description shown in the timeline panel header. */
+  blurbKey: string;
 }
 
 export const PERSONAS: Record<RoleId, Persona> = {
   conductor: {
     id: "conductor",
-    name: "Conductor",
+    nameKey: "dock.persona.conductor.name",
     emoji: "🎙️",
     color: "#a855f7",
-    blurb: "Plans the DAG and routes work between the other four.",
+    blurbKey: "dock.persona.conductor.blurb",
   },
   product_manager: {
     id: "product_manager",
-    name: "PM",
+    nameKey: "dock.persona.product_manager.name",
     emoji: "📊",
     color: "#3b82f6",
-    blurb: "Reads the issue, drafts the PRD.",
+    blurbKey: "dock.persona.product_manager.blurb",
   },
   architect: {
     id: "architect",
-    name: "Architect",
+    nameKey: "dock.persona.architect.name",
     emoji: "🏗️",
     color: "#22c55e",
-    blurb: "Designs the system and breaks the implementation into tasks.",
+    blurbKey: "dock.persona.architect.blurb",
   },
   engineer: {
     id: "engineer",
-    name: "Engineer",
+    nameKey: "dock.persona.engineer.name",
     emoji: "⚙️",
     color: "#f59e0b",
-    blurb: "Writes the code, runs the tests.",
+    blurbKey: "dock.persona.engineer.blurb",
   },
   engineer_frontend: {
     id: "engineer_frontend",
-    name: "FE Engineer",
+    nameKey: "dock.persona.engineer_frontend.name",
     emoji: "🎨",
     color: "#06b6d4",
-    blurb: "Implements the UI / client slice.",
+    blurbKey: "dock.persona.engineer_frontend.blurb",
   },
   engineer_backend: {
     id: "engineer_backend",
-    name: "BE Engineer",
+    nameKey: "dock.persona.engineer_backend.name",
     emoji: "🔧",
     color: "#a855f7",
-    blurb: "Implements the API / server slice.",
+    blurbKey: "dock.persona.engineer_backend.blurb",
   },
   qa: {
     id: "qa",
-    name: "QA",
+    nameKey: "dock.persona.qa.name",
     emoji: "🔎",
     color: "#ef4444",
-    blurb: "Validates the implementation, files follow-ups.",
+    blurbKey: "dock.persona.qa.blurb",
   },
 };
 

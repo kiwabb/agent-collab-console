@@ -1,0 +1,5 @@
+{"file": "CLAUDE.md", "reason": "验证改动没破坏 Conductor 架构关键不变量 — dispatch_subagent 仍是真实的、tiered memory 仍注入、QA 真跑命令、specialist mesh 等都不受流式影响"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-conductor-steer-resume/prd.md", "reason": "回归检查项 — pause/resume + mid-call cancel + [USER INTERJECTION] 在新流式实现下还能正常工作（特别是 inflight_llm_task 在流式 LLM call 期间的取消语义）"}
+{"file": ".trellis/tasks/archive/2026-05/05-21-conductor/prd.md", "reason": "回归检查项 — conductor_failed SSE + 5 个 turn_recorder hook 点 + done_callback 异常兜底仍工作；新增 llm_response kind 不破坏 list_conductor_turns 现有查询"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证 backend SSE → frontend 链路一致性 — 新增 conductor_turn_delta / conductor_status 事件名和 payload schema 在两端对齐，不留前后端 typo"}
+{"file": ".trellis/tasks/05-22-conductor-streaming-and-live-status/research/claude-agent-sdk-provider-support.md", "reason": "对照确认 — 实施过程没引入任何 SDK 依赖或 Claude-only 假设；新流式 caller 仍能跑通 MiniMax-M2.7 网关"}

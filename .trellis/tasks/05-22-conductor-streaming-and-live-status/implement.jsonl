@@ -1,0 +1,5 @@
+{"file": "CLAUDE.md", "reason": "项目架构总览 — Conductor 是直接 LLM API、sub-agent 才走 CLI；Tiered memory / dispatch_subagent / conductor_turns 表 / SSE 事件 bus 的整体设计，是改动 LLM 调用层和 SSE 端点的前提"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-conductor-steer-resume/prd.md", "reason": "本任务的直接前序 — 定义了 conductor_pause_registry / inflight_llm_task / [USER INTERJECTION] / mid-call cancel 机制；流式实现必须不破坏这些"}
+{"file": ".trellis/tasks/archive/2026-05/05-21-conductor/prd.md", "reason": "建立了 conductor_turns 表 + 5 个 turn_recorder hook 点（llm_request/tool_use/tool_result/finalize）+ conductor_failed SSE；本任务在它的基础上加 llm_response kind + conductor_turn_delta + conductor_status payload 扩展"}
+{"file": ".trellis/tasks/05-22-conductor-streaming-and-live-status/research/claude-agent-sdk-provider-support.md", "reason": "为什么不切 claude-agent-sdk 的理由证据 — MiniMax 兼容性风险、Anthropic 官方不背书第三方 provider；说明本任务必须保持自撸 httpx + Anthropic /v1/messages 协议"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 llm_runner.stream_llm（已实现 Anthropic SSE text_delta）作为新流式 caller 的参考，不要从零写"}

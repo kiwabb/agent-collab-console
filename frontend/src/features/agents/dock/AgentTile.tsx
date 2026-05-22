@@ -5,6 +5,7 @@ import type { Persona } from "./personas";
 import type { RoleStatus } from "./useAgentStatus";
 import { StatusBubble } from "./StatusBubble";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface Props {
   persona: Persona;
@@ -29,10 +30,12 @@ export function AgentTile({
   size = 64,
   containerWidth = 84,
 }: Props) {
+  const { t } = useI18n();
   const isActive = status.mode === "active" || isActiveSpeaker;
   const isDone = status.mode === "done";
   const isFailed = status.mode === "failed";
   const emojiSize = Math.round(size * 0.44);
+  const translatedName = t(persona.nameKey);
 
   return (
     <div className="relative flex flex-col items-center" style={{ minWidth: containerWidth }}>
@@ -67,7 +70,7 @@ export function AgentTile({
             ? `0 0 0 4px ${persona.color}33, 0 8px 24px ${persona.color}22`
             : undefined,
         }}
-        aria-label={`${persona.name}: ${status.text || "idle"}`}
+        aria-label={`${translatedName}: ${status.text || "idle"}`}
       >
         <span aria-hidden>{persona.emoji}</span>
         {/* Status dot */}
@@ -112,7 +115,7 @@ export function AgentTile({
           isActive ? "text-foreground" : "text-text-muted",
         )}
       >
-        {persona.name}
+        {translatedName}
       </div>
     </div>
   );

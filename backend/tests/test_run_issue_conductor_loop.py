@@ -79,6 +79,8 @@ async def test_loop_calls_finalize():
     issue = _make_issue()
     graph = _make_graph(issue.id)
     store = _make_store(issue, graph)
+    event_bus = MagicMock()
+    event_bus.append = AsyncMock()
 
     registry = _make_noop_conductor_tools_registry()
 
@@ -98,15 +100,18 @@ async def test_loop_calls_finalize():
             issue=issue,
             project_id="proj-001",
             store=store,
-            event_bus=None,
+            event_bus=event_bus,
             task_dispatcher_fn=None,
         )
 
     assert result.status == "done"
-    # ConductorTask was saved twice (running + final)
-    assert store.save_conductor_task.call_count == 2
+    # ConductorTask is saved on start, phase transitions, and finalization.
+    assert store.save_conductor_task.call_count >= 2
     final_task = store.save_conductor_task.call_args_list[-1][0][0]
     assert final_task.status == "done"
+    status_events = [call.args[0] for call in event_bus.append.call_args_list if call.args and call.args[0].get("type") == "conductor_status"]
+    assert status_events[0]["phase"] == "awaiting_llm"
+    assert status_events[-1]["phase"] == "done"
 
 
 @pytest.mark.asyncio

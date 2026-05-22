@@ -8,6 +8,7 @@ from app.application.project_conductor import ProjectConductor
 
 
 ToolCallable = Callable[[dict[str, Any]], Awaitable[Any]]
+ToolStatusCallback = Callable[[str, str | None], Awaitable[None] | None]
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ def build_conductor_tools(
     event_bus=None,
     task_dispatcher_fn=None,
     issue_id: str | None = None,
+    on_status: ToolStatusCallback | None = None,
 ) -> ConductorToolRegistry:
     conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
 
@@ -51,12 +53,14 @@ def build_conductor_tools(
         role = str(tool_input.get("role") or "")
         prompt_override = tool_input.get("prompt") or None
         prev_node_key = tool_input.get("prev_node_key") or None
+        detail = role or prev_node_key or "subagent"
 
         issue = await store.load_codex_issue(issue_id)
         if issue is None:
             return {"error": f"Issue {issue_id} not found"}
 
         try:
+            await _notify_status(on_status, "dispatching_subagent", detail)
             task_id, node_id = await dispatch_role(
                 issue=issue,
                 role=role,
@@ -71,6 +75,7 @@ def build_conductor_tools(
 
         registry = TaskCompletionRegistry.get()
         registry.register(task_id)
+        await _notify_status(on_status, "awaiting_subagent", detail)
 
         await _emit(event_bus, "conductor_tool", {
             "tool": "dispatch_subagent",
@@ -108,6 +113,7 @@ def build_conductor_tools(
         return payload
 
     async def request_user_clarification(tool_input: dict[str, Any]) -> dict[str, Any]:
+        await _notify_status(on_status, "awaiting_user_clarification", str(tool_input.get("question") or "").strip() or None)
         payload = {
             "project_id": project_id,
             "question": tool_input.get("question"),
@@ -143,6 +149,14 @@ async def _emit(event_bus, event_type: str, payload: dict[str, Any]) -> None:
         result = event_bus.append({"type": event_type, **payload})
     else:
         return
+    if hasattr(result, "__await__"):
+        await result
+
+
+async def _notify_status(callback: ToolStatusCallback | None, phase: str, detail: str | None) -> None:
+    if callback is None:
+        return
+    result = callback(phase, detail)
     if hasattr(result, "__await__"):
         await result
 

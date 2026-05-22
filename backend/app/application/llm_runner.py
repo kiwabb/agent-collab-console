@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 # more than necessary, but we re-resolve on each invocation in case the
 # user edited it.
 LLM_RUNNER_TYPE = Callable[[str], Awaitable[str | None]]
+DeltaCallback = Callable[[int, str, str], Awaitable[None] | None]
 
 
 def extract_tool_use_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
@@ -336,3 +338,167 @@ async def call_llm_with_tools(
     if not isinstance(data.get("content"), list):
         data["content"] = []
     return data
+
+
+async def call_llm_with_tools_streaming(
+    *,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    ctx: StreamingPlanContext,
+    on_delta: DeltaCallback | None = None,
+    batch_window_ms: int = 100,
+) -> dict[str, Any]:
+    """Stream an Anthropic-compatible messages response and reconstruct the final message.
+
+    Emits batched `text` and `tool_input_json` deltas through `on_delta`, while
+    returning a complete assistant message payload at the end.
+    """
+    url = f"{ctx.endpoint}/v1/messages"
+    payload: dict[str, Any] = {
+        "model": ctx.model,
+        "max_tokens": ctx.max_tokens,
+        "messages": messages,
+        "stream": True,
+    }
+    if tools:
+        payload["tools"] = tools
+
+    headers = {
+        "x-api-key": ctx.api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "accept": "text/event-stream",
+    }
+    block_order: list[int] = []
+    blocks: dict[int, dict[str, Any]] = {}
+    pending_chunks: dict[tuple[int, str], str] = {}
+    last_flush = time.monotonic()
+    stop_reason: str | None = None
+    usage: dict[str, Any] | None = None
+
+    async def emit_delta(index: int, kind: str, chunk: str) -> None:
+        if not chunk or on_delta is None:
+            return
+        result = on_delta(index, kind, chunk)
+        if hasattr(result, "__await__"):
+            await result
+
+    async def flush_pending(force: bool = False) -> None:
+        nonlocal last_flush
+        if not pending_chunks:
+            if force:
+                last_flush = time.monotonic()
+            return
+        now = time.monotonic()
+        if not force and (now - last_flush) * 1000 < batch_window_ms:
+            return
+        items = list(pending_chunks.items())
+        pending_chunks.clear()
+        last_flush = now
+        for (index, kind), chunk in items:
+            await emit_delta(index, kind, chunk)
+
+    async with httpx.AsyncClient(timeout=ctx.timeout_s) as client:
+        async with client.stream("POST", url, headers=headers, json=payload) as response:
+            if response.status_code != 200:
+                body = await response.aread()
+                raise RuntimeError(
+                    f"LLM tools stream HTTP {response.status_code}: {body[:300]!r}"
+                )
+            async for line in response.aiter_lines():
+                if not line:
+                    await flush_pending()
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw in ("", "[DONE]"):
+                    continue
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+
+                etype = event.get("type")
+                if etype == "message_start":
+                    message = event.get("message") or {}
+                    if isinstance(message.get("usage"), dict):
+                        usage = dict(message["usage"])
+                elif etype == "content_block_start":
+                    index = int(event.get("index") or 0)
+                    content_block = event.get("content_block") or {}
+                    block_type = str(content_block.get("type") or "text")
+                    if index not in blocks:
+                        block_order.append(index)
+                    if block_type == "tool_use":
+                        blocks[index] = {
+                            "type": "tool_use",
+                            "id": str(content_block.get("id") or ""),
+                            "name": str(content_block.get("name") or ""),
+                            "input_json": "",
+                        }
+                    else:
+                        blocks[index] = {
+                            "type": "text",
+                            "text": str(content_block.get("text") or ""),
+                        }
+                elif etype == "content_block_delta":
+                    index = int(event.get("index") or 0)
+                    delta = event.get("delta") or {}
+                    delta_type = delta.get("type")
+                    block = blocks.setdefault(index, {"type": "text", "text": ""})
+                    if index not in block_order:
+                        block_order.append(index)
+                    if delta_type == "text_delta":
+                        chunk = str(delta.get("text") or "")
+                        if chunk:
+                            block["type"] = "text"
+                            block["text"] = str(block.get("text") or "") + chunk
+                            pending_chunks[(index, "text")] = pending_chunks.get((index, "text"), "") + chunk
+                    elif delta_type == "input_json_delta":
+                        chunk = str(delta.get("partial_json") or "")
+                        if chunk:
+                            block["type"] = "tool_use"
+                            block["input_json"] = str(block.get("input_json") or "") + chunk
+                            pending_chunks[(index, "tool_input_json")] = pending_chunks.get((index, "tool_input_json"), "") + chunk
+                    await flush_pending()
+                elif etype == "message_delta":
+                    delta = event.get("delta") or {}
+                    if delta.get("stop_reason") is not None:
+                        stop_reason = str(delta.get("stop_reason"))
+                    if isinstance(event.get("usage"), dict):
+                        usage = dict(event["usage"])
+                elif etype == "content_block_stop":
+                    await flush_pending(force=True)
+                elif etype == "message_stop":
+                    await flush_pending(force=True)
+                    break
+
+    content: list[dict[str, Any]] = []
+    for index in sorted(block_order):
+        block = blocks.get(index) or {}
+        if block.get("type") == "tool_use":
+            input_json = str(block.get("input_json") or "").strip()
+            try:
+                tool_input = json.loads(input_json) if input_json else {}
+            except json.JSONDecodeError:
+                tool_input = {}
+            content.append(
+                {
+                    "type": "tool_use",
+                    "id": str(block.get("id") or ""),
+                    "name": str(block.get("name") or ""),
+                    "input": tool_input if isinstance(tool_input, dict) else {},
+                }
+            )
+            continue
+        text = str(block.get("text") or "")
+        if text:
+            content.append({"type": "text", "text": text})
+
+    return {
+        "role": "assistant",
+        "content": content,
+        "stop_reason": stop_reason or "end_turn",
+        "usage": usage or {},
+    }

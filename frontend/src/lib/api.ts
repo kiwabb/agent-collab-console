@@ -1363,7 +1363,7 @@ export interface ConductorTurn {
   issue_id: string;
   turn_index: number;
   sub_index: number;
-  kind: "llm_request" | "tool_use" | "tool_result" | "user_message" | "error" | "finalize";
+  kind: "llm_request" | "llm_response" | "tool_use" | "tool_result" | "user_message" | "error" | "finalize";
   payload: Record<string, unknown>;
   created_at: string | null;
   consumed_at?: string | null;
@@ -1387,6 +1387,8 @@ export interface ConductorStatePayload {
   issue_id: string;
   conductor_task_id?: string | null;
   conductor_status?: string | null;
+  phase?: string | null;
+  detail?: string | null;
   running_thread: Array<{
     task_id: string;
     completed_node_key: string;

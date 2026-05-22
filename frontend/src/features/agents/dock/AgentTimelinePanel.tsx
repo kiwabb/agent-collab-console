@@ -10,6 +10,7 @@ import {
 import { PERSONAS, type RoleId } from "./personas";
 import type { HistoryEntry } from "./agentBus";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface Props {
   open: boolean;
@@ -35,9 +36,12 @@ function relTime(ts: number, now: number): string {
 }
 
 export function AgentTimelinePanel({ open, role, history, onClose }: Props) {
+  const { t } = useI18n();
   const persona = role ? PERSONAS[role] : null;
   const now = Date.now();
   const reversed = [...history].reverse();
+  const translatedName = persona ? t(persona.nameKey) : "";
+  const translatedBlurb = persona ? t(persona.blurbKey) : "";
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
@@ -53,10 +57,10 @@ export function AgentTimelinePanel({ open, role, history, onClose }: Props) {
                 >
                   {persona.emoji}
                 </span>
-                {persona.name}
+                {translatedName}
               </SheetTitle>
               <SheetDescription className="text-xs text-text-muted">
-                {persona.blurb}
+                {translatedBlurb}
               </SheetDescription>
             </SheetHeader>
 
@@ -66,7 +70,7 @@ export function AgentTimelinePanel({ open, role, history, onClose }: Props) {
               </div>
               {reversed.length === 0 ? (
                 <div className="text-sm text-text-muted py-6 text-center">
-                  No activity yet. {persona.name} hasn't spoken.
+                  No activity yet. {translatedName} hasn't spoken.
                 </div>
               ) : (
                 <ol className="relative border-l border-border-subtle ml-2 space-y-3">

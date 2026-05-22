@@ -530,7 +530,7 @@ class ProjectConductorState:
 
 
 ConductorTaskKind = Literal["issue", "qa_question", "scheduled_review", "ad_hoc"]
-ConductorTurnKind = Literal["llm_request", "tool_use", "tool_result", "user_message", "error", "finalize"]
+ConductorTurnKind = Literal["llm_request", "llm_response", "tool_use", "tool_result", "user_message", "error", "finalize"]
 
 
 @dataclass

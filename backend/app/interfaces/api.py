@@ -4799,6 +4799,8 @@ async def codex_issue_conductor_message(issue_id: str, request: IssueConductorMe
                     "issue_id": issue_id,
                     "conductor_task_id": conductor_task.id,
                     "status": conductor_task.status,
+                    "phase": (conductor_task.payload or {}).get("phase"),
+                    "detail": (conductor_task.payload or {}).get("detail"),
                     "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
                 }
             )
@@ -4852,6 +4854,8 @@ async def codex_issue_conductor_pause(issue_id: str):
                 "issue_id": issue_id,
                 "conductor_task_id": conductor_task.id,
                 "status": conductor_task.status,
+                "phase": (conductor_task.payload or {}).get("phase"),
+                "detail": (conductor_task.payload or {}).get("detail"),
                 "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
             }
         )
@@ -4884,6 +4888,8 @@ async def codex_issue_conductor_resume(issue_id: str):
                 "issue_id": issue_id,
                 "conductor_task_id": conductor_task.id,
                 "status": conductor_task.status,
+                "phase": (conductor_task.payload or {}).get("phase"),
+                "detail": (conductor_task.payload or {}).get("detail"),
                 "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
             }
         )
@@ -4905,6 +4911,8 @@ async def codex_issue_conductor_state(issue_id: str):
             "updated_at": None,
             "conductor_task_id": None,
             "conductor_status": None,
+            "phase": None,
+            "detail": None,
         }
     conductor_task = None
     if hasattr(codex_store, "load_latest_conductor_task_for_issue"):
@@ -4920,6 +4928,8 @@ async def codex_issue_conductor_state(issue_id: str):
             "updated_at": None,
             "conductor_task_id": conductor_task.id if conductor_task else None,
             "conductor_status": conductor_task.status if conductor_task else None,
+            "phase": (conductor_task.payload or {}).get("phase") if conductor_task else None,
+            "detail": (conductor_task.payload or {}).get("detail") if conductor_task else None,
         }
     try:
         running_thread = json.loads(state.running_thread_json or "[]")
@@ -4938,6 +4948,8 @@ async def codex_issue_conductor_state(issue_id: str):
         "updated_at": state.updated_at.isoformat() if state.updated_at else None,
         "conductor_task_id": conductor_task.id if conductor_task else None,
         "conductor_status": conductor_task.status if conductor_task else None,
+        "phase": (conductor_task.payload or {}).get("phase") if conductor_task else None,
+        "detail": (conductor_task.payload or {}).get("detail") if conductor_task else None,
     }
 
 

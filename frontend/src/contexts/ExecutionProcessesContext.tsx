@@ -29,6 +29,7 @@ export type BusEventType =
   | "worktree_dirty"
   | "conductor_decision"
   | "conductor_turn"
+  | "conductor_turn_delta"
   | "conductor_failed"
   | "conductor_status"
   | "agent_message_posted";
@@ -123,9 +124,22 @@ export interface BusConductorTurnEvent {
   conductor_task_id: string;
   turn_index: number;
   sub_index: number;
-  kind: "llm_request" | "tool_use" | "tool_result" | "error" | "finalize";
+  kind: "llm_request" | "llm_response" | "tool_use" | "tool_result" | "error" | "finalize";
   payload: Record<string, unknown>;
   summary?: string;
+  created_at: string | null;
+}
+
+export interface BusConductorTurnDeltaEvent {
+  type: "conductor_turn_delta";
+  issue_id: string;
+  session_id?: string;
+  conductor_task_id: string;
+  turn_index: number;
+  sub_index: number;
+  kind: "text" | "tool_input_json";
+  chunk: string;
+  content_block_index: number;
   created_at: string | null;
 }
 
@@ -145,6 +159,8 @@ export interface BusConductorStatusEvent {
   session_id?: string;
   conductor_task_id: string;
   status: string;
+  phase?: string | null;
+  detail?: string | null;
   updated_at?: string | null;
 }
 
@@ -199,6 +215,7 @@ export type BusEvent =
   | BusWorktreeDirtyEvent
   | BusConductorDecisionEvent
   | BusConductorTurnEvent
+  | BusConductorTurnDeltaEvent
   | BusConductorFailedEvent
   | BusConductorStatusEvent
   | (LogEvent & { type?: BusEventType });

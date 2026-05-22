@@ -332,6 +332,6 @@ function EmptyState({ text }: { text: string }) {
 }
 
 // Helper hook unused right now but kept for memoization affordances.
-export function _useStableSearchKey(...args: unknown[]) {
+export function useStableSearchKey(...args: unknown[]) {
   return useMemo(() => args.join("|"), [args]);
 }
