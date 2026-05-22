@@ -72,6 +72,34 @@ async def test_search_artifact_content(store, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_search_snippet_escapes_indexed_html_but_keeps_mark_tags(store, tmp_path):
+    issue = _make_issue(id="xss-issue", title="Security", description="-")
+    await store.save_codex_issue(issue)
+    p = tmp_path / "xss.md"
+    p.write_text('<img src=x onerror=alert(1)> vulnerable-token', encoding="utf-8")
+    await kidx.index_artifact(
+        store,
+        {
+            "id": "xss-artifact",
+            "issue_id": issue.id,
+            "task_id": "t",
+            "name": "xss.md",
+            "path": str(p),
+            "kind": "pm",
+            "created_at": datetime.now().isoformat(),
+        },
+    )
+
+    out = await kidx.search(store, "vulnerable-token", scope="artifacts", mode="fts")
+    hit = next(r for r in out["artifacts"] if r["artifact_id"] == "xss-artifact")
+    snippet = hit["snippet"]
+    assert "<mark>vulnerable-token</mark>" in snippet
+    assert "<img" not in snippet
+    assert "onerror" in snippet
+    assert "&lt;img" in snippet
+
+
+@pytest.mark.asyncio
 async def test_search_scope_all_combines(store, tmp_path):
     issue = _make_issue(id="i3", title="Tarantula deploy", description="-")
     await store.save_codex_issue(issue)

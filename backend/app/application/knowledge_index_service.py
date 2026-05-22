@@ -22,6 +22,7 @@ Failure model:
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import math
@@ -35,6 +36,8 @@ logger = logging.getLogger(__name__)
 CONTENT_BYTES_CAP = 16_000
 SNIPPET_MAX_TOKENS = 24
 FTS_SNIPPET_ELLIPSIS = "…"
+MARK_OPEN_SENTINEL = "\u0000KIDX_MARK_OPEN\u0000"
+MARK_CLOSE_SENTINEL = "\u0000KIDX_MARK_CLOSE\u0000"
 
 SearchMode = Literal["fts", "semantic", "hybrid"]
 SearchScope = Literal["issues", "artifacts", "all"]
@@ -145,6 +148,23 @@ def _escape_fts_query(q: str) -> str:
     if not tokens:
         return ""
     return " OR ".join(f'"{t}"' for t in tokens)
+
+
+def _sanitize_fts_snippet(snippet: str | None) -> str:
+    """Escape indexed content while preserving FTS-generated mark tags."""
+    if not snippet:
+        return ""
+    protected = (
+        snippet
+        .replace("<mark>", MARK_OPEN_SENTINEL)
+        .replace("</mark>", MARK_CLOSE_SENTINEL)
+    )
+    escaped = html.escape(protected, quote=True)
+    return (
+        escaped
+        .replace(MARK_OPEN_SENTINEL, "<mark>")
+        .replace(MARK_CLOSE_SENTINEL, "</mark>")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +508,7 @@ async def _fts_search_issues(store, query: str, project_id: str | None, limit: i
             "issue_id": r[0],
             "project_id": r[1],
             "title": r[2],
-            "snippet": r[3],
+            "snippet": _sanitize_fts_snippet(r[3]),
             "score": float(r[4]) if r[4] is not None else 0.0,
             "source": "fts",
         })
@@ -527,7 +547,7 @@ async def _fts_search_artifacts(store, query: str, project_id: str | None, limit
             "project_id": r[2],
             "role": r[3],
             "name": r[4],
-            "snippet": r[5],
+            "snippet": _sanitize_fts_snippet(r[5]),
             "score": float(r[6]) if r[6] is not None else 0.0,
             "source": "fts",
         })

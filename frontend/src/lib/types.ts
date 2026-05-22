@@ -515,6 +515,7 @@ export interface RuntimeExecutorConfig {
   executor_type: "claude" | "codex";
   api_endpoint?: string | null;
   api_key?: string | null;
+  api_key_configured?: boolean;
   default_model?: string | null;
   providers: RuntimeProviderConfig[];
   default_provider_id: string | null;

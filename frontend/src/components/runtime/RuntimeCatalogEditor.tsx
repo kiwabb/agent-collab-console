@@ -41,8 +41,18 @@ function normalizeCatalog(catalog: RuntimeCatalog): RuntimeCatalog {
     executors: catalog.executors.map((executor) => ({
       ...executor,
       api_endpoint: executor.api_endpoint ?? null,
-      api_key: executor.api_key ?? null,
+      api_key_configured: executor.api_key_configured ?? Boolean(executor.api_key),
       default_model: executor.default_model ?? null,
+    })),
+  };
+}
+
+function stripEmptyApiKeys(catalog: RuntimeCatalog): RuntimeCatalog {
+  return {
+    ...catalog,
+    executors: catalog.executors.map(({ api_key, ...executor }) => ({
+      ...executor,
+      ...(api_key ? { api_key } : {}),
     })),
   };
 }
@@ -84,7 +94,7 @@ export function RuntimeCatalogEditor({
   const handleChange = async (updatedCatalog: RuntimeCatalog) => {
     setLocalCatalog(updatedCatalog);
     if (onChange) {
-      await onChange(updatedCatalog);
+      await onChange(stripEmptyApiKeys(updatedCatalog));
     }
   };
 
@@ -200,7 +210,7 @@ export function RuntimeCatalogEditor({
               const result = await testRuntimeExecutor({
                 executor_id: exec.id,
                 api_endpoint: exec.api_endpoint,
-                api_key: exec.api_key,
+                ...(exec.api_key ? { api_key: exec.api_key } : {}),
               });
               return result;
             }}
@@ -406,8 +416,17 @@ function ExecutorCard({
               type="password"
               value={executor.api_key || ""}
               onChange={(e) => onUpdate({ api_key: e.target.value || null })}
-              placeholder={t("runtime.executor.keyPlaceholder")}
+              placeholder={
+                executor.api_key_configured
+                  ? t("runtime.executor.keyConfiguredPlaceholder")
+                  : t("runtime.executor.keyPlaceholder")
+              }
             />
+            {executor.api_key_configured && !executor.api_key && (
+              <p className="text-[11px] text-muted-foreground">
+                {t("runtime.executor.keyHiddenHint")}
+              </p>
+            )}
           </div>
         </div>
 

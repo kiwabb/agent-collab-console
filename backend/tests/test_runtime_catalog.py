@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import tempfile
 import asyncio
+import json
 
 pytestmark = pytest.mark.slow
 
@@ -18,6 +19,76 @@ from app.domain.models import (
 )
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
 from app.application.runtime_catalog_service import RuntimeCatalogService, RuntimeCatalogValidationError
+
+
+def test_runtime_catalog_api_never_returns_raw_api_keys(client):
+    secret = "runtime-secret-should-not-leak"
+    resp = client.put(
+        "/api/runtime-catalog",
+        json={
+            "catalog": {
+                "executors": [
+                    {
+                        "id": "codex",
+                        "label": "Codex",
+                        "enabled": True,
+                        "executor_type": "codex",
+                        "api_endpoint": "https://api.openai.com/v1",
+                        "api_key": secret,
+                        "default_model": "gpt-5-codex",
+                        "providers": [],
+                        "default_provider_id": None,
+                    }
+                ]
+            }
+        },
+    )
+    assert resp.status_code == 200
+    assert secret not in json.dumps(resp.json())
+
+    saved = client.get("/api/runtime-catalog")
+    assert saved.status_code == 200
+    body = saved.json()
+    assert secret not in json.dumps(body)
+    executor = body["executors"][0]
+    assert "api_key" not in executor
+    assert executor["api_key_configured"] is True
+
+
+def test_runtime_catalog_update_preserves_omitted_api_key(client):
+    secret = "runtime-secret-to-preserve"
+    resp = client.put(
+        "/api/runtime-catalog",
+        json={
+            "catalog": {
+                "executors": [
+                    {
+                        "id": "codex",
+                        "label": "Codex",
+                        "enabled": True,
+                        "executor_type": "codex",
+                        "api_endpoint": "https://api.openai.com/v1",
+                        "api_key": secret,
+                        "default_model": "gpt-5-codex",
+                        "providers": [],
+                        "default_provider_id": None,
+                    }
+                ]
+            }
+        },
+    )
+    assert resp.status_code == 200
+
+    edited = resp.json()
+    edited["executors"][0]["label"] = "Codex Updated"
+    edited["executors"][0].pop("api_key", None)
+    resp = client.put("/api/runtime-catalog", json={"catalog": edited})
+    assert resp.status_code == 200
+    assert resp.json()["executors"][0]["api_key_configured"] is True
+
+    import app.bootstrap as bootstrap_module
+    stored = bootstrap_module.store.load_runtime_catalog()
+    assert stored.executors[0].api_key == secret
 
 
 class TestRuntimeCatalogService:

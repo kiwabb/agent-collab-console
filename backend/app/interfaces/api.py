@@ -4366,6 +4366,62 @@ class RuntimeCatalogRequest(BaseModel):
     catalog: RuntimeCatalog
 
 
+async def _merge_existing_runtime_secrets(incoming: RuntimeCatalog) -> RuntimeCatalog:
+    """Preserve stored API keys omitted by public catalog edit forms."""
+    if codex_store is None:
+        return incoming
+    existing = await _get_runtime_catalog_service().load_catalog()
+    existing_by_id = {executor.id: executor for executor in existing.executors}
+    for executor in incoming.executors:
+        if "api_key" not in executor.model_fields_set:
+            existing_executor = existing_by_id.get(executor.id)
+            if existing_executor is not None:
+                executor.api_key = existing_executor.api_key
+    return incoming
+
+
+def _public_runtime_catalog(catalog: RuntimeCatalog) -> dict:
+    """Return runtime catalog data safe for browser clients.
+
+    The stored catalog may contain provider API keys. Read endpoints expose only
+    configuration booleans so frontend state cannot retain raw credentials.
+    """
+    return {
+        "executors": [
+            {
+                "id": executor.id,
+                "label": executor.label,
+                "enabled": executor.enabled,
+                "executor_type": executor.executor_type,
+                "api_endpoint": executor.api_endpoint,
+                "api_key_configured": bool(executor.api_key),
+                "default_model": executor.default_model,
+                "providers": [
+                    {
+                        "id": provider.id,
+                        "label": provider.label,
+                        "enabled": provider.enabled,
+                        "models": [
+                            {
+                                "id": model.id,
+                                "label": model.label,
+                                "enabled": model.enabled,
+                            }
+                            for model in provider.models
+                        ],
+                        "default_model_id": provider.default_model_id,
+                        "command_template": provider.command_template,
+                        "env_template": provider.env_template,
+                    }
+                    for provider in executor.providers
+                ],
+                "default_provider_id": executor.default_provider_id,
+            }
+            for executor in catalog.executors
+        ]
+    }
+
+
 @router.get("/runtime-catalog")
 async def get_runtime_catalog():
     """Get the global runtime catalog."""
@@ -4373,7 +4429,7 @@ async def get_runtime_catalog():
         raise HTTPException(status_code=503, detail="SQLite store not available")
     service = _get_runtime_catalog_service()
     catalog = await service.load_catalog()
-    return catalog
+    return _public_runtime_catalog(catalog)
 
 
 @router.put("/runtime-catalog")
@@ -4386,8 +4442,8 @@ async def update_runtime_catalog(request: RuntimeCatalogRequest):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     service = _get_runtime_catalog_service()
     try:
-        catalog = await service.save_catalog(request.catalog)
-        return catalog
+        catalog = await service.save_catalog(await _merge_existing_runtime_secrets(request.catalog))
+        return _public_runtime_catalog(catalog)
     except RuntimeCatalogValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

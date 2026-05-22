@@ -371,8 +371,8 @@ export function SettingsPage() {
                           onChange={async (cat) => {
                             setSaveStatus("saving");
                             try {
-                              await updateRuntimeCatalog(cat);
-                              setRuntimeCatalog(cat);
+                              const savedCatalog = await updateRuntimeCatalog(cat);
+                              setRuntimeCatalog(savedCatalog);
                               setSaveStatus("saved");
                             } catch (err) {
                               setSaveError(err instanceof Error ? err.message : t("settings.saveFailed"));
