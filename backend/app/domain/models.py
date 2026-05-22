@@ -108,6 +108,22 @@ class Project(BaseModel):
     updated_at: datetime | None = None
 
 
+class Skill(BaseModel):
+    """A reusable skill reference: pointer to an externally hosted markdown
+    playbook (frontmatter + body) that an agent could later be configured to use.
+    Body is intentionally NOT persisted — the right-side preview fetches `link`
+    on demand via the backend proxy.
+    """
+    id: str
+    name: str
+    link: str
+    description: str | None = None
+    category: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class GitBranch(BaseModel):
     """A branch listing entry surfaced by the branches API."""
     name: str

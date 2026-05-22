@@ -147,6 +147,22 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* Fader placeholder color across all native inputs / textareas so it sits
+     visibly behind real input text. Tailwind utilities on wrapped Input /
+     Textarea components override this when needed. */
+  input::placeholder,
+  textarea::placeholder,
+  [contenteditable][data-placeholder]:empty::before {
+    color: var(--color-text-muted);
+    opacity: 1;
+  }
+
+  /* Page-transition fade used by app/template.tsx */
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
   /* Custom scrollbar matching reference */
   ::-webkit-scrollbar {
     width: 6px;

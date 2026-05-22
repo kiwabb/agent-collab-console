@@ -4,8 +4,8 @@ from pathlib import Path
 import logging
 import shutil
 
-from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File
+from fastapi.responses import JSONResponse, PlainTextResponse
 import json
 import os
 
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 import subprocess
 
-from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service
+from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service, skill_service
 from app.domain.models import CodexIssue, ConductorTask, Project
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
@@ -21,6 +21,7 @@ from app.application.phase_duration_estimator import get_phase_duration_estimato
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.process_runtime_common import is_agent_message_item_type
 from app.application.project_service import ProjectError
+from app.application.skill_service import SkillError
 from app.application.worktree_manager import WorktreeError
 from app.application.git_service import GitError
 from app.interfaces.execution_process_views import build_execution_process_view
@@ -824,6 +825,289 @@ async def get_project_stats(project_id: str):
         "issues_open": counts["open"],
         "issues_merged": counts["merged"],
         "issues_abandoned": counts["abandoned"],
+    }
+
+
+# --- Skills library ---
+
+class CreateSkillRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    link: str = Field(..., min_length=1)
+    description: str | None = None
+    category: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class UpdateSkillRequest(BaseModel):
+    name: str | None = None
+    link: str | None = None
+    description: str | None = None
+    category: str | None = None
+    tags: list[str] | None = None
+
+
+def _require_skill_service():
+    if skill_service is None:
+        raise HTTPException(status_code=503, detail="Skill service unavailable (no async store)")
+    return skill_service
+
+
+@router.get("/skills")
+async def list_skills(search: str | None = None, category: str | None = None):
+    svc = _require_skill_service()
+    items = await svc.list(search=search, category=category)
+    return [s.model_dump(mode="json") for s in items]
+
+
+@router.get("/skills/categories")
+async def list_skill_categories():
+    svc = _require_skill_service()
+    return await svc.list_categories()
+
+
+class SkillCategoryRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+
+
+@router.post("/skills/categories", status_code=201)
+async def create_skill_category(request: SkillCategoryRequest):
+    svc = _require_skill_service()
+    try:
+        name = await svc.add_category(request.name)
+    except SkillError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"name": name}
+
+
+@router.delete("/skills/categories/{name}")
+async def delete_skill_category(name: str, force: bool = False):
+    svc = _require_skill_service()
+    try:
+        await svc.delete_category(name, force=force)
+    except SkillError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True}
+
+
+def _rewrite_to_raw(url: str) -> str:
+    """Forgiving URL normaliser — turns common GitHub/gist VIEW pages into the
+    raw-content equivalents. If we don't know how to rewrite, return as-is and
+    let the caller deal with HTML.
+
+    Repo-root URLs (e.g. github.com/<owner>/<repo>) resolve to the repo's
+    README via the special `HEAD` ref, which GitHub maps to the default branch.
+    """
+    import re
+    url = url.rstrip("/")
+    # GitHub blob view → raw
+    m = re.match(r"^https?://github\.com/([^/]+)/([^/]+)/blob/(.+)$", url)
+    if m:
+        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/{m.group(3)}"
+    # GitHub raw view (rare alt path) → raw.githubusercontent
+    m = re.match(r"^https?://github\.com/([^/]+)/([^/]+)/raw/(.+)$", url)
+    if m:
+        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/{m.group(3)}"
+    # GitHub tree view (folder) → README of that folder ref
+    m = re.match(r"^https?://github\.com/([^/]+)/([^/]+)/tree/([^/]+)/?(.*)$", url)
+    if m:
+        owner, repo, ref, path = m.group(1), m.group(2), m.group(3), m.group(4)
+        suffix = f"{path.rstrip('/')}/README.md" if path else "README.md"
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{suffix}"
+    # Repo root → README at HEAD (HEAD = default branch on raw.githubusercontent)
+    m = re.match(r"^https?://github\.com/([^/]+)/([^/]+)$", url)
+    if m:
+        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/HEAD/README.md"
+    # Gist view → raw (only single-file gists handled reliably)
+    m = re.match(r"^https?://gist\.github\.com/([^/]+)/([0-9a-f]+)$", url)
+    if m:
+        return f"https://gist.githubusercontent.com/{m.group(1)}/{m.group(2)}/raw"
+    return url
+
+
+@router.get("/skills/proxy")
+async def proxy_skill_link(url: str):
+    """Fetch the markdown body of a remote skill link. Used by the right-side
+    preview panel — we don't persist body locally; this bypasses browser CORS
+    for raw.githubusercontent.com / gist / etc.
+
+    Common GitHub/gist VIEW URLs are auto-rewritten to their raw equivalents
+    so users can paste the URL straight from their browser bar.
+    """
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="url must be an absolute http(s) URL")
+    target = _rewrite_to_raw(url)
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(target, headers={"User-Agent": "agent-collab-console/skills"})
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"upstream fetch failed: {exc}")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=f"upstream returned {resp.status_code}")
+    ctype = (resp.headers.get("content-type") or "").lower()
+    # If upstream gave us an HTML page (user pasted a non-raw link we couldn't
+    # rewrite), refuse loudly instead of dumping HTML tags into the preview.
+    if "html" in ctype:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                "upstream returned HTML, not markdown. Paste the raw file URL "
+                "(e.g. raw.githubusercontent.com/...) instead of the page URL."
+            ),
+        )
+    return PlainTextResponse(resp.text, media_type="text/markdown; charset=utf-8")
+
+
+class SkillTranslateRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    target: Literal["zh", "en"] = "zh"
+
+
+@router.post("/skills/translate")
+async def translate_skill_content(request: SkillTranslateRequest):
+    """Translate markdown content between Chinese and English using the
+    configured Anthropic-compatible executor. Preserves markdown / code / URLs.
+    """
+    from app.application.llm_runner import _pick_executor, _resolve_model
+
+    catalog_service = _get_runtime_catalog_service()
+    catalog = await catalog_service.load_catalog()
+    executor = _pick_executor(catalog, os.getenv("WORKFLOW_ORCHESTRATOR_EXECUTOR_ID") or None)
+    if executor is None:
+        raise HTTPException(status_code=503, detail="No usable executor configured for translation")
+    model = _resolve_model(executor, os.getenv("WORKFLOW_ORCHESTRATOR_MODEL") or None)
+    if not model:
+        raise HTTPException(status_code=503, detail="No resolvable model on the executor")
+
+    # Cap input to a safe size (avoids context-window blow-ups and runaway cost).
+    MAX_CHARS = 30000
+    text = request.text
+    truncated = False
+    if len(text) > MAX_CHARS:
+        text = text[:MAX_CHARS]
+        truncated = True
+
+    target_label = "Simplified Chinese (简体中文)" if request.target == "zh" else "English"
+    system_prompt = (
+        f"You are a professional markdown translator. Translate the user's content into {target_label}.\n"
+        "Rules:\n"
+        "1. Preserve ALL markdown formatting exactly (headings, lists, tables, blockquotes, links, images).\n"
+        "2. Do NOT translate content inside code blocks, inline code, URLs, file paths, or HTML attribute values.\n"
+        "3. Preserve raw HTML tags (<details>, <summary>, <img>, <picture>, ...) — only translate the visible text.\n"
+        "4. Keep proper nouns, library / API / command names untranslated.\n"
+        "5. Output ONLY the translated markdown — no preamble, no explanation, no surrounding ``` fence."
+    )
+
+    url = f"{executor.api_endpoint.rstrip('/')}/v1/messages"
+    payload = {
+        "model": model,
+        "max_tokens": 16384,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": text}],
+    }
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "x-api-key": executor.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}")
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM returned HTTP {resp.status_code}: {resp.text[:300]}",
+        )
+    data = resp.json()
+    parts = data.get("content") or []
+    translated = "".join(
+        p.get("text", "")
+        for p in parts
+        if isinstance(p, dict) and p.get("type") == "text"
+    ).strip()
+    if not translated:
+        raise HTTPException(status_code=502, detail="LLM returned empty content")
+    return {"translated": translated, "target": request.target, "truncated": truncated, "model": model}
+
+
+@router.post("/skills", status_code=201)
+async def create_skill(request: CreateSkillRequest):
+    svc = _require_skill_service()
+    try:
+        skill = await svc.create(
+            name=request.name,
+            link=request.link,
+            description=request.description,
+            category=request.category,
+            tags=request.tags,
+        )
+        return skill.model_dump(mode="json")
+    except SkillError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/skills/{skill_id}")
+async def get_skill(skill_id: str):
+    svc = _require_skill_service()
+    skill = await svc.get(skill_id)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"skill not found: {skill_id}")
+    return skill.model_dump(mode="json")
+
+
+@router.patch("/skills/{skill_id}")
+async def update_skill(skill_id: str, request: UpdateSkillRequest):
+    svc = _require_skill_service()
+    try:
+        skill = await svc.update(
+            skill_id,
+            name=request.name,
+            link=request.link,
+            description=request.description,
+            category=request.category,
+            tags=request.tags,
+        )
+        return skill.model_dump(mode="json")
+    except SkillError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/skills/{skill_id}")
+async def delete_skill(skill_id: str):
+    svc = _require_skill_service()
+    await svc.delete(skill_id)
+    return {"deleted": skill_id}
+
+
+@router.post("/skills/import/md")
+async def import_skills_md(files: list[UploadFile] = File(...)):
+    svc = _require_skill_service()
+    payloads: list[tuple[str, bytes]] = []
+    for f in files:
+        payloads.append((f.filename or "skill.md", await f.read()))
+    result = await svc.import_markdown(payloads)
+    return {
+        "created": [s.model_dump(mode="json") for s in result["created"]],
+        "skipped": result["skipped"],
+    }
+
+
+@router.post("/skills/import/excel")
+async def import_skills_excel(file: UploadFile = File(...)):
+    svc = _require_skill_service()
+    try:
+        result = await svc.import_excel(await file.read())
+    except SkillError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "created": [s.model_dump(mode="json") for s in result["created"]],
+        "skipped": result["skipped"],
     }
 
 
