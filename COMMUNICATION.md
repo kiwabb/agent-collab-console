@@ -487,3 +487,105 @@
 - 真实 codex/claude CLI 端到端验证 chat/refine/rerun 三种模式的实际效果（需本机 CLI）
 - 4 role × 3 mode 矩阵的 e2e 实跑（mock-mode 测试已覆盖端点 shape 和 prompt 构造）
 - 等待: review
+
+## Task 7: Project Conductor Finalization
+- Status: **DONE**
+- 修改文件:
+  - `backend/app/application/conductor_main_loop.py`
+  - `frontend/tests/projectConductorApi.test.ts`
+- 关键实现:
+  - 将 `conductor_main_loop.py` 中的 tool / LLM callable 类型别名改为 `Union[...]`，避免导入阶段因解释器兼容性直接失败
+  - 新增 4 个前端 API 契约测试，覆盖 `getProjectConductorState` / `askProjectConductor` / `scheduleProjectConductorReview` / `startProjectConductorLoop`
+- 本地环境补齐:
+  - `python3.11 -m ensurepip --user`
+  - `python3.11 -m pip install --user -r backend/requirements.txt pytest`
+  - `python3.11 -m pip install --user httpx pytest-asyncio`
+- 验证:
+  - `PYTHONPATH=backend python3.11 -m pytest backend/tests/test_conductor_main_loop.py backend/tests/test_project_conductor.py backend/tests/test_workflow_scheduler.py -q -k conductor` → `13 passed, 8 deselected`
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --import tsx --test tests/*.test.ts` → `89 passed`
+  - `python3.11 -m py_compile backend/app/application/conductor_main_loop.py backend/app/application/conductor_tools.py backend/app/application/project_conductor.py backend/app/interfaces/api.py backend/app/domain/models.py` → pass
+- Commit message: not committed
+- Blockers: none
+
+## Task 8: Project Conductor I18n
+- Status: **DONE**
+- 修改文件:
+  - `frontend/src/features/projects/ProjectConductorPage.tsx`
+  - `frontend/src/features/projects/components/ProjectConductorThreadDock.tsx`
+  - `frontend/src/lib/i18n.ts`
+  - `frontend/tests/projectConductorI18n.test.ts`
+- 关键实现:
+  - 将 Project Conductor 页面与 ThreadDock 的硬编码文案改为 `projectConductor.*` i18n keys
+  - 为中英文词典补齐标题、按钮、空态、toast、ThreadDock 状态与提示文案
+  - 新增前端测试锁定组件已接入 i18n，且英文词典键存在
+- 验证:
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --import tsx --test tests/*.test.ts` → `96 passed`
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node ./node_modules/typescript/bin/tsc --noEmit` → pass
+- Commit message: not committed
+- Blockers: none
+
+## Task 9: Settings I18n Completion
+- Status: **DONE**
+- 修改文件:
+  - `frontend/src/features/settings/SettingsPage.tsx`
+  - `frontend/src/components/runtime/RuntimeCatalogEditor.tsx`
+  - `frontend/src/app/settings/page.tsx`
+  - `frontend/src/lib/i18n.ts`
+  - `frontend/tests/settingsI18n.test.ts`
+- 关键实现:
+  - 将设置页 breadcrumb、Agents tab、Agents 说明、运行时加载/保存失败文案、ON/OFF 状态切换文案改为 i18n keys
+  - 将运行时编辑器中的 `Validate` / `Catalog is valid` / `Validation failed` / `Unknown error` / `Test` 接入 i18n
+  - 新增前端测试锁定 settings 与 runtime editor 的新增文案已接入 i18n，且英文词典键存在
+- 验证:
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --import tsx --test tests/*.test.ts` → `98 passed`
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node ./node_modules/typescript/bin/tsc --noEmit` → pass
+- Commit message: not committed
+- Blockers: none
+
+## Task 10: Agent Catalog Copy I18n
+- Status: **DONE**
+- 修改文件:
+  - `frontend/src/features/workflow/AgentCatalogPanel.tsx`
+  - `frontend/src/lib/i18n.ts`
+  - `frontend/tests/settingsI18n.test.ts`
+- 关键实现:
+  - 将 Agent Catalog 面板里的标题与说明改为 settings i18n keys
+  - 将刷新、加载中、空态、built-in 标签、执行器/产物元信息都接入 i18n
+  - 保留设置页内文案风格一致，避免 Agent Catalog 面板出现英文硬编码
+- 验证:
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --import tsx --test tests/settingsI18n.test.ts tests/*.test.ts` → `98 passed`
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node ./node_modules/typescript/bin/tsc --noEmit` → pass
+- Commit message: not committed
+- Blockers: none
+
+## Task 11: Agent Catalog Tier Content I18n
+- Status: **DONE**
+- 修改文件:
+  - `frontend/src/features/workflow/AgentCatalogPanel.tsx`
+  - `frontend/src/lib/i18n.ts`
+  - `frontend/tests/settingsI18n.test.ts`
+- 关键实现:
+  - 将 Agent Catalog 三个 tier 卡片的标题与说明改为 i18n keys
+  - 保持 managed / specialist / custom 三层内容在中英文下都可切换
+  - 新增测试锁定 tier copy 不再硬编码
+- 验证:
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --import tsx --test tests/settingsI18n.test.ts tests/*.test.ts` → `98 passed`
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node ./node_modules/typescript/bin/tsc --noEmit` → pass
+- Commit message: not committed
+- Blockers: none
+
+## Task 12: Agent Display Content I18n
+- Status: **DONE**
+- 修改文件:
+  - `frontend/src/features/workflow/AgentCatalogPanel.tsx`
+  - `frontend/src/lib/i18n.ts`
+  - `frontend/tests/settingsI18n.test.ts`
+- 关键实现:
+  - 为内置 managed 角色和 specialist 角色增加按 `role_key` 映射的本地化显示名与说明
+  - 自定义智能体仍保留原始用户内容
+  - 通过测试锁定 Agent Catalog 内容区不再依赖英文硬编码
+- 验证:
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --import tsx --test tests/settingsI18n.test.ts tests/*.test.ts` → `98 passed`
+  - `/Users/zhoujiaangyao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node ./node_modules/typescript/bin/tsc --noEmit` → pass
+- Commit message: not committed
+- Blockers: none

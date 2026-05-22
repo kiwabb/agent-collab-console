@@ -240,6 +240,22 @@ export function IssueDetailPage({ issueId }: Props) {
     },
   });
 
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("conductor_failed"),
+    ),
+    onEvent: (evt) => {
+      const e = evt as { error_message?: string };
+      addToast({
+        type: "error",
+        title: t("conductor.toastFailed"),
+        message: e.error_message || t("conductor.toastFailedHint"),
+      });
+      void loadIssue();
+    },
+  });
+
   useEffect(() => {
     if (isTab(urlTab) && urlTab !== tab) setTab(urlTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -25,6 +25,11 @@ cd frontend && npm run build && npm run lint
   - `request_user_clarification` — Conductor 决定"PM 出完 PRD 要不要停"/"QA 通过要不要等用户审"等 gate，对接 Approvals 页 `awaiting_review` 状态。
   - `retrieve_cold_memory` / `finalize_task`。
 
+**诊断 Conductor 崩溃**:
+- 后台异常会把 `conductor_tasks.status` 标成 `failed`，并把错误摘要 + traceback 写进 `result_json`
+- 每轮 LLM / tool_use / tool_result / finalize 会落到 `conductor_turns`，前端 DAG 里点 Conductor 可看完整时间线
+- `./dev-local.sh` 会把后端日志同步写到 `/tmp/agent-collab-backend.log`，可直接 `tail -f /tmp/agent-collab-backend.log`
+
 **WorkflowGraph 现在是 Conductor 决策时间线的可视化**：每次 `dispatch_subagent` 加一个 node + 上一节点到当前节点的 sequence edge（`add_workflow_node` / `add_workflow_edge` 是 INSERT OR IGNORE，不破坏已存在的节点）。前端 DagTab 通过 `workflow_node_updated` / `task_status` / `task_created` SSE 事件实时增长画面。同一 role 多次调度的 node_key 加 `#N` 后缀（`engineer#1`、`engineer#2`），前端按前缀解析 role icon。
 
 **Run kinds** (`ExecutionProcess.kind`): `initial` / `rerun` 用 role workflow prompt 并 persist 产物；`refine` 把现有产物 + 用户修改指令喂给 agent 再 persist；`chat` 用极简 prompt，CLI 自己续接历史，**不**改 `task.result`、**不** persist。端点：`POST /api/codex/tasks/{id}/chat|refine|rerun`，旧 `/messages` alias 到 chat。

@@ -530,6 +530,7 @@ class ProjectConductorState:
 
 
 ConductorTaskKind = Literal["issue", "qa_question", "scheduled_review", "ad_hoc"]
+ConductorTurnKind = Literal["llm_request", "tool_use", "tool_result", "error", "finalize"]
 
 
 @dataclass
@@ -545,6 +546,20 @@ class ConductorTask:
     result_json: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+@dataclass
+class ConductorTurn:
+    """A persisted event within a single Conductor loop."""
+
+    id: str
+    conductor_task_id: str
+    issue_id: str
+    turn_index: int
+    sub_index: int = 0
+    kind: ConductorTurnKind = "llm_request"
+    payload_json: str = "{}"
+    created_at: datetime | None = None
 
 
 @dataclass

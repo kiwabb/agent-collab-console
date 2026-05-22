@@ -1,9 +1,21 @@
-Use the local `agent-collaboration-help` skill at `.codex/skills/agent-collaboration-help/SKILL.md` when a Codex task needs focused help from Claude for review, validation, alternative approaches, or higher-confidence analysis.
+<!-- TRELLIS:START -->
+# Trellis Instructions
 
-When you need that help, output exactly one raw JSON object using the project help protocol and nothing else.
+These instructions are for AI assistants working in this project.
 
-Do not use `curl`, do not create sessions yourself, and do not call local APIs directly as a substitute for help.
+This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
 
-Keep help requests specific. Provide a short title, a concrete prompt, and use blocking help so the parent task can continue with the returned result.
-Use the canonical JSON keys `type`, `target`, `title`, `prompt`, `blocking`, and optional `context_summary`.
-The `type` value must be exactly `request_help`.
+- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
+- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
+- `.trellis/workspace/` — per-developer journals and session traces
+- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
+
+If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
+
+If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
+- `.agents/skills/` — reusable Trellis skills
+- `.codex/agents/` — optional custom subagents
+
+Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
+
+<!-- TRELLIS:END -->

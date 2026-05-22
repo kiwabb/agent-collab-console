@@ -81,6 +81,42 @@ async def test_conductor_loop_stops_when_finalize_task_tool_returns_answer():
 
 
 @pytest.mark.asyncio
+async def test_conductor_loop_records_turn_timeline():
+    recorded = []
+
+    async def fake_llm(messages, tools):
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"answer": "captured", "status": "done"},
+                }
+            ],
+        }
+
+    async def finalize_task(tool_input):
+        return tool_input
+
+    await run_conductor_loop(
+        prompt="Record turns.",
+        llm=fake_llm,
+        tools={"finalize_task": finalize_task},
+        tool_definitions=[{"name": "finalize_task"}],
+        turn_recorder=lambda **turn: recorded.append((turn["kind"], turn["turn_index"], turn["sub_index"])),
+    )
+
+    assert recorded == [
+        ("llm_request", 0, 0),
+        ("tool_use", 0, 1),
+        ("tool_result", 0, 1),
+        ("finalize", 0, 1),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_conductor_tools_expose_phase6_tool_schema_and_memory_lookup(tmp_path):
     from app.adapters.async_sqlite_store import AsyncSQLiteStore
 

@@ -641,6 +641,18 @@ class SQLiteStore:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS conductor_turns (
+                    id TEXT PRIMARY KEY,
+                    conductor_task_id TEXT NOT NULL,
+                    issue_id TEXT NOT NULL,
+                    turn_index INTEGER NOT NULL,
+                    sub_index INTEGER NOT NULL DEFAULT 0,
+                    kind TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS project_memory_embeddings (
                     id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL,
@@ -686,6 +698,8 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_id ON conductor_tasks(project_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
             # Phase 4: add instance_index to workflow_nodes for existing DBs
             try:
@@ -1656,6 +1670,94 @@ class SQLiteStore:
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
+
+    def load_latest_conductor_task_for_issue(self, issue_id: str) -> "ConductorTask | None":
+        from app.domain.models import ConductorTask
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """SELECT * FROM conductor_tasks
+               WHERE issue_id = ?
+               ORDER BY created_at DESC, updated_at DESC, id DESC
+               LIMIT 1""",
+            (issue_id,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        return ConductorTask(
+            id=row["id"],
+            project_id=row["project_id"],
+            task_kind=row["task_kind"],
+            payload=payload if isinstance(payload, dict) else {},
+            issue_id=row["issue_id"],
+            status=row["status"],
+            result_json=row["result_json"],
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    def save_conductor_turn(self, turn: "ConductorTurn") -> None:
+        from app.domain.models import ConductorTurn  # noqa: F401
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO conductor_turns
+               (id, conductor_task_id, issue_id, turn_index, sub_index, kind, payload_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                turn.id,
+                turn.conductor_task_id,
+                turn.issue_id,
+                turn.turn_index,
+                turn.sub_index,
+                turn.kind,
+                turn.payload_json,
+                self._format_datetime(turn.created_at or datetime.now()),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_conductor_turns(
+        self,
+        issue_id: str,
+        *,
+        conductor_task_id: str | None = None,
+        limit: int = 200,
+    ) -> list["ConductorTurn"]:
+        from app.domain.models import ConductorTurn
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        sql = """SELECT * FROM conductor_turns
+                 WHERE issue_id = ?"""
+        params: list[object] = [issue_id]
+        if conductor_task_id:
+            sql += " AND conductor_task_id = ?"
+            params.append(conductor_task_id)
+        sql += " ORDER BY created_at ASC, turn_index ASC, sub_index ASC LIMIT ?"
+        params.append(max(1, min(limit, 500)))
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        conn.close()
+        return [
+            ConductorTurn(
+                id=row["id"],
+                conductor_task_id=row["conductor_task_id"],
+                issue_id=row["issue_id"],
+                turn_index=int(row["turn_index"] or 0),
+                sub_index=int(row["sub_index"] or 0),
+                kind=row["kind"],
+                payload_json=row["payload_json"] or "{}",
+                created_at=self._parse_datetime(row["created_at"]),
+            )
+            for row in rows
+        ]
 
     def save_project_memory_embedding(self, memory: "ProjectMemoryEmbedding") -> None:
         from app.domain.models import ProjectMemoryEmbedding  # noqa: F401

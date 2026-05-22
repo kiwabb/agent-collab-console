@@ -9,6 +9,7 @@ FRONTEND_SWC_CACHE_DIR="$FRONTEND_DIR/.next/cache/next-swc"
 FRONTEND_NODE_BIN=""
 BACKEND_VENV_PYTHON=""
 BACKEND_UVICORN_CMD=()
+BACKEND_LOG_PATH="${BACKEND_LOG_PATH:-/tmp/agent-collab-backend.log}"
 export CODEX_SOURCE_ROOT="$ROOT_DIR"
 export CODEX_WORKSPACE_ROOT="${CODEX_WORKSPACE_ROOT:-/tmp/agent-collab-console-workspaces}"
 # Real-CLI mode is the production default — Engineer must actually patch the
@@ -122,6 +123,7 @@ free_port 9000 "backend"
 free_port 4000 "frontend"
 
 echo "Starting backend on http://localhost:9000"
+echo "Backend log: $BACKEND_LOG_PATH"
 echo "Codex workspace root: $CODEX_WORKSPACE_ROOT"
 if [[ -n "$BACKEND_VENV_PYTHON" ]]; then
   echo "Using backend virtualenv: $BACKEND_VENV_PYTHON"
@@ -130,7 +132,8 @@ else
 fi
 (
   cd "$BACKEND_DIR"
-  exec "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --port 9000 2>&1
+  : > "$BACKEND_LOG_PATH"
+  "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --port 9000 2>&1 | tee "$BACKEND_LOG_PATH"
 ) &
 BACKEND_PID=$!
 

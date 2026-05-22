@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verification must cover DB persistence, SSE payloads, and frontend rendering across layers"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Review for duplicated event/logging/persistence logic before signoff"}
+{"file": ".trellis/spec/ccgui/frontend/index.md", "reason": "Frontend verification should at least align with the repo frontend guideline index"}

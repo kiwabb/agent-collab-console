@@ -4610,18 +4610,50 @@ async def auto_start_issue_graph(issue_id: str):
     if not project_id:
         raise HTTPException(status_code=409, detail="Issue has no associated project")
 
-    from app.application.conductor_main_loop import run_issue_conductor_loop
+    from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
     from app.application.event_bus import _workflow_task_dispatcher
 
-    asyncio.create_task(run_issue_conductor_loop(
+    task = asyncio.create_task(run_issue_conductor_loop(
         issue=issue,
         project_id=project_id,
         store=store,
         event_bus=event_bus,
         task_dispatcher_fn=_workflow_task_dispatcher,
     ))
+    task.add_done_callback(
+        lambda done: _handle_conductor_loop_done(
+            done,
+            issue_id=issue_id,
+            store=store,
+            recover_fn=recover_background_conductor_failure,
+        )
+    )
 
     return _graph_to_dict(graph)
+
+
+def _handle_conductor_loop_done(task, *, issue_id: str, store, recover_fn) -> None:
+    import asyncio
+
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc is None:
+        return
+    logger.error(
+        "background conductor loop crashed for issue %s",
+        issue_id,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    asyncio.create_task(
+        recover_fn(
+            issue_id=issue_id,
+            store=store,
+            event_bus=event_bus,
+            exc=exc,
+        )
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -4692,6 +4724,43 @@ async def codex_issue_conductor_log(issue_id: str):
          "created_at": d.created_at.isoformat() if d.created_at else None}
         for d in decisions
     ]}
+
+
+@router.get("/codex/issues/{issue_id}/conductor-turns")
+async def codex_issue_conductor_turns(
+    issue_id: str,
+    conductor_task_id: str | None = None,
+    limit: int = 200,
+):
+    """Return persisted conductor loop turns for this issue."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    if not hasattr(codex_store, "list_conductor_turns"):
+        return {"turns": []}
+    turns = await codex_store.list_conductor_turns(
+        issue_id,
+        conductor_task_id=conductor_task_id,
+        limit=limit,
+    )
+    payload = []
+    for turn in turns:
+        try:
+            turn_payload = json.loads(turn.payload_json or "{}")
+        except json.JSONDecodeError:
+            turn_payload = {"raw": turn.payload_json}
+        payload.append(
+            {
+                "id": turn.id,
+                "conductor_task_id": turn.conductor_task_id,
+                "issue_id": turn.issue_id,
+                "turn_index": turn.turn_index,
+                "sub_index": turn.sub_index,
+                "kind": turn.kind,
+                "payload": turn_payload,
+                "created_at": turn.created_at.isoformat() if turn.created_at else None,
+            }
+        )
+    return {"turns": payload}
 
 
 @router.get("/codex/issues/{issue_id}/conductor-state")

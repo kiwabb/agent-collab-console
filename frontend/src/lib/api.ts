@@ -1357,6 +1357,31 @@ export async function getConductorLog(issueId: string): Promise<ConductorDecisio
   return data.decisions ?? [];
 }
 
+export interface ConductorTurn {
+  id: string;
+  conductor_task_id: string;
+  issue_id: string;
+  turn_index: number;
+  sub_index: number;
+  kind: "llm_request" | "tool_use" | "tool_result" | "error" | "finalize";
+  payload: Record<string, unknown>;
+  created_at: string | null;
+}
+
+export async function getConductorTurns(
+  issueId: string,
+  opts?: { conductorTaskId?: string; limit?: number },
+): Promise<ConductorTurn[]> {
+  const sp = new URLSearchParams();
+  if (opts?.conductorTaskId) sp.set("conductor_task_id", opts.conductorTaskId);
+  if (opts?.limit) sp.set("limit", String(opts.limit));
+  const suffix = sp.size > 0 ? `?${sp.toString()}` : "";
+  const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-turns${suffix}`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { turns: ConductorTurn[] };
+  return data.turns ?? [];
+}
+
 export interface ConductorStatePayload {
   issue_id: string;
   running_thread: Array<{

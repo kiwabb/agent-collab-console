@@ -197,3 +197,45 @@ async def test_loop_dispatches_pm():
 
     assert result.status == "done"
     assert "pm" in dispatched_roles
+
+
+@pytest.mark.asyncio
+async def test_loop_marks_failed_and_emits_failure_event():
+    from app.application.conductor_main_loop import run_issue_conductor_loop
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    store = _make_store(issue, graph)
+    store.save_conductor_turn = AsyncMock()
+    event_bus = MagicMock()
+    event_bus.append = AsyncMock()
+
+    registry = _make_noop_conductor_tools_registry()
+    mock_conductor = MagicMock()
+    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.append_hot_event = AsyncMock()
+
+    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
+         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
+         patch("app.application.conductor_main_loop.call_llm_with_tools", side_effect=RuntimeError("boom")), \
+         patch("app.application.conductor_main_loop.resolve_streaming_context", return_value=MagicMock()), \
+         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor):
+
+        mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
+
+        result = await run_issue_conductor_loop(
+            issue=issue,
+            project_id="proj-001",
+            store=store,
+            event_bus=event_bus,
+            task_dispatcher_fn=None,
+        )
+
+    assert result.status == "failed"
+    final_task = store.save_conductor_task.call_args_list[-1][0][0]
+    assert final_task.status == "failed"
+    assert "\"status\": \"failed\"" in (final_task.result_json or "")
+    assert any(call.args[0]["type"] == "conductor_failed" for call in event_bus.append.call_args_list)
