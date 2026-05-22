@@ -52,3 +52,6 @@ scratch/
 # Temporary files
 *.log
 *.tmp
+
+# Local/private vendor testing notes may include real model keys.
+hermes_agent_training_manual.md
