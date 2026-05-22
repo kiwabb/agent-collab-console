@@ -3,6 +3,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
