@@ -177,3 +177,37 @@ Conductor LLM 调用从非流式 httpx.post 切到 Anthropic SSE 流式 (call_ll
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Fix conductor streaming not live
+
+**Date**: 2026-05-22
+**Task**: Fix conductor streaming not live
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Unified the global realtime event stream onto WebSocket with envelope/ring-buffer resume, removed the SSE endpoint, and fixed the conductor drawer refresh gap with resume_gap handling and regression tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2b9dbc4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
