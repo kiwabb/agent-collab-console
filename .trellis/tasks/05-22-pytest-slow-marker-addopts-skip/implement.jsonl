@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check for existing pytest configuration patterns (e.g., conftest hooks, marker registration) before introducing new --runslow infrastructure. pytest official `--runslow` pattern is widely used; don't reinvent it."}
+{"file": ".trellis/tasks/05-22-pytest-slow-marker-addopts-skip/prd.md", "reason": "Acceptance Criteria defines exact <60s default-fast / --runslow full / explicit-path-still-runs behavior. Sub-agent must verify each AC after wiring up the marker + addopts."}

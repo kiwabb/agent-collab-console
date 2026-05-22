@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 import asyncio
 
+pytestmark = pytest.mark.slow
+
 from app.domain.models import (
     RuntimeCatalog,
     RuntimeExecutorConfig,

@@ -13,7 +13,10 @@ from pathlib import Path
 import pytest
 
 
-pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git binary not available")
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skipif(shutil.which("git") is None, reason="git binary not available"),
+]
 
 
 def _init_repo(path: Path) -> Path:

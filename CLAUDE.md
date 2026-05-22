@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./dev-local.sh                                          # 同时启动前后端
 cd backend && uvicorn app.main:app --reload --port 9000
 cd frontend && npm run dev                              # port 4000
-cd backend && python3 -m pytest -v
-cd backend && python3 -m pytest tests/test_foo.py -v
+cd backend && python3 -m pytest -v                      # 默认快档，跳过 @pytest.mark.slow
+cd backend && python3 -m pytest --runslow -v            # 全量，包括 slow integration tests
+cd backend && python3 -m pytest tests/test_foo.py -v    # 显式点名文件时不受 slow 默认跳过影响
 cd frontend && npm test
 cd frontend && npm run build && npm run lint
 ```

@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/05-22-pytest-slow-marker-addopts-skip/prd.md", "reason": "Verify each AC checkbox: default pytest <60s and ~351 collected; --runslow runs all 406; explicit path still runs slow files; quick tests still all pass."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Verify the conftest.py implementation follows pytest's documented --runslow pattern instead of a custom mechanism."}
