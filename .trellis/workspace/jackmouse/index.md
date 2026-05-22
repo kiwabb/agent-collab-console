@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
+- **Total Sessions**: 5
 - **Last Active**: 2026-05-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~145 | Active |
+| `journal-1.md` | ~179 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-05-22 | Conductor 完整状态机 + Stepper/Timeline + 预估剩余时间 | `f7c912d` | `main` |
 | 4 | 2026-05-22 | Conductor 流式输出 + phase/detail 实时状态可见 | `fe12046`, `7dbf71c` | `main` |
 | 3 | 2026-05-22 | pytest 提速 + Conductor consumed_at hotfix | `01454d4`, `e30653c` | `main` |
 | 2 | 2026-05-22 | Conductor 交互式对话 (Steer + Resume) | `5e3cc65` | `main` |

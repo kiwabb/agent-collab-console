@@ -143,3 +143,37 @@ Conductor LLM 调用从非流式 httpx.post 切到 Anthropic SSE 流式 (call_ll
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Conductor 完整状态机 + Stepper/Timeline + 预估剩余时间
+
+**Date**: 2026-05-22
+**Task**: Conductor 完整状态机 + Stepper/Timeline + 预估剩余时间
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+上一任务 (05-22-conductor-streaming-and-live-status, fe12046+7dbf71c) 交付的 phase/detail 基础上升级到完整状态机。后端 conductor_main_loop 加 LEGAL_TRANSITIONS 矩阵 + set_phase 校验 + 违规警告放行（is_legal=0 + emit conductor_state_violation SSE）；新表 conductor_state_log 两份 migration (CREATE TABLE 在 CREATE INDEX 之前)，set_phase 成功后 INSERT 一行带 duration_ms；phase_duration_estimator.py 新模块按 to_phase 算 P50/P95/N + lru cache + done invalidate；api.py 加 GET /conductor-state-log + /conductor-phase-estimates。前端 ConductorLogPanel 加横向 Stepper（framer-motion AnimatePresence + motion.div）当前节点 pulse、failed XCircle error 色、连续 paused 合并成一个节点 + i18n '暂停合并' 提示；PhaseEstimate 显示 '已 32s / ~45s' N<5 加 ~ + 灰 + tooltip 解释置信度、超 P95 进度条变 warning；IssueDetailPage + ExecutionProcessesContext 监听 conductor_state_violation 弹 toast。Codex 完成实施，main agent inline 验证 10 条 R 全绿（15 backend tests + 4 frontend node:test + build 通过 + lint 无 error），避免上次 sub-agent 跑全量 pytest 卡死的教训。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f7c912d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
