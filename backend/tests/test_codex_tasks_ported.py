@@ -40,7 +40,7 @@ def project_ctx(client, tmp_path):
     ).json()
     workspace = client.post(
         "/api/codex/workspaces",
-        json={"title": "WS", "project_id": project["id"]},
+        json={"title": "Workspace", "project_id": project["id"]},
     ).json()
     return {"project_id": project["id"], "session_id": workspace["id"], "repo": repo}
 

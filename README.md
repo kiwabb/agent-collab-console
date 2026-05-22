@@ -140,6 +140,17 @@ Check the backend:
 curl http://localhost:9000/api/health
 ```
 
+For an operational snapshot that is safe to share in support/debugging notes:
+
+```bash
+curl http://localhost:9000/api/diagnostics
+```
+
+The diagnostics response includes database counts, runtime catalog status,
+executor binary availability, WebSocket subscriber counts, and key configuration
+flags. It reports whether model API keys are configured, but never returns the
+secret values.
+
 If another service owns port 9000, stop it or change the backend/frontend rewrite configuration together.
 
 ### Codex or Claude unavailable

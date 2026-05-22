@@ -491,6 +491,131 @@ async def health_check():
     return {"service": "agent-collab-console", "version": "1.0"}
 
 
+@router.get("/diagnostics")
+async def diagnostics():
+    """Machine-readable operational snapshot for local-first deployments.
+
+    This endpoint is intentionally safe for support screenshots and CI smoke
+    checks: it reports whether secrets are configured, but never returns secret
+    values.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+
+    from app.bootstrap import WORKFLOW_DAG_ENABLED
+    from app.interfaces.codex_ws import (
+        message_stream_manager,
+        raw_log_stream_manager,
+        stream_manager,
+    )
+
+    now = datetime.now().isoformat()
+    checks: list[dict] = []
+
+    try:
+        sessions = await codex_store.list_codex_sessions()
+        issues = await codex_store.list_codex_issues()
+        processes = await codex_store.list_execution_processes()
+        running_processes = [
+            process for process in processes
+            if str(getattr(process, "status", "")).lower() in {"running", "responding"}
+        ]
+        database = {
+            "status": "ok",
+            "sessions_total": len(sessions),
+            "issues_total": len(issues),
+            "execution_processes_total": len(processes),
+            "execution_processes_running": len(running_processes),
+        }
+        checks.append({"name": "database", "status": "ok"})
+    except Exception as exc:  # noqa: BLE001
+        database = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+        checks.append({"name": "database", "status": "error", "detail": database["error"]})
+
+    try:
+        catalog = await _get_runtime_catalog_service().load_catalog()
+        enabled_executors = [executor for executor in catalog.executors if executor.enabled]
+        runtime_catalog = {
+            "status": "ok",
+            "executors_total": len(catalog.executors),
+            "executors_enabled": len(enabled_executors),
+            "executors": [
+                {
+                    "id": executor.id,
+                    "label": executor.label,
+                    "enabled": executor.enabled,
+                    "executor_type": executor.executor_type,
+                    "providers_total": len(executor.providers),
+                    "providers_enabled": len([provider for provider in executor.providers if provider.enabled]),
+                    "default_provider_id": executor.default_provider_id,
+                    "default_model": executor.default_model,
+                    "api_endpoint_configured": bool(executor.api_endpoint),
+                    "api_key_configured": bool(executor.api_key),
+                }
+                for executor in catalog.executors
+            ],
+        }
+        checks.append({
+            "name": "runtime_catalog",
+            "status": "ok" if enabled_executors else "degraded",
+            "detail": None if enabled_executors else "No enabled executors configured",
+        })
+    except Exception as exc:  # noqa: BLE001
+        runtime_catalog = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+        checks.append({"name": "runtime_catalog", "status": "error", "detail": runtime_catalog["error"]})
+
+    config = {
+        "real_cli_enabled": os.getenv("REAL_CLI", "true").lower() == "true",
+        "codex_launch_enabled": os.getenv("CODEX_LAUNCH_ENABLED", "true").lower() != "false",
+        "workflow_dag_enabled": WORKFLOW_DAG_ENABLED,
+        "use_sqlite": os.getenv("USE_SQLITE", "true").lower() == "true",
+        "sqlite_db_path_configured": bool(os.getenv("SQLITE_DB_PATH")),
+        "workspace_root_configured": bool(os.getenv("CODEX_WORKSPACE_ROOT")),
+        "event_bus_buffer_size": getattr(event_bus, "_buffer_size", None),
+    }
+
+    executors = {
+        "codex_binary_available": check_codex_available(),
+        "claude_binary_available": shutil.which("claude") is not None,
+    }
+
+    websockets = {
+        "workspace_stream_workspaces": len(getattr(stream_manager, "_subscribers", {})),
+        "workspace_stream_subscribers": sum(
+            len(subscribers) for subscribers in getattr(stream_manager, "_subscribers", {}).values()
+        ),
+        "raw_log_stream_processes": len(getattr(raw_log_stream_manager, "_subscribers", {})),
+        "raw_log_stream_subscribers": sum(
+            len(subscribers) for subscribers in getattr(raw_log_stream_manager, "_subscribers", {}).values()
+        ),
+        "message_stream_processes": len(getattr(message_stream_manager, "_subscribers", {})),
+        "message_stream_subscribers": sum(
+            len(subscribers) for subscribers in getattr(message_stream_manager, "_subscribers", {}).values()
+        ),
+        "global_event_subscribers": len(getattr(event_bus, "subscribers", [])),
+        "global_event_buffer_size": len(getattr(event_bus, "events", [])),
+        "global_event_buffer_capacity": getattr(event_bus, "_buffer_size", None),
+    }
+
+    status = "ok"
+    if any(check["status"] == "error" for check in checks):
+        status = "degraded"
+    elif any(check["status"] == "degraded" for check in checks):
+        status = "degraded"
+
+    return {
+        "service": "agent-collab-console",
+        "status": status,
+        "generated_at": now,
+        "database": database,
+        "runtime_catalog": runtime_catalog,
+        "executors": executors,
+        "websockets": websockets,
+        "config": config,
+        "checks": checks,
+    }
+
+
 @router.get("/utils/select-directory")
 async def select_directory():
     """Opens a native directory picker on macOS and returns the selected path."""
@@ -1121,8 +1246,8 @@ async def get_codex_stats():
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
 
-    sessions = await codex_store.list_codex_sessions(project_id=None)
-    issues = await codex_store.list_codex_issues(project_id=None)
+    sessions = await codex_store.list_codex_sessions()
+    issues = await codex_store.list_codex_issues()
 
     sessions_active = 0
     for session in sessions:

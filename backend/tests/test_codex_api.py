@@ -36,23 +36,24 @@ def _create_project(client, tmp_path: Path, name: str = "demo"):
 
 def test_codex_stats_returns_basic_counts_across_projects(client, tmp_path):
     """Two separate projects each get a workspace; stats must aggregate workspace/session counts."""
+    before = client.get("/api/codex/stats").json()
     proj_a = _create_project(client, tmp_path, name="stats-proj-a")
     proj_b = _create_project(client, tmp_path, name="stats-proj-b")
 
     ws_a = client.post(
         "/api/codex/workspaces",
-        json={"title": "WA", "project_id": proj_a["id"]},
+        json={"title": "Workspace A", "project_id": proj_a["id"]},
     ).json()
     ws_b = client.post(
         "/api/codex/workspaces",
-        json={"title": "WB", "project_id": proj_b["id"]},
+        json={"title": "Workspace B", "project_id": proj_b["id"]},
     ).json()
 
     resp = client.get("/api/codex/stats")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["workspaces_total"] == 2, f"expected 2 workspaces, got {body}"
-    assert body["sessions_total"] == 2
+    assert body["workspaces_total"] == before["workspaces_total"] + 2, body
+    assert body["sessions_total"] == before["sessions_total"] + 2
     assert "tasks_total" in body
     assert "executor_codex_available" in body
     assert "executor_claude_available" in body

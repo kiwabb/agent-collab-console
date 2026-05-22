@@ -166,18 +166,26 @@ class TestRuntimeCatalogService:
         assert model == "claude-opus-4-7"
 
     @pytest.mark.asyncio
-    async def test_resolve_effective_config_rejects_unknown_executor(self, service, default_catalog):
-        """Unknown executor raises validation error."""
-        with pytest.raises(RuntimeCatalogValidationError, match="Unknown executor"):
-            service.resolve_effective_config(default_catalog, "unknown", provider=None, model=None)
+    async def test_resolve_effective_config_falls_back_from_unknown_executor(self, service, default_catalog):
+        """Unknown executor falls back to the first enabled executor."""
+        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(
+            default_catalog, "unknown", provider=None, model=None
+        )
+        assert executor == "codex"
+        assert provider == "anthropic"
+        assert model == "claude-sonnet-4-6"
 
     @pytest.mark.asyncio
-    async def test_resolve_effective_config_rejects_disabled_executor(self, service, default_catalog):
-        """Disabled executor raises validation error."""
+    async def test_resolve_effective_config_falls_back_from_disabled_executor(self, service, default_catalog):
+        """Disabled executor falls back to the next enabled executor."""
         codex = next(e for e in default_catalog.executors if e.id == "codex")
         codex.enabled = False
-        with pytest.raises(RuntimeCatalogValidationError, match="disabled"):
-            service.resolve_effective_config(default_catalog, "codex", provider=None, model=None)
+        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(
+            default_catalog, "codex", provider=None, model=None
+        )
+        assert executor == "claude"
+        assert provider == "anthropic"
+        assert model == "claude-sonnet-4-6"
 
     @pytest.mark.asyncio
     async def test_render_template_valid_placeholders(self, service):

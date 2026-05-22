@@ -67,7 +67,7 @@ def test_workspace_creation_inherits_repo_path_as_cwd(client, tmp_path):
     project = _create_project(client, tmp_path, name="ws-host")
     resp = client.post(
         "/api/codex/workspaces",
-        json={"title": "WS", "project_id": project["id"]},
+        json={"title": "Workspace", "project_id": project["id"]},
     )
     assert resp.status_code == 201, resp.text
     workspace = resp.json()
@@ -79,7 +79,7 @@ def test_issue_creation_builds_worktree(client, tmp_path):
     project = _create_project(client, tmp_path, name="issue-host")
     ws = client.post(
         "/api/codex/workspaces",
-        json={"title": "W", "project_id": project["id"]},
+        json={"title": "Workspace", "project_id": project["id"]},
     ).json()
     resp = client.post(
         "/api/codex/issues",
@@ -96,7 +96,7 @@ def test_issue_creation_builds_worktree(client, tmp_path):
 def test_merge_issue_squash_lands_on_base(client, tmp_path):
     project = _create_project(client, tmp_path, name="merge-host")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     issue = client.post(
         "/api/codex/issues",
@@ -125,7 +125,7 @@ def test_merge_issue_squash_lands_on_base(client, tmp_path):
 def test_delete_project_refuses_without_force_when_session_attached(client, tmp_path):
     project = _create_project(client, tmp_path, name="protected")
     client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     )
     resp = client.delete(f"/api/projects/{project['id']}")
     assert resp.status_code == 409
@@ -134,7 +134,7 @@ def test_delete_project_refuses_without_force_when_session_attached(client, tmp_
 def test_delete_project_force_cascades_sessions(client, tmp_path):
     project = _create_project(client, tmp_path, name="bulk")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     # Spawn an issue so a real worktree dir exists.
     issue = client.post(
@@ -166,7 +166,7 @@ def test_issue_creation_with_base_branch_override_forks_from_feature(client, tmp
     subprocess.run(["git", "checkout", "main"], cwd=repo, check=True, capture_output=True)
 
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     resp = client.post(
         "/api/codex/issues",
@@ -182,7 +182,7 @@ def test_issue_creation_with_base_branch_override_forks_from_feature(client, tmp
 def test_project_stats_counts_workspaces_and_issue_buckets(client, tmp_path):
     project = _create_project(client, tmp_path, name="stats-host")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     # Three issues: leave one open, merge one, abandon one.
     open_issue = client.post(
@@ -225,7 +225,7 @@ def test_merge_refuses_when_base_diverged(client, tmp_path):
     project = _create_project(client, tmp_path, name="diverged-base")
     repo = Path(project["repo_path"])
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     issue = client.post(
         "/api/codex/issues", json={"session_id": ws["id"], "title": "behind"}
@@ -260,10 +260,10 @@ def test_merge_refuses_when_base_diverged(client, tmp_path):
     assert allowed.status_code == 200
 
 
-def test_merge_refuses_dirty_worktree(client, tmp_path):
+def test_merge_auto_commits_dirty_worktree(client, tmp_path):
     project = _create_project(client, tmp_path, name="dirty-merge")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     issue = client.post(
         "/api/codex/issues", json={"session_id": ws["id"], "title": "dirty"}
@@ -271,14 +271,15 @@ def test_merge_refuses_dirty_worktree(client, tmp_path):
     # Drop an uncommitted file in the worktree.
     (Path(issue["git_worktree_path"]) / "tmp.txt").write_text("staging")
     resp = client.post(f"/api/codex/issues/{issue['id']}/merge", json={"message": None})
-    assert resp.status_code == 400
-    assert "uncommitted" in resp.json()["detail"].lower()
+    assert resp.status_code == 200, resp.text
+    refreshed = client.get(f"/api/codex/issues/{issue['id']}").json()
+    assert refreshed["git_merge_status"] == "merged"
 
 
-def test_abandon_issue_clears_worktree_and_marks_status(client, tmp_path):
+def test_abandon_issue_marks_status_and_keeps_worktree_for_undo(client, tmp_path):
     project = _create_project(client, tmp_path, name="abandon-host")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     issue = client.post(
         "/api/codex/issues", json={"session_id": ws["id"], "title": "throwaway"}
@@ -289,17 +290,21 @@ def test_abandon_issue_clears_worktree_and_marks_status(client, tmp_path):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["git_merge_status"] == "abandoned"
-    assert body["git_worktree_path"] is None
-    assert not worktree.exists()
+    assert body["git_worktree_path"] == str(worktree)
+    assert worktree.exists()
     # Issue record still exists.
     listed = client.get(f"/api/codex/issues/{issue['id']}").json()
     assert listed["git_merge_status"] == "abandoned"
+    finalize = client.post(f"/api/codex/issues/{issue['id']}/abandon/finalize")
+    assert finalize.status_code == 200, finalize.text
+    assert finalize.json()["git_worktree_path"] is None
+    assert not worktree.exists()
 
 
 def test_abandon_refuses_when_already_merged(client, tmp_path):
     project = _create_project(client, tmp_path, name="abandon-block")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     issue = client.post(
         "/api/codex/issues", json={"session_id": ws["id"], "title": "block"}
@@ -320,7 +325,7 @@ def test_abandon_refuses_when_already_merged(client, tmp_path):
 def test_repair_resets_issue_state_when_branch_was_deleted_externally(client, tmp_path):
     project = _create_project(client, tmp_path, name="ghost-branch")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     issue = client.post(
         "/api/codex/issues", json={"session_id": ws["id"], "title": "ghost-branch"}
@@ -343,7 +348,7 @@ def test_repair_resets_issue_state_when_branch_was_deleted_externally(client, tm
 def test_repair_removes_orphan_worktree_dirs(client, tmp_path):
     project = _create_project(client, tmp_path, name="orphan-gc")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     # Create one live issue (=> one legit worktree).
     live = client.post(
@@ -367,7 +372,7 @@ def test_repair_removes_orphan_worktree_dirs(client, tmp_path):
 def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path):
     project = _create_project(client, tmp_path, name="repair-host")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     issue = client.post(
         "/api/codex/issues", json={"session_id": ws["id"], "title": "ghost"}
@@ -386,7 +391,7 @@ def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path
 def test_audit_log_supports_since_filter(client, tmp_path):
     project = _create_project(client, tmp_path, name="audit-since")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     issue_a = client.post(
         "/api/codex/issues", json={"session_id": ws["id"], "title": "early"}
@@ -409,7 +414,7 @@ def test_audit_log_supports_since_filter(client, tmp_path):
 def test_audit_log_records_merge_and_abandon(client, tmp_path):
     project = _create_project(client, tmp_path, name="audit-host")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     # Merge one issue
     merged = client.post(
@@ -502,7 +507,7 @@ def test_full_create_to_merge_round_trip(client, tmp_path):
 def test_get_issue_diff_returns_empty_when_no_changes(client, tmp_path):
     project = _create_project(client, tmp_path, name="diff-empty")
     ws = client.post(
-        "/api/codex/workspaces", json={"title": "W", "project_id": project["id"]}
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     issue = client.post(
         "/api/codex/issues",

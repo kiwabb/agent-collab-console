@@ -23,7 +23,7 @@ Goal: users can tell what the app is doing and operators can diagnose failures.
 Deliverables:
 
 * Structured backend logging with request IDs and task/process IDs.
-* Health and diagnostics endpoints for backend, database, runtime catalog, and WebSocket status.
+* Health and diagnostics endpoints for backend, database, runtime catalog, and WebSocket status. `/api/diagnostics` now exposes the first machine-readable snapshot and redacts secret values.
 * Frontend diagnostics panel showing backend connectivity, event stream health, and executor availability.
 * Golden-signal metrics plan: latency, traffic, errors, saturation.
 
