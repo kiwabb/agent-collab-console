@@ -46,6 +46,26 @@ Questions to answer:
 - Do not make row click select inline detail. Row click should navigate to `/issues/[id]`.
 - Do not pass large prop bundles into list components; keep each component's props focused on its own responsibility.
 
+### Scenario: Project Workspaces Management Surface
+
+#### Scope / Trigger
+
+- Trigger: changing `/projects/[id]`, `/projects/[id]/conductor`, or components under `frontend/src/features/projects/`.
+- Project pages have two sibling responsibilities: workspace management and project-level Conductor conversation.
+
+#### Required Structure
+
+- Keep workspace CRUD, KPIs, search, and workspace table on `/projects/[id]`.
+- Keep the full `ProjectConductorPage` on `/projects/[id]/conductor`.
+- Share project Hero and secondary navigation through `ProjectShell`.
+- Secondary navigation should use `next/link` and `usePathname` so active state, deep links, and browser navigation remain correct.
+
+#### Forbidden Patterns
+
+- Do not embed `ProjectConductorPage` directly in `ProjectWorkspacesPage`.
+- Do not push the primary `+ New workspace` action below a full Conductor panel or other heavy conversation surface.
+- Do not rewrite `ProjectConductorPage` just to move where it mounts; keep project conductor behavior reusable.
+
 ---
 
 ## Props Conventions

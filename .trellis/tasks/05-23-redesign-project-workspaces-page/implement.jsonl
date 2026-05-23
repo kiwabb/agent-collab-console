@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/vibe-kanban/frontend/component-guidelines.md", "reason": "Project page redesign should mirror the scheduler-surface split pattern and keep management pages focused."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing ProjectConductorPage and current workspace table/KPI components instead of creating parallel conductor or table implementations."}

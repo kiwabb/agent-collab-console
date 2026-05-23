@@ -13,6 +13,7 @@ function readSource(relativePath: string): string {
 
 test("project workspace table strings come from i18n keys", () => {
   const source = readSource("features/projects/ProjectWorkspacesPage.tsx");
+  const shell = readSource("features/projects/ProjectShell.tsx");
 
   [
     't("workspace.projectPage.new")',
@@ -32,6 +33,14 @@ test("project workspace table strings come from i18n keys", () => {
     't("workspace.dialog.planFirstPm")',
   ].forEach((needle) => {
     assert.match(source, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  [
+    't("project.nav.workspaces")',
+    't("project.nav.conductor")',
+    't("workspace.projectPage.titleFallback")',
+  ].forEach((needle) => {
+    assert.match(shell, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 });
 
@@ -69,6 +78,8 @@ test("workspace translation keys are available in English", () => {
   assert.equal(getDictionaryValue("en-US", "workspace.deleteAllData"), "Clean all data");
   assert.equal(getDictionaryValue("en-US", "workspace.console.createAndStart"), "Create and start ↵");
   assert.equal(getDictionaryValue("en-US", "workspace.dialog.planFirstPm"), "Pause after PM");
+  assert.equal(getDictionaryValue("en-US", "project.nav.workspaces"), "Workspaces");
+  assert.equal(getDictionaryValue("en-US", "project.nav.conductor"), "Conductor");
 });
 
 test("workspace console strings come from i18n keys", () => {

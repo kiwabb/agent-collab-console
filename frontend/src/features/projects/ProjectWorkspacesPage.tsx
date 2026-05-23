@@ -8,7 +8,6 @@ import {
   Edit3,
   Trash2,
   ChevronRight,
-  Folder,
   Layers,
   GitBranch,
   Inbox,
@@ -42,7 +41,7 @@ import { cn } from "@/lib/utils";
 import { emitDataEvent } from "@/lib/dataEvents";
 import { workspaceLabel } from "@/lib/workspaceLabel";
 import { useI18n } from "@/providers/I18nProvider";
-import { ProjectConductorPage } from "@/features/projects/ProjectConductorPage";
+import { ProjectShell } from "@/features/projects/ProjectShell";
 
 interface Props {
   projectId: string;
@@ -191,36 +190,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   }, [pendingDelete, addToast, t]);
 
   return (
-    <div className="min-h-full">
-      {/* Hero */}
-      <div className="relative overflow-hidden border-b border-border-subtle">
-        <div
-          aria-hidden
-          className="absolute inset-0 opacity-[0.35] pointer-events-none"
-          style={{
-            background:
-              "radial-gradient(900px 300px at 12% -10%, rgba(230,149,82,0.30), transparent 60%), radial-gradient(700px 240px at 90% -10%, rgba(96,165,250,0.18), transparent 60%)",
-          }}
-        />
-        <div className="relative px-8 pt-7 pb-6 max-w-[1280px] mx-auto">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="size-9 rounded-xl bg-gradient-to-br from-brand to-brand-strong flex items-center justify-center shadow-lg shadow-brand/30">
-              <Folder size={18} className="text-black" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h1 className="text-2xl font-bold tracking-tight truncate">
-                {project?.name ?? t("workspace.projectPage.titleFallback")}
-                <span className="text-text-muted font-normal"> / {t("sidebar.workspaces")}</span>
-              </h1>
-              <p className="text-[12px] text-text-muted truncate">
-                {project?.repo_path}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-8 py-6 max-w-[1280px] mx-auto space-y-5">
+    <ProjectShell projectId={projectId} project={project}>
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Kpi
@@ -253,8 +223,6 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             loading={loading}
           />
         </div>
-
-        <ProjectConductorPage projectId={projectId} />
 
         {/* Toolbar */}
         <div className="flex items-center gap-2">
@@ -323,7 +291,6 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             </ul>
           )}
         </section>
-      </div>
 
       <WorkspaceFormDialog
         open={createOpen}
@@ -369,7 +336,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
         isLoading={deleting}
         variant="destructive"
       />
-    </div>
+    </ProjectShell>
   );
 }
 

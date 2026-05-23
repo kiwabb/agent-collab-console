@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/vibe-kanban/frontend/component-guidelines.md", "reason": "Verify the project page keeps workspace management and conductor concerns separated without a new giant page component."}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "Verify new route/shell code follows frontend quality rules and avoids unsafe rendering."}
