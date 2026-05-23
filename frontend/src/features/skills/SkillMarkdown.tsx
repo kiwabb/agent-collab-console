@@ -4,14 +4,49 @@ import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
 import { cn } from "@/lib/utils";
 
-// Skill content is user-curated (user explicitly added the link) so passing
-// `rehype-raw` is acceptable — README files on GitHub commonly use raw HTML
-// (<details>, <summary>, <img>, <picture>, ...) that ReactMarkdown otherwise
-// escapes. Do NOT reuse this renderer for agent-generated content.
+// Skill content may come from remote README URLs. Keep GitHub-style raw HTML
+// support for docs ergonomics, but sanitize it before syntax highlighting.
+const markdownSanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [
+    ...(defaultSchema.tagNames || []),
+    "details",
+    "summary",
+  ],
+  attributes: {
+    ...defaultSchema.attributes,
+    "*": [
+      ...(defaultSchema.attributes?.["*"] || []),
+      "className",
+      "title",
+      "aria-label",
+    ],
+    a: [
+      ...(defaultSchema.attributes?.a || []),
+      ["href", /^https?:\/\//i, /^mailto:/i, /^#/],
+      "target",
+      "rel",
+    ],
+    code: [
+      ...(defaultSchema.attributes?.code || []),
+      ["className", /^language-/, /^hljs/],
+    ],
+    details: ["open"],
+    img: [
+      ...(defaultSchema.attributes?.img || []),
+      "alt",
+      "src",
+      "title",
+      "width",
+      "height",
+    ],
+  },
+};
 
 const components: Components = {
   p: ({ node, ...props }) => (
@@ -110,7 +145,7 @@ export const SkillMarkdown = memo(function SkillMarkdown({ content, className }:
     <div className={cn("max-w-none break-words", className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeRaw, rehypeHighlight]}
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema], rehypeHighlight]}
         components={components}
       >
         {content}

@@ -3,6 +3,7 @@ from uuid import uuid4
 from pathlib import Path
 import logging
 import shutil
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -68,6 +69,11 @@ class ProjectConductorStartLoopRequest(BaseModel):
 # --- Exception Handlers (added in main.py, not on router) ---
 
 router = APIRouter(prefix="/api")
+
+_ALLOWED_SKILL_PROXY_HOSTS = {
+    "raw.githubusercontent.com",
+    "gist.githubusercontent.com",
+}
 
 # Legacy phase enums removed (PR5 destructive). Phase is now a free-form tag
 # on tasks and a derived presentation field on issues — the source of truth is
@@ -1049,6 +1055,15 @@ def _rewrite_to_raw(url: str) -> str:
     return url
 
 
+def _validate_skill_proxy_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="url must be an absolute http(s) URL")
+    if (parsed.hostname or "").lower() not in _ALLOWED_SKILL_PROXY_HOSTS:
+        raise HTTPException(status_code=400, detail="skill proxy host is not allowed")
+    return url
+
+
 @router.get("/skills/proxy")
 async def proxy_skill_link(url: str):
     """Fetch the markdown body of a remote skill link. Used by the right-side
@@ -1060,13 +1075,15 @@ async def proxy_skill_link(url: str):
     """
     if not url or not (url.startswith("http://") or url.startswith("https://")):
         raise HTTPException(status_code=400, detail="url must be an absolute http(s) URL")
-    target = _rewrite_to_raw(url)
+    target = _validate_skill_proxy_url(_rewrite_to_raw(url))
     import httpx
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
             resp = await client.get(target, headers={"User-Agent": "agent-collab-console/skills"})
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"upstream fetch failed: {exc}")
+    if 300 <= resp.status_code < 400:
+        raise HTTPException(status_code=400, detail="skill proxy redirects are not allowed")
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=f"upstream returned {resp.status_code}")
     ctype = (resp.headers.get("content-type") or "").lower()
@@ -2855,6 +2872,7 @@ async def get_codex_issue_artifacts(issue_id: str):
     # and only writes new rows.
     disk_rows = await _scan_and_backfill_artifacts(issue_id, issue.session_id, codex_store)
     db_rows = await codex_store.list_artifacts(issue_id)
+    safe_roots = await _artifact_issue_roots(issue_id, issue.session_id, codex_store)
     # Union, preferring the freshest disk scan when there's a name collision.
     by_name: dict[str, dict] = {row["name"]: row for row in db_rows}
     for row in disk_rows:
@@ -2869,9 +2887,11 @@ async def get_codex_issue_artifacts(issue_id: str):
     MAX_FILE_SIZE = 1024 * 1024
     result = []
     for row in rows:
-        path = Path(row["path"])
+        path = Path(row["path"]) if row.get("path") else None
+        if path is None or not _is_safe_artifact_file(path, safe_roots):
+            continue
         content = None
-        if path.exists() and path.suffix in (".md", ".json", ".txt", ".html", ".js", ".css"):
+        if path.suffix in (".md", ".json", ".txt", ".html", ".js", ".css"):
             try:
                 content = path.read_text(encoding="utf-8", errors="replace")[:MAX_FILE_SIZE]
             except OSError:
@@ -2915,11 +2935,12 @@ async def download_issue_artifacts_zip(issue_id: str):
     if not rows:
         raise HTTPException(status_code=404, detail="No artifacts to download")
 
+    safe_roots = await _artifact_issue_roots(issue_id, issue.session_id, codex_store)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for row in rows:
             path = Path(row["path"]) if row.get("path") else None
-            if path is None or not path.exists() or not path.is_file():
+            if path is None or not _is_safe_artifact_file(path, safe_roots):
                 continue
             arcname = row.get("name") or path.name
             try:
@@ -2933,6 +2954,51 @@ async def download_issue_artifacts_zip(issue_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+async def _artifact_issue_roots(issue_id: str, session_id: str, store) -> list[Path]:
+    workspace = await store.load_codex_workspace(session_id)
+    if workspace is None:
+        return []
+
+    if hasattr(store, "list_codex_tasks"):
+        tasks = await store.list_codex_tasks(session_id=session_id, issue_id=issue_id)
+    else:
+        tasks = []
+    sorted_tasks = sorted(
+        tasks,
+        key=lambda item: item.get("updated_at") or item.get("created_at") or "",
+        reverse=True,
+    )
+    seen_wp: set[str] = set()
+    issue_roots: list[Path] = []
+    for task_row in sorted_tasks:
+        wp = task_row.get("workspace_path")
+        if wp and wp not in seen_wp:
+            seen_wp.add(wp)
+            issue_roots.append(Path(wp) / "issues" / issue_id)
+
+    fallback_root = Path(workspace.cwd) / "issues" / issue_id
+    if str(fallback_root) not in {str(r) for r in issue_roots}:
+        issue_roots.append(fallback_root)
+    return issue_roots
+
+
+def _is_safe_artifact_file(path: Path, roots: list[Path]) -> bool:
+    if path.is_symlink() or not path.exists() or not path.is_file():
+        return False
+    try:
+        resolved_path = path.resolve(strict=True)
+    except OSError:
+        return False
+
+    for root in roots:
+        try:
+            resolved_path.relative_to(root.resolve(strict=False))
+            return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) -> list[dict]:
@@ -2950,16 +3016,7 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
     )
 
     # Build ordered, deduplicated list of issue roots to scan.
-    seen_wp: set[str] = set()
-    issue_roots: list[Path] = []
-    for task_row in sorted_tasks:
-        wp = task_row.get("workspace_path")
-        if wp and wp not in seen_wp:
-            seen_wp.add(wp)
-            issue_roots.append(Path(wp) / "issues" / issue_id)
-    fallback_root = Path(workspace.cwd) / "issues" / issue_id
-    if str(fallback_root) not in {str(r) for r in issue_roots}:
-        issue_roots.append(fallback_root)
+    issue_roots = await _artifact_issue_roots(issue_id, session_id, store)
 
     # Backfill missing artifacts for *all* managed roles. For each done
     # task, if its expected artifact dir is empty, ask the role workflow
@@ -3036,9 +3093,11 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
                 # live alongside artifacts but aren't user-facing outputs.
                 if item.name.startswith("_") or item.name.startswith("."):
                     continue
+                if item.is_symlink():
+                    continue
                 if item.is_dir():
                     _walk(item)
-                elif item.is_file() and item.name != ".DS_Store":
+                elif item.name != ".DS_Store" and _is_safe_artifact_file(item, [root]):
                     rel_path = item.relative_to(root)
                     display_name = str(rel_path)
                     # Newer root already provided this file — don't overwrite

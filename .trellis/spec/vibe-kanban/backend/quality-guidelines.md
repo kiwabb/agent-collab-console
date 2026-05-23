@@ -204,6 +204,123 @@ Correct:
 {"snippet": _sanitize_fts_snippet(row["snippet"])}
 ```
 
+### Scenario: Safe Skill Proxy Fetching
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing remote skill preview fetching, URL rewriting, or CORS proxy behavior.
+- The proxy runs server-side with local network access, so it must not become a generic URL fetcher.
+
+#### 2. Signatures
+
+- API: `GET /api/skills/proxy?url=<absolute http(s) URL>`
+- Helpers: `_rewrite_to_raw(url: str) -> str`, `_validate_skill_proxy_url(url: str) -> str`
+- Allowed upstream hosts: `raw.githubusercontent.com`, `gist.githubusercontent.com`
+
+#### 3. Contracts
+
+- Browser-facing callers may pass common GitHub/Gist view URLs; the backend may rewrite them to raw URLs.
+- After rewriting, the final target host must be in the allowlist before any network request is made.
+- The proxy must not follow redirects, because redirects can leave the allowlisted host after validation.
+- The proxy returns markdown text only; HTML content types are rejected.
+
+#### 4. Validation & Error Matrix
+
+- Missing or non-http(s) URL -> HTTP `400`.
+- Host outside allowlist, including loopback/private/local hosts -> HTTP `400`, detail contains `"not allowed"`.
+- Upstream redirect -> HTTP `400`.
+- Upstream HTTP error -> matching upstream status.
+- Upstream HTML content type -> HTTP `415`.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `https://github.com/owner/repo/blob/main/SKILL.md` rewrites to `https://raw.githubusercontent.com/...` and fetches markdown.
+- Base: `https://gist.github.com/user/<id>` rewrites to `https://gist.githubusercontent.com/.../raw`.
+- Bad: `http://127.0.0.1:8000/secret.md`, cloud metadata IPs, or arbitrary intranet URLs are fetched.
+
+#### 6. Tests Required
+
+- Test that loopback/private URLs are rejected before fetch.
+- Test GitHub/Gist view URL rewriting still produces an allowed raw host.
+- Test redirects are rejected when proxy behavior changes.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+async with httpx.AsyncClient(follow_redirects=True) as client:
+    return await client.get(url)
+```
+
+Correct:
+
+```python
+target = _validate_skill_proxy_url(_rewrite_to_raw(url))
+async with httpx.AsyncClient(follow_redirects=False) as client:
+    return await client.get(target)
+```
+
+### Scenario: Artifact File Boundary Safety
+
+#### 1. Scope / Trigger
+
+- Trigger: scanning issue artifact folders, backfilling artifact rows, reading artifact preview content, or building artifact zip downloads.
+- Artifact paths can come from disk scans or persisted rows, so every file read/archive path needs a filesystem boundary check.
+
+#### 2. Signatures
+
+- Scanner: `_scan_and_backfill_artifacts(issue_id: str, session_id: str, store) -> list[dict]`
+- Roots helper: `_artifact_issue_roots(issue_id: str, session_id: str, store) -> list[Path]`
+- Guard helper: `_is_safe_artifact_file(path: Path, roots: list[Path]) -> bool`
+- Preview API: `GET /api/codex/issues/{issue_id}/artifacts`
+- Download API: `GET /api/codex/issues/{issue_id}/artifacts/download`
+
+#### 3. Contracts
+
+- An artifact file is safe only when it is a regular file, not a symlink, and its resolved path remains under one of the issue artifact roots.
+- Directory traversal must not follow symlinked directories.
+- Artifact preview must re-check persisted artifact paths before returning a row or reading content.
+- Zip download must re-check persisted artifact paths instead of trusting database rows.
+- Stores used in tests may omit task-list methods; root discovery must still fall back to the workspace issue root.
+
+#### 4. Validation & Error Matrix
+
+- Symlink file -> skip.
+- Symlink directory -> skip.
+- Regular file resolving outside issue roots -> skip.
+- Missing file or unreadable file -> skip.
+- No artifacts after filtering -> return an empty zip when rows existed but no safe files remained.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `issues/<issue_id>/pm/prd.md` is scanned and zipped.
+- Base: stale DB row pointing to a deleted file is ignored.
+- Bad: `issues/<issue_id>/pm/leak.md -> /tmp/secret.md` is scanned, indexed, previewed, or zipped.
+
+#### 6. Tests Required
+
+- Test scan skips symlinks that point outside the issue root.
+- Test preview skips symlink artifact rows.
+- Test zip skips symlink artifact rows.
+- Test regular artifacts under the issue root still zip correctly.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+if path.exists() and path.is_file():
+    zf.write(path, arcname)
+```
+
+Correct:
+
+```python
+if _is_safe_artifact_file(path, safe_roots):
+    zf.write(path, arcname)
+```
+
 ---
 
 ## Testing Requirements

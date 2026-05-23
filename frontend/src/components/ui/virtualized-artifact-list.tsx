@@ -61,6 +61,15 @@ function detectLanguage(content: string, filename?: string): string {
   return "markdown";
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 interface HighlightedCodeProps {
   code: string;
   language: string;
@@ -85,7 +94,7 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
       }
       return hljs.highlightAuto(code).value;
     } catch {
-      return code;
+      return escapeHtml(code);
     }
   }, [code, language]);
 

@@ -19,6 +19,13 @@ export REAL_CLI="${REAL_CLI:-true}"
 # Same idea for the Codex process manager. Disable only for fast unit tests.
 export CODEX_LAUNCH_ENABLED="${CODEX_LAUNCH_ENABLED:-true}"
 
+# macOS 26 + Homebrew python@3.14: pyexpat.so 链接的是 /usr/lib/libexpat.1.dylib，
+# 但 Tahoe dyld cache 里的版本旧于 expat 2.7，缺 _XML_SetAllocTrackerActivationThreshold
+# 等新符号，pip / 任何 import xml.parsers.expat 的代码都会崩。指向 brew expat 即可。
+if [[ -d "/opt/homebrew/opt/expat/lib" ]]; then
+  export DYLD_LIBRARY_PATH="/opt/homebrew/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+fi
+
 mkdir -p "$CODEX_WORKSPACE_ROOT"
 mkdir -p "$FRONTEND_SWC_CACHE_DIR"
 
