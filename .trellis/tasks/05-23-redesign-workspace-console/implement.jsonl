@@ -1,1 +1,2 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "拆 WorkspaceConsole 前必须先 grep 现有组件（StatusBadge / NewIssueDialog / IssueRow / TabButton 等），复用而非新造"}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "前端质量基线：禁止 dangerouslySetInnerHTML / 必须经 sanitizer 等约束；IssueRow 渲染 issue.title 时要走安全路径"}

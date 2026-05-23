@@ -1,57 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Filter, ArrowDownUp, Plus, GitBranch, Trash2 } from "lucide-react";
-import {
-  autoStartIssueGraph,
-  chatCodexTask,
-  createCodexIssue,
-  deleteCodexIssue,
-  getCodexIssues,
-  getCodexTasks,
-  getProject,
-  getRuntimeCatalog,
-  getWorkspace,
-  rerunCodexTask,
-  terminateCodexTask,
-} from "@/lib/api";
-import type { CodexIssue, CodexTask, ExecutionProcess, Project, RuntimeCatalog, Workspace } from "@/lib/types";
+
+import { getCodexIssues, getCodexTasks, getProject, getRuntimeCatalog, getWorkspace } from "@/lib/api";
+import type { CodexIssue, CodexTask, Project, RuntimeCatalog, Workspace } from "@/lib/types";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
-import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
 import { useToast } from "@/components/ui/toast";
-import { Button } from "@/components/ui/button";
-import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
-import { ApprovalCard } from "@/components/ui/approval-card";
-import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
-import { createIssueAndInitialTask } from "@/features/workbench/workbenchActions";
 import { NewIssueDialog } from "./NewIssueDialog";
-import {
-  deriveWorkspaceConsoleDefaultRuntime,
-  deriveWorkspaceConsoleMode,
-  formatWorkspaceConsoleRepoLabel,
-  getWorkspaceConsoleRoleLabel,
-  pickActiveIssueTask,
-  type WorkspaceConsoleMode,
-} from "./workspaceConsoleState";
+import { WorkspaceConsoleHeader, type IssueStatusFilter, type IssueSortMode } from "./WorkspaceConsoleHeader";
+import { IssueListPanel } from "./IssueListPanel";
 
 interface Props {
   workspaceId: string;
 }
 
-/**
- * Console v2 master-detail layout.
- *
- *   ┌─────────────────────── Issue list ───────────────────────┐ ┌── Run detail ──┐
- *   │ Workspace v2 · development  [Filter] [Sort] [+ New task] │ │ Running run·… │
- *   │                                                          │ │ Title         │
- *   │ ○ Plan auth module with JWT…     Done    feat/auth-plan… │ │ tabs          │
- *   │ ◉ Design SessionService → Adapt  Running feat/adapter-w…│ │ log rows      │
- *   │ ...                                                      │ │ approval card │
- *   │ [codex exec --json   continuation #4923] ──── [Run task↵]│ │               │
- *   └──────────────────────────────────────────────────────────┘ └───────────────┘
- */
 export default function WorkspaceConsole({ workspaceId }: Props) {
   const router = useRouter();
   const { addToast } = useToast();
@@ -61,22 +25,25 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
   const [project, setProject] = useState<Project | null>(null);
   const [catalog, setCatalog] = useState<RuntimeCatalog | null>(null);
   const [issues, setIssues] = useState<CodexIssue[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [hasInitializedSelection, setHasInitializedSelection] = useState(false);
-  const [selectedIssueTasks, setSelectedIssueTasks] = useState<CodexTask[]>([]);
+  const [tasks, setTasks] = useState<CodexTask[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [createCommand, setCreateCommand] = useState("");
-  const [chatCommand, setChatCommand] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [statusFilter, setStatusFilter] = useState<IssueStatusFilter>("all");
+  const [sortMode, setSortMode] = useState<IssueSortMode>("updated");
 
-  const refreshIssues = useCallback(async () => {
+  const refresh = useCallback(async (showLoader = false) => {
+    if (showLoader) setIsLoading(true);
     try {
-      const all = await getCodexIssues(workspaceId);
-      setIssues(all);
+      const [allIssues, allTasks] = await Promise.all([
+        getCodexIssues(workspaceId),
+        getCodexTasks(workspaceId, null),
+      ]);
+      setIssues(allIssues);
+      setTasks(allTasks);
     } catch {
-      // best-effort silent failure; the next user action / full load() will retry
+      // Realtime refresh is best-effort; the full load path surfaces errors.
+    } finally {
+      if (showLoader) setIsLoading(false);
     }
   }, [workspaceId]);
 
@@ -85,178 +52,80 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
     try {
       const ws = await getWorkspace(workspaceId);
       setWorkspace(ws);
-      const [proj, all, runtimeCatalog] = await Promise.all([
+      const [proj, runtimeCatalog] = await Promise.all([
         ws.project_id ? getProject(ws.project_id) : Promise.resolve(null),
-        getCodexIssues(workspaceId),
         getRuntimeCatalog().catch(() => null),
       ]);
       setProject(proj);
       setCatalog(runtimeCatalog);
-      setIssues(all);
+      await refresh(false);
     } catch (err) {
       addToast({ type: "error", title: t("workspace.toast.loadFailed"), message: err instanceof Error ? err.message : String(err) });
     } finally {
       setIsLoading(false);
     }
-  }, [workspaceId, addToast, t]);
+  }, [workspaceId, refresh, addToast, t]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  // Refresh the issue list whenever a workflow event arrives that may have
-  // changed an issue's status — terminal task_status (done/failed/completed)
-  // means the scheduler just finalized, and issue_merged/abandoned mutate
-  // status directly. Without this, the issue chip stays at "排队中" even
-  // after the run is fully done.
   useEffect(() => {
     if (!lastEvent) return;
     const type = (lastEvent as { type?: string }).type;
-    if (type === "issue_merged" || type === "issue_abandoned") {
-      void refreshIssues();
+    if (type === "issue_merged" || type === "issue_abandoned" || type === "task_created") {
+      void refresh(false);
       return;
     }
     if (type === "task_status") {
       const status = String((lastEvent as { status?: string }).status || "").toLowerCase();
-      if (status === "done" || status === "completed" || status === "failed") {
-        void refreshIssues();
+      if (status === "done" || status === "completed" || status === "failed" || status === "running") {
+        void refresh(false);
       }
     }
-  }, [lastEvent, refreshIssues]);
+  }, [lastEvent, refresh]);
 
-  useEffect(() => {
-    if (!hasInitializedSelection) {
-      setSelectedId(issues[0]?.id ?? null);
-      setHasInitializedSelection(true);
-      return;
-    }
-    if (selectedId && !issues.some((issue) => issue.id === selectedId)) {
-      setSelectedId(null);
-    }
-  }, [hasInitializedSelection, issues, selectedId]);
-
-  const selected = useMemo(
-    () => issues.find((i) => i.id === selectedId) ?? null,
-    [issues, selectedId],
-  );
-
-  useEffect(() => {
-    if (!selectedId) {
-      setSelectedIssueTasks([]);
-      return;
-    }
-    let cancelled = false;
-    void getCodexTasks(null, selectedId)
-      .then((tasks) => {
-        if (!cancelled) setSelectedIssueTasks(tasks);
-      })
-      .catch(() => {
-        if (!cancelled) setSelectedIssueTasks([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId]);
-
-  const mode = deriveWorkspaceConsoleMode(selectedId);
-  const defaultRuntime = useMemo(
-    () => deriveWorkspaceConsoleDefaultRuntime(catalog),
-    [catalog],
-  );
-  const repoLabel = useMemo(
-    () => formatWorkspaceConsoleRepoLabel(project?.repo_path),
-    [project?.repo_path],
-  );
-  const activeTask = useMemo(
-    () => pickActiveIssueTask(selected, selectedIssueTasks),
-    [selected, selectedIssueTasks],
-  );
-  const activeRoleLabel = useMemo(
-    () => getWorkspaceConsoleRoleLabel(activeTask?.role),
-    [activeTask?.role],
-  );
-
-  const handleSubmitCommand = async () => {
-    const content = (mode === "create" ? createCommand : chatCommand).trim();
-    if (!content || isSubmitting) return;
-    if (mode === "chat" && !activeTask) return;
-
-    setIsSubmitting(true);
-    try {
-      if (mode === "create") {
-        const title = content.slice(0, 60);
-        const { issue } = await createIssueAndInitialTask({
-          workspaceId,
-          title,
-          description: content,
-          createCodexIssue,
-          autoStartIssueGraph,
-        });
-        setIssues((prev) => [issue, ...prev]);
-        setSelectedId(issue.id);
-        setSelectedIssueTasks([]);
-        setCreateCommand("");
-        addToast({ type: "success", title: t("issue.toast.created") });
-      } else {
-        await chatCodexTask(activeTask!.id, content);
-        setChatCommand("");
-        addToast({ type: "success", title: t("workspace.console.chatSent") });
-        const refreshedTasks = await getCodexTasks(null, selectedId);
-        setSelectedIssueTasks(refreshedTasks);
-        void load();
-      }
-    } catch (err) {
-      addToast({
-        type: "error",
-        title: mode === "create" ? t("issue.toast.createFailed") : t("workspace.console.chatFailed"),
-        message: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleDelete = useCallback(
-    async (id: string) => {
-      try {
-        await deleteCodexIssue(id);
-        setIssues((prev) => prev.filter((i) => i.id !== id));
-        if (selectedId === id) setSelectedId(null);
-      } catch (err) {
-        addToast({ type: "error", title: "Failed to delete", message: err instanceof Error ? err.message : String(err) });
-      }
-    },
-    [addToast, selectedId],
-  );
+  const visibleIssues = useMemo(() => {
+    const filtered = issues.filter((issue) => {
+      if (statusFilter === "all") return true;
+      if (statusFilter === "awaiting") return issue.status === "awaiting_approval" || issue.status === "awaiting_review";
+      if (statusFilter === "running") return issue.status === "in_progress" || issue.status === "running";
+      if (statusFilter === "queued") return issue.status === "open" || issue.status === "queued" || issue.status === "pending";
+      if (statusFilter === "done") return issue.status === "completed" || issue.status === "done";
+      return issue.status === "failed";
+    });
+    return [...filtered].sort((a, b) => {
+      if (sortMode === "phase") return String(a.current_phase).localeCompare(String(b.current_phase));
+      if (sortMode === "status") return String(a.status).localeCompare(String(b.status));
+      const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+      const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+      return bTime - aTime;
+    });
+  }, [issues, sortMode, statusFilter]);
 
   return (
-    <div className="h-full flex min-h-0">
-      <IssueListColumn
-        workspace={workspace}
-        project={project}
-        issues={issues}
-        mode={mode}
-        selectedId={selectedId}
-        activeTask={activeTask}
-        activeRoleLabel={activeRoleLabel}
-        repoLabel={repoLabel}
-        defaultExecutor={defaultRuntime.executor}
-        command={mode === "create" ? createCommand : chatCommand}
-        composerRef={composerRef}
-        onSelect={(id) => setSelectedId((current) => (current === id ? null : id))}
-        onNewIssue={() => setNewIssueOpen(true)}
-        onOpen={(id) => router.push(`/issues/${id}`)}
-        onDelete={handleDelete}
-        isLoading={isLoading}
-        selectedIssue={selected}
-        onCommandChange={(value) => {
-          if (mode === "create") setCreateCommand(value);
-          else setChatCommand(value);
-        }}
-        onSubmitCommand={handleSubmitCommand}
-        isCreating={isSubmitting}
-      />
-      <RunDetailColumn issue={selected} project={project} />
+    <div className="h-full min-h-0 overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.12),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.04),transparent_22%)]">
+      <main className="mx-auto flex h-full max-w-7xl flex-col gap-4 px-5 py-5 lg:px-8">
+        <WorkspaceConsoleHeader
+          workspace={workspace}
+          project={project}
+          issues={issues}
+          statusFilter={statusFilter}
+          sortMode={sortMode}
+          onStatusFilterChange={setStatusFilter}
+          onSortModeChange={setSortMode}
+          onNewIssue={() => setNewIssueOpen(true)}
+        />
+        <IssueListPanel
+          issues={visibleIssues}
+          allIssueCount={issues.length}
+          tasks={tasks}
+          project={project}
+          isLoading={isLoading}
+          onOpenIssue={(issueId) => router.push(`/issues/${issueId}`)}
+          onClearFilter={() => setStatusFilter("all")}
+        />
+      </main>
       <NewIssueDialog
         open={newIssueOpen}
         onOpenChange={setNewIssueOpen}
@@ -265,518 +134,9 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
         catalog={catalog}
         onCreated={(issue) => {
           setIssues((prev) => [issue, ...prev.filter((item) => item.id !== issue.id)]);
-          setSelectedId(issue.id);
-          setSelectedIssueTasks([]);
+          void refresh(false);
         }}
       />
     </div>
   );
 }
-
-// ============================================================================
-// Middle column — issue table + bottom command input
-// ============================================================================
-
-interface ListColumnProps {
-  workspace: Workspace | null;
-  project: Project | null;
-  issues: CodexIssue[];
-  mode: WorkspaceConsoleMode;
-  selectedId: string | null;
-  selectedIssue: CodexIssue | null;
-  activeTask: CodexTask | null;
-  activeRoleLabel: string;
-  repoLabel: string;
-  defaultExecutor: string;
-  composerRef: RefObject<HTMLTextAreaElement>;
-  onSelect: (id: string) => void;
-  onNewIssue: () => void;
-  onOpen: (id: string) => void;
-  onDelete: (id: string) => void;
-  isLoading: boolean;
-  command: string;
-  onCommandChange: (s: string) => void;
-  onSubmitCommand: () => void;
-  isCreating: boolean;
-}
-
-function IssueListColumn({
-  workspace,
-  project,
-  issues,
-  mode,
-  selectedId,
-  selectedIssue,
-  activeTask,
-  activeRoleLabel,
-  repoLabel,
-  defaultExecutor,
-  composerRef,
-  onSelect,
-  onNewIssue,
-  onOpen,
-  onDelete,
-  isLoading,
-  command,
-  onCommandChange,
-  onSubmitCommand,
-  isCreating,
-}: ListColumnProps) {
-  const { t } = useI18n();
-  const bannerText =
-    mode === "create"
-      ? t("workspace.console.createBanner", { project: repoLabel, executor: defaultExecutor })
-      : activeTask && selectedIssue
-        ? t("workspace.console.chatBanner", {
-            issueId: selectedIssue.id.slice(0, 4),
-            role: activeRoleLabel,
-          })
-        : t("workspace.console.noActiveTaskBanner", {
-            issueId: selectedIssue?.id.slice(0, 4) ?? "—",
-          });
-  const placeholder =
-    mode === "create"
-      ? t("workspace.console.commandPlaceholder")
-      : t("workspace.console.chatPlaceholder");
-  const submitLabel =
-    mode === "create"
-      ? t("workspace.console.runIssue")
-      : t("workspace.console.chatSend");
-  const isSubmitDisabled =
-    isCreating
-    || !command.trim()
-    || (mode === "chat" && !activeTask);
-
-  return (
-    <div className="flex-1 min-w-0 flex flex-col border-r border-border-subtle">
-      {/* Header */}
-      <div className="px-6 py-4 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-[11px] uppercase tracking-wide text-text-muted">
-            {workspace?.title ?? t("workspace.console.titleFallback")}
-            {issues[0]?.current_phase && (
-              <>
-                {" · "}
-                {issues[0].current_phase}
-              </>
-            )}
-          </div>
-          <h1 className="text-xl font-bold tracking-tight mt-1 truncate">
-            {issues[0]?.title ?? t("workspace.console.emptyTitle")}
-          </h1>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button variant="outline" size="sm" className="gap-1">
-            <Filter size={12} /> {t("workspace.console.filter")}
-          </Button>
-          <Button variant="outline" size="sm" className="gap-1">
-            <ArrowDownUp size={12} /> {t("workspace.console.sort")}
-          </Button>
-          <Button
-            size="sm"
-            onClick={onNewIssue}
-            className="gap-1 bg-brand hover:bg-brand-strong text-black font-semibold"
-          >
-            <Plus size={12} /> {t("workspace.console.newIssue")}
-          </Button>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="flex-1 min-h-0 overflow-auto">
-        <div className="px-6">
-          <div className="grid grid-cols-[1fr_140px_180px_120px_60px] gap-4 py-2 text-[10px] uppercase tracking-wider text-text-muted border-b border-border-subtle">
-            <div>{t("workspace.console.table.task")}</div>
-            <div>{t("workspace.console.table.status")}</div>
-            <div>{t("workspace.console.table.branch")}</div>
-            <div>{t("workspace.console.table.agent")}</div>
-            <div className="text-right">{t("workspace.console.table.run")}</div>
-          </div>
-          {isLoading && (
-            <div className="px-3 py-10 text-center text-text-muted text-sm">{t("workspace.console.loading")}</div>
-          )}
-          {!isLoading && issues.length === 0 && (
-            <div className="px-3 py-10 text-center text-text-muted text-sm">
-              {t("workspace.console.emptyBody")}
-            </div>
-          )}
-          {issues.map((issue) => (
-            <IssueRow
-              key={issue.id}
-              issue={issue}
-              project={project}
-              selected={issue.id === selectedId}
-              onSelect={() => onSelect(issue.id)}
-              onOpen={() => onOpen(issue.id)}
-              onDelete={() => onDelete(issue.id)}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Bottom command input */}
-      <div className="px-6 py-4 border-t border-border-subtle">
-        <div className="rounded-md border border-border-subtle bg-surface-input">
-          <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-text-muted border-b border-border-subtle">
-            <span className="truncate">{bannerText}</span>
-          </div>
-          <textarea
-            ref={composerRef}
-            value={command}
-            onChange={(e) => onCommandChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                onSubmitCommand();
-              }
-            }}
-            placeholder={placeholder}
-            rows={2}
-            className="w-full bg-transparent border-none outline-none resize-none px-3 py-2 text-sm placeholder:text-text-muted"
-          />
-          <div className="flex items-center justify-between px-3 py-2 border-t border-border-subtle text-[11px] text-text-muted">
-            <span>
-              <kbd className="px-1.5 py-0.5 rounded bg-surface-raised border border-border-subtle font-mono text-[10px]">↵</kbd>{" "}
-              {t("workspace.console.send")} ·{" "}
-              <kbd className="px-1.5 py-0.5 rounded bg-surface-raised border border-border-subtle font-mono text-[10px]">⇧↵</kbd>{" "}
-              {t("workspace.console.newline")}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm">{t("workspace.console.mention")}</Button>
-              <Button
-                size="sm"
-                onClick={onSubmitCommand}
-                disabled={isSubmitDisabled}
-                className="bg-brand hover:bg-brand-strong text-black font-semibold"
-              >
-                {submitLabel}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function IssueRow({
-  issue,
-  project,
-  selected,
-  onSelect,
-  onOpen,
-  onDelete,
-}: {
-  issue: CodexIssue;
-  project: Project | null;
-  selected: boolean;
-  onSelect: () => void;
-  onOpen: () => void;
-  onDelete: () => void;
-}) {
-  const { t } = useI18n();
-  const kind = inferStatusKind(issue.status);
-  const label =
-    issue.status === "in_progress" ? t("workspace.console.status.running")
-    : issue.status === "completed" ? t("workspace.console.status.done")
-    : issue.status === "failed" ? t("workspace.console.status.failed")
-    : issue.status === "awaiting_approval" ? t("workspace.console.status.awaitingApproval")
-    : issue.status === "open" ? t("workspace.console.status.queued")
-    : issue.status || t("workspace.console.status.queued");
-
-  return (
-    <div
-      className={cn(
-        "group w-full grid grid-cols-[1fr_140px_180px_120px_60px] gap-4 py-2.5 px-1 -mx-1 rounded items-center text-sm transition-colors",
-        selected ? "bg-brand/[0.08] text-foreground" : "hover:bg-surface-hover",
-      )}
-    >
-      <button type="button" onClick={onSelect} onDoubleClick={onOpen} className="min-w-0 flex items-center gap-2 text-left">
-        <span
-          className={cn(
-            "size-1.5 rounded-full shrink-0",
-            selected ? "bg-brand" : "bg-text-muted/40",
-          )}
-        />
-        <span className="truncate">{issue.title}</span>
-      </button>
-      <div>
-        <StatusBadge kind={kind} label={label} />
-      </div>
-      <div className="font-mono text-[12px] text-text-muted truncate flex items-center gap-1.5">
-        <GitBranch size={11} />
-        {issue.git_branch || project?.default_branch || "main"}
-      </div>
-      <div className="text-[12px] text-text-secondary flex items-center gap-1.5">
-        <span className="size-4 rounded-sm bg-surface-raised border border-border-subtle inline-flex items-center justify-center text-[9px] font-bold text-brand">
-          C
-        </span>
-        Codex
-      </div>
-      <div className="flex items-center justify-end gap-1">
-        <span className="text-[11px] font-mono text-text-muted group-hover:hidden">
-          {issue.updated_at ? relTime(issue.updated_at) : "—"}
-        </span>
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="hidden group-hover:flex items-center justify-center size-6 rounded hover:bg-red-500/10 hover:text-red-500 text-text-muted transition-colors"
-          title="删除需求"
-        >
-          <Trash2 size={13} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function relTime(iso: string): string {
-  const timestamp = new Date(iso).getTime();
-  if (!Number.isFinite(timestamp)) return "—";
-  const diff = Date.now() - timestamp;
-  if (diff < 60_000) return "now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
-  return `${Math.floor(diff / 86_400_000)}d`;
-}
-
-// ============================================================================
-// Right column — selected issue's run detail
-// ============================================================================
-
-type DetailTab = "logs" | "messages" | "result" | "artifacts" | "approvals";
-
-function RunDetailColumn({ issue, project }: { issue: CodexIssue | null; project: Project | null }) {
-  const { t } = useI18n();
-  const { addToast } = useToast();
-  const [tab, setTab] = useState<DetailTab>("logs");
-  const [issueTasks, setIssueTasks] = useState<CodexTask[]>([]);
-  const { executionProcessesVisible, lastEvent } = useExecutionProcessesContext();
-
-  const issueId = issue?.id ?? null;
-  const issueSessionId = issue?.session_id ?? null;
-  const issueTasksRef = useRef<CodexTask[]>([]);
-  useEffect(() => {
-    issueTasksRef.current = issueTasks;
-  }, [issueTasks]);
-
-  const refreshIssueTasks = useCallback(async () => {
-    if (!issueId) {
-      setIssueTasks([]);
-      return;
-    }
-    try {
-      const tasks = await getCodexTasks(issueSessionId, issueId);
-      setIssueTasks(tasks);
-    } catch {
-      setIssueTasks([]);
-    }
-  }, [issueId, issueSessionId]);
-
-  useEffect(() => {
-    void refreshIssueTasks();
-  }, [refreshIssueTasks]);
-
-  // Stage transitions (e.g. architect→engineer) create a fresh CodexTask
-  // outside of any direct user action in this view, so we have to listen on
-  // the bus to learn about it — otherwise issueTasks stays stale and the new
-  // ExecutionProcess gets filtered out of `liveProcess`, leaving the log
-  // panel blank until the user manually refreshes.
-  useEffect(() => {
-    if (!issueId || !lastEvent) return;
-    const evtType = (lastEvent as { type?: string }).type;
-    if (evtType !== "task_created" && evtType !== "task_status") return;
-    const evtTask = (lastEvent as { task?: { issue_id?: string; session_id?: string; id?: string } }).task;
-    const evtIssueId = evtTask?.issue_id ?? (lastEvent as { issue_id?: string }).issue_id;
-    const evtSessionId =
-      evtTask?.session_id ??
-      (lastEvent as { session_id?: string }).session_id ??
-      (lastEvent as { workspace_id?: string }).workspace_id;
-    const evtTaskId = evtTask?.id ?? (lastEvent as { task_id?: string }).task_id;
-    const matchesIssue = evtIssueId && evtIssueId === issueId;
-    const matchesSession = !evtIssueId && evtSessionId && evtSessionId === issueSessionId;
-    // For task_status without issue_id but with a task_id we already know,
-    // skip the refetch — the status update is for an existing task and
-    // doesn't add anything new to fetch.
-    const isKnownTask =
-      evtType === "task_status" &&
-      !evtIssueId &&
-      evtTaskId &&
-      issueTasksRef.current.some((task) => task.id === evtTaskId);
-    if ((matchesIssue || matchesSession) && !isKnownTask) {
-      void refreshIssueTasks();
-    }
-  }, [lastEvent, issueId, issueSessionId, refreshIssueTasks]);
-
-  const liveProcess = useMemo<ExecutionProcess | null>(() => {
-    if (!issue || issueTasks.length === 0) return null;
-    const taskIdSet = new Set(issueTasks.map((task) => task.id));
-    const candidates = executionProcessesVisible.filter((proc) => taskIdSet.has(proc.task_id));
-    if (candidates.length === 0) return null;
-    const running = candidates.filter((proc) => {
-      const status = String(proc.status || "").toLowerCase();
-      return status === "running" || status === "responding";
-    });
-    const pool = running.length > 0 ? running : candidates;
-    return [...pool].sort((a, b) => {
-      const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-      const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
-      return bTime - aTime;
-    })[0] ?? null;
-  }, [issue, issueTasks, executionProcessesVisible]);
-
-  const liveTask = useMemo<CodexTask | null>(() => {
-    if (!liveProcess) return null;
-    return issueTasks.find((task) => task.id === liveProcess.task_id) ?? null;
-  }, [liveProcess, issueTasks]);
-
-  if (!issue) {
-    return (
-      <div className="w-[440px] shrink-0 flex items-center justify-center text-text-muted text-sm">
-        {t("workspace.console.selectIssueHint")}
-      </div>
-    );
-  }
-
-  const kind = inferStatusKind(issue.status);
-  const statusLabel =
-    issue.status === "in_progress" ? t("workspace.console.status.running")
-    : issue.status === "completed" ? t("workspace.console.status.done")
-    : issue.status === "failed" ? t("workspace.console.status.failed")
-    : issue.status === "awaiting_approval" ? t("workspace.console.status.awaitingApproval")
-    : t("workspace.console.status.queued");
-
-  return (
-    <aside className="w-[440px] shrink-0 flex flex-col bg-background">
-      {/* Header */}
-      <div className="px-5 py-4 border-b border-border-subtle">
-        <div className="flex items-center justify-between text-[11px] font-mono text-text-muted mb-2">
-          <StatusBadge kind={kind} label={statusLabel} />
-          <span className="truncate">
-            run · {issue.id.slice(0, 4)}
-            {liveProcess?.id ? ` · ep ${liveProcess.id.slice(0, 6)}` : ""}
-            {liveTask?.role ? ` · ${liveTask.role}` : ""}
-          </span>
-        </div>
-        <h2 className="text-base font-bold tracking-tight">{issue.title}</h2>
-        <p className="text-[11px] text-text-muted mt-1">
-          Codex agent · phase {issue.current_phase ?? "—"} · {project?.name ?? "—"}
-        </p>
-      </div>
-
-      {/* Tabs */}
-      <div className="px-5 border-b border-border-subtle flex items-center gap-4 text-[12px]">
-        <TabButton active={tab === "logs"} onClick={() => setTab("logs")} label={t("console.logs")} />
-        <TabButton active={tab === "messages"} onClick={() => setTab("messages")} label={t("console.messages")} />
-        <TabButton active={tab === "result"} onClick={() => setTab("result")} label={t("console.result")} />
-        <TabButton active={tab === "artifacts"} onClick={() => setTab("artifacts")} label={t("console.artifacts")} />
-        <TabButton active={tab === "approvals"} onClick={() => setTab("approvals")} label={t("console.approvals")} count={1} />
-      </div>
-
-      {/* Body */}
-      <div className="flex-1 min-h-0 overflow-hidden px-5 py-3">
-        {tab === "logs" && (
-          <AgentLiveTimeline
-            executionProcessId={liveProcess?.id ?? null}
-            taskStartedAt={liveProcess?.started_at ?? null}
-            taskStatus={liveTask?.status ?? null}
-            reviewComment={liveTask?.review_comment ?? null}
-            taskResult={liveTask?.result ?? null}
-            taskRole={liveTask?.role ?? null}
-            onRerun={
-              liveTask
-                ? async () => {
-                    try {
-                      await rerunCodexTask(liveTask.id);
-                      addToast({ type: "success", title: t("agentLive.rerunOk") });
-                    } catch (err) {
-                      addToast({
-                        type: "error",
-                        title: t("agentLive.rerunErr"),
-                        message: err instanceof Error ? err.message : String(err),
-                      });
-                    }
-                  }
-                : undefined
-            }
-            onStop={
-              liveTask
-                ? async () => {
-                    if (!window.confirm(t("agentLive.stopConfirm"))) return;
-                    try {
-                      await terminateCodexTask(liveTask.id);
-                      addToast({ type: "success", title: t("agentLive.stopOk") });
-                    } catch (err) {
-                      addToast({
-                        type: "error",
-                        title: t("agentLive.stopErr"),
-                        message: err instanceof Error ? err.message : String(err),
-                      });
-                    }
-                  }
-                : undefined
-            }
-            className="h-full"
-          />
-        )}
-        {tab !== "logs" && (
-          <div className="text-text-muted text-xs italic py-8 text-center">
-            {t("workspace.console.runViewHint", { tab })}
-          </div>
-        )}
-      </div>
-
-      {/* Approval card pinned to bottom when relevant */}
-      {issue.status === "awaiting_approval" && (
-        <div className="px-5 pb-5">
-          <ApprovalCard
-            meta="step ?/?"
-            body={
-              <span>
-                {t("workspace.console.awaitingApproval")}
-              </span>
-            }
-          />
-        </div>
-      )}
-    </aside>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  label,
-  count,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  count?: number;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "py-2.5 -mb-px border-b-2 transition-colors flex items-center gap-1.5",
-        active
-          ? "border-foreground text-foreground font-medium"
-          : "border-transparent text-text-muted hover:text-foreground",
-      )}
-    >
-      {label}
-      {count !== undefined && (
-        <span
-          className={cn(
-            "text-[10px] px-1 rounded",
-            active ? "bg-brand text-black" : "bg-surface-raised text-text-muted",
-          )}
-        >
-          {count}
-        </span>
-      )}
-    </button>
-  );
-}
-

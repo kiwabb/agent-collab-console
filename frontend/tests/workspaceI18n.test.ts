@@ -73,31 +73,51 @@ test("workspace translation keys are available in English", () => {
 
 test("workspace console strings come from i18n keys", () => {
   const source = readSource("features/workspaces/WorkspaceConsole.tsx");
+  const header = readSource("features/workspaces/WorkspaceConsoleHeader.tsx");
+  const list = readSource("features/workspaces/IssueListPanel.tsx");
+  const row = readSource("features/workspaces/IssueRow.tsx");
   const modal = readSource("features/workspaces/NewIssueDialog.tsx");
+
+  [
+    'NewIssueDialog',
+  ].forEach((needle) => {
+    assert.match(source, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
 
   [
     't("workspace.console.emptyTitle")',
     't("workspace.console.filter")',
     't("workspace.console.sort")',
     't("workspace.console.newIssue")',
+    'workspace.console.filter.',
+    'workspace.console.sort.',
+  ].forEach((needle) => {
+    assert.match(header, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  [
     't("workspace.console.table.task")',
     't("workspace.console.table.status")',
-    't("workspace.console.table.branch")',
     't("workspace.console.table.agent")',
     't("workspace.console.table.run")',
     't("workspace.console.emptyBody")',
-    't("workspace.console.commandPlaceholder")',
-    't("workspace.console.chatPlaceholder")',
-    't("workspace.console.send")',
-    't("workspace.console.newline")',
-    't("workspace.console.runIssue")',
-    't("workspace.console.chatSend")',
-    'workspace.console.createBanner',
-    'workspace.console.chatBanner',
-    't("workspace.console.selectIssueHint")',
-    'NewIssueDialog',
+    't("workspace.console.emptyFilteredTitle")',
+    't("workspace.console.emptyFilteredBody")',
+    't("workspace.console.clearFilter")',
   ].forEach((needle) => {
-    assert.match(source, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(list, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  [
+    't("workspace.console.status.running")',
+    't("workspace.console.status.done")',
+    't("workspace.console.status.failed")',
+    't("workspace.console.status.awaitingApproval")',
+    't("workspace.console.status.awaitingReview")',
+    't("workspace.console.status.queued")',
+    't("workspace.console.openIssue")',
+  ].forEach((needle) => {
+    assert.match(row, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 
   [

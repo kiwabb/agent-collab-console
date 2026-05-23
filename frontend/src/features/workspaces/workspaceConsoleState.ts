@@ -1,8 +1,6 @@
 import { PHASE_CONFIG, type Phase } from "@/lib/task-selection";
 import type { CodexIssue, CodexTask, RuntimeCatalog } from "@/lib/types";
 
-export type WorkspaceConsoleMode = "create" | "chat";
-
 const ACTIVE_TASK_STATUSES = new Set([
   "running",
   "responding",
@@ -19,10 +17,6 @@ const ROLE_LABELS: Record<string, string> = {
   engineer: "Engineer",
   qa: "QA",
 };
-
-export function deriveWorkspaceConsoleMode(selectedId: string | null): WorkspaceConsoleMode {
-  return selectedId ? "chat" : "create";
-}
 
 export function deriveWorkspaceConsoleDefaultRuntime(
   catalog: RuntimeCatalog | null,

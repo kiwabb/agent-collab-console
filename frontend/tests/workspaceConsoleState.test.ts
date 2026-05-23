@@ -3,11 +3,15 @@ import assert from "node:assert/strict";
 
 import {
   deriveWorkspaceConsoleDefaultRuntime,
-  deriveWorkspaceConsoleMode,
   formatWorkspaceConsoleRepoLabel,
   getWorkspaceConsoleRoleLabel,
   pickActiveIssueTask,
 } from "../src/features/workspaces/workspaceConsoleState";
+import {
+  getIssueStatusBucket,
+  getPhaseProgress,
+  pickCurrentRole,
+} from "../src/features/workspaces/IssueRow";
 import type { CodexIssue, CodexTask, RuntimeCatalog } from "../src/lib/types";
 
 function makeIssue(overrides: Partial<CodexIssue> = {}): CodexIssue {
@@ -66,14 +70,6 @@ function makeTask(overrides: Partial<CodexTask> = {}): CodexTask {
   };
 }
 
-test("deriveWorkspaceConsoleMode uses create when nothing is selected", () => {
-  assert.equal(deriveWorkspaceConsoleMode(null), "create");
-});
-
-test("deriveWorkspaceConsoleMode uses chat when an issue is selected", () => {
-  assert.equal(deriveWorkspaceConsoleMode("issue-1"), "chat");
-});
-
 test("deriveWorkspaceConsoleDefaultRuntime prefers the first enabled executor", () => {
   const catalog: RuntimeCatalog = {
     executors: [
@@ -128,4 +124,30 @@ test("pickActiveIssueTask falls back to the most recently updated task", () => {
   ];
 
   assert.equal(pickActiveIssueTask(issue, tasks)?.id, "qa-1");
+});
+
+test("workspace issue rows derive enterprise status buckets", () => {
+  assert.equal(getIssueStatusBucket("in_progress"), "running");
+  assert.equal(getIssueStatusBucket("awaiting_review"), "awaiting");
+  assert.equal(getIssueStatusBucket("completed"), "done");
+  assert.equal(getIssueStatusBucket("failed"), "failed");
+  assert.equal(getIssueStatusBucket("open"), "queued");
+});
+
+test("workspace issue rows expose phase progress and current role", () => {
+  const issue = makeIssue({ current_phase: "development" });
+
+  assert.deepEqual(getPhaseProgress("development"), {
+    index: 3,
+    total: 4,
+    label: "development",
+    role: "engineer",
+  });
+  assert.equal(
+    pickCurrentRole(issue, [
+      makeTask({ role: "architect", status: "done" }),
+      makeTask({ role: "engineer", status: "running" }),
+    ]),
+    "engineer",
+  );
 });

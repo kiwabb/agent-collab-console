@@ -1,1 +1,2 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "verify: 拆出的 IssueRow/Header/Panel 是否真的复用了现有 StatusBadge / NewIssueDialog / icon set，没造平行物"}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "verify: 新建组件未引入 dangerouslySetInnerHTML / 未绕过 sanitizer / Tailwind 工具类合法"}

@@ -29,12 +29,12 @@
 ## Requirements (evolving)
 
 ### MVP
-- [ ] 删除右侧 `RunDetailColumn`（440px 固定列）
-- [ ] 强化 issue 列表行的状态/进度可视化：phase 进度条 / 当前 role avatar / awaiting-review badge
-- [ ] Header 信息瘦身：workspace 名 + 简短计数（如 `3 running · 1 awaiting · 12 total`），不再塞"第一个 issue 的标题"
-- [ ] 选中 issue 时不再展开右侧，而是 inline 在该行下显示极简快照（当前 phase / 当前 role / 一键跳 `/issues/[id]`）或直接跳转
-- [ ] 命令输入框 → 简化为悬浮"+ 新建 issue"按钮 + 模态/抽屉创建表单（chat 模式从本页移除，chat 只在 `/issues/[id]` 里有）
-- [ ] `IssueListColumn` 16 props → 拆出小组件 + 用 context / hook 收敛状态
+- [x] 删除右侧 `RunDetailColumn`（440px 固定列）
+- [x] 强化 issue 列表行的状态/进度可视化：phase 进度条 / 当前 role avatar / awaiting-review badge
+- [x] Header 信息瘦身：workspace 名 + 简短计数（如 `3 running · 1 awaiting · 12 total`），不再塞"第一个 issue 的标题"
+- [x] 选中 issue 时不再展开右侧，而是 inline 在该行下显示极简快照（当前 phase / 当前 role / 一键跳 `/issues/[id]`）或直接跳转
+- [x] 命令输入框 → 简化为悬浮"+ 新建 issue"按钮 + 模态/抽屉创建表单（chat 模式从本页移除，chat 只在 `/issues/[id]` 里有）
+- [x] `IssueListColumn` 16 props → 拆出小组件 + 用 context / hook 收敛状态
 
 ### 非 MVP（Out of Scope，但要保留扩展点）
 - 列表的 sort/filter UI 现在按钮是 placeholder，本轮可以接上 status / phase 筛选，但**不**做高级查询语法
@@ -42,14 +42,14 @@
 
 ## Acceptance Criteria (evolving)
 
-- [ ] `/workspaces/[wsId]` 打开默认只见左 sidebar + 主区 issue 列表，无右侧 440px 详情列
-- [ ] 列表行能一眼区分：running / awaiting_review / completed / failed / queued
-- [ ] 列表行直观显示当前 role（PM/Engineer/QA…）+ phase 进度（如 1/4、2/4）
-- [ ] 点击 issue 跳 `/issues/[id]`（不再 inline 展开 RunDetailColumn）
-- [ ] 新建 issue 走 `NewIssueDialog`（保留现有组件，不重写）
-- [ ] `WorkspaceConsole.tsx` 拆分后单文件 < 300 行，主组件 props ≤ 5 个
-- [ ] frontend `npm run build && npm run lint` 绿
-- [ ] frontend `npm test` 绿
+- [x] `/workspaces/[wsId]` 打开默认只见左 sidebar + 主区 issue 列表，无右侧 440px 详情列
+- [x] 列表行能一眼区分：running / awaiting_review / completed / failed / queued
+- [x] 列表行直观显示当前 role（PM/Engineer/QA…）+ phase 进度（如 1/4、2/4）
+- [x] 点击 issue 跳 `/issues/[id]`（不再 inline 展开 RunDetailColumn）
+- [x] 新建 issue 走 `NewIssueDialog`（保留现有组件，不重写）
+- [x] `WorkspaceConsole.tsx` 拆分后单文件 < 300 行，主组件 props ≤ 5 个
+- [x] frontend `npm run build && npm run lint` 绿
+- [x] frontend `npm test` 绿
 
 ## Definition of Done
 
@@ -129,4 +129,3 @@
   - 行点击 = router.push 跳 `/issues/[id]`
   - 加 1 个 component test 覆盖"行渲染 + 跳转"
   - frontend build + lint + test 全绿
-
