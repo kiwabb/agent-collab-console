@@ -50,10 +50,11 @@ test("Conductor response labels are available in both locales", () => {
   assert.equal(getDictionaryValue("en-US", "conductor.panel.timeline"), "Phase Timeline");
 });
 
-test("IssueDetailPage listens for conductor state violation toast events", () => {
-  const source = readSource("features/issues/IssueDetailPage.tsx");
+test("issue command center phase hook listens for conductor state violation toast events", () => {
+  const source = readSource("features/issues/hooks/useConductorPhase.ts");
 
-  assert.match(source, /typeIn\("conductor_state_violation"\)/);
+  assert.match(source, /typeIn\("conductor_status", "conductor_state_violation", "conductor_failed"\)/);
+  assert.match(source, /event\.type === "conductor_state_violation"/);
   assert.match(source, /conductor\.toastStateViolation/);
   assert.match(source, /conductor\.toastStateViolationMessage/);
 });

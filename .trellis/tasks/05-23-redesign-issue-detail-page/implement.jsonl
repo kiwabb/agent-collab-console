@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/vibe-kanban/frontend/component-guidelines.md", "reason": "Large issue detail redesign must follow the project/workspace surface separation pattern and split components by responsibility."}
+{"file": ".trellis/spec/vibe-kanban/frontend/state-management.md", "reason": "The page aggregates tasks, websocket state, artifacts, diff, and conductor data; state boundaries need to remain clear."}
+{"file": ".trellis/spec/vibe-kanban/frontend/type-safety.md", "reason": "Timeline and backend payload adapters must avoid unsafe assumptions about optional historical data."}
+{"file": ".trellis/spec/vibe-kanban/backend/directory-structure.md", "reason": "If conductor turns/state endpoints are missing, backend route additions must follow existing API placement."}

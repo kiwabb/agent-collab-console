@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/vibe-kanban/frontend/component-guidelines.md", "reason": "Verify IssueDetailPage is split into focused components and old tabs are no longer primary navigation."}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "Verify rendering avoids unsafe HTML sinks and frontend test/lint gates stay green."}
+{"file": ".trellis/spec/vibe-kanban/frontend/type-safety.md", "reason": "Verify conductor timeline adapters handle absent historical data gracefully."}

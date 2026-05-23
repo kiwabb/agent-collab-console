@@ -66,6 +66,30 @@ Questions to answer:
 - Do not push the primary `+ New workspace` action below a full Conductor panel or other heavy conversation surface.
 - Do not rewrite `ProjectConductorPage` just to move where it mounts; keep project conductor behavior reusable.
 
+### Scenario: Issue Command Center
+
+#### Scope / Trigger
+
+- Trigger: changing `/issues/[id]`, `frontend/src/features/issues/IssueDetailPage.tsx`, or issue detail components.
+- The issue detail page is a Conductor command center, not a multi-tab workspace.
+
+#### Required Structure
+
+- Keep `IssueDetailPage.tsx` as a thin composition shell under 200 lines.
+- Put the top issue/conductor state in `StatusStrip`.
+- Put unaddressed failures in `LatestFailureAlert`.
+- Use `DecisionTimeline` and `TimelineRow` as the primary work history, with thinking turns collapsed by default.
+- Put lower-priority surfaces in accordions: artifacts, diff, and mesh.
+- Keep live user steering in a sticky `CommandCenterChatBar`; `[CLARIFY]` answers should flow through the conductor message endpoint.
+- Keep WebSocket connectivity feedback in `WsConnectionBanner`.
+
+#### Forbidden Patterns
+
+- Do not reintroduce six top-level tabs or `?tab=` navigation on `/issues/[id]`.
+- Do not make DAG, task runs, artifacts, diff, or collaboration the primary navigation model.
+- Do not put conductor state toast subscriptions directly into the page shell; keep them in focused hooks such as `useConductorPhase`.
+- Do not grow `IssueDetailPage.tsx` with drawer, timeline, or panel implementation details.
+
 ---
 
 ## Props Conventions

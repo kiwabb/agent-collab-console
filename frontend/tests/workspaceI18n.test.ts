@@ -149,19 +149,32 @@ test("workspace console strings come from i18n keys", () => {
   });
 });
 
-test("issue detail approval copy is wired for plan-first review", () => {
-  const source = readSource("features/issues/IssueDetailPage.tsx");
+test("issue command center is wired to the conductor-first surfaces", () => {
+  const page = readSource("features/issues/IssueDetailPage.tsx");
+  const phaseHook = readSource("features/issues/hooks/useConductorPhase.ts");
+  const chatBar = readSource("features/issues/components/CommandCenterChatBar.tsx");
 
   [
-    'approveCodexIssuePlan',
-    't("issue.planApproval.title")',
-    't("issue.planApproval.description")',
-    't("issue.planApproval.placeholder")',
-    't("issue.planApproval.helper")',
-    't("issue.planApproval.approve")',
-    't("issue.planApproval.saving")',
+    'useConductorPhase',
+    'CommandCenterChatBar',
+    'DecisionTimeline',
+    'LatestFailureAlert',
   ].forEach((needle) => {
-    assert.match(source, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(page, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  [
+    '"conductor.toastStateViolation"',
+    '"conductor.toastStateViolationMessage"',
+  ].forEach((needle) => {
+    assert.match(phaseHook, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  [
+    'sendConductorMessage',
+    '[CLARIFY]',
+  ].forEach((needle) => {
+    assert.match(chatBar, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
   });
 });
 
