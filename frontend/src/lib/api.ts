@@ -38,6 +38,31 @@ const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE ?? "ws://localhost:9000";
 
 export { API_BASE, WS_BASE };
 
+interface ApiValidationError {
+  loc?: unknown;
+  msg?: unknown;
+}
+
+export function formatApiErrorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (!item || typeof item !== "object") return String(item);
+      const error = item as ApiValidationError;
+      const loc = Array.isArray(error.loc)
+        ? error.loc.map((part) => String(part)).join(".")
+        : typeof error.loc === "string"
+          ? error.loc
+          : "";
+      const msg = typeof error.msg === "string" ? error.msg : "";
+      if (loc && msg) return `${loc}: ${msg}`;
+      return msg || loc || JSON.stringify(item);
+    }).filter(Boolean);
+    if (parts.length > 0) return parts.join("; ");
+  }
+  return fallback;
+}
+
 /**
  * Short-window GET dedupe. When multiple components ask for the same URL
  * within `ttlMs`, they share one in-flight Promise instead of each firing
@@ -79,7 +104,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
     let errorMessage = `HTTP ${response.status}`;
     try {
       const err = await response.json();
-      errorMessage = (err as { detail?: string }).detail || errorMessage;
+      errorMessage = formatApiErrorDetail((err as { detail?: unknown }).detail, errorMessage);
     } catch {
       // If JSON parsing fails, try reading as text
       try {

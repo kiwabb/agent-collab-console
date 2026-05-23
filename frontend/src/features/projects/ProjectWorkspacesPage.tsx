@@ -452,7 +452,9 @@ function WorkspaceFormDialog({
     }
   }, [open, initial.title, initial.cwd, initial.planFirstPm]);
 
-  const canSubmit = titleDraft.trim().length > 0 && !saving;
+  const trimmedTitleLength = titleDraft.trim().length;
+  const showTitleMinLengthHint = trimmedTitleLength > 0 && trimmedTitleLength < 3;
+  const canSubmit = trimmedTitleLength >= 3 && !saving;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -474,7 +476,11 @@ function WorkspaceFormDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <Field label={t("workspace.field.title")}>
+          <Field
+            label={t("workspace.field.title")}
+            hint={showTitleMinLengthHint ? t("workspace.field.titleMinLengthHint") : undefined}
+            tone={showTitleMinLengthHint ? "warning" : "muted"}
+          >
             <Input
               value={titleDraft}
               onChange={(e) => setTitleDraft(e.target.value)}
@@ -552,10 +558,12 @@ function WorkspaceFormDialog({
 function Field({
   label,
   hint,
+  tone = "muted",
   children,
 }: {
   label: string;
   hint?: string;
+  tone?: "muted" | "warning";
   children: React.ReactNode;
 }) {
   return (
@@ -564,7 +572,14 @@ function Field({
         {label}
       </span>
       <div className="mt-1">{children}</div>
-      {hint && <p className="text-[11px] text-text-muted mt-1">{hint}</p>}
+      {hint && (
+        <p className={cn(
+          "mt-1 text-[11px]",
+          tone === "warning" ? "text-status-awaiting" : "text-text-muted",
+        )}>
+          {hint}
+        </p>
+      )}
     </label>
   );
 }

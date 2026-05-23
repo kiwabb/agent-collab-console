@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/vibe-kanban/frontend/type-safety.md", "reason": "Implement robust unknown API error parsing without unsafe assumptions about FastAPI detail shapes."}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "Keep UX validation and tests aligned with frontend quality gates."}

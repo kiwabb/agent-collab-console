@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/vibe-kanban/frontend/type-safety.md", "reason": "Verify API error parsing handles string, array, and unknown detail values safely."}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "Verify new UX validation has regression coverage and does not weaken frontend gates."}

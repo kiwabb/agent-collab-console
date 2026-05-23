@@ -40,7 +40,23 @@ Questions to answer:
 
 <!-- Type utilities, generics, type guards -->
 
-(To be filled by the team)
+### Scenario: API Error Detail Parsing
+
+#### Scope / Trigger
+
+- Trigger: changing `frontend/src/lib/api.ts` response handling or adding frontend wrappers around FastAPI endpoints.
+- FastAPI may return `detail` as a string, array of validation errors, object, or omit it.
+
+#### Required Pattern
+
+- Treat parsed error JSON as `unknown` until narrowed.
+- Preserve string `detail` values directly.
+- For validation arrays, render each item with `loc` and `msg` when present, joined with `; `.
+- Fall back to `HTTP <status>` when the detail shape is unknown or empty.
+
+#### Forbidden Pattern
+
+- Do not cast `detail` to `string` without runtime narrowing. FastAPI 422 arrays stringify to `[object Object]`, hiding the actual validation error.
 
 ---
 
