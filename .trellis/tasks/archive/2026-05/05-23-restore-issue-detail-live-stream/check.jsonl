@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "审查必看：确认实现是 import AgentLiveTimeline 而不是复制；任何复制/重写都需要按此 guide 给出充分理由，否则打回。"}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "前端代码质量基线（forbidden / required pattern）。检查 DispatchDrawer 改造不要引入禁用模式（dangerouslySetInnerHTML / 未净化 markdown 等）。"}
+{"file": ".trellis/spec/ccgui/frontend/quality-guidelines.md", "reason": "cc-gui 是 streaming UI 的对照基准，质量 guideline 包含 streaming / 并发 WS / 状态机相关规范，用来核对 drawer WS 生命周期、单实例约束是否到位。"}
+{"file": ".trellis/spec/vibe-kanban/frontend/state-management.md", "reason": "复核 WS 订阅生命周期是否走 hook 自带 cleanup、drawer 切换是否正确触发 re-subscribe，避免泄漏。"}
+{"file": ".trellis/spec/ccgui/frontend/hook-guidelines.md", "reason": "复核 useExecutionProcessMessageStream 在 drawer 内的使用方式与 cc-gui 同类 hook 范式一致，特别是订阅 id 变化 / 取消订阅 / 重连横幅触发。"}

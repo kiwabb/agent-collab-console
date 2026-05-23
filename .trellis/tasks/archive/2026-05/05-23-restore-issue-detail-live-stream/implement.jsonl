@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "本任务核心约束：必须 import 复用 AgentLiveTimeline / useExecutionProcessMessageStream，禁止复制。需要在编码前内化复用 vs 重写的判定标准。"}
+{"file": ".trellis/spec/ccgui/frontend/component-guidelines.md", "reason": "cc-gui 是 streaming UI 参考实现，其组件分层范式（streaming Markdown / activity phase / runtime reconnect card）是判断本仓 DispatchDrawer 改造对不对的对照基准。"}
+{"file": ".trellis/spec/ccgui/frontend/hook-guidelines.md", "reason": "本任务核心数据源是 useExecutionProcessMessageStream（WS hook + 生命周期 + 重连），cc-gui 同类 hook 模式（useThreadItemEvents / useStreamActivityPhase）决定 drawer 内 WS 订阅应该怎么放。"}
+{"file": ".trellis/spec/vibe-kanban/frontend/component-guidelines.md", "reason": "通用前端组件分层基线（容器 / 展示 / 状态分支）。DispatchDrawer 内部三段（Header / Live Stream / Summary&Actions）的拆分要符合这套范式。"}
+{"file": ".trellis/spec/vibe-kanban/frontend/state-management.md", "reason": "drawer 开关 + WS 订阅生命周期 + 单实例约束属于典型状态管理决策，需要按这套规范处理（不要在组件里手管 ws）。"}
