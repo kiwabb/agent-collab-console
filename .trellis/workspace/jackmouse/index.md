@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
-- **Last Active**: 2026-05-22
+- **Total Sessions**: 7
+- **Last Active**: 2026-05-24
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~213 | Active |
+| `journal-1.md` | ~247 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-05-24 | Restore live agent streaming in Issue DispatchDrawer | `914a73d` | `main` |
 | 6 | 2026-05-22 | Fix conductor streaming not live | `2b9dbc4` | `main` |
 | 5 | 2026-05-22 | Conductor 完整状态机 + Stepper/Timeline + 预估剩余时间 | `f7c912d` | `main` |
 | 4 | 2026-05-22 | Conductor 流式输出 + phase/detail 实时状态可见 | `fe12046`, `7dbf71c` | `main` |

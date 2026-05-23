@@ -211,3 +211,37 @@ Unified the global realtime event stream onto WebSocket with envelope/ring-buffe
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Restore live agent streaming in Issue DispatchDrawer
+
+**Date**: 2026-05-24
+**Task**: Restore live agent streaming in Issue DispatchDrawer
+**Package**: vibe-kanban
+**Branch**: `main`
+
+### Summary
+
+Diagnosed missing live token stream after issue-detail redesign (commit 774963c): IssueDetailPage never mounted AgentLiveTimeline and LiveThinkingDock was orphan dead code. Path 1: embedded AgentLiveTimeline inside DispatchDrawer middle section, reusing useExecutionProcessLogStream via item.task.last_execution_process_id (zero new API, zero copy). Widened drawer 480->560px, added Esc close + stop-task action when running, collapsed SubAgentResult while task still running. Deleted LiveThinkingDock.tsx (245 lines, never imported). Verified: tsc/lint/test/build all green (117/117 tests).
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `914a73d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
