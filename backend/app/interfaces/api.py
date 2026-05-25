@@ -2088,6 +2088,12 @@ async def codex_status():
     return {"available": available, "binary": "codex"}
 
 
+@router.get("/codex/heartbeat")
+async def codex_heartbeat():
+    """Lightweight Codex heartbeat endpoint."""
+    return {"status": "ok"}
+
+
 @router.get("/codex/workspaces")
 @router.get("/codex/sessions")
 async def list_codex_workspaces(project_id: str | None = None):
