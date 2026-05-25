@@ -654,7 +654,6 @@ class BaseProcessRuntime:
 
             if not is_chat and callable(self.refresh_task_result):
                 try:
-                    _logger.info("[LLM raw response] task=%s len=%d\n%s", task_id, len(task.result), task.result)
                     await self.refresh_task_result(task)
                 except Exception as exc:
                     _logger.error(
@@ -839,8 +838,6 @@ class BaseProcessRuntime:
             # Call refresh_task_result to persist artifacts
             if callable(self.refresh_task_result):
                 try:
-                    raw_result = entry.result_text or ""
-                    _logger.info("[LLM raw response] task=%s len=%d\n%s", task_id, len(raw_result), raw_result)
                     await self.refresh_task_result(task)
                 except Exception as exc:
                     _logger.error(

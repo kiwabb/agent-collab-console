@@ -295,6 +295,57 @@ async def test_process_runtime_mark_task_done_emits_single_failure_channel_for_r
 
 
 @pytest.mark.asyncio
+async def test_process_runtime_mark_task_done_handles_empty_result_without_crashing():
+    # When a subagent completes but produces no usable result (e.g. its only
+    # output was a CLI control payload that got filtered), task.result stays
+    # None. _mark_task_done must still complete cleanly — it must not crash on
+    # len(None) and must not mis-mark the completed task as failed.
+    now = datetime.now()
+    task = CodexTask(
+        id="task-empty",
+        session_id="workspace-empty",
+        issue_id="issue-empty",
+        title="PM task",
+        prompt="write prd",
+        role="product_manager",
+        executor="codex",
+        status="running",
+        workspace_path="/tmp/workspace",
+        last_execution_process_id="process-empty",
+        created_at=now,
+        updated_at=now,
+    )
+    store = RuntimeStoreStub(task)
+    bus = EventBusStub()
+    refreshed = {"called": False}
+
+    async def refresh_task_result(task):
+        refreshed["called"] = True
+
+    runtime = RuntimeUnderTest(
+        codex_store=store,
+        log_store=store,
+        event_bus=bus,
+        refresh_task_result=refresh_task_result,
+    )
+    entry = AsyncProcessEntry(
+        proc=None,
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        executor="codex",
+        cwd="/tmp/workspace",
+        resume_session_id=None,
+        result_text=None,
+    )
+
+    await runtime._mark_task_done(task.id, entry)
+
+    assert store.task.status == "done"
+    assert refreshed["called"] is True
+
+
+@pytest.mark.asyncio
 async def test_persist_reader_metadata_does_not_overwrite_terminal_failure_reason():
     now = datetime.now()
     task = CodexTask(

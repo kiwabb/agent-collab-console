@@ -285,8 +285,6 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         command_args: list[str] | None = None,
         force_new_session: bool = False,
     ) -> AsyncProcessEntry:
-        import sys
-
         workspace = await self.codex_store.load_codex_workspace(workspace_id)
         if workspace is None:
             raise KeyError(f"Workspace {workspace_id} not found")
@@ -341,7 +339,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         if command_args:
             cmd.extend(command_args)
 
-        print(f"[DEBUG] spawning async app-server cmd={cmd} cwd={effective_cwd}", file=sys.stderr, flush=True)
+        logger.debug("spawning async app-server cmd=%s cwd=%s", cmd, effective_cwd)
 
         proc = await asyncio.create_subprocess_exec(
             cmd[0],
@@ -433,7 +431,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 if prompt_text:
                     await client.turn_start(prompt_text)
             except Exception as exc:
-                print(f"[ERROR] Handshake failed: {exc}", file=sys.stderr)
+                logger.error("Handshake failed: %s", exc)
                 entry.had_error = True
                 entry.result_text = str(exc)
                 await self._append_log(workspace_id, "error", f"Handshake failed: {exc}", task_id)
