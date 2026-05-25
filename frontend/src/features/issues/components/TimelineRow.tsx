@@ -1,8 +1,9 @@
 "use client";
 
-import { AlertCircle, CheckCircle2, Clock3, HelpCircle, Loader2, MessageCircle, Square } from "lucide-react";
+import { AlertCircle, CheckCircle2, HelpCircle, Lightbulb, Loader2, MessageCircle, Square } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/providers/I18nProvider";
 import type { DecisionTimelineItem } from "../hooks/useDecisionTimeline";
 import { TimelineThinkingTurns } from "./TimelineThinkingTurns";
 import { formatDuration } from "./StatusStrip";
@@ -21,9 +22,11 @@ const STATUS_ICON = {
 };
 
 export function TimelineRow({ item, onOpen }: Props) {
+  const { locale, t } = useI18n();
   const Icon = item.kind === "user" ? MessageCircle : STATUS_ICON[item.status];
   const failed = item.status === "failed";
   const waiting = item.kind === "clarification";
+  const title = item.titleKey ? t(item.titleKey, item.titleParams) : item.title;
 
   return (
     <article
@@ -37,7 +40,7 @@ export function TimelineRow({ item, onOpen }: Props) {
     >
       <button type="button" onClick={onOpen} className="grid w-full grid-cols-[84px_1fr_auto] gap-3 text-left">
         <div className="font-mono text-xs text-text-muted">
-          {item.createdAt ? new Date(item.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "—"}
+          {item.createdAt ? new Date(item.createdAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" }) : "—"}
         </div>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -59,22 +62,32 @@ export function TimelineRow({ item, onOpen }: Props) {
               <span className="font-mono text-xs text-text-muted">{formatDuration(item.durationMs)}</span>
             )}
           </div>
-          <h3 className="mt-2 truncate text-sm font-bold text-foreground">{item.title}</h3>
+          <h3 className="mt-2 truncate text-sm font-bold text-foreground">{title}</h3>
           {item.summary && <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{item.summary}</p>}
         </div>
-        <div className="text-xs font-semibold text-text-muted">Details</div>
+        <div className="text-xs font-semibold text-text-muted">{t("issue.command.details")}</div>
       </button>
 
       {failed && item.why && (
         <div className="mt-3 rounded-xl border border-status-failed/25 bg-background/70 p-3">
-          <div className="mb-1 text-[11px] font-black uppercase tracking-[0.18em] text-status-failed">Why</div>
+          <div className="mb-1 text-[11px] font-black uppercase tracking-[0.18em] text-status-failed">{t("issue.command.why")}</div>
           <pre className="max-h-36 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">{item.why}</pre>
         </div>
       )}
 
       {waiting && (
         <div className="mt-3 rounded-xl border border-status-awaiting/25 bg-status-awaiting/10 p-3 text-xs text-status-awaiting">
-          Conductor is waiting for an answer. Use the sticky chat bar below.
+          {t("issue.command.waitingAnswerHint")}
+        </div>
+      )}
+
+      {item.rationale && (
+        <div className="mt-3 rounded-xl border border-brand/25 bg-brand-muted/10 p-3">
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-[0.18em] text-brand">
+            <Lightbulb size={12} />
+            {t("issue.command.rationale")}
+          </div>
+          <p className="whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">{item.rationale}</p>
         </div>
       )}
 

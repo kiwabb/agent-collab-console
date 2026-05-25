@@ -65,7 +65,7 @@ function SetupScriptCard({
         <Textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="npm install"
+          placeholder={t("projects.setupScriptPlaceholder")}
           rows={4}
           className="font-mono text-xs"
         />
@@ -464,7 +464,7 @@ export function ProjectsPage() {
               <CardContent className="p-4">
                 <InteractionEmptyState
                   title={t("projects.selectHint")}
-                  description="Select a project from the left rail or create a new project to start an agent workspace."
+                  description={t("projects.selectHintDescription")}
                 />
               </CardContent>
             </Card>
@@ -498,14 +498,14 @@ export function ProjectsPage() {
         onOpenChange={(next) => {
           if (!next) setCascadePending(null);
         }}
-        title="Cascade-delete this project?"
+        title={t("projects.confirmCascadeTitle")}
         description={
           cascadePending
-            ? `${cascadePending.detail}\n\nForce-delete will remove the project plus all attached workspaces, issues, tasks and logs. This cannot be undone.`
+            ? t("projects.confirmCascadeBody", { detail: cascadePending.detail })
             : ""
         }
-        confirmText="Force delete"
-        cancelText="Keep project"
+        confirmText={t("projects.forceDelete")}
+        cancelText={t("projects.keepProject")}
         variant="destructive"
         isLoading={deletingProject}
         onConfirm={() => void handleCascadeConfirm()}

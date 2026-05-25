@@ -62,6 +62,26 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("Orphan recovery failed: %s", exc)
 
+    try:
+        from app.bootstrap import async_store
+        from app.application.conductor_lease import get_conductor_lease_owner
+        from app.application.conductor_recovery import recover_orphaned_conductors
+        from app.application.event_bus import _workflow_task_dispatcher
+        if async_store is not None:
+            recovered = await recover_orphaned_conductors(
+                async_store,
+                event_bus=event_bus,
+                current_owner=get_conductor_lease_owner(),
+                stale_after_s=0,
+                recover_foreign_owner=True,
+                auto_restart=True,
+                task_dispatcher_fn=_workflow_task_dispatcher,
+            )
+            if recovered:
+                logger.info("Recovered and relaunched %d orphan conductor task(s) from previous run", recovered)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Conductor orphan recovery failed: %s", exc)
+
     # Seed built-in workflow agents (idempotent — only creates missing rows).
     try:
         from app.bootstrap import async_store, WORKFLOW_DAG_ENABLED
@@ -88,6 +108,7 @@ async def lifespan(app: FastAPI):
     # threshold. Gated by CODEX_STALL_WATCHDOG (default on); the watchdog
     # itself exits cleanly if the env disables it.
     watchdog_task: asyncio.Task | None = None
+    conductor_watchdog_task: asyncio.Task | None = None
     try:
         from app.bootstrap import async_store, get_codex_process_manager
         from app.application.stall_watchdog import run as _run_watchdog
@@ -100,6 +121,22 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to start stall watchdog: %s", exc)
 
+    try:
+        from app.bootstrap import async_store
+        from app.application.conductor_recovery import run_watchdog as _run_conductor_watchdog
+        from app.application.event_bus import _workflow_task_dispatcher
+        if async_store is not None:
+            conductor_watchdog_task = asyncio.create_task(
+                _run_conductor_watchdog(
+                    async_store,
+                    event_bus=event_bus,
+                    task_dispatcher_fn=_workflow_task_dispatcher,
+                ),
+                name="conductor-recovery-watchdog",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to start conductor recovery watchdog: %s", exc)
+
     yield
     # Shutdown: terminate all running Codex processes via formal terminate_all() interface
     # This avoids orphan child processes when the backend exits
@@ -107,6 +144,12 @@ async def lifespan(app: FastAPI):
         watchdog_task.cancel()
         try:
             await watchdog_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    if conductor_watchdog_task is not None:
+        conductor_watchdog_task.cancel()
+        try:
+            await conductor_watchdog_task
         except (asyncio.CancelledError, Exception):
             pass
     try:

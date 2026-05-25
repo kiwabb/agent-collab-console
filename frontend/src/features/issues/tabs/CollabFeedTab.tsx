@@ -26,6 +26,7 @@ const ROLE_LABEL: Record<string, string> = {
   "specialist:log_summarizer": "📊 Log Summarizer",
 };
 
+
 const TYPE_CONFIG: Record<
   AgentMessage["message_type"],
   { label: string; colorClass: string; borderClass: string; bgClass: string }

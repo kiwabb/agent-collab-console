@@ -451,6 +451,9 @@ export interface CreateIssueRequest {
   title: string;
   description?: string;
   base_branch?: string | null;
+  executor?: string | null;
+  provider?: string | null;
+  model?: string | null;
 }
 
 export interface UpdateIssuePhaseRequest {
@@ -517,12 +520,21 @@ export interface RuntimeExecutorConfig {
   api_key?: string | null;
   api_key_configured?: boolean;
   default_model?: string | null;
+  protocol?: "anthropic" | "openai";
   providers: RuntimeProviderConfig[];
   default_provider_id: string | null;
 }
 
+export interface ConductorLLMConfig {
+  executor_id?: string | null;
+  model?: string | null;
+  max_tokens?: number;
+  timeout_s?: number;
+}
+
 export interface RuntimeCatalog {
   executors: RuntimeExecutorConfig[];
+  conductor_llm?: ConductorLLMConfig;
 }
 
 export interface RuntimeCatalogRequest {

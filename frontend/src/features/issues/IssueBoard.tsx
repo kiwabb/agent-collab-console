@@ -231,14 +231,14 @@ export function IssueBoard({
               <button
                 onClick={() => onExport("json")}
                 className="p-2 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all"
-                title="Export JSON"
+                title={t("issue.exportJson")}
               >
                 <Download size={16} />
               </button>
               <button
                 onClick={() => onExport("csv")}
                 className="p-2 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all"
-                title="Export CSV"
+                title={t("issue.exportCsv")}
               >
                 <span className="text-[10px] font-black">CSV</span>
               </button>
@@ -248,7 +248,7 @@ export function IssueBoard({
             <button
               onClick={() => setShowImportDialog(true)}
               className="p-2 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all"
-              title="Import"
+              title={t("issue.importAction")}
             >
               <Upload size={16} />
             </button>

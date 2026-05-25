@@ -153,6 +153,9 @@ class SQLiteStore:
                     git_last_commit_sha TEXT,
                     github_pr_url TEXT,
                     github_pr_state TEXT,
+                    executor TEXT,
+                    provider TEXT,
+                    model TEXT,
                     created_at TEXT,
                     updated_at TEXT,
                     FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
@@ -337,6 +340,11 @@ class SQLiteStore:
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN project_id TEXT")
             except sqlite3.OperationalError:
                 pass
+            for _issue_exec_col in ("executor", "provider", "model"):
+                try:
+                    conn.execute(f"ALTER TABLE codex_issues ADD COLUMN {_issue_exec_col} TEXT")
+                except sqlite3.OperationalError:
+                    pass
             try:
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN review_comment TEXT")
             except sqlite3.OperationalError:
@@ -637,6 +645,9 @@ class SQLiteStore:
                     issue_id TEXT,
                     status TEXT NOT NULL DEFAULT 'pending',
                     result_json TEXT,
+                    lease_owner TEXT,
+                    heartbeat_at TEXT,
+                    lease_expires_at TEXT,
                     created_at TEXT,
                     updated_at TEXT
                 )
@@ -713,6 +724,16 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_id ON conductor_tasks(project_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)")
+            for stmt in (
+                "ALTER TABLE conductor_tasks ADD COLUMN lease_owner TEXT",
+                "ALTER TABLE conductor_tasks ADD COLUMN heartbeat_at TEXT",
+                "ALTER TABLE conductor_tasks ADD COLUMN lease_expires_at TEXT",
+            ):
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_lease ON conductor_tasks(status, lease_expires_at)")
             # Phase 4: add instance_index to workflow_nodes for existing DBs
             try:
                 conn.execute(
@@ -1061,7 +1082,7 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO codex_issues (id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO codex_issues (id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, executor, provider, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 issue.id,
                 issue.session_id,
@@ -1080,6 +1101,9 @@ class SQLiteStore:
                 issue.git_last_commit_sha,
                 getattr(issue, "github_pr_url", None),
                 getattr(issue, "github_pr_state", None),
+                getattr(issue, "executor", None),
+                getattr(issue, "provider", None),
+                getattr(issue, "model", None),
                 self._format_datetime(issue.created_at),
                 self._format_datetime(issue.updated_at),
             ),
@@ -1113,6 +1137,9 @@ class SQLiteStore:
             git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in row.keys() and row["git_last_commit_sha"] else None,
             github_pr_url=row["github_pr_url"] if "github_pr_url" in row.keys() and row["github_pr_url"] else None,
             github_pr_state=row["github_pr_state"] if "github_pr_state" in row.keys() and row["github_pr_state"] else None,
+            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
+            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
+            model=row["model"] if "model" in row.keys() and row["model"] else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1648,42 +1675,14 @@ class SQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def save_conductor_task(self, task: "ConductorTask") -> None:
-        from app.domain.models import ConductorTask  # noqa: F401
-        self._ensure_db()
-        conn = self._get_conn()
-        conn.execute(
-            """INSERT OR REPLACE INTO conductor_tasks
-               (id, project_id, task_kind, payload_json, issue_id, status, result_json, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                task.id,
-                task.project_id,
-                task.task_kind,
-                json.dumps(task.payload, ensure_ascii=False, default=str),
-                task.issue_id,
-                task.status,
-                task.result_json,
-                self._format_datetime(task.created_at),
-                self._format_datetime(task.updated_at or datetime.now()),
-            ),
-        )
-        conn.commit()
-        conn.close()
-
-    def load_conductor_task(self, task_id: str) -> "ConductorTask | None":
+    def _row_to_conductor_task(self, row) -> "ConductorTask":
         from app.domain.models import ConductorTask
-        self._ensure_db()
-        conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM conductor_tasks WHERE id = ?", (task_id,)).fetchone()
-        conn.close()
-        if row is None:
-            return None
+
         try:
             payload = json.loads(row["payload_json"] or "{}")
         except json.JSONDecodeError:
             payload = {}
+        keys = row.keys()
         return ConductorTask(
             id=row["id"],
             project_id=row["project_id"],
@@ -1692,12 +1691,51 @@ class SQLiteStore:
             issue_id=row["issue_id"],
             status=row["status"],
             result_json=row["result_json"],
+            lease_owner=row["lease_owner"] if "lease_owner" in keys and row["lease_owner"] else None,
+            heartbeat_at=self._parse_datetime(row["heartbeat_at"] if "heartbeat_at" in keys else None),
+            lease_expires_at=self._parse_datetime(row["lease_expires_at"] if "lease_expires_at" in keys else None),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
+    def save_conductor_task(self, task: "ConductorTask") -> None:
+        from app.domain.models import ConductorTask  # noqa: F401
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO conductor_tasks
+               (id, project_id, task_kind, payload_json, issue_id, status, result_json,
+                lease_owner, heartbeat_at, lease_expires_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task.id,
+                task.project_id,
+                task.task_kind,
+                json.dumps(task.payload, ensure_ascii=False, default=str),
+                task.issue_id,
+                task.status,
+                task.result_json,
+                task.lease_owner,
+                self._format_datetime(task.heartbeat_at),
+                self._format_datetime(task.lease_expires_at),
+                self._format_datetime(task.created_at),
+                self._format_datetime(task.updated_at or datetime.now()),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def load_conductor_task(self, task_id: str) -> "ConductorTask | None":
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM conductor_tasks WHERE id = ?", (task_id,)).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return self._row_to_conductor_task(row)
+
     def load_latest_conductor_task_for_issue(self, issue_id: str) -> "ConductorTask | None":
-        from app.domain.models import ConductorTask
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -1711,21 +1749,25 @@ class SQLiteStore:
         conn.close()
         if row is None:
             return None
-        try:
-            payload = json.loads(row["payload_json"] or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        return ConductorTask(
-            id=row["id"],
-            project_id=row["project_id"],
-            task_kind=row["task_kind"],
-            payload=payload if isinstance(payload, dict) else {},
-            issue_id=row["issue_id"],
-            status=row["status"],
-            result_json=row["result_json"],
-            created_at=self._parse_datetime(row["created_at"]),
-            updated_at=self._parse_datetime(row["updated_at"]),
-        )
+        return self._row_to_conductor_task(row)
+
+    def list_conductor_tasks(self, *, status: str | None = None) -> list["ConductorTask"]:
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        if status:
+            rows = conn.execute(
+                """SELECT * FROM conductor_tasks
+                   WHERE status = ?
+                   ORDER BY created_at ASC, updated_at ASC, id ASC""",
+                (status,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM conductor_tasks ORDER BY created_at ASC, updated_at ASC, id ASC"
+            ).fetchall()
+        conn.close()
+        return [self._row_to_conductor_task(row) for row in rows]
 
     def save_conductor_turn(self, turn: "ConductorTurn") -> None:
         from app.domain.models import ConductorTurn  # noqa: F401

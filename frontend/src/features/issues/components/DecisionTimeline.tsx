@@ -1,17 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { History } from "lucide-react";
+import { History, Loader2 } from "lucide-react";
 
+import { useI18n } from "@/providers/I18nProvider";
 import type { DecisionTimelineItem } from "../hooks/useDecisionTimeline";
 import { TimelineRow } from "./TimelineRow";
 
 interface Props {
   items: DecisionTimelineItem[];
   onOpenItem: (item: DecisionTimelineItem) => void;
+  liveThinking?: string;
 }
 
-export function DecisionTimeline({ items, onOpenItem }: Props) {
+export function DecisionTimeline({ items, onOpenItem, liveThinking }: Props) {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const collapsedCount = items.length > 20 ? items.length - 10 : 0;
   const visible = collapsedCount > 0 && !expanded ? items.slice(-10) : items;
@@ -22,11 +25,11 @@ export function DecisionTimeline({ items, onOpenItem }: Props) {
         <div>
           <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-text-muted">
             <History size={15} />
-            Decision timeline
+            {t("issue.command.timelineTitle")}
           </div>
-          <p className="mt-1 text-sm text-text-secondary">Every conductor dispatch, question, memory retrieval, and user interruption.</p>
+          <p className="mt-1 text-sm text-text-secondary">{t("issue.command.timelineDescription")}</p>
         </div>
-        <div className="font-mono text-xs text-text-muted">{items.length} events</div>
+        <div className="font-mono text-xs text-text-muted">{t("issue.command.eventCount", { count: items.length })}</div>
       </div>
 
       {collapsedCount > 0 && !expanded && (
@@ -35,19 +38,28 @@ export function DecisionTimeline({ items, onOpenItem }: Props) {
           onClick={() => setExpanded(true)}
           className="mb-3 w-full rounded-2xl border border-dashed border-border-subtle bg-surface-raised/60 px-4 py-3 text-sm text-text-muted hover:text-foreground"
         >
-          ... {collapsedCount} older conductor events hidden. Show all.
+          {t("issue.command.showOlder", { count: collapsedCount })}
         </button>
       )}
 
-      {items.length === 0 ? (
+      {items.length === 0 && !liveThinking ? (
         <div className="rounded-2xl border border-dashed border-border-subtle bg-surface-input/40 px-6 py-12 text-center text-sm text-text-muted">
-          暂无 Conductor 决策历史
+          {t("issue.command.emptyTimeline")}
         </div>
       ) : (
         <div className="space-y-3">
           {visible.map((item) => (
             <TimelineRow key={item.id} item={item} onOpen={() => onOpenItem(item)} />
           ))}
+          {liveThinking && (
+            <div className="rounded-2xl border border-brand/30 bg-brand-muted/10 p-4">
+              <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-[0.18em] text-brand">
+                <Loader2 size={12} className="animate-spin" />
+                {t("issue.command.liveThinking")}
+              </div>
+              <p className="whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">{liveThinking}</p>
+            </div>
+          )}
         </div>
       )}
     </section>

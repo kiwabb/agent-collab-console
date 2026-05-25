@@ -64,9 +64,9 @@ export function TasksRunsTab({ issueId, issue }: Props) {
       setTasks(list);
       if (!selectedTaskId && list.length > 0) setSelectedTaskId(list[0].id);
     } catch (err) {
-      addToast({ type: "error", title: "Failed to load tasks", message: err instanceof Error ? err.message : String(err) });
+      addToast({ type: "error", title: t("task.loadFailed"), message: err instanceof Error ? err.message : String(err) });
     }
-  }, [issueId, selectedTaskId, addToast]);
+  }, [issueId, selectedTaskId, addToast, t]);
 
   useEffect(() => {
     void loadTasks();
@@ -170,15 +170,15 @@ export function TasksRunsTab({ issueId, issue }: Props) {
         provider: config.provider,
         model: config.model,
       });
-      addToast({ type: "success", title: "Run dispatched" });
+      addToast({ type: "success", title: t("task.runDispatched") });
       void loadTasks();
       void loadRuns(selectedTaskId);
     } catch (err) {
-      addToast({ type: "error", title: "Run failed", message: err instanceof Error ? err.message : String(err) });
+      addToast({ type: "error", title: t("task.runFailed"), message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
     }
-  }, [selectedTaskId, config, addToast, loadTasks, loadRuns]);
+  }, [selectedTaskId, config, addToast, loadTasks, loadRuns, t]);
 
   const send = useCallback(async () => {
     if (!selectedTaskId) return;
@@ -199,26 +199,26 @@ export function TasksRunsTab({ issueId, issue }: Props) {
         await chatCodexTask(selectedTaskId, content);
       }
       setComposer("");
-      addToast({ type: "success", title: `${mode} dispatched` });
+      addToast({ type: "success", title: t("task.modeDispatched", { mode }) });
       void loadTasks();
       void loadRuns(selectedTaskId);
     } catch (err) {
-      addToast({ type: "error", title: `${mode} failed`, message: err instanceof Error ? err.message : String(err) });
+      addToast({ type: "error", title: t("task.modeFailed", { mode }), message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
     }
-  }, [selectedTaskId, composer, mode, config, addToast, loadTasks, loadRuns]);
+  }, [selectedTaskId, composer, mode, config, addToast, loadTasks, loadRuns, t]);
 
   const handleTerminate = useCallback(async () => {
     if (!selectedTaskId) return;
     try {
       await terminateCodexTask(selectedTaskId);
-      addToast({ type: "success", title: "Terminated" });
+      addToast({ type: "success", title: t("task.terminated") });
       void loadRuns(selectedTaskId);
     } catch (err) {
-      addToast({ type: "error", title: "Failed to terminate", message: err instanceof Error ? err.message : String(err) });
+      addToast({ type: "error", title: t("task.terminateFailed"), message: err instanceof Error ? err.message : String(err) });
     }
-  }, [selectedTaskId, loadRuns, addToast]);
+  }, [selectedTaskId, loadRuns, addToast, t]);
 
   return (
     <div className="h-full flex flex-col min-h-0 flex-1">
@@ -230,8 +230,8 @@ export function TasksRunsTab({ issueId, issue }: Props) {
             <div className="flex-1 flex items-center justify-center">
               <EmptyState
                 icon="task"
-                title="No tasks yet"
-                description="Tasks appear here when the workflow DAG starts."
+                title={t("task.emptyTitle")}
+                description={t("task.emptyDescription")}
               />
             </div>
           )}
@@ -336,8 +336,8 @@ export function TasksRunsTab({ issueId, issue }: Props) {
               <div className="h-full flex items-center justify-center">
                 <EmptyState
                   icon="message"
-                  title="No run selected"
-                  description="Pick a run on the left to watch its live log and messages."
+                  title={t("run.emptyTitle")}
+                  description={t("run.emptyDescription")}
                 />
               </div>
             )}

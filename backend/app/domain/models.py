@@ -184,6 +184,11 @@ class CodexIssue(BaseModel):
     # `OPEN/MERGED/CLOSED` for state, `APPROVED/CHANGES_REQUESTED/REVIEW_REQUIRED` for decision.
     # Stored as "<state>:<reviewDecision?>" so a single column carries both.
     github_pr_state: str | None = None
+    # Executor selection chosen at issue creation. When set, Conductor-dispatched
+    # sub-agents use these instead of the agent catalog defaults (see dispatch_role).
+    executor: str | None = None
+    provider: str | None = None
+    model: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -374,13 +379,32 @@ class RuntimeExecutorConfig(BaseModel):
     api_endpoint: str | None = None
     api_key: str | None = None
     default_model: str | None = None
+    # HTTP wire protocol this executor's api_endpoint speaks. Used by the
+    # Conductor's tool-use loop to pick the right request/response adapter.
+    # "anthropic" -> POST /v1/messages; "openai" -> POST /v1/chat/completions.
+    protocol: Literal["anthropic", "openai"] = "anthropic"
     providers: list[RuntimeProviderConfig] = Field(default_factory=list)
     default_provider_id: str | None = None  # ID of the default provider
+
+
+class ConductorLLMConfig(BaseModel):
+    """Dedicated LLM selection for the ProjectConductor's tool-use loop.
+
+    Separate from the per-subagent executors so the orchestrating brain can run
+    on a different model/provider than the agents it dispatches. `executor_id`
+    references a RuntimeExecutorConfig in the same catalog (whose `protocol`
+    decides the wire format); `model` overrides that executor's default model.
+    """
+    executor_id: str | None = None
+    model: str | None = None
+    max_tokens: int = 8192
+    timeout_s: float = 120.0
 
 
 class RuntimeCatalog(BaseModel):
     """Global runtime catalog containing all executor/provider/model configurations."""
     executors: list[RuntimeExecutorConfig] = Field(default_factory=list)
+    conductor_llm: ConductorLLMConfig = Field(default_factory=ConductorLLMConfig)
 
 
 # --- Template Models ---
@@ -560,6 +584,9 @@ class ConductorTask:
     issue_id: str | None = None
     status: str = "pending"
     result_json: str | None = None
+    lease_owner: str | None = None
+    heartbeat_at: datetime | None = None
+    lease_expires_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

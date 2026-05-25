@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Pencil, Check, X, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface InlineEditProps {
   value: string;
@@ -25,6 +26,8 @@ export function InlineEdit({
   disabled = false,
   autoSave = true,
 }: InlineEditProps) {
+  const { t } = useI18n();
+  const resolvedPlaceholder = placeholder === "Click to edit..." ? t("ui.clickToEdit") : placeholder;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(value);
   const [isSaving, setIsSaving] = useState(false);
@@ -125,8 +128,8 @@ export function InlineEdit({
           onClick={handleSave}
           disabled={isSaving}
           className="p-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50"
-          title="Save (Enter)"
-          aria-label="Save"
+          title={t("ui.saveShortcut")}
+          aria-label={t("ui.save")}
         >
           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
         </button>
@@ -134,8 +137,8 @@ export function InlineEdit({
           onClick={handleCancel}
           disabled={isSaving}
           className="p-1.5 rounded-lg bg-error/10 text-error hover:bg-error/20 transition-colors disabled:opacity-50"
-          title="Cancel (Esc)"
-          aria-label="Cancel"
+          title={t("ui.cancelShortcut")}
+          aria-label={t("ui.cancel")}
         >
           <X size={14} />
         </button>
@@ -159,12 +162,12 @@ export function InlineEdit({
           textClassName
         )}
       >
-        {value || placeholder}
+        {value || resolvedPlaceholder}
       </span>
       {!disabled && (
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
           {showSaved && (
-            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">Saved</span>
+            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">{t("ui.saved")}</span>
           )}
           <Pencil size={12} className="text-text-muted" />
         </div>

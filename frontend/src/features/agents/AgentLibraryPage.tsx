@@ -69,19 +69,19 @@ export function AgentLibraryPage() {
     setBusy(true);
     try {
       await deleteAgent(confirmDelete.id);
-      addToast({ type: "success", title: "Agent deleted" });
+      addToast({ type: "success", title: t("agents.deleted") });
       setConfirmDelete(null);
       await reload();
     } catch (err) {
       addToast({
         type: "error",
-        title: "Delete failed",
+        title: t("agents.deleteFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setBusy(false);
     }
-  }, [confirmDelete, addToast, reload]);
+  }, [confirmDelete, addToast, reload, t]);
 
   return (
     <WorkbenchShell breadcrumbs={[{ label: t("agents.pageTitle") }]}>
@@ -98,7 +98,7 @@ export function AgentLibraryPage() {
             }}
             className="gap-1 bg-brand hover:bg-brand-strong text-black font-semibold"
           >
-            <Plus size={14} /> New agent
+            <Plus size={14} /> {t("agents.new")}
           </Button>
         )}
         contentClassName="space-y-4"
@@ -107,8 +107,8 @@ export function AgentLibraryPage() {
         {loading && (
           <InteractionEmptyState
             tone="loading"
-            title="Loading agents"
-            description="Preparing built-in and custom multi-agent roles."
+            title={t("agents.loadingTitle")}
+            description={t("agents.loadingDescription")}
           />
         )}
         {error && (
@@ -122,8 +122,8 @@ export function AgentLibraryPage() {
             {agents.length === 0 && (
               <li className="p-4">
                 <InteractionEmptyState
-                  title="No agents yet"
-                  description="Built-in roles will be seeded on backend startup. Custom specialist agents will appear here after creation."
+                  title={t("agents.emptyTitle")}
+                  description={t("agents.emptyDescription")}
                 />
               </li>
             )}
@@ -137,7 +137,7 @@ export function AgentLibraryPage() {
                     <span className="text-[13px] font-semibold truncate">{a.name}</span>
                     {a.is_builtin && (
                       <span className="text-[9px] uppercase tracking-wider bg-brand/15 text-brand rounded px-1 py-0.5">
-                        built-in
+                        {t("agents.builtIn")}
                       </span>
                     )}
                   </div>
@@ -154,7 +154,7 @@ export function AgentLibraryPage() {
                 <div className="flex items-center gap-1 justify-end">
                   <button
                     type="button"
-                    aria-label="Edit"
+                    aria-label={t("agents.edit")}
                     onClick={() => {
                       setEditing(a);
                       setEditorOpen(true);
@@ -166,7 +166,7 @@ export function AgentLibraryPage() {
                   {!a.is_builtin && (
                     <button
                       type="button"
-                      aria-label="Delete"
+                      aria-label={t("agents.delete")}
                       onClick={() => setConfirmDelete(a)}
                       className="size-7 rounded-md hover:bg-status-failed/10 text-text-muted hover:text-status-failed flex items-center justify-center transition-colors"
                     >
@@ -192,13 +192,13 @@ export function AgentLibraryPage() {
         <ConfirmDialog
           open={confirmDelete !== null}
           onOpenChange={(o) => !o && setConfirmDelete(null)}
-          title="Delete agent?"
+          title={t("agents.deleteTitle")}
           description={
             confirmDelete
-              ? `"${confirmDelete.name}" will be removed. The Conductor will no longer be able to dispatch this role.`
+              ? t("agents.deleteDescription", { name: confirmDelete.name })
               : ""
           }
-          confirmText="Delete"
+          confirmText={t("agents.delete")}
           variant="destructive"
           isLoading={busy}
           onConfirm={() => void handleDelete()}
@@ -217,6 +217,7 @@ interface AgentEditorDialogProps {
 
 function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialogProps) {
   const { addToast } = useToast();
+  const { t } = useI18n();
   const [name, setName] = useState("");
   const [roleKey, setRoleKey] = useState("");
   const [description, setDescription] = useState("");
@@ -255,7 +256,7 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
         // placeholder being intact.
         if (!isBuiltin) patch.system_prompt_template = systemPromptTemplate;
         await updateAgent(editing.id, patch);
-        addToast({ type: "success", title: "Agent updated" });
+        addToast({ type: "success", title: t("agents.updated") });
       } else {
         const payload: CreateAgentRequest = {
           name: name.trim(),
@@ -266,13 +267,13 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
           artifact_subdir: artifactSubdir.trim() || null,
         };
         await createAgent(payload);
-        addToast({ type: "success", title: "Agent created" });
+        addToast({ type: "success", title: t("agents.created") });
       }
       onSaved();
     } catch (err) {
       addToast({
         type: "error",
-        title: editing ? "Update failed" : "Create failed",
+        title: editing ? t("agents.updateFailed") : t("agents.createFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
@@ -284,48 +285,48 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-auto">
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit agent" : "New agent"}</DialogTitle>
+          <DialogTitle>{editing ? t("agents.editTitle") : t("agents.newTitle")}</DialogTitle>
           <DialogDescription>
             {isBuiltin
-              ? "This is a built-in agent. Only the surface fields can be edited; the system prompt template is owned by the framework."
-              : "Custom roles get their own slot in the agents registry. The Conductor can dispatch them via dispatch_subagent or spawn_custom_subagent."}
+              ? t("agents.builtinDescription")
+              : t("agents.customDescription")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Name">
+            <Field label={t("agents.field.name")}>
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Security Reviewer"
+                placeholder={t("agents.placeholder.name")}
                 autoFocus
                 className="bg-surface-input border-border-subtle"
               />
             </Field>
-            <Field label="role_key" hint={editing ? "Immutable after creation" : "Lowercase snake_case identifier"}>
+            <Field label={t("agents.field.roleKey")} hint={editing ? t("agents.field.roleKeyImmutable") : t("agents.field.roleKeyHint")}>
               <Input
                 value={roleKey}
                 onChange={(e) => setRoleKey(e.target.value.replace(/[^a-z0-9_]/g, "").toLowerCase())}
-                placeholder="security_reviewer"
+                placeholder={t("agents.placeholder.roleKey")}
                 disabled={!!editing}
                 className="bg-surface-input border-border-subtle font-mono text-[12px]"
               />
             </Field>
           </div>
-          <Field label="Description">
+          <Field label={t("agents.field.description")}>
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="One-line summary shown in the agent library"
+              placeholder={t("agents.placeholder.description")}
               className="bg-surface-input border-border-subtle"
             />
           </Field>
           <Field
-            label="System prompt template"
+            label={t("agents.field.prompt")}
             hint={
               isBuiltin
-                ? "Read-only — built-in template references framework hooks."
-                : "Plain text. The framework substitutes {issue_title}, {issue_description}, {role_key}, {node_key} at dispatch time."
+                ? t("agents.field.promptBuiltinHint")
+                : t("agents.field.promptHint")
             }
           >
             <textarea
@@ -333,7 +334,7 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
               onChange={(e) => setSystemPromptTemplate(e.target.value)}
               rows={10}
               disabled={isBuiltin}
-              placeholder="You are acting as Security Reviewer. Inspect the engineer report and flag…"
+              placeholder={t("agents.placeholder.prompt")}
               className={cn(
                 "w-full rounded-md border border-border-subtle bg-background px-3 py-2 text-[12px] font-mono",
                 "focus:outline-none focus:ring-2 focus:ring-brand/50",
@@ -342,7 +343,7 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
             />
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Default executor">
+            <Field label={t("agents.field.executor")}>
               <select
                 value={defaultExecutor}
                 onChange={(e) => setDefaultExecutor(e.target.value)}
@@ -352,11 +353,11 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
                 <option value="codex">codex</option>
               </select>
             </Field>
-            <Field label="Artifact subdir" hint="Where this role's outputs land in issue/<id>/<subdir>/">
+            <Field label={t("agents.field.artifactSubdir")} hint={t("agents.field.artifactSubdirHint")}>
               <Input
                 value={artifactSubdir}
                 onChange={(e) => setArtifactSubdir(e.target.value)}
-                placeholder="security"
+                placeholder={t("agents.placeholder.artifactSubdir")}
                 className="bg-surface-input border-border-subtle font-mono text-[12px]"
               />
             </Field>
@@ -364,7 +365,7 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            <X size={12} className="mr-1" /> Cancel
+            <X size={12} className="mr-1" /> {t("agents.cancel")}
           </Button>
           <Button
             onClick={() => void handleSave()}
@@ -373,9 +374,9 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
           >
             {saving ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> Saving…
+                <Loader2 size={12} className="animate-spin" /> {t("agents.saving")}
               </span>
-            ) : editing ? "Save changes" : "Create agent"}
+            ) : editing ? t("agents.saveChanges") : t("agents.createAgent")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Pencil, Check, X, Loader2, Eye, Edit3, Bold, Italic, Code, Link, Smile } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/providers/I18nProvider";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -30,6 +31,8 @@ export function MarkdownEditor({
   disabled = false,
   autoSave = true,
 }: MarkdownEditorProps) {
+  const { t } = useI18n();
+  const resolvedPlaceholder = placeholder === "Click to edit..." ? t("ui.clickToEdit") : placeholder;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(value);
   const [isSaving, setIsSaving] = useState(false);
@@ -168,7 +171,7 @@ export function MarkdownEditor({
               type="button"
               onClick={() => insertMarkdown("**", "**")}
               className="p-1.5 rounded hover:bg-surface-hover transition-colors"
-              title="Bold (Ctrl+B)"
+              title={t("ui.boldShortcut")}
             >
               <Bold size={14} className="text-text-muted" />
             </button>
@@ -176,7 +179,7 @@ export function MarkdownEditor({
               type="button"
               onClick={() => insertMarkdown("*", "*")}
               className="p-1.5 rounded hover:bg-surface-hover transition-colors"
-              title="Italic (Ctrl+I)"
+              title={t("ui.italicShortcut")}
             >
               <Italic size={14} className="text-text-muted" />
             </button>
@@ -184,7 +187,7 @@ export function MarkdownEditor({
               type="button"
               onClick={() => insertMarkdown("`", "`")}
               className="p-1.5 rounded hover:bg-surface-hover transition-colors"
-              title="Inline Code (Ctrl+E)"
+              title={t("ui.inlineCodeShortcut")}
             >
               <Code size={14} className="text-text-muted" />
             </button>
@@ -192,7 +195,7 @@ export function MarkdownEditor({
               type="button"
               onClick={() => insertMarkdown("[", "](url)")}
               className="p-1.5 rounded hover:bg-surface-hover transition-colors"
-              title="Link"
+              title={t("ui.link")}
             >
               <Link size={14} className="text-text-muted" />
             </button>
@@ -201,7 +204,7 @@ export function MarkdownEditor({
               type="button"
               onClick={() => setShowPreview(p => !p)}
               className={cn("p-1.5 rounded hover:bg-surface-hover transition-colors", showPreview && "bg-surface-hover")}
-              title="Preview"
+              title={t("ui.preview")}
             >
               {showPreview ? <Edit3 size={14} className="text-brand" /> : <Eye size={14} className="text-text-muted" />}
             </button>
@@ -210,7 +213,7 @@ export function MarkdownEditor({
                 type="button"
                 onClick={() => setShowEmojiPicker(p => !p)}
                 className={cn("p-1.5 rounded hover:bg-surface-hover transition-colors", showEmojiPicker && "bg-surface-hover")}
-                title="Emoji"
+                title={t("ui.emoji")}
               >
                 <Smile size={14} className={cn("text-text-muted", showEmojiPicker && "text-brand")} />
               </button>
@@ -240,7 +243,7 @@ export function MarkdownEditor({
             onKeyDown={handleKeyDown}
             className="flex-1 px-3 py-2 text-sm rounded-lg bg-surface-input border border-brand/50 outline-none resize-none focus:ring-2 focus:ring-brand/20 font-mono"
             rows={multiline ? 6 : undefined}
-            placeholder={placeholder}
+            placeholder={resolvedPlaceholder}
           />
         )}
         <div className="flex items-center gap-2">
@@ -248,22 +251,22 @@ export function MarkdownEditor({
             onClick={handleSave}
             disabled={isSaving}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50 text-xs font-bold"
-            title="Save (Enter)"
+            title={t("ui.saveShortcut")}
           >
             {isSaving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-            Save
+            {t("ui.save")}
           </button>
           <button
             onClick={handleCancel}
             disabled={isSaving}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-error/10 text-error hover:bg-error/20 transition-colors disabled:opacity-50 text-xs font-bold"
-            title="Cancel (Esc)"
+            title={t("ui.cancelShortcut")}
           >
             <X size={12} />
-            Cancel
+            {t("ui.cancel")}
           </button>
           {showSaved && (
-            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">Saved</span>
+            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">{t("ui.saved")}</span>
           )}
         </div>
       </div>
@@ -287,12 +290,12 @@ export function MarkdownEditor({
           <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{value}</ReactMarkdown>
         </div>
       ) : (
-        <span className={cn("italic text-text-muted", textClassName)}>{placeholder}</span>
+        <span className={cn("italic text-text-muted", textClassName)}>{resolvedPlaceholder}</span>
       )}
       {!disabled && (
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
           {showSaved && (
-            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">Saved</span>
+            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">{t("ui.saved")}</span>
           )}
           <Pencil size={12} className="text-text-muted" />
         </div>

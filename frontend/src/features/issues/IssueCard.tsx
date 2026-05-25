@@ -117,7 +117,7 @@ export function IssueCard({
             <button
               onClick={handleDuplicate}
               className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover:opacity-100"
-              title="Duplicate issue"
+              title={t("issue.duplicate")}
             >
               <Duplicate size={12} />
             </button>
@@ -127,14 +127,14 @@ export function IssueCard({
                 "p-1.5 rounded-md hover:bg-surface-hover transition-all opacity-0 group-hover:opacity-100",
                 issue.is_pinned ? "text-warning" : "text-text-muted hover:text-warning"
               )}
-              title={issue.is_pinned ? "Unpin" : "Pin to top"}
+              title={issue.is_pinned ? t("issue.unpin") : t("issue.pin")}
             >
               {issue.is_pinned ? <PinOff size={12} /> : <Pin size={12} />}
             </button>
             <button
               onClick={handleCopyLink}
               className="p-1.5 rounded-md hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover:opacity-100"
-              title="Copy link"
+              title={t("issue.copyLink")}
             >
               {copied ? <Check size={12} className="text-success" /> : <Link size={12} />}
             </button>

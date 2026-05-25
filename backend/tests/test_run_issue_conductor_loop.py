@@ -90,7 +90,7 @@ async def test_loop_calls_finalize():
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
          patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.resolve_streaming_context", return_value=None), \
+         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=None), \
          patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
          patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
 
@@ -112,6 +112,46 @@ async def test_loop_calls_finalize():
     status_events = [call.args[0] for call in event_bus.append.call_args_list if call.args and call.args[0].get("type") == "conductor_status"]
     assert status_events[0]["phase"] == "awaiting_llm"
     assert status_events[-1]["phase"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_loop_records_durable_conductor_lease():
+    """A live Conductor loop persists a runner lease so reload recovery can detect orphans."""
+    from app.application.conductor_main_loop import run_issue_conductor_loop
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    store = _make_store(issue, graph)
+    registry = _make_noop_conductor_tools_registry()
+
+    mock_conductor = MagicMock()
+    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.append_hot_event = AsyncMock()
+
+    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
+         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
+         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=None), \
+         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
+         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
+
+        mock_cs.return_value.load_catalog = AsyncMock(return_value=None)
+
+        await run_issue_conductor_loop(
+            issue=issue,
+            project_id="proj-001",
+            store=store,
+            event_bus=None,
+            task_dispatcher_fn=None,
+        )
+
+    first_task = store.save_conductor_task.call_args_list[0][0][0]
+    saved_tasks = [call.args[0] for call in store.save_conductor_task.call_args_list]
+    assert first_task.lease_owner
+    assert first_task.heartbeat_at is not None
+    assert any(task.heartbeat_at is not None for task in saved_tasks)
 
 
 @pytest.mark.asyncio
@@ -185,8 +225,8 @@ async def test_loop_dispatches_pm():
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
          patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_llm_with_tools", side_effect=make_stub_llm()), \
-         patch("app.application.conductor_main_loop.resolve_streaming_context", return_value=MagicMock()), \
+         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=make_stub_llm()), \
+         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
          patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
          patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
 
@@ -225,8 +265,8 @@ async def test_loop_marks_failed_and_emits_failure_event():
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
          patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_llm_with_tools", side_effect=RuntimeError("boom")), \
-         patch("app.application.conductor_main_loop.resolve_streaming_context", return_value=MagicMock()), \
+         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=RuntimeError("boom")), \
+         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
          patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor):
 
         mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
@@ -287,8 +327,8 @@ async def test_loop_pause_resume_cancels_inflight_llm_and_retries():
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
          patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_llm_with_tools", side_effect=fake_llm), \
-         patch("app.application.conductor_main_loop.resolve_streaming_context", return_value=MagicMock()), \
+         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=fake_llm), \
+         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
          patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
          patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
 

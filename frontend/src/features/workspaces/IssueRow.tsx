@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, CheckCircle2, Clock3, GitBranch, PauseCircle, PlayCircle, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, Clock3, GitBranch, PauseCircle, PlayCircle, Trash2, XCircle } from "lucide-react";
 
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
 import { PHASES, PHASE_CONFIG, type Phase } from "@/lib/task-selection";
@@ -52,9 +52,10 @@ interface Props {
   tasks: CodexTask[];
   project: Project | null;
   onOpen: () => void;
+  onDelete?: () => void;
 }
 
-export function IssueRow({ issue, tasks, project, onOpen }: Props) {
+export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
   const { t } = useI18n();
   const bucket = getIssueStatusBucket(issue.status);
   const Icon = BUCKET_ICON[bucket];
@@ -69,10 +70,12 @@ export function IssueRow({ issue, tasks, project, onOpen }: Props) {
     : t("workspace.console.status.queued");
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className="group grid w-full grid-cols-[minmax(0,1fr)_150px_180px_92px] gap-4 rounded-2xl border border-border-subtle bg-surface-input/45 px-4 py-3 text-left transition-all hover:-translate-y-0.5 hover:border-brand/45 hover:bg-surface-hover hover:shadow-[0_18px_48px_rgba(2,6,23,0.16)] max-lg:grid-cols-1"
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpen(); }}
+      className="group grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_150px_180px_92px] gap-4 rounded-2xl border border-border-subtle bg-surface-input/45 px-4 py-3 text-left transition-all hover:-translate-y-0.5 hover:border-brand/45 hover:bg-surface-hover hover:shadow-[0_18px_48px_rgba(2,6,23,0.16)] max-lg:grid-cols-1"
       aria-label={`Open issue ${issue.title}`}
     >
       <div className="min-w-0">
@@ -131,11 +134,24 @@ export function IssueRow({ issue, tasks, project, onOpen }: Props) {
         <div className="mt-1 text-[11px] capitalize text-text-muted">{progress.label}</div>
       </div>
 
-      <div className="flex items-center justify-end gap-2 text-xs font-bold text-text-muted transition-colors group-hover:text-foreground max-lg:justify-start">
-        <span>{t("workspace.console.openIssue")}</span>
-        <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
+      <div className="flex items-center justify-end gap-2 max-lg:justify-start">
+        {onDelete && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="rounded-lg p-1.5 text-text-muted opacity-0 transition-all hover:bg-error/10 hover:text-error group-hover:opacity-100"
+            aria-label={t("issue.delete")}
+            title={t("issue.delete")}
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
+        <span className="text-xs font-bold text-text-muted transition-colors group-hover:text-foreground">
+          {t("workspace.console.openIssue")}
+        </span>
+        <ArrowRight size={15} className="text-text-muted transition-all group-hover:translate-x-1 group-hover:text-foreground" />
       </div>
-    </button>
+    </div>
   );
 }
 

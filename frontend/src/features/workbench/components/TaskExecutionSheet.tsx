@@ -153,32 +153,32 @@ export function TaskExecutionSheet() {
             .setOptimisticProcess(result.execution_process as ExecutionProcess);
           setSelectedProcessId(result.execution_process.id);
         }
-        addToast({ type: "success", title: "Rerun started" });
+        addToast({ type: "success", title: t("taskExecution.toast.rerunStarted") });
         return;
       }
       if (id === "change_executor") {
         addToast({
           type: "info",
-          title: "Choose a runtime below",
-          message: "Use the run controls to switch executor, provider, or model.",
+          title: t("taskExecution.toast.chooseRuntime"),
+          message: t("taskExecution.toast.chooseRuntimeHint"),
         });
         return;
       }
       if (id === "stop_run") {
         await terminateCodexTask(currentTask.id);
-        addToast({ type: "success", title: "Run termination requested" });
+        addToast({ type: "success", title: t("taskExecution.toast.terminationRequested") });
         return;
       }
       if (id === "submit_review") {
         const { submitCodexTask } = await import("@/lib/api");
         const updated = await submitCodexTask(currentTask.id);
         useWorkbenchStore.getState().updateTask(updated.id, updated);
-        addToast({ type: "success", title: "Submitted for review" });
+        addToast({ type: "success", title: t("taskExecution.toast.submittedReview") });
       }
     } catch (err) {
       addToast({
         type: "error",
-        title: "Recovery action failed",
+        title: t("taskExecution.toast.recoveryFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     }
@@ -276,7 +276,7 @@ export function TaskExecutionSheet() {
                   } catch (err) {
                     addToast({
                       type: "error",
-                      title: "Failed to submit",
+                      title: t("taskExecution.toast.submitFailed"),
                       message: err instanceof Error ? err.message : String(err),
                     });
                   }
@@ -289,7 +289,7 @@ export function TaskExecutionSheet() {
                   } catch (err) {
                     addToast({
                       type: "error",
-                      title: "Failed to review",
+                      title: t("taskExecution.toast.reviewFailed"),
                       message: err instanceof Error ? err.message : String(err),
                     });
                   }
@@ -303,7 +303,7 @@ export function TaskExecutionSheet() {
                   } catch (err) {
                     addToast({
                       type: "error",
-                      title: "Failed to run",
+                      title: t("taskExecution.toast.runFailed"),
                       message: err instanceof Error ? err.message : String(err),
                     });
                   }
@@ -319,7 +319,7 @@ export function TaskExecutionSheet() {
                     } catch (err) {
                       addToast({
                         type: "error",
-                        title: "Failed to rerun",
+                        title: t("taskExecution.toast.rerunFailed"),
                         message: err instanceof Error ? err.message : String(err),
                       });
                     }
@@ -333,7 +333,7 @@ export function TaskExecutionSheet() {
                     } catch (err) {
                       addToast({
                         type: "error",
-                        title: "Failed to delete",
+                        title: t("taskExecution.toast.deleteFailed"),
                         message: err instanceof Error ? err.message : String(err),
                       });
                     }
@@ -345,7 +345,7 @@ export function TaskExecutionSheet() {
                   } catch (err) {
                     addToast({
                       type: "error",
-                      title: "Failed to send",
+                      title: t("taskExecution.toast.sendFailed"),
                       message: err instanceof Error ? err.message : String(err),
                     });
                   }
@@ -393,7 +393,7 @@ export function TaskExecutionSheet() {
                   } catch (err) {
                     addToast({
                       type: "error",
-                      title: "Failed to terminate",
+                      title: t("taskExecution.toast.terminateFailed"),
                       message: err instanceof Error ? err.message : String(err),
                     });
                   }

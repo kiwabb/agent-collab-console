@@ -48,16 +48,40 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         model = os.getenv("CODEX_APP_SERVER_MODEL", "gpt-5.4-mini").strip()
         if model:
             cmd.extend(["-c", f"model={model}"])
-        
-        # Clean up any existing permission flags to avoid duplicates/conflicts
-        cmd = [arg for arg in cmd if not arg.startswith("--permission-mode=")]
-        cmd = [arg for arg in cmd if not arg.startswith("--permission-prompt-tool=")]
 
-        # Add correct permission bypass flags for automated background tasks
-        cmd.append("--permission-mode=bypassPermissions")
-        cmd.append("--permission-prompt-tool=stdio")
-            
+        # `codex app-server` does NOT accept --permission-mode / --permission-prompt-tool
+        # (it exits with "unexpected argument", code 2, before the JSON-RPC handshake —
+        # which manifests downstream as "Connection lost" on every send and a 900s
+        # dispatch timeout). Permission handling is done over the protocol instead:
+        # AppServerClient._on_server_request auto-approves file-change / command-exec
+        # requests. So strip any such flags that leak in from CODEX_APP_SERVER_CMD and
+        # never add them here.
+        cmd = [arg for arg in cmd if not arg.startswith("--permission-mode")]
+        cmd = [arg for arg in cmd if not arg.startswith("--permission-prompt-tool")]
+
+        # Grant the automated agent full, non-interactive workspace access. Under
+        # codex's restrictive default sandbox + approval policy it cannot write the
+        # git index lock (a git worktree's git metadata lives in the MAIN repo's
+        # .git/worktrees/<id>/, outside the sandboxed workspace) and it stalls on
+        # command-execution approval requests (activeFlags=['waitingOnApproval']).
+        # These `-c` configs are the codex-app-server-correct equivalent of the old
+        # (invalid) --permission-mode=bypassPermissions flag.
+        if not self._config_sets(cmd, "approval_policy"):
+            cmd.extend(["-c", 'approval_policy="never"'])
+        if not self._config_sets(cmd, "sandbox_mode"):
+            cmd.extend(["-c", 'sandbox_mode="danger-full-access"'])
+
         return cmd
+
+    @staticmethod
+    def _config_sets(cmd: list[str], key: str) -> bool:
+        for index, arg in enumerate(cmd):
+            if arg in {"-c", "--config"} and index + 1 < len(cmd):
+                if cmd[index + 1].split("=", 1)[0].strip() == key:
+                    return True
+            if arg.startswith("--config=") and arg.split("=", 1)[1].split("=", 1)[0].strip() == key:
+                return True
+        return False
 
     @staticmethod
     def _command_sets_model(cmd: list[str]) -> bool:
@@ -71,6 +95,28 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 if value.split("=", 1)[0] == "model":
                     return True
         return False
+
+    @staticmethod
+    def _with_model_override(cmd: list[str], model: str) -> list[str]:
+        """Return cmd with the codex `-c model=...` config set to `model`.
+
+        The base cmd is built once at construction with a default model, but each
+        task can select a different model. The codex CLI honours the `-c model=`
+        flag (not the CODEX_APP_SERVER_MODEL env var), so the per-task model must
+        rewrite the flag here or the app-server silently runs the wrong model —
+        which can leave the turn hanging until the 900s dispatch timeout.
+        """
+        result = list(cmd)
+        for index, arg in enumerate(result):
+            if arg in {"-c", "--config"} and index + 1 < len(result):
+                if result[index + 1].split("=", 1)[0] == "model":
+                    result[index + 1] = f"model={model}"
+                    return result
+            if arg.startswith("--config=") and arg.split("=", 1)[1].split("=", 1)[0] == "model":
+                result[index] = f"--config=model={model}"
+                return result
+        result.extend(["-c", f"model={model}"])
+        return result
 
     def check_availability(self) -> bool:
         try:
@@ -259,6 +305,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
 
         effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
         cmd = list(self._app_server_cmd)
+        # Per-task model: rewrite the baked-in `-c model=` flag so the selected
+        # model actually reaches the codex CLI (the env var below is not enough).
+        if model:
+            cmd = self._with_model_override(cmd, model)
 
         # Binary path resolution
         for common_path in ["~/.npm-global/bin/codex", "/usr/local/bin/codex", "/opt/homebrew/bin/codex"]:
@@ -268,8 +318,14 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 break
 
         env = os.environ.copy()
+        # APPEND fallback dirs (don't prepend): the inherited PATH already points at
+        # the working toolchain (e.g. node@24). Prepending /opt/homebrew/bin ahead of
+        # it can shadow that with a broken Homebrew `node` (codex is a Node script, so
+        # the wrong node makes the app-server crash on startup → "Connection lost" →
+        # 900s dispatch timeout). Fallback dirs only fill gaps when PATH lacks them.
         paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", os.path.expanduser("~/.npm-global/bin")]
-        env["PATH"] = ":".join(paths) + ":" + env.get("PATH", "")
+        existing_path = env.get("PATH", "")
+        env["PATH"] = (existing_path + ":" + ":".join(paths)) if existing_path else ":".join(paths)
 
         # Set provider/model env vars if specified
         if provider:
@@ -505,13 +561,19 @@ class CodexAppServerRuntime(BaseProcessRuntime):
 
             if method in ("item/completed", "item.completed"):
                 item = params.get("item", {})
-                if is_agent_message_item_type(item.get("type")) and item.get("phase") == "final_answer":
-                    text = item.get("text", "").strip()
-                    entry = self._processes.get(task_id or workspace_id)
-                    if entry:
-                        entry.result_text = text
-                    if task_id:
-                        await self._persist_assistant_message(task_id, execution_process_id, text)
+                if is_agent_message_item_type(item.get("type")):
+                    # codex 0.132.0 tags agent messages with phase "commentary"/
+                    # "final_answer" (older builds only emitted "final_answer").
+                    # Capture the latest agent message text as the result — the
+                    # final one wins — so the engineer's answer is never lost just
+                    # because the phase label changed across CLI versions.
+                    text = (item.get("text") or "").strip()
+                    if text:
+                        entry = self._processes.get(task_id or workspace_id)
+                        if entry:
+                            entry.result_text = text
+                        if task_id and item.get("phase") in (None, "final_answer"):
+                            await self._persist_assistant_message(task_id, execution_process_id, text)
                     return False
                 if self._is_tool_item(item.get("type")):
                     entry = self._processes.get(task_id or workspace_id)

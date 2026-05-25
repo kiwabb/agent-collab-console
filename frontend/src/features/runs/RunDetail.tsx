@@ -475,7 +475,7 @@ export function RunDetail({
                 <EmptyState
                   icon="message"
                   title={t("run.noMessages")}
-                  description="Start a task to see communications"
+                  description={t("run.startTaskHint")}
                   className="py-24"
                 />
               ) : (

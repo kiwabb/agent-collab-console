@@ -31,6 +31,7 @@ import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
+import { useI18n } from "@/providers/I18nProvider";
 
 const CLARIFY_PREFIX = "[CLARIFY] ";
 
@@ -45,6 +46,7 @@ interface RowAction {
 export function ApprovalsPage() {
   const router = useRouter();
   const { addToast } = useToast();
+  const { t } = useI18n();
   const [issues, setIssues] = useState<CodexIssue[]>([]);
   const [tasks, setTasks] = useState<CodexTask[]>([]);
   const [tools, setTools] = useState<Approval[]>([]);
@@ -69,7 +71,7 @@ export function ApprovalsPage() {
       } catch (err) {
         addToast({
           type: "error",
-          title: "Failed to load approvals",
+          title: t("approvals.toast.loadFailed"),
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
@@ -77,7 +79,7 @@ export function ApprovalsPage() {
         setRefreshing(false);
       }
     },
-    [addToast],
+    [addToast, t],
   );
 
   useEffect(() => {
@@ -162,33 +164,33 @@ export function ApprovalsPage() {
         await reviewCodexTask(task.id, decision, null);
         addToast({
           type: "success",
-          title: decision === "approve" ? "Approved" : "Sent back for rework",
+          title: decision === "approve" ? t("approvals.toast.approved") : t("approvals.toast.sentBack"),
         });
         await load("refresh");
       } catch (err) {
         addToast({
           type: "error",
-          title: "Review failed",
+          title: t("approvals.toast.reviewFailed"),
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setBusyId(null);
       }
     },
-    [addToast, load],
+    [addToast, load, t],
   );
 
   const handleAnswerQuestion = useCallback(
     async (task: CodexTask, answer: string) => {
       const trimmed = answer.trim();
       if (!trimmed) {
-        addToast({ type: "error", title: "Answer cannot be empty" });
+        addToast({ type: "error", title: t("approvals.toast.answerEmpty") });
         return;
       }
       setBusyId(task.id);
       try {
         await answerCodexTaskClarification(task.id, trimmed);
-        addToast({ type: "success", title: "Answer sent — agent re-dispatched" });
+        addToast({ type: "success", title: t("approvals.toast.answerSent") });
         // D2: hop back to the issue so the user can watch the agent
         // re-run with their answer threaded in, instead of staying on
         // the approvals inbox.
@@ -203,14 +205,14 @@ export function ApprovalsPage() {
       } catch (err) {
         addToast({
           type: "error",
-          title: "Failed to send answer",
+          title: t("approvals.toast.answerFailed"),
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setBusyId(null);
       }
     },
-    [addToast, load, router],
+    [addToast, load, router, t],
   );
 
   const handleResolveTool = useCallback(
@@ -220,27 +222,27 @@ export function ApprovalsPage() {
         await resolveApproval(approval.id, decision, null);
         addToast({
           type: "success",
-          title: decision === "accept" ? "Approved" : "Declined",
+          title: decision === "accept" ? t("approvals.toast.approved") : t("approvals.toast.declined"),
         });
         await load("refresh");
       } catch (err) {
         addToast({
           type: "error",
-          title: "Resolve failed",
+          title: t("approvals.toast.resolveFailed"),
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setBusyId(null);
       }
     },
-    [addToast, load],
+    [addToast, load, t],
   );
 
   return (
     <PageFrame
-      eyebrow="approvals"
-      title="Approvals"
-      description="Review the things waiting on you across every project."
+      eyebrow={t("approvals.eyebrow")}
+      title={t("approvals.title")}
+      description={t("approvals.description")}
       actions={(
         <Button
           size="sm"
@@ -249,7 +251,7 @@ export function ApprovalsPage() {
           onClick={() => void load("refresh")}
         >
           <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
-          Refresh
+          {t("approvals.refresh")}
         </Button>
       )}
       contentClassName="space-y-5"
@@ -257,51 +259,51 @@ export function ApprovalsPage() {
       <div className="space-y-5">
         <div className="enterprise-card flex items-center gap-1 overflow-x-auto rounded-2xl px-2">
           <TabBtn active={tab === "all"} onClick={() => setTab("all")}>
-            All <Pill>{total}</Pill>
+            {t("approvals.tab.all")} <Pill>{total}</Pill>
           </TabBtn>
           <TabBtn active={tab === "issues"} onClick={() => setTab("issues")}>
-            Issues <Pill>{totals.issues}</Pill>
+            {t("approvals.tab.issues")} <Pill>{totals.issues}</Pill>
           </TabBtn>
           <TabBtn active={tab === "reviews"} onClick={() => setTab("reviews")}>
-            Task reviews <Pill>{totals.reviews}</Pill>
+            {t("approvals.tab.reviews")} <Pill>{totals.reviews}</Pill>
           </TabBtn>
           <TabBtn active={tab === "questions"} onClick={() => setTab("questions")}>
-            Agent questions <Pill>{totals.questions}</Pill>
+            {t("approvals.tab.questions")} <Pill>{totals.questions}</Pill>
           </TabBtn>
           <TabBtn active={tab === "qa_passed"} onClick={() => setTab("qa_passed")}>
-            QA passed <Pill>{totals.qa_passed}</Pill>
+            {t("approvals.tab.qaPassed")} <Pill>{totals.qa_passed}</Pill>
           </TabBtn>
           <TabBtn active={tab === "tools"} onClick={() => setTab("tools")}>
-            Tool calls <Pill>{totals.tools}</Pill>
+            {t("approvals.tab.tools")} <Pill>{totals.tools}</Pill>
           </TabBtn>
         </div>
 
         {loading ? (
           <InteractionEmptyState
             tone="loading"
-            title="Loading approvals"
-            description="Checking issues, reviews, questions, and tool permissions."
+            title={t("approvals.loadingTitle")}
+            description={t("approvals.loadingDescription")}
           />
         ) : total === 0 ? (
           <InteractionEmptyState
-            title="Inbox zero"
-            description="Nothing is waiting on a human right now. You can return to the operational inbox or refresh this review queue."
+            title={t("approvals.emptyTitle")}
+            description={t("approvals.emptyDescription")}
             action={
               <EmptyStateAction onClick={() => router.push("/")}>
-                Open Inbox
+                {t("approvals.openInbox")}
               </EmptyStateAction>
             }
           />
         ) : (
           <div className="space-y-6">
             {visible.length > 0 && (
-              <Section title="Issues awaiting approval" count={visible.length}>
+              <Section title={t("approvals.section.issues")} count={visible.length}>
                 <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
                   {visible.map((issue) => (
                     <RowCard
                       key={issue.id}
                       title={issue.title || issue.id.slice(0, 8)}
-                      subtitle={`Issue · phase ${issue.current_phase ?? "—"}`}
+                      subtitle={t("approvals.issueSubtitle", { phase: issue.current_phase ?? "—" })}
                       kindLabel={(issue.status ?? "—").replace(/_/g, " ")}
                       kind={inferStatusKind(issue.status)}
                       meta={
@@ -322,7 +324,7 @@ export function ApprovalsPage() {
             )}
 
             {visibleQuestions.length > 0 && (
-              <Section title="Agent questions awaiting your answer" count={visibleQuestions.length}>
+              <Section title={t("approvals.section.questions")} count={visibleQuestions.length}>
                 <ul className="space-y-2">
                   {visibleQuestions.map((task) => {
                     const question = (task.review_comment || "").slice(CLARIFY_PREFIX.length);
@@ -332,7 +334,7 @@ export function ApprovalsPage() {
                         className="enterprise-card rounded-2xl border-brand/40 bg-brand/5 p-4"
                       >
                         <div className="flex items-baseline gap-2">
-                          <StatusBadge kind="awaiting" label={`${task.role ?? "agent"} asks`} />
+                          <StatusBadge kind="awaiting" label={t("approvals.agentAsks", { role: task.role ?? "agent" })} />
                           <span className="text-[13px] font-semibold truncate flex-1">
                             {task.title || task.id.slice(0, 8)}
                           </span>
@@ -342,7 +344,7 @@ export function ApprovalsPage() {
                               onClick={() => router.push(`/issues/${task.issue_id}?tab=tasks&taskId=${task.id}`)}
                               className="text-[11px] text-brand hover:underline"
                             >
-                              open task →
+                              {t("approvals.openTask")}
                             </button>
                           )}
                         </div>
@@ -361,14 +363,14 @@ export function ApprovalsPage() {
             )}
 
             {visibleReviews.length > 0 && (
-              <Section title="Tasks awaiting review" count={visibleReviews.length}>
+              <Section title={t("approvals.section.reviews")} count={visibleReviews.length}>
                 <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
                   {visibleReviews.map((task) => (
                     <RowCard
                       key={task.id}
                       title={task.title || task.id.slice(0, 8)}
-                      subtitle={`Task · ${task.role ?? "general"} · ${task.executor ?? "—"}`}
-                      kindLabel="awaiting review"
+                      subtitle={t("approvals.taskSubtitle", { role: task.role ?? "general", executor: task.executor ?? "—" })}
+                      kindLabel={t("approvals.kindAwaitingReview")}
                       kind="awaiting"
                       busy={busyId === task.id}
                       action={{
@@ -385,13 +387,13 @@ export function ApprovalsPage() {
             )}
 
             {visibleQaPassed.length > 0 && (
-              <Section title="QA passed" count={visibleQaPassed.length}>
+              <Section title={t("approvals.section.qaPassed")} count={visibleQaPassed.length}>
                 <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
                   {visibleQaPassed.map((issue) => (
                     <RowCard
                       key={issue.id}
                       title={issue.title || issue.id.slice(0, 8)}
-                      subtitle={`Issue · phase ${issue.current_phase ?? "—"}`}
+                      subtitle={t("approvals.issueSubtitle", { phase: issue.current_phase ?? "—" })}
                       kindLabel={(issue.status ?? "—").replace(/_/g, " ")}
                       kind={inferStatusKind(issue.status)}
                       meta={
@@ -412,18 +414,18 @@ export function ApprovalsPage() {
             )}
 
             {visibleTools.length > 0 && (
-              <Section title="Tool calls awaiting permission" count={visibleTools.length}>
+              <Section title={t("approvals.section.tools")} count={visibleTools.length}>
                 <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
                   {visibleTools.map((approval) => (
                     <RowCard
                       key={approval.id}
-                      title={approval.action || "Tool action"}
-                      subtitle={`Codex · session ${approval.session_id.slice(0, 8)}`}
-                      kindLabel="needs permission"
+                      title={approval.action || t("approvals.toolActionFallback")}
+                      subtitle={t("approvals.toolSubtitle", { session: approval.session_id.slice(0, 8) })}
+                      kindLabel={t("approvals.kindNeedsPermission")}
                       kind="awaiting"
                       meta={
                         <span className="font-mono text-[11px] text-text-muted">
-                          task {approval.task_id.slice(0, 8)}
+                          {t("approvals.toolMeta", { task: approval.task_id.slice(0, 8) })}
                         </span>
                       }
                       busy={busyId === approval.id}
@@ -516,6 +518,8 @@ function RowCard({
   busy: boolean;
   action: RowAction;
 }) {
+  const { t } = useI18n();
+
   return (
     <li className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3 items-center hover:bg-surface-hover transition-colors">
       <div className="min-w-0">
@@ -537,7 +541,7 @@ function RowCard({
             className="bg-success text-black hover:bg-success/90"
           >
             {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-            <span className="ml-1">Approve</span>
+            <span className="ml-1">{t("approvals.approve")}</span>
           </Button>
         )}
         {action.reject && (
@@ -548,12 +552,12 @@ function RowCard({
             onClick={() => void action.reject!()}
           >
             <XCircle size={12} />
-            <span className="ml-1">Reject</span>
+            <span className="ml-1">{t("approvals.reject")}</span>
           </Button>
         )}
         {action.open && (
           <Button size="sm" variant="ghost" onClick={action.open}>
-            Open
+            {t("approvals.open")}
           </Button>
         )}
       </div>
@@ -568,6 +572,7 @@ function AnswerInline({
   disabled: boolean;
   onSubmit: (answer: string) => void;
 }) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState("");
   return (
     <form
@@ -582,7 +587,7 @@ function AnswerInline({
       <Input
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder="Type your answer and press enter…"
+        placeholder={t("approvals.answerPlaceholder")}
         className="bg-surface-input border-border-subtle h-9 text-[13px]"
         disabled={disabled}
         autoFocus={false}
@@ -593,7 +598,7 @@ function AnswerInline({
         disabled={disabled || !draft.trim()}
         className="bg-brand hover:bg-brand-strong text-black font-semibold"
       >
-        {disabled ? <Loader2 size={12} className="animate-spin" /> : "Send answer"}
+        {disabled ? <Loader2 size={12} className="animate-spin" /> : t("approvals.sendAnswer")}
       </Button>
     </form>
   );

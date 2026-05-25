@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from app.domain.models import (
     Agent,
+    AgentMessage,
     CodexIssue,
     CodexTask,
     WorkflowEdge,
@@ -21,6 +22,12 @@ from app.domain.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _summarize_dispatch_body(role: str, prompt: str | None, *, is_fallback: bool = False) -> str:
+    if is_fallback or not prompt:
+        return f"Dispatch {role}"
+    return prompt.strip()
 
 
 async def dispatch_role(
@@ -53,25 +60,34 @@ async def dispatch_role(
     if graph is None:
         raise ValueError(f"No workflow graph for issue {issue.id}")
 
-    # Check for an existing node for this role (idempotent re-dispatch)
-    existing_node = next(
-        (
-            n for n in graph.nodes
-            if (n.node_key == role or n.node_key.startswith(f"{role}#"))
-            and n.status in ("done", "failed", "completed")
-        ),
-        None,
+    # Compute node_key: each dispatch gets a unique key (engineer, engineer#1, …)
+    # so Conductor can legitimately re-dispatch the same role (e.g. after QA failure).
+    same_role_count = sum(
+        1 for n in graph.nodes
+        if n.node_key == role or n.node_key.startswith(f"{role}#")
     )
-    if existing_node and existing_node.task_id:
-        # Already completed — return existing task_id (Conductor will get cached result)
-        return existing_node.task_id, existing_node.id
+    node_key = role if same_role_count == 0 else f"{role}#{same_role_count}"
 
     # Build the task
     effective_prompt = prompt_override
+    is_fallback_prompt = False
     if not effective_prompt:
-        # Fall back to issue title + description (same as _dispatch_node for managed roles)
         issue_body = (issue.description or "").strip()
         effective_prompt = f"{issue.title}\n\n{issue_body}" if issue_body else (issue.title or "")
+        is_fallback_prompt = True
+
+    # The issue-level executor selection (chosen at creation) wins over the agent
+    # catalog defaults. When the issue specifies an executor we take its
+    # executor/provider/model as a set, so we never mix an issue executor with an
+    # agent's provider/model (which would route to the wrong runtime/API).
+    if issue.executor:
+        task_executor = issue.executor
+        task_provider = issue.provider
+        task_model = issue.model
+    else:
+        task_executor = agent.default_executor or "claude"
+        task_provider = agent.default_provider
+        task_model = agent.default_model
 
     now = datetime.now()
     task = CodexTask(
@@ -83,9 +99,9 @@ async def dispatch_role(
         title=issue.title,
         prompt=effective_prompt,
         role=role,
-        executor=agent.default_executor or "claude",
-        provider=agent.default_provider,
-        model=agent.default_model,
+        executor=task_executor,
+        provider=task_provider,
+        model=task_model,
         status="pending",
         workspace_path=issue.git_worktree_path,
         git_branch=issue.git_branch,
@@ -95,15 +111,7 @@ async def dispatch_role(
         updated_at=now,
     )
 
-    # Dynamically add a node to the graph for visualization.
-    # We do this by loading current nodes+edges, appending, and re-saving.
     node_id = str(uuid4())
-    # Count existing nodes with same role to create unique key
-    same_role_count = sum(
-        1 for n in graph.nodes
-        if n.node_key == role or n.node_key.startswith(f"{role}#")
-    )
-    node_key = role if same_role_count == 0 else f"{role}#{same_role_count}"
 
     node = WorkflowNode(
         id=node_id,
@@ -136,6 +144,24 @@ async def dispatch_role(
     if new_edge:
         await store.add_workflow_edge(new_edge)
 
+    mesh_msg: AgentMessage | None = None
+    try:
+        from_key = prev_node_key or "conductor"
+        mesh_msg = AgentMessage(
+            id=str(uuid4()),
+            issue_id=issue.id,
+            graph_id=graph.id,
+            from_node_key=from_key,
+            to_node_key=node_key,
+            message_type="handoff",
+            body=_summarize_dispatch_body(role, effective_prompt, is_fallback=is_fallback_prompt),
+            created_at=now,
+        )
+        await store.save_agent_message(mesh_msg)
+    except Exception as exc:  # noqa: BLE001
+        mesh_msg = None
+        logger.warning("dispatch_role mesh write failed: %s", exc)
+
     # Emit events
     if event_bus is not None:
         try:
@@ -150,6 +176,22 @@ async def dispatch_role(
                 "status": "running",
                 "task_id": task.id,
             })
+            if mesh_msg is not None:
+                await event_bus.append({
+                    "type": "agent_message_posted",
+                    "issue_id": issue.id,
+                    "session_id": issue.session_id,
+                    "message": {
+                        "id": mesh_msg.id,
+                        "issue_id": mesh_msg.issue_id,
+                        "graph_id": mesh_msg.graph_id,
+                        "from_node_key": mesh_msg.from_node_key,
+                        "to_node_key": mesh_msg.to_node_key,
+                        "message_type": mesh_msg.message_type,
+                        "body": mesh_msg.body,
+                        "created_at": mesh_msg.created_at.isoformat() if mesh_msg.created_at else None,
+                    },
+                })
         except Exception as exc:  # noqa: BLE001
             logger.warning("dispatch_role emit failed: %s", exc)
 

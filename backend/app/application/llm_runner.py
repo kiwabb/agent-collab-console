@@ -502,3 +502,271 @@ async def call_llm_with_tools_streaming(
         "stop_reason": stop_reason or "end_turn",
         "usage": usage or {},
     }
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Chat Completions protocol adapter.
+#
+# The Conductor loop only understands Anthropic-shaped messages
+# ({role, content:[{type:text|tool_use|...}]}). These helpers translate to/from
+# the OpenAI /v1/chat/completions wire format so an OpenAI-protocol endpoint can
+# drive the exact same loop. All public functions return Anthropic-shaped dicts.
+# ---------------------------------------------------------------------------
+
+
+def _anthropic_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for tool in tools or []:
+        if not isinstance(tool, dict) or not tool.get("name"):
+            continue
+        out.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description") or "",
+                    "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
+                },
+            }
+        )
+    return out
+
+
+def _anthropic_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Translate the conductor's Anthropic message list to OpenAI chat messages."""
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if isinstance(content, str):
+            out.append({"role": role, "content": content})
+            continue
+        if not isinstance(content, list):
+            out.append({"role": role, "content": ""})
+            continue
+        if role == "assistant":
+            text_parts: list[str] = []
+            tool_calls: list[dict[str, Any]] = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "text":
+                    text_parts.append(str(block.get("text") or ""))
+                elif block.get("type") == "tool_use":
+                    tool_calls.append(
+                        {
+                            "id": str(block.get("id") or ""),
+                            "type": "function",
+                            "function": {
+                                "name": str(block.get("name") or ""),
+                                "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+                            },
+                        }
+                    )
+            assistant_msg: dict[str, Any] = {"role": "assistant"}
+            assistant_msg["content"] = "".join(text_parts) or None
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+            out.append(assistant_msg)
+        else:
+            # user turn: may carry tool_result blocks -> one OpenAI "tool" msg each.
+            tool_results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+            if tool_results:
+                for block in tool_results:
+                    raw = block.get("content")
+                    text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, default=str)
+                    out.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": str(block.get("tool_use_id") or ""),
+                            "content": text,
+                        }
+                    )
+            else:
+                text_parts = [str(b.get("text") or "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                out.append({"role": "user", "content": "".join(text_parts)})
+    return out
+
+
+def _openai_choice_to_anthropic(message: dict[str, Any], finish_reason: str | None, usage: dict[str, Any] | None) -> dict[str, Any]:
+    content: list[dict[str, Any]] = []
+    text = message.get("content")
+    if isinstance(text, str) and text:
+        content.append({"type": "text", "text": text})
+    for tc in message.get("tool_calls") or []:
+        fn = (tc or {}).get("function") or {}
+        args_raw = fn.get("arguments") or "{}"
+        try:
+            tool_input = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+        except json.JSONDecodeError:
+            tool_input = {}
+        content.append(
+            {
+                "type": "tool_use",
+                "id": str(tc.get("id") or ""),
+                "name": str(fn.get("name") or ""),
+                "input": tool_input if isinstance(tool_input, dict) else {},
+            }
+        )
+    stop_reason = "tool_use" if finish_reason == "tool_calls" else "end_turn"
+    anthropic_usage: dict[str, Any] = {}
+    if isinstance(usage, dict):
+        anthropic_usage = {
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+        }
+    return {"role": "assistant", "content": content, "stop_reason": stop_reason, "usage": anthropic_usage}
+
+
+async def call_openai_with_tools(
+    *,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    ctx: StreamingPlanContext,
+) -> dict[str, Any]:
+    """Call an OpenAI-compatible /v1/chat/completions endpoint; return Anthropic shape."""
+    url = f"{ctx.endpoint}/v1/chat/completions"
+    payload: dict[str, Any] = {
+        "model": ctx.model,
+        "max_tokens": ctx.max_tokens,
+        "messages": _anthropic_messages_to_openai(messages),
+    }
+    openai_tools = _anthropic_tools_to_openai(tools)
+    if openai_tools:
+        payload["tools"] = openai_tools
+    async with httpx.AsyncClient(timeout=ctx.timeout_s) as client:
+        response = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {ctx.api_key}",
+                "content-type": "application/json",
+            },
+            json=payload,
+        )
+    if response.status_code != 200:
+        raise RuntimeError(f"OpenAI tools HTTP {response.status_code}: {response.text[:300]}")
+    data = response.json()
+    choice = (data.get("choices") or [{}])[0]
+    return _openai_choice_to_anthropic(
+        choice.get("message") or {},
+        choice.get("finish_reason"),
+        data.get("usage"),
+    )
+
+
+async def call_openai_with_tools_streaming(
+    *,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    ctx: StreamingPlanContext,
+    on_delta: DeltaCallback | None = None,
+) -> dict[str, Any]:
+    """Stream an OpenAI-compatible chat completion, reconstructing an Anthropic message.
+
+    Emits the same `on_delta(content_block_index, kind, chunk)` contract as the
+    Anthropic streamer: text -> kind "text" at block 0; tool-call arguments ->
+    kind "tool_input_json" at block (openai_index + 1).
+    """
+    url = f"{ctx.endpoint}/v1/chat/completions"
+    payload: dict[str, Any] = {
+        "model": ctx.model,
+        "max_tokens": ctx.max_tokens,
+        "messages": _anthropic_messages_to_openai(messages),
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    openai_tools = _anthropic_tools_to_openai(tools)
+    if openai_tools:
+        payload["tools"] = openai_tools
+    headers = {
+        "Authorization": f"Bearer {ctx.api_key}",
+        "content-type": "application/json",
+        "accept": "text/event-stream",
+    }
+
+    text_acc = ""
+    # tool_calls accumulated by OpenAI delta index -> {id, name, args}
+    tool_acc: dict[int, dict[str, str]] = {}
+    finish_reason: str | None = None
+    usage: dict[str, Any] | None = None
+
+    async def emit(block_index: int, kind: str, chunk: str) -> None:
+        if not chunk or on_delta is None:
+            return
+        result = on_delta(block_index, kind, chunk)
+        if hasattr(result, "__await__"):
+            await result
+
+    async with httpx.AsyncClient(timeout=ctx.timeout_s) as client:
+        async with client.stream("POST", url, headers=headers, json=payload) as response:
+            if response.status_code != 200:
+                body = await response.aread()
+                raise RuntimeError(f"OpenAI tools stream HTTP {response.status_code}: {body[:300]!r}")
+            async for line in response.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw in ("", "[DONE]"):
+                    if raw == "[DONE]":
+                        break
+                    continue
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event.get("usage"), dict):
+                    usage = dict(event["usage"])
+                choices = event.get("choices") or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                delta = choice.get("delta") or {}
+                if choice.get("finish_reason"):
+                    finish_reason = str(choice.get("finish_reason"))
+                content_chunk = delta.get("content")
+                if isinstance(content_chunk, str) and content_chunk:
+                    text_acc += content_chunk
+                    await emit(0, "text", content_chunk)
+                for tc in delta.get("tool_calls") or []:
+                    idx = int(tc.get("index") or 0)
+                    slot = tool_acc.setdefault(idx, {"id": "", "name": "", "args": ""})
+                    if tc.get("id"):
+                        slot["id"] = str(tc["id"])
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["name"] = str(fn["name"])
+                    arg_chunk = fn.get("arguments")
+                    if isinstance(arg_chunk, str) and arg_chunk:
+                        slot["args"] += arg_chunk
+                        await emit(idx + 1, "tool_input_json", arg_chunk)
+
+    content: list[dict[str, Any]] = []
+    if text_acc:
+        content.append({"type": "text", "text": text_acc})
+    for idx in sorted(tool_acc.keys()):
+        slot = tool_acc[idx]
+        args_str = slot["args"].strip()
+        try:
+            tool_input = json.loads(args_str) if args_str else {}
+        except json.JSONDecodeError:
+            tool_input = {}
+        content.append(
+            {
+                "type": "tool_use",
+                "id": slot["id"],
+                "name": slot["name"],
+                "input": tool_input if isinstance(tool_input, dict) else {},
+            }
+        )
+    anthropic_usage: dict[str, Any] = {}
+    if isinstance(usage, dict):
+        anthropic_usage = {
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+        }
+    return {
+        "role": "assistant",
+        "content": content,
+        "stop_reason": "tool_use" if finish_reason == "tool_calls" else "end_turn",
+        "usage": anthropic_usage,
+    }

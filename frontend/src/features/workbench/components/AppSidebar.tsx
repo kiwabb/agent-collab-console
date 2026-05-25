@@ -16,6 +16,7 @@ import {
   ChevronsUpDown,
   Library,
   Sparkles,
+  Activity,
 } from "lucide-react";
 import { getCodexIssues, getWorkspaces, listProjects } from "@/lib/api";
 import type { CodexIssue, Project, Workspace } from "@/lib/types";
@@ -264,6 +265,12 @@ export function AppSidebar() {
           count={counts.approvals || undefined}
           active={pathname.startsWith("/approvals")}
           onClick={() => router.push("/approvals")}
+        />
+        <NavRow
+          icon={<Activity size={13} />}
+          label={t("sidebar.conductor")}
+          active={pathname.startsWith("/conductor")}
+          onClick={() => router.push("/conductor")}
         />
         <NavRow
           icon={<FileBox size={13} />}

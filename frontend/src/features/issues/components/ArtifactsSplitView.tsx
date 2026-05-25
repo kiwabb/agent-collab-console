@@ -206,42 +206,109 @@ function PreviewBody({
             remarkPlugins={[remarkGfm]}
             components={{
               h1: ({ children }) => (
-                <h2 className="text-[15px] font-semibold text-foreground mt-5 mb-2 first:mt-0">
+                <h1 className="text-[18px] font-black text-foreground mt-6 mb-3 first:mt-0 border-b border-border-subtle pb-1.5 leading-snug">
                   {children}
-                </h2>
+                </h1>
               ),
               h2: ({ children }) => (
-                <h2 className="text-[15px] font-semibold text-foreground mt-5 mb-2 first:mt-0">
+                <h2 className="text-[16px] font-bold text-foreground mt-5 mb-2.5 first:mt-0 border-b border-border-subtle/50 pb-1 leading-snug">
                   {children}
                 </h2>
               ),
               h3: ({ children }) => (
-                <h3 className="text-[12.5px] font-mono font-semibold uppercase tracking-wider text-brand-strong mt-4 mb-1.5">
+                <h3 className="text-[14px] font-bold text-brand mt-4 mb-2 leading-snug">
                   {children}
                 </h3>
               ),
-              p: ({ children }) => <p className="my-1.5">{children}</p>,
+              h4: ({ children }) => (
+                <h4 className="text-[12.5px] font-bold text-text-primary mt-3.5 mb-1.5 uppercase tracking-wider">
+                  {children}
+                </h4>
+              ),
+              p: ({ children }) => (
+                <p className="my-2.5 text-[13px] leading-relaxed text-text-secondary">
+                  {children}
+                </p>
+              ),
               ul: ({ children }) => (
-                <ul className="pl-5 my-1.5 list-disc">{children}</ul>
+                <ul className="pl-6 my-3 list-disc space-y-1.5 text-[13px] text-text-secondary">
+                  {children}
+                </ul>
               ),
               ol: ({ children }) => (
-                <ol className="pl-5 my-1.5 list-decimal">{children}</ol>
+                <ol className="pl-6 my-3 list-decimal space-y-1.5 text-[13px] text-text-secondary">
+                  {children}
+                </ol>
               ),
-              li: ({ children }) => <li className="my-1">{children}</li>,
+              li: ({ children }) => (
+                <li className="leading-relaxed pl-0.5">
+                  {children}
+                </li>
+              ),
+              blockquote: ({ children }) => (
+                <blockquote className="pl-4 py-2 my-4 border-l-4 border-brand bg-brand-muted/10 rounded-r-xl text-text-secondary italic text-[13px] leading-relaxed">
+                  {children}
+                </blockquote>
+              ),
+              table: ({ children }) => (
+                <div className="my-5 overflow-x-auto rounded-xl border border-border-subtle shadow-sm bg-surface/30">
+                  <table className="w-full border-collapse text-left text-[12.5px] leading-normal">
+                    {children}
+                  </table>
+                </div>
+              ),
+              thead: ({ children }) => (
+                <thead className="bg-surface-raised border-b border-border-subtle text-[11px] font-black uppercase tracking-wider text-text-muted">
+                  {children}
+                </thead>
+              ),
+              tbody: ({ children }) => (
+                <tbody className="divide-y divide-border-subtle bg-transparent">
+                  {children}
+                </tbody>
+              ),
+              tr: ({ children }) => (
+                <tr className="hover:bg-surface-hover/30 transition-colors">
+                  {children}
+                </tr>
+              ),
+              th: ({ children }) => (
+                <th className="px-4 py-3 font-semibold text-foreground">
+                  {children}
+                </th>
+              ),
+              td: ({ children }) => (
+                <td className="px-4 py-2.5 text-text-secondary font-medium font-sans">
+                  {children}
+                </td>
+              ),
+              hr: () => (
+                <hr className="my-6 border-t border-border-subtle" />
+              ),
+              a: ({ href, children }) => (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-brand hover:text-brand-strong hover:underline font-semibold transition-all inline-flex items-center gap-0.5"
+                >
+                  {children}
+                </a>
+              ),
               code: ({ className, children }) => {
                 const isBlock = className?.includes("language-");
                 return isBlock ? (
-                  <pre className="my-3 p-3 rounded-lg bg-surface-input border border-border-subtle overflow-auto font-mono text-[12px]">
+                  <pre className="my-3 p-3.5 rounded-xl bg-surface-input border border-border-subtle overflow-auto font-mono text-[12px] leading-relaxed shadow-inner">
                     <code>{children}</code>
                   </pre>
                 ) : (
-                  <code className="font-mono text-[12px] bg-surface-input border border-border-subtle px-1.5 rounded text-foreground">
+                  <code className="font-mono text-[11.5px] bg-surface-input border border-border-subtle px-1.5 py-0.5 rounded text-brand-strong font-medium">
                     {children}
                   </code>
                 );
               },
               strong: ({ children }) => (
-                <strong className="text-foreground font-semibold">
+                <strong className="text-foreground font-black">
                   {children}
                 </strong>
               ),

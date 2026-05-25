@@ -20,6 +20,7 @@ import { agentBus } from "@/features/agents/dock/agentBus";
 import { AgentStatusProvider, useAgentStatusContext } from "@/features/agents/dock/AgentStatusProvider";
 import { AgentDecisionDrawer } from "@/features/issues/components/AgentDecisionDrawer";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface Props {
   issueId: string;
@@ -29,6 +30,7 @@ type View = "loading" | "no-graph" | "saved";
 
 export function DagTab({ issueId }: Props) {
   const router = useRouter();
+  const { t } = useI18n();
   const { addToast } = useToast();
   const [view, setView] = useState<View>("loading");
   const [graph, setGraph] = useState<WorkflowGraph | null>(null);
@@ -160,20 +162,20 @@ export function DagTab({ issueId }: Props) {
     setRetryBusy(true);
     try {
       await runCodexTask(retryTarget.task_id);
-      addToast({ type: "success", title: "Retry dispatched" });
+      addToast({ type: "success", title: t("issue.retryDispatched") });
       const fresh = await getIssueGraph(issueId).catch(() => null);
       if (fresh) setGraph(fresh);
       setRetryTarget(null);
     } catch (err) {
       addToast({
         type: "error",
-        title: "Retry failed",
+        title: t("issue.retryFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setRetryBusy(false);
     }
-  }, [retryTarget, addToast, issueId]);
+  }, [retryTarget, addToast, issueId, t]);
 
   async function handleStart() {
     setBusy(true);
@@ -310,13 +312,13 @@ export function DagTab({ issueId }: Props) {
             setRetryBusy(false);
           }
         }}
-        title="Retry this failed node?"
+        title={t("issue.retryNodeTitle")}
         description={
           retryTarget
-            ? `Node "${retryTarget.node_key}" failed previously. Re-dispatch the task now? The run history is preserved.`
+            ? t("issue.retryNodeBody", { node: retryTarget.node_key })
             : ""
         }
-        confirmText="Retry"
+        confirmText={t("issue.retry")}
         variant="warning"
         isLoading={retryBusy}
         onConfirm={() => void handleRetryConfirm()}

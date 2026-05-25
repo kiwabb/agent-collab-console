@@ -274,7 +274,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Command palette"
+      aria-label={t("cmd.palette")}
       className="fixed inset-0 z-[200] flex items-start justify-center pt-24 bg-black/40 backdrop-blur-sm"
       onClick={closeAndRestoreFocus}
     >
@@ -289,7 +289,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Jump to issue / workspace / page…"
+            placeholder={t("cmd.placeholder")}
             className="flex-1 bg-transparent outline-none text-[14px] placeholder:text-text-muted"
           />
           {loading && <Loader2 size={12} className="animate-spin text-text-muted" />}
@@ -299,12 +299,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         </div>
         <div
           role="listbox"
-          aria-label="Command results"
+          aria-label={t("cmd.results")}
           className="max-h-[60vh] overflow-auto py-1"
         >
           {hits.length === 0 && (
             <div className="px-3 py-6 text-center text-sm text-text-muted">
-              {loading ? "Loading…" : "Nothing matches."}
+              {loading ? t("cmd.loading") : t("cmd.noMatches")}
             </div>
           )}
           {hits.map((hit, i) => (

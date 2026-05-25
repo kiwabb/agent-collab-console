@@ -467,13 +467,13 @@ function KpiCard({
 // Donut card — status distribution
 // ============================================================================
 
-const DONUT_ORDER: { key: keyof Buckets; tint: Tint; label: string }[] = [
-  { key: "running", tint: "running", label: "Running" },
-  { key: "awaiting", tint: "awaiting", label: "Awaiting" },
-  { key: "done", tint: "done", label: "Done" },
-  { key: "failed", tint: "failed", label: "Failed" },
-  { key: "merged", tint: "info", label: "Merged" },
-  { key: "queued", tint: "brand", label: "Queued" },
+const DONUT_ORDER: { key: keyof Buckets; tint: Tint; labelKey: string }[] = [
+  { key: "running", tint: "running", labelKey: "inbox.status.running" },
+  { key: "awaiting", tint: "awaiting", labelKey: "inbox.status.awaiting" },
+  { key: "done", tint: "done", labelKey: "inbox.status.done" },
+  { key: "failed", tint: "failed", labelKey: "inbox.status.failed" },
+  { key: "merged", tint: "info", labelKey: "inbox.status.merged" },
+  { key: "queued", tint: "brand", labelKey: "inbox.status.queued" },
 ];
 
 const TINT_TO_HEX: Record<Tint, string> = {
@@ -486,6 +486,7 @@ const TINT_TO_HEX: Record<Tint, string> = {
 };
 
 function DonutCard({ buckets, loading }: { buckets: Buckets; loading: boolean }) {
+  const { t } = useI18n();
   const slices = DONUT_ORDER.map((d) => ({ ...d, value: buckets[d.key] })).filter((s) => s.value > 0);
   const total = slices.reduce((acc, s) => acc + s.value, 0);
 
@@ -503,7 +504,7 @@ function DonutCard({ buckets, loading }: { buckets: Buckets; loading: boolean })
   });
 
   return (
-    <Card title="Status distribution" subtitle={`${total} issue${total === 1 ? "" : "s"}`} className="lg:col-span-1">
+    <Card title={t("inbox.statusDistribution")} subtitle={t("inbox.issueCount", { count: total })} className="lg:col-span-1">
       {loading ? (
         <Skeleton h={180} />
       ) : (
@@ -539,7 +540,7 @@ function DonutCard({ buckets, loading }: { buckets: Buckets; loading: boolean })
                 {total}
               </text>
               <text textAnchor="middle" dominantBaseline="middle" dy="18" className="fill-text-muted" fontSize="9">
-                ISSUES
+                {t("inbox.issueCountShort").toUpperCase()}
               </text>
             </g>
           </svg>
@@ -553,7 +554,7 @@ function DonutCard({ buckets, loading }: { buckets: Buckets; loading: boolean })
                     className="size-2 rounded-full shrink-0"
                     style={{ background: TINT_TO_HEX[d.tint] }}
                   />
-                  <span className="text-text-secondary flex-1 truncate">{d.label}</span>
+                  <span className="text-text-secondary flex-1 truncate">{t(d.labelKey)}</span>
                   <span className="tabular-nums text-foreground font-medium">{value}</span>
                   <span className="tabular-nums text-text-muted w-9 text-right">{pct}%</span>
                 </li>
@@ -577,6 +578,7 @@ function ActivityCard({
   data: { label: string; created: number; finished: number }[];
   loading: boolean;
 }) {
+  const { t } = useI18n();
   const max = Math.max(1, ...data.map((d) => Math.max(d.created, d.finished)));
   const totalCreated = data.reduce((acc, d) => acc + d.created, 0);
   const totalFinished = data.reduce((acc, d) => acc + d.finished, 0);
@@ -584,11 +586,11 @@ function ActivityCard({
 
   return (
     <Card
-      title="Activity — last 7 days"
+      title={t("inbox.activityLast7Days")}
       subtitle={
         <span className="flex items-center gap-1">
           <TrendingUp size={11} className={delta >= 0 ? "text-status-done" : "text-status-failed"} />
-          <span className="text-text-secondary">{totalCreated} created · {totalFinished} finished</span>
+          <span className="text-text-secondary">{t("inbox.activitySummary", { created: totalCreated, finished: totalFinished })}</span>
         </span>
       }
       className="lg:col-span-2"
@@ -607,14 +609,14 @@ function ActivityCard({
                     <div
                       className="w-full bg-gradient-to-t from-brand to-brand-strong rounded-sm transition-all group-hover:opacity-90"
                       style={{ height: `${Math.max(hC, d.created > 0 ? 4 : 0)}%` }}
-                      title={`${d.created} created`}
+                      title={t("inbox.activitySummary", { created: d.created, finished: 0 })}
                     />
                   </div>
                   <div className="relative w-full max-w-[14px] h-full flex items-end">
                     <div
                       className="w-full bg-gradient-to-t from-status-done/70 to-status-done rounded-sm transition-all group-hover:opacity-90"
                       style={{ height: `${Math.max(hF, d.finished > 0 ? 4 : 0)}%` }}
-                      title={`${d.finished} finished`}
+                      title={t("inbox.activitySummary", { created: 0, finished: d.finished })}
                     />
                   </div>
                 </div>
@@ -631,11 +633,11 @@ function ActivityCard({
           <div className="flex items-center gap-4 pt-3 border-t border-border-subtle mt-3 text-[11px]">
             <span className="flex items-center gap-1.5">
               <span className="size-2 rounded-sm bg-brand" />
-              <span className="text-text-secondary">Created</span>
+              <span className="text-text-secondary">{t("inbox.created")}</span>
             </span>
             <span className="flex items-center gap-1.5">
               <span className="size-2 rounded-sm bg-status-done" />
-              <span className="text-text-secondary">Finished</span>
+              <span className="text-text-secondary">{t("inbox.finished")}</span>
             </span>
           </div>
         </>
@@ -657,15 +659,16 @@ function ProjectSummaryCard({
   onPick: (id: string) => void;
   loading?: boolean;
 }) {
+  const { t } = useI18n();
   const top = summaries.slice(0, 5);
   const maxTotal = Math.max(1, ...top.map((s) => s.total));
 
   return (
-    <Card title="By project" subtitle={`${summaries.length} project${summaries.length === 1 ? "" : "s"}`} className="lg:col-span-1">
+    <Card title={t("inbox.byProject")} subtitle={t("inbox.projectCount", { count: summaries.length })} className="lg:col-span-1">
       {loading ? (
         <Skeleton h={160} />
       ) : top.length === 0 ? (
-        <Empty label="No projects yet" />
+        <Empty label={t("inbox.noProjects")} />
       ) : (
         <ul className="space-y-2.5">
           {top.map((s) => (
@@ -723,22 +726,23 @@ function RecentIssuesCard({
   onOpen: (id: string) => void;
   loading?: boolean;
 }) {
+  const { t } = useI18n();
   const projectMap = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
   return (
     <Card
-      title="Recent issues"
-      subtitle={`${issues.length} most recent`}
+      title={t("inbox.recentIssues")}
+      subtitle={t("inbox.mostRecent", { count: issues.length })}
       className="lg:col-span-2"
     >
       {loading ? (
         <Skeleton h={200} />
       ) : issues.length === 0 ? (
-        <Empty label="No issues yet — create one from any workspace" />
+        <Empty label={t("inbox.noIssues")} />
       ) : (
         <ul className="divide-y divide-border-subtle -mx-1">
           {issues.map((issue) => {
             const kind = inferStatusKind(issue.status);
-            const label = humanLabel(issue.status);
+            const label = t(statusLabelKey(issue.status));
             const project = issue.project_id ? projectMap.get(issue.project_id) : null;
             const updated = issue.updated_at ?? issue.created_at;
             return (
@@ -905,15 +909,15 @@ function computeDailyActivity(
   return out.map(({ label, created, finished }) => ({ label, created, finished }));
 }
 
-function humanLabel(status: string | null | undefined): string {
-  if (!status) return "Queued";
+function statusLabelKey(status: string | null | undefined): string {
+  if (!status) return "inbox.status.queued";
   const s = status.toLowerCase();
-  if (s === "in_progress" || s === "running") return "Running";
-  if (s === "completed" || s === "done") return "Done";
-  if (s === "failed") return "Failed";
-  if (s === "awaiting_approval") return "Awaiting";
-  if (s === "open") return "Queued";
-  return status;
+  if (s === "in_progress" || s === "running") return "inbox.status.running";
+  if (s === "completed" || s === "done") return "inbox.status.done";
+  if (s === "failed") return "inbox.status.failed";
+  if (s === "awaiting_approval") return "inbox.status.awaiting";
+  if (s === "open") return "inbox.status.queued";
+  return "inbox.status.queued";
 }
 
 function relTime(iso: string): string {

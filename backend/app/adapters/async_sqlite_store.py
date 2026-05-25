@@ -134,6 +134,9 @@ class AsyncSQLiteStore:
                 git_last_commit_sha TEXT,
                 github_pr_url TEXT,
                 github_pr_state TEXT,
+                executor TEXT,
+                provider TEXT,
+                model TEXT,
                 created_at TEXT,
                 updated_at TEXT,
                 FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
@@ -352,6 +355,12 @@ class AsyncSQLiteStore:
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
         except aiosqlite.OperationalError:
             pass
+        # Issue-level executor selection (propagated to Conductor sub-agents)
+        for _issue_exec_col in ("executor", "provider", "model"):
+            try:
+                await conn.execute(f"ALTER TABLE codex_issues ADD COLUMN {_issue_exec_col} TEXT")
+            except aiosqlite.OperationalError:
+                pass
         # Add executor/provider/model snapshot columns to execution_processes
         try:
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
@@ -717,6 +726,9 @@ class AsyncSQLiteStore:
                 issue_id TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 result_json TEXT,
+                lease_owner TEXT,
+                heartbeat_at TEXT,
+                lease_expires_at TEXT,
                 created_at TEXT,
                 updated_at TEXT
             )
@@ -807,6 +819,16 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_id ON conductor_tasks(project_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)")
+        for stmt in (
+            "ALTER TABLE conductor_tasks ADD COLUMN lease_owner TEXT",
+            "ALTER TABLE conductor_tasks ADD COLUMN heartbeat_at TEXT",
+            "ALTER TABLE conductor_tasks ADD COLUMN lease_expires_at TEXT",
+        ):
+            try:
+                await conn.execute(stmt)
+            except aiosqlite.OperationalError:
+                pass
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_lease ON conductor_tasks(status, lease_expires_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
         # Phase 4: add instance_index to workflow_nodes for existing DBs
         try:
@@ -1097,8 +1119,9 @@ class AsyncSQLiteStore:
                 is_pinned, milestone,
                 git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha,
                 github_pr_url, github_pr_state,
+                executor, provider, model,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 issue.id,
                 issue.session_id,
@@ -1117,6 +1140,9 @@ class AsyncSQLiteStore:
                 issue.git_last_commit_sha,
                 getattr(issue, "github_pr_url", None),
                 getattr(issue, "github_pr_state", None),
+                getattr(issue, "executor", None),
+                getattr(issue, "provider", None),
+                getattr(issue, "model", None),
                 self._format_datetime(issue.created_at),
                 self._format_datetime(issue.updated_at),
             ),
@@ -1159,6 +1185,9 @@ class AsyncSQLiteStore:
             git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in keys and row["git_last_commit_sha"] else None,
             github_pr_url=row["github_pr_url"] if "github_pr_url" in keys and row["github_pr_url"] else None,
             github_pr_state=row["github_pr_state"] if "github_pr_state" in keys and row["github_pr_state"] else None,
+            executor=row["executor"] if "executor" in keys and row["executor"] else None,
+            provider=row["provider"] if "provider" in keys and row["provider"] else None,
+            model=row["model"] if "model" in keys and row["model"] else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -2250,6 +2279,22 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
+    async def clear_issue_execution_history(self, issue_id: str) -> None:
+        """Delete all execution history for an issue (used by reset).
+
+        Clears every table whose data would make the UI show stale state
+        after a hard reset: conductor phase/timeline, mesh messages, and
+        any cached conductor decisions.
+        """
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute("DELETE FROM conductor_turns WHERE issue_id = ?", (issue_id,))
+        await conn.execute("DELETE FROM agent_messages WHERE issue_id = ?", (issue_id,))
+        await conn.execute("DELETE FROM conductor_decisions WHERE issue_id = ?", (issue_id,))
+        await conn.execute("DELETE FROM conductor_states WHERE issue_id = ?", (issue_id,))
+        await conn.execute("DELETE FROM conductor_state_log WHERE issue_id = ?", (issue_id,))
+        await conn.commit()
+
     async def list_agent_messages(self, issue_id: str) -> list["AgentMessage"]:
         from app.domain.models import AgentMessage
         await self._ensure_db()
@@ -2361,41 +2406,14 @@ class AsyncSQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def save_conductor_task(self, task: "ConductorTask") -> None:
-        from app.domain.models import ConductorTask  # noqa: F401
-        await self._ensure_db()
-        conn = await self._get_conn()
-        await conn.execute(
-            """INSERT OR REPLACE INTO conductor_tasks
-               (id, project_id, task_kind, payload_json, issue_id, status, result_json, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                task.id,
-                task.project_id,
-                task.task_kind,
-                json.dumps(task.payload, ensure_ascii=False, default=str),
-                task.issue_id,
-                task.status,
-                task.result_json,
-                self._format_datetime(task.created_at),
-                self._format_datetime(task.updated_at or datetime.now()),
-            ),
-        )
-        await conn.commit()
-
-    async def load_conductor_task(self, task_id: str) -> "ConductorTask | None":
+    def _row_to_conductor_task(self, row) -> "ConductorTask":
         from app.domain.models import ConductorTask
-        await self._ensure_db()
-        conn = await self._get_conn()
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT * FROM conductor_tasks WHERE id = ?", (task_id,)) as cur:
-            row = await cur.fetchone()
-        if row is None:
-            return None
+
         try:
             payload = json.loads(row["payload_json"] or "{}")
         except json.JSONDecodeError:
             payload = {}
+        keys = row.keys()
         return ConductorTask(
             id=row["id"],
             project_id=row["project_id"],
@@ -2404,12 +2422,50 @@ class AsyncSQLiteStore:
             issue_id=row["issue_id"],
             status=row["status"],
             result_json=row["result_json"],
+            lease_owner=row["lease_owner"] if "lease_owner" in keys and row["lease_owner"] else None,
+            heartbeat_at=self._parse_datetime(row["heartbeat_at"] if "heartbeat_at" in keys else None),
+            lease_expires_at=self._parse_datetime(row["lease_expires_at"] if "lease_expires_at" in keys else None),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
+    async def save_conductor_task(self, task: "ConductorTask") -> None:
+        from app.domain.models import ConductorTask  # noqa: F401
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """INSERT OR REPLACE INTO conductor_tasks
+               (id, project_id, task_kind, payload_json, issue_id, status, result_json,
+                lease_owner, heartbeat_at, lease_expires_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task.id,
+                task.project_id,
+                task.task_kind,
+                json.dumps(task.payload, ensure_ascii=False, default=str),
+                task.issue_id,
+                task.status,
+                task.result_json,
+                task.lease_owner,
+                self._format_datetime(task.heartbeat_at),
+                self._format_datetime(task.lease_expires_at),
+                self._format_datetime(task.created_at),
+                self._format_datetime(task.updated_at or datetime.now()),
+            ),
+        )
+        await conn.commit()
+
+    async def load_conductor_task(self, task_id: str) -> "ConductorTask | None":
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM conductor_tasks WHERE id = ?", (task_id,)) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_conductor_task(row)
+
     async def load_latest_conductor_task_for_issue(self, issue_id: str) -> "ConductorTask | None":
-        from app.domain.models import ConductorTask
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2423,21 +2479,26 @@ class AsyncSQLiteStore:
             row = await cur.fetchone()
         if row is None:
             return None
-        try:
-            payload = json.loads(row["payload_json"] or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        return ConductorTask(
-            id=row["id"],
-            project_id=row["project_id"],
-            task_kind=row["task_kind"],
-            payload=payload if isinstance(payload, dict) else {},
-            issue_id=row["issue_id"],
-            status=row["status"],
-            result_json=row["result_json"],
-            created_at=self._parse_datetime(row["created_at"]),
-            updated_at=self._parse_datetime(row["updated_at"]),
-        )
+        return self._row_to_conductor_task(row)
+
+    async def list_conductor_tasks(self, *, status: str | None = None) -> list["ConductorTask"]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        if status:
+            async with conn.execute(
+                """SELECT * FROM conductor_tasks
+                   WHERE status = ?
+                   ORDER BY created_at ASC, updated_at ASC, id ASC""",
+                (status,),
+            ) as cur:
+                rows = await cur.fetchall()
+        else:
+            async with conn.execute(
+                "SELECT * FROM conductor_tasks ORDER BY created_at ASC, updated_at ASC, id ASC"
+            ) as cur:
+                rows = await cur.fetchall()
+        return [self._row_to_conductor_task(row) for row in rows]
 
     async def save_conductor_turn(self, turn: "ConductorTurn") -> None:
         from app.domain.models import ConductorTurn  # noqa: F401

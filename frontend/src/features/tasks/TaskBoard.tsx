@@ -105,6 +105,7 @@ interface TaskCardProps {
 }
 
 function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProps) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const rawStatus = task.status || process?.status || "pending";
   const status = rawStatus.toLowerCase();
@@ -148,7 +149,7 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
           <button
             onClick={handleCopyLink}
             className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover/card:opacity-100"
-            title="Copy link"
+            title={t("issue.copyLink")}
           >
             {copied ? <Check size={12} className="text-success" /> : <Link size={12} />}
           </button>
@@ -165,7 +166,7 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
           )}
           {!unlocked && (
             <span className="text-[9px] font-black text-warning bg-warning/10 px-1.5 py-0.5 rounded-md">
-              {status === "rework" ? "REWORK REQUIRED" : "BLOCKED"}
+              {status === "rework" ? t("task.reworkRequired") : t("task.blocked")}
             </span>
           )}
         </div>
@@ -286,18 +287,18 @@ export function TaskBoard({
     setIsDeletingIssue(true);
     try {
       await onDeleteIssue();
-      addToast({ type: "success", title: "Issue deleted" });
+      addToast({ type: "success", title: t("task.deletedIssue") });
       setDeleteIssueOpen(false);
     } catch (err) {
       addToast({
         type: "error",
-        title: "Failed to delete issue",
+        title: t("task.deleteIssueFailed"),
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
       setIsDeletingIssue(false);
     }
-  }, [addToast, onDeleteIssue]);
+  }, [addToast, onDeleteIssue, t]);
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id as string);
@@ -375,7 +376,7 @@ export function TaskBoard({
                 variant={viewMode === "kanban" ? "secondary" : "ghost"}
                 size="icon-sm"
                 onClick={() => setViewMode("kanban")}
-                title="Kanban view"
+                title={t("task.kanbanView")}
                 className={viewMode === "kanban" ? "bg-brand/10 text-brand" : "text-text-muted"}
               >
                 <Kanban size={14} />
@@ -385,7 +386,7 @@ export function TaskBoard({
                 variant={viewMode === "table" ? "secondary" : "ghost"}
                 size="icon-sm"
                 onClick={() => setViewMode("table")}
-                title="Table view"
+                title={t("task.tableView")}
                 className={viewMode === "table" ? "bg-brand/10 text-brand" : "text-text-muted"}
               >
                 <Table2 size={14} />

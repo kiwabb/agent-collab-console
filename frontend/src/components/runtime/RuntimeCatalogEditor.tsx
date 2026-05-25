@@ -22,16 +22,18 @@ interface RuntimeCatalogEditorProps {
   className?: string;
 }
 
-const EXECUTOR_DEFAULTS: Record<"claude" | "codex", { label: string; api_endpoint: string; default_model: string }> = {
+const EXECUTOR_DEFAULTS: Record<"claude" | "codex", { label: string; api_endpoint: string; default_model: string; protocol: "anthropic" | "openai" }> = {
   claude: {
     label: "Claude",
     api_endpoint: "https://api.anthropic.com",
     default_model: "claude-sonnet-4-6",
+    protocol: "anthropic",
   },
   codex: {
     label: "Codex",
     api_endpoint: "https://api.openai.com/v1",
     default_model: "gpt-5-codex",
+    protocol: "openai",
   },
 };
 
@@ -108,6 +110,13 @@ export function RuntimeCatalogEditor({
     handleChange(updatedCatalog);
   };
 
+  const updateConductorLLM = (updates: Partial<NonNullable<RuntimeCatalog["conductor_llm"]>>) => {
+    handleChange({
+      ...localCatalog,
+      conductor_llm: { ...(localCatalog.conductor_llm ?? {}), ...updates },
+    });
+  };
+
   const removeExecutor = (index: number) => {
     const updatedCatalog = {
       ...localCatalog,
@@ -132,6 +141,7 @@ export function RuntimeCatalogEditor({
       api_endpoint: newApiEndpoint.trim() || null,
       api_key: newApiKey.trim() || null,
       default_model: newDefaultModel.trim() || null,
+      protocol: EXECUTOR_DEFAULTS[newExecutorType].protocol,
       providers: [],
       default_provider_id: null,
     };
@@ -305,7 +315,65 @@ export function RuntimeCatalogEditor({
           </Button>
         )}
       </div>
+
+      <ConductorLLMSection
+        catalog={localCatalog}
+        onUpdate={updateConductorLLM}
+        t={t}
+      />
     </div>
+  );
+}
+
+interface ConductorLLMSectionProps {
+  catalog: RuntimeCatalog;
+  onUpdate: (updates: Partial<NonNullable<RuntimeCatalog["conductor_llm"]>>) => void;
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string;
+}
+
+function ConductorLLMSection({ catalog, onUpdate, t }: ConductorLLMSectionProps) {
+  const cfg = catalog.conductor_llm ?? {};
+  const selected = catalog.executors.find((e) => e.id === cfg.executor_id) ?? null;
+  const protocol = selected?.protocol ?? "anthropic";
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">{t("runtime.conductor.title")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{t("runtime.conductor.desc")}</p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="min-w-0 space-y-1">
+            <label className="text-xs text-muted-foreground">{t("runtime.conductor.executor")}</label>
+            <select
+              value={cfg.executor_id ?? ""}
+              onChange={(e) => onUpdate({ executor_id: e.target.value || null })}
+              className="h-9 w-full rounded-md border border-border-subtle bg-surface-input px-3 text-sm"
+            >
+              <option value="">{t("runtime.conductor.autoPick")}</option>
+              {catalog.executors.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.label} ({e.protocol ?? "anthropic"})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="min-w-0 space-y-1">
+            <label className="text-xs text-muted-foreground">{t("runtime.conductor.model")}</label>
+            <Input
+              value={cfg.model ?? ""}
+              onChange={(e) => onUpdate({ model: e.target.value || null })}
+              placeholder={selected?.default_model || t("runtime.executor.modelPlaceholder")}
+            />
+          </div>
+        </div>
+        {selected && (
+          <p className="text-[11px] text-muted-foreground">
+            {t("runtime.conductor.resolvedProtocol", { protocol })}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -430,13 +498,27 @@ function ExecutorCard({
           </div>
         </div>
 
-        <div className="min-w-0 space-y-1">
-          <label className="text-xs text-muted-foreground">{t("runtime.executor.defaultModel")}</label>
-          <Input
-            value={executor.default_model || ""}
-            onChange={(e) => onUpdate({ default_model: e.target.value || null })}
-            placeholder={t("runtime.executor.modelPlaceholder")}
-          />
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="min-w-0 space-y-1">
+            <label className="text-xs text-muted-foreground">{t("runtime.executor.defaultModel")}</label>
+            <Input
+              value={executor.default_model || ""}
+              onChange={(e) => onUpdate({ default_model: e.target.value || null })}
+              placeholder={t("runtime.executor.modelPlaceholder")}
+            />
+          </div>
+          <div className="min-w-0 space-y-1">
+            <label className="text-xs text-muted-foreground">{t("runtime.executor.protocol")}</label>
+            <select
+              value={executor.protocol ?? "anthropic"}
+              onChange={(e) => onUpdate({ protocol: e.target.value as "anthropic" | "openai" })}
+              className="h-9 w-full rounded-md border border-border-subtle bg-surface-input px-3 text-sm"
+            >
+              <option value="anthropic">{t("runtime.executor.protocolAnthropic")}</option>
+              <option value="openai">{t("runtime.executor.protocolOpenai")}</option>
+            </select>
+            <p className="text-[11px] text-muted-foreground">{t("runtime.executor.protocolHint")}</p>
+          </div>
         </div>
 
         <div className="border-t border-border-subtle/50 pt-4">

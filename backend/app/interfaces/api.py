@@ -2547,6 +2547,11 @@ class CreateIssueRequest(BaseModel):
     title: str
     description: str | None = None
     base_branch: str | None = None  # Override fork point (defaults to project.default_branch)
+    # Executor selection for the Conductor's sub-agents. When omitted, sub-agents
+    # fall back to the agent catalog defaults.
+    executor: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 class UpdateIssuePhaseRequest(BaseModel):
@@ -2585,6 +2590,9 @@ async def create_codex_issue(request: CreateIssueRequest):
         description=request.description,
         current_phase="requirements",
         status="open",
+        executor=request.executor,
+        provider=request.provider,
+        model=request.model,
         created_at=now,
         updated_at=now,
     )
@@ -4461,6 +4469,7 @@ def _public_runtime_catalog(catalog: RuntimeCatalog) -> dict:
                 "api_endpoint": executor.api_endpoint,
                 "api_key_configured": bool(executor.api_key),
                 "default_model": executor.default_model,
+                "protocol": executor.protocol,
                 "providers": [
                     {
                         "id": provider.id,
@@ -4483,7 +4492,13 @@ def _public_runtime_catalog(catalog: RuntimeCatalog) -> dict:
                 "default_provider_id": executor.default_provider_id,
             }
             for executor in catalog.executors
-        ]
+        ],
+        "conductor_llm": {
+            "executor_id": catalog.conductor_llm.executor_id,
+            "model": catalog.conductor_llm.model,
+            "max_tokens": catalog.conductor_llm.max_tokens,
+            "timeout_s": catalog.conductor_llm.timeout_s,
+        },
     }
 
 
@@ -5104,10 +5119,19 @@ async def auto_start_issue_graph(issue_id: str):
     dynamically populating the graph with nodes for visualization.
     """
     import asyncio
+    from app.application.conductor_session_registry import ConductorSessionRegistry
     store = _require_agent_store()
     issue = await store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+
+    # Idempotency: if a live conductor session already exists for this issue,
+    # do not start a second one — return the existing graph instead. This is
+    # the first line of defense against duplicate conductors.
+    if ConductorSessionRegistry.instance().is_alive(issue_id):
+        existing_graph = await store.load_workflow_graph_for_issue(issue_id)
+        if existing_graph is not None:
+            return _graph_to_dict(existing_graph)
 
     # Ensure worktree exists
     if issue.project_id and not issue.git_worktree_path and project_service is not None:
@@ -5148,21 +5172,25 @@ async def auto_start_issue_graph(issue_id: str):
     from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
     from app.application.event_bus import _workflow_task_dispatcher
 
-    task = asyncio.create_task(run_issue_conductor_loop(
-        issue=issue,
-        project_id=project_id,
-        store=store,
-        event_bus=event_bus,
-        task_dispatcher_fn=_workflow_task_dispatcher,
-    ))
-    task.add_done_callback(
-        lambda done: _handle_conductor_loop_done(
-            done,
-            issue_id=issue_id,
+    handle = await ConductorSessionRegistry.instance().try_start(
+        issue_id,
+        lambda: run_issue_conductor_loop(
+            issue=issue,
+            project_id=project_id,
             store=store,
-            recover_fn=recover_background_conductor_failure,
-        )
+            event_bus=event_bus,
+            task_dispatcher_fn=_workflow_task_dispatcher,
+        ),
     )
+    if handle is not None:
+        handle.task.add_done_callback(
+            lambda done: _handle_conductor_loop_done(
+                done,
+                issue_id=issue_id,
+                store=store,
+                recover_fn=recover_background_conductor_failure,
+            )
+        )
 
     return _graph_to_dict(graph)
 
@@ -5441,6 +5469,318 @@ async def codex_issue_conductor_resume(issue_id: str):
     )
     await ConductorPauseRegistry.instance().resume(conductor_task.id)
     return {"ok": True, "conductor_task_id": conductor_task.id, "status": conductor_task.status}
+
+
+@router.post("/codex/issues/{issue_id}/conductor/restart", status_code=201)
+async def codex_issue_conductor_restart(issue_id: str):
+    """Safely restart the Conductor loop for an issue.
+
+    Marks any running/paused conductor task as failed, marks the current
+    workflow graph as failed, then starts a fresh conductor loop.
+    """
+    import asyncio
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    # Cancel the live in-process session, then kill ALL conductor task rows
+    # for this issue (not just the latest). Multiple rows can accumulate.
+    from app.application.conductor_session_registry import ConductorSessionRegistry
+    await ConductorSessionRegistry.instance().stop(issue_id)
+    if hasattr(codex_store, "list_conductor_tasks"):
+        from app.application.conductor_pause_registry import ConductorPauseRegistry
+        _pause_reg = ConductorPauseRegistry.instance()
+        all_running = await codex_store.list_conductor_tasks(status="running")
+        all_paused = await codex_store.list_conductor_tasks(status="paused")
+        for _ct in (all_running or []) + (all_paused or []):
+            if getattr(_ct, "issue_id", None) != issue_id:
+                continue
+            await _pause_reg.request_pause(_ct.id)
+            _ct.status = "failed"
+            _ct.updated_at = datetime.now()
+            await codex_store.save_conductor_task(_ct)
+
+    # Mark current graph as failed
+    old_graph = await codex_store.load_workflow_graph_for_issue(issue_id)
+    if old_graph is not None and old_graph.status in ("running", "pending"):
+        old_graph.status = "failed"
+        old_graph.updated_at = datetime.now()
+        await codex_store.save_workflow_graph(old_graph, nodes=old_graph.nodes, edges=old_graph.edges)
+
+    # Ensure worktree exists
+    if issue.project_id and not issue.git_worktree_path and project_service is not None:
+        project = await project_service.get_project(issue.project_id)
+        if project is not None:
+            try:
+                branch, wt_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+                issue.git_branch = branch
+                issue.git_worktree_path = wt_path
+                issue.git_base_branch = base
+                await codex_store.save_codex_issue(issue)
+            except (GitError, WorktreeError):
+                pass
+
+    project_id = issue.project_id
+    if not project_id:
+        workspace = await codex_store.load_codex_session(issue.session_id)
+        project_id = getattr(workspace, "project_id", None) if workspace else None
+    if not project_id:
+        raise HTTPException(status_code=409, detail="Issue has no associated project")
+
+    from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
+    from app.application.event_bus import _workflow_task_dispatcher
+    from app.domain.models import WorkflowGraph
+
+    now = datetime.now()
+    graph = WorkflowGraph(
+        id=str(uuid4()),
+        issue_id=issue_id,
+        dag_json="{}",
+        status="running",
+        created_by="conductor",
+        created_at=now,
+        updated_at=now,
+        nodes=[],
+        edges=[],
+    )
+    await codex_store.save_workflow_graph(graph, nodes=[], edges=[])
+
+    handle = await ConductorSessionRegistry.instance().try_start(
+        issue_id,
+        lambda: run_issue_conductor_loop(
+            issue=issue,
+            project_id=project_id,
+            store=codex_store,
+            event_bus=event_bus,
+            task_dispatcher_fn=_workflow_task_dispatcher,
+        ),
+    )
+    if handle is not None:
+        handle.task.add_done_callback(
+            lambda done: _handle_conductor_loop_done(
+                done,
+                issue_id=issue_id,
+                store=codex_store,
+                recover_fn=recover_background_conductor_failure,
+            )
+        )
+    return _graph_to_dict(graph)
+
+
+@router.post("/codex/issues/{issue_id}/reset", status_code=201)
+async def codex_issue_reset(issue_id: str):
+    """Hard-reset an issue: cancel all in-flight tasks, wipe graph history,
+    restore the issue to open state, and launch a fresh Conductor loop.
+    """
+    import asyncio
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    # 1. Cancel the live in-process session, then kill ALL conductor task rows
+    from app.application.conductor_session_registry import ConductorSessionRegistry
+    await ConductorSessionRegistry.instance().stop(issue_id)
+    if hasattr(codex_store, "list_conductor_tasks"):
+        from app.application.conductor_pause_registry import ConductorPauseRegistry
+        _pause_reg = ConductorPauseRegistry.instance()
+        for _status in ("running", "paused"):
+            for _ct in (await codex_store.list_conductor_tasks(status=_status) or []):
+                if getattr(_ct, "issue_id", None) != issue_id:
+                    continue
+                await _pause_reg.request_pause(_ct.id)
+                _ct.status = "failed"
+                _ct.updated_at = datetime.now()
+                await codex_store.save_conductor_task(_ct)
+
+    # 2. Delete ALL codex tasks for this issue (full wipe, not just cancel)
+    if hasattr(codex_store, "list_codex_tasks") and hasattr(codex_store, "delete_codex_task"):
+        task_dicts = await codex_store.list_codex_tasks(issue_id=issue_id)
+        for td in (task_dicts or []):
+            try:
+                await codex_store.delete_codex_task(td["id"])
+            except Exception:
+                pass
+
+    # 3. Wipe execution history: conductor_turns, agent_messages, conductor_decisions
+    _clear_history = getattr(codex_store, "clear_issue_execution_history", None)
+    if callable(_clear_history):
+        await _clear_history(issue_id)
+
+    # 4. Remove the git worktree so generated code is fully purged
+    _reset_project: Project | None = None
+    if issue.project_id and project_service is not None:
+        _reset_project = await project_service.get_project(issue.project_id)
+    if _reset_project is not None and issue.git_worktree_path:
+        try:
+            await worktree_manager.cleanup_issue_worktree(_reset_project, issue)
+        except Exception:
+            pass
+
+    # 5. Reset the issue: clear phase, status, and all git fields so a fresh worktree is created
+    issue.status = "open"
+    issue.current_phase = None
+    issue.git_worktree_path = None
+    issue.git_branch = None
+    issue.git_base_branch = None
+    issue.git_last_commit_sha = None
+    issue.git_merge_status = "open"
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+
+    # 6. Create a fresh worktree for the upcoming conductor run
+    if _reset_project is not None:
+        try:
+            branch, wt_path, base = await worktree_manager.prepare_issue_worktree(_reset_project, issue)
+            issue.git_branch = branch
+            issue.git_worktree_path = wt_path
+            issue.git_base_branch = base
+            await codex_store.save_codex_issue(issue)
+        except (GitError, WorktreeError):
+            pass
+
+    project_id = issue.project_id
+    if not project_id:
+        workspace = await codex_store.load_codex_session(issue.session_id)
+        project_id = getattr(workspace, "project_id", None) if workspace else None
+    if not project_id:
+        raise HTTPException(status_code=409, detail="Issue has no associated project")
+
+    from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
+    from app.application.event_bus import _workflow_task_dispatcher
+    from app.domain.models import WorkflowGraph
+
+    now = datetime.now()
+    graph = WorkflowGraph(
+        id=str(uuid4()),
+        issue_id=issue_id,
+        dag_json="{}",
+        status="running",
+        created_by="conductor",
+        created_at=now,
+        updated_at=now,
+        nodes=[],
+        edges=[],
+    )
+    await codex_store.save_workflow_graph(graph, nodes=[], edges=[])
+
+    handle = await ConductorSessionRegistry.instance().try_start(
+        issue_id,
+        lambda: run_issue_conductor_loop(
+            issue=issue,
+            project_id=project_id,
+            store=codex_store,
+            event_bus=event_bus,
+            task_dispatcher_fn=_workflow_task_dispatcher,
+        ),
+    )
+    if handle is not None:
+        handle.task.add_done_callback(
+            lambda done: _handle_conductor_loop_done(
+                done,
+                issue_id=issue_id,
+                store=codex_store,
+                recover_fn=recover_background_conductor_failure,
+            )
+        )
+    return _graph_to_dict(graph)
+
+
+_CONDUCTOR_PHASE_THRESHOLDS_MS: dict[str, tuple[float, float]] = {
+    # phase -> (warn_ms, danger_ms); mirrors frontend getPhaseSeverity
+    "awaiting_llm": (30_000, 60_000),
+    "streaming_llm": (120_000, float("inf")),
+    "awaiting_subagent": (180_000, 360_000),
+    "dispatching_subagent": (30_000, 60_000),
+}
+
+
+def _conductor_health(status: str, phase: str | None, duration_ms: float | None) -> str:
+    """Classify a session's health for the monitor: failed/stalled/ok/warn/danger."""
+    s = (status or "").lower()
+    if s == "failed":
+        return "failed"
+    if s == "stalled":
+        return "stalled"
+    if s == "paused":
+        return "paused"
+    if phase and duration_ms is not None:
+        warn, danger = _CONDUCTOR_PHASE_THRESHOLDS_MS.get(phase, (float("inf"), float("inf")))
+        if duration_ms >= danger:
+            return "danger"
+        if duration_ms >= warn:
+            return "warn"
+    return "ok"
+
+
+@router.get("/codex/conductors")
+async def list_conductors(project_id: str | None = None):
+    """List all conductor sessions with liveness + health, for the monitor panel.
+
+    Merges DB conductor_task rows (running/paused/stalled/failed) with the
+    in-process session registry's liveness signal, and computes a health
+    label from how long the current phase has been running.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    from app.application.conductor_session_registry import ConductorSessionRegistry
+    registry = ConductorSessionRegistry.instance()
+    all_tasks = await codex_store.list_conductor_tasks() or []
+    now = datetime.now()
+    # Keep only the latest conductor_task per issue (list is created_at ASC, so
+    # the last seen per issue_id is newest). Older rows are superseded history.
+    latest_by_issue: dict[str, object] = {}
+    for ct in all_tasks:
+        if getattr(ct, "task_kind", None) != "issue" or not ct.issue_id:
+            continue
+        latest_by_issue[ct.issue_id] = ct
+    sessions: list[dict] = []
+    for ct in latest_by_issue.values():
+        status = str(getattr(ct, "status", "") or "")
+        if status.lower() not in {"running", "paused", "stalled", "failed"}:
+            continue
+        if project_id and getattr(ct, "project_id", None) != project_id:
+            continue
+        payload = ct.payload if isinstance(ct.payload, dict) else {}
+        phase = payload.get("phase")
+        detail = payload.get("detail")
+        issue_title = payload.get("issue_title")
+
+        phase_started_at = None
+        duration_ms: float | None = None
+        try:
+            logs = await codex_store.list_conductor_state_logs(ct.issue_id, limit=1, descending=True)
+            if logs:
+                phase_started_at = logs[0].transition_at
+        except Exception:  # noqa: BLE001
+            phase_started_at = None
+        if phase_started_at is None:
+            phase_started_at = ct.heartbeat_at or ct.updated_at
+        if phase_started_at is not None and status.lower() == "running":
+            duration_ms = max(0.0, (now - phase_started_at).total_seconds() * 1000)
+
+        sessions.append({
+            "conductor_task_id": ct.id,
+            "issue_id": ct.issue_id,
+            "issue_title": issue_title,
+            "project_id": ct.project_id,
+            "status": status,
+            "phase": phase,
+            "detail": detail,
+            "phase_started_at": phase_started_at.isoformat() if phase_started_at else None,
+            "phase_duration_ms": duration_ms,
+            "health": _conductor_health(status, phase, duration_ms),
+            "lease_owner": ct.lease_owner,
+            "alive": registry.is_conductor_task_alive(ct.issue_id, ct.id),
+            "updated_at": ct.updated_at.isoformat() if ct.updated_at else None,
+        })
+    # Order: problems first (failed/stalled/danger/warn), then running, by recency.
+    health_rank = {"failed": 0, "stalled": 1, "danger": 2, "warn": 3, "paused": 4, "ok": 5}
+    sessions.sort(key=lambda s: (health_rank.get(s["health"], 9), s.get("updated_at") or ""))
+    return {"conductors": sessions}
 
 
 @router.get("/codex/issues/{issue_id}/conductor-state")
@@ -5785,9 +6125,8 @@ async def codex_issue_agent_mesh(issue_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     if not hasattr(codex_store, "list_agent_messages"):
         return []
-    import dataclasses
     messages = await codex_store.list_agent_messages(issue_id)
-    return [dataclasses.asdict(m) for m in messages]
+    return [m.model_dump() if hasattr(m, "model_dump") else m for m in messages]
 
 
 class ProjectConductorMessageRequest(BaseModel):

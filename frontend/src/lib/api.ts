@@ -247,6 +247,35 @@ export async function getProjectConductorState(projectId: string): Promise<Proje
   return handleResponse<ProjectConductorState>(response);
 }
 
+export interface ConductorSession {
+  conductor_task_id: string;
+  issue_id: string;
+  issue_title: string | null;
+  project_id: string | null;
+  status: string;
+  phase: string | null;
+  detail: string | null;
+  phase_started_at: string | null;
+  phase_duration_ms: number | null;
+  health: "ok" | "warn" | "danger" | "stalled" | "failed" | "paused";
+  lease_owner: string | null;
+  alive: boolean;
+  updated_at: string | null;
+}
+
+export async function getConductors(projectId?: string | null): Promise<ConductorSession[]> {
+  const url = projectId
+    ? `${API_BASE}/codex/conductors?project_id=${encodeURIComponent(projectId)}`
+    : `${API_BASE}/codex/conductors`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    console.error(`getConductors failed: HTTP ${response.status}`);
+    return [];
+  }
+  const data = (await response.json()) as { conductors: ConductorSession[] };
+  return data.conductors ?? [];
+}
+
 export async function askProjectConductor(
   projectId: string,
   question: string,
@@ -499,9 +528,15 @@ export async function createCodexIssue(
   title: string,
   description = "",
   baseBranch: string | null = null,
+  executor: string | null = null,
+  provider: string | null = null,
+  model: string | null = null,
 ): Promise<CodexIssue> {
   const body: CreateIssueRequest = { session_id: sessionId, title, description };
   if (baseBranch) body.base_branch = baseBranch;
+  if (executor) body.executor = executor;
+  if (provider) body.provider = provider;
+  if (model) body.model = model;
   const response = await fetch(`${API_BASE}/codex/issues`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1164,6 +1199,16 @@ export async function getIssueGraph(issueId: string): Promise<WorkflowGraph | nu
 
 export async function autoStartIssueGraph(issueId: string): Promise<WorkflowGraph> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/auto-start`, { method: "POST" });
+  return handleResponse<WorkflowGraph>(response);
+}
+
+export async function restartConductor(issueId: string): Promise<WorkflowGraph> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/conductor/restart`, { method: "POST" });
+  return handleResponse<WorkflowGraph>(response);
+}
+
+export async function resetIssue(issueId: string): Promise<WorkflowGraph> {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/reset`, { method: "POST" });
   return handleResponse<WorkflowGraph>(response);
 }
 

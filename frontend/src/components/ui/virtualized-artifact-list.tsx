@@ -80,6 +80,7 @@ interface HighlightedCodeProps {
 }
 
 export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, showLineNumbers = false, previousContent }: HighlightedCodeProps) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -157,7 +158,7 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
     return (
       <div className="flex gap-2 font-mono text-[12px] p-5">
         <div className="flex-1">
-          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">Previous</div>
+          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">{t("ui.previous")}</div>
           {prevLines.map((line, i) => (
             <div key={i} className={cn("py-0.5 pr-4", line && "bg-red-500/10 text-red-400/70")}>
               <span className="text-text-muted/30 mr-3 select-none">{i + 1}</span>
@@ -166,7 +167,7 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
           ))}
         </div>
         <div className="flex-1">
-          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">Current</div>
+          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">{t("ui.current")}</div>
           {lines.map((line, i) => (
             <div key={i} className={cn("py-0.5 pr-4", line && "bg-green-500/10 text-green-400/70")}>
               <span className="text-text-muted/30 mr-3 select-none">{i + 1}</span>
@@ -181,21 +182,21 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
   return (
     <div className="relative group/code">
       <div className="absolute top-3 right-3 flex items-center gap-1 z-10 opacity-0 group-hover/code:opacity-100 transition-opacity">
-        <button onClick={() => setLineNumbersOn(l => !l)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Toggle line numbers">
+        <button onClick={() => setLineNumbersOn(l => !l)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.toggleLineNumbers")}>
           <Hash size={14} className={cn("text-text-muted", lineNumbersOn && "text-brand")} />
         </button>
-        <button onClick={() => setShowSearch(s => !s)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Search">
+        <button onClick={() => setShowSearch(s => !s)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.search")}>
           <Search size={14} className={cn("text-text-muted", showSearch && "text-brand")} />
         </button>
         {previousContent && (
-          <button onClick={() => setShowDiff(d => !d)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Toggle diff view">
+          <button onClick={() => setShowDiff(d => !d)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.toggleDiffView")}>
             <GitCompare size={14} className={cn("text-text-muted", showDiff && "text-brand")} />
           </button>
         )}
-        <button onClick={handleCopy} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Copy code">
+        <button onClick={handleCopy} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.copyCode")}>
           {copied ? <Check size={14} className="text-success" /> : <Copy size={14} className="text-text-muted" />}
         </button>
-        <button onClick={handleDownload} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label="Download artifact">
+        <button onClick={handleDownload} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.downloadArtifact")}>
           <Download size={14} className="text-text-muted" />
         </button>
       </div>
@@ -206,17 +207,17 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search..."
+            placeholder={t("ui.searchPlaceholder")}
             className="bg-transparent text-[12px] w-40 outline-none text-text-primary placeholder:text-text-muted/50"
             autoFocus
           />
-          {searchQuery && <span className="text-[10px] text-text-muted">{searchMatches.length} matches</span>}
+          {searchQuery && <span className="text-[10px] text-text-muted">{t("ui.matchCount", { count: searchMatches.length })}</span>}
           <button onClick={() => { setShowSearch(false); setSearchQuery(""); }} className="p-0.5 hover:bg-surface-hover rounded"><X size={12} className="text-text-muted" /></button>
         </div>
       )}
       {lineNumbersOn && (
         <div className="absolute top-3 left-3 z-10 flex items-center gap-1 bg-surface-raised border border-border-subtle rounded-lg p-1.5">
-          <span className="text-[10px] text-text-muted/50 mr-1">Line:</span>
+          <span className="text-[10px] text-text-muted/50 mr-1">{t("ui.line")}</span>
           <input
             type="text"
             value={jumpToLine}
@@ -335,7 +336,7 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
             <button
               onClick={() => setZoom(z => Math.max(50, z - 10))}
               className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors"
-              aria-label="Zoom out"
+              aria-label={t("ui.zoomOut")}
             >
               <ZoomOut size={14} className="text-text-muted" />
             </button>
@@ -343,7 +344,7 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
             <button
               onClick={() => setZoom(z => Math.min(200, z + 10))}
               className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors"
-              aria-label="Zoom in"
+              aria-label={t("ui.zoomIn")}
             >
               <ZoomIn size={14} className="text-text-muted" />
             </button>
@@ -351,14 +352,14 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
             <button
               onClick={() => setWordWrap(w => !w)}
               className={cn("p-1.5 rounded-lg transition-colors", wordWrap ? "bg-surface-raised" : "hover:bg-surface-raised")}
-              aria-label="Toggle word wrap"
+              aria-label={t("ui.toggleWordWrap")}
             >
               <WrapText size={14} className={cn("text-text-muted", wordWrap && "text-brand")} />
             </button>
             <button
               onClick={() => setIsFullscreen(f => !f)}
               className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors"
-              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+              aria-label={isFullscreen ? t("ui.exitFullscreen") : t("ui.enterFullscreen")}
             >
               {isFullscreen ? <Minimize2 size={14} className="text-text-muted" /> : <Maximize2 size={14} className="text-text-muted" />}
             </button>

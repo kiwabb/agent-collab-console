@@ -4,6 +4,7 @@ from pathlib import Path
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
+from app.application.process_runtime_common import is_cli_control_payload
 from app.domain.models import CodexTask, SubAgentResult, WorkflowNode
 
 
@@ -21,7 +22,7 @@ def build_subagent_result(
         role=task.role,
         agent_id=node.agent_id,
         status=task.status,
-        summary=task.result or "",
+        summary="" if is_cli_control_payload(task.result) else (task.result or ""),
         artifact_json=_artifact_json(doc),
         artifact_markdown=_artifact_markdown(artifact_paths),
         artifact_paths=artifact_paths,

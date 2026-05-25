@@ -227,7 +227,7 @@ export function KnowledgePage() {
               {!query.trim() ? (
                 <InteractionEmptyState
                   title={t("knowledge.emptyHint")}
-                  description="Search issues, artifacts, and team notes from one place."
+                  description={t("knowledge.emptyDescription")}
                   action={
                     <EmptyStateAction onClick={() => void handleReindex()}>
                       {t("knowledge.reindex")}
@@ -238,10 +238,10 @@ export function KnowledgePage() {
                 <InteractionEmptyState
                   tone={loading ? "loading" : "empty"}
                   title={loading ? t("knowledge.loading") : t("knowledge.noResults")}
-                  description="Try a broader query, switch search mode, or reindex project knowledge."
+                  description={t("knowledge.noResultsHint")}
                   action={
                     <EmptyStateAction onClick={() => setQuery("")}>
-                      Clear query
+                      {t("knowledge.clearQuery")}
                     </EmptyStateAction>
                   }
                 />

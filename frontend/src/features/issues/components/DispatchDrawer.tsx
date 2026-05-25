@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, RotateCcw, Send, Sparkles, X } from "lucide-react";
+import { Loader2, RotateCcw, Send, Sparkles, X, Terminal, MessageSquare, Code2, Zap } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
+import { useI18n } from "@/providers/I18nProvider";
 import {
   chatCodexTask,
   refineCodexTask,
@@ -27,8 +28,19 @@ const RUNNING_STATUSES = new Set([
   "in_progress",
 ]);
 
+const STATUS_COLOR: Record<string, string> = {
+  running: "var(--color-brand)",
+  responding: "var(--color-brand)",
+  pending: "var(--color-status-queued)",
+  in_progress: "var(--color-brand)",
+  done: "var(--color-status-done)",
+  completed: "var(--color-status-done)",
+  failed: "var(--color-status-failed)",
+};
+
 export function DispatchDrawer({ item, onClose }: Props) {
   const { addToast } = useToast();
+  const { t } = useI18n();
   const [draft, setDraft] = useState("");
   const [busyAction, setBusyAction] = useState<"chat" | "refine" | "rerun" | null>(null);
 
@@ -58,9 +70,9 @@ export function DispatchDrawer({ item, onClose }: Props) {
       if (action === "refine") await refineCodexTask(item.taskId, content);
       if (action === "rerun") await rerunCodexTask(item.taskId);
       if (action !== "rerun") setDraft("");
-      addToast({ type: "success", title: `Task ${action} dispatched` });
+      addToast({ type: "success", title: t("issue.command.drawer.actionDispatched", { action }) });
     } catch (err) {
-      addToast({ type: "error", title: `Task ${action} failed`, message: err instanceof Error ? err.message : String(err) });
+      addToast({ type: "error", title: t("issue.command.drawer.actionFailed", { action }), message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusyAction(null);
     }
@@ -68,16 +80,17 @@ export function DispatchDrawer({ item, onClose }: Props) {
 
   const executionProcessId = item.task?.last_execution_process_id ?? null;
   const showLiveStream = item.kind === "dispatch" || item.kind === "tool";
+  const statusColor = STATUS_COLOR[String(item.status).toLowerCase()] ?? "var(--color-text-muted)";
   const onStop =
     item.taskId && taskIsRunning
       ? async () => {
           try {
             await terminateCodexTask(item.taskId!);
-            addToast({ type: "success", title: "Task stop requested" });
+            addToast({ type: "success", title: t("issue.command.drawer.stopRequested") });
           } catch (err) {
             addToast({
               type: "error",
-              title: "Task stop failed",
+              title: t("issue.command.drawer.stopFailed"),
               message: err instanceof Error ? err.message : String(err),
             });
           }
@@ -86,40 +99,89 @@ export function DispatchDrawer({ item, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-50">
+      {/* Backdrop with blur */}
       <button
         type="button"
-        aria-label="Close dispatch drawer overlay"
-        className="absolute inset-0 bg-black/30"
+        aria-label={t("issue.command.drawer.closeOverlay")}
+        className="absolute inset-0 bg-black/40 backdrop-blur-[2px] transition-opacity"
         onClick={onClose}
       />
-      <aside className="absolute right-0 top-0 flex h-full w-[560px] max-w-[calc(100vw-24px)] flex-col border-l border-border-subtle bg-background shadow-2xl">
-        <div className="flex items-start justify-between gap-3 border-b border-border-subtle px-5 py-4">
-          <div className="min-w-0">
-            <div className="font-mono text-xs font-bold uppercase text-brand">
-              {item.role} · {item.status}
+
+      {/* Drawer panel */}
+      <aside className="absolute right-0 top-0 flex h-full w-[680px] max-w-[calc(100vw-24px)] flex-col border-l border-border-subtle bg-background shadow-[0_0_80px_-20px_rgba(0,0,0,0.6)]">
+        {/* ─── Premium Header ─── */}
+        <div
+          className="relative flex items-start justify-between gap-4 px-6 py-5 border-b border-border-subtle overflow-hidden"
+          style={{
+            background: `linear-gradient(135deg, color-mix(in srgb, ${statusColor} 8%, var(--color-surface)) 0%, var(--color-surface) 100%)`,
+          }}
+        >
+          {/* Subtle accent line */}
+          <div
+            className="absolute bottom-0 left-0 right-0 h-[2px]"
+            style={{
+              background: `linear-gradient(90deg, ${statusColor}, transparent 60%)`,
+              opacity: 0.5,
+            }}
+          />
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2.5 mb-2">
+              <span
+                className="inline-flex px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-[0.15em] border"
+                style={{
+                  color: statusColor,
+                  borderColor: `color-mix(in srgb, ${statusColor} 30%, transparent)`,
+                  backgroundColor: `color-mix(in srgb, ${statusColor} 8%, transparent)`,
+                }}
+              >
+                {item.role}
+              </span>
+              <span
+                className="inline-flex px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wide border"
+                style={{
+                  color: statusColor,
+                  borderColor: `color-mix(in srgb, ${statusColor} 25%, transparent)`,
+                  backgroundColor: `color-mix(in srgb, ${statusColor} 6%, transparent)`,
+                }}
+              >
+                {item.status}
+              </span>
             </div>
-            <h2 className="mt-1 truncate text-lg font-black text-foreground">{item.title}</h2>
-            <p className="mt-1 font-mono text-xs text-text-muted">
+            <h2 className="text-[16px] font-black text-foreground leading-snug tracking-tight line-clamp-2">
+              {item.titleKey ? t(item.titleKey, item.titleParams) : item.title}
+            </h2>
+            <p className="mt-1.5 font-mono text-[11px] text-text-faint truncate">
               {item.taskId ?? item.toolUseId ?? item.id}
             </p>
           </div>
-          <Button variant="ghost" size="sm" onClick={onClose} className="rounded-xl">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="rounded-xl shrink-0 mt-0.5 hover:bg-surface-hover"
+          >
             <X size={16} />
           </Button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 py-4">
+        {/* ─── Content area ─── */}
+        <div className="flex min-h-0 flex-1 flex-col gap-5 px-6 py-5 overflow-y-auto no-scrollbar">
+          {/* Live Stream Panel */}
           {showLiveStream ? (
-            <section className="flex min-h-0 flex-[3] basis-[60%] flex-col rounded-2xl border border-border-subtle bg-surface-raised p-3">
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">
-                  Live stream
-                </h3>
-                <span className="font-mono text-[11px] text-text-muted">
-                  {executionProcessId ? executionProcessId.slice(0, 8) : "no run"}
+            <section className="flex min-h-[280px] flex-col rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden">
+              <div className="px-4 py-3 flex items-center justify-between gap-3 border-b border-border-subtle bg-surface/60">
+                <div className="flex items-center gap-2">
+                  <Terminal size={13} className="text-text-muted" />
+                  <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-text-muted">
+                    {t("issue.command.drawer.liveStream")}
+                  </h3>
+                </div>
+                <span className="font-mono text-[10px] text-text-faint bg-surface-input px-2 py-0.5 rounded-md">
+                  {executionProcessId ? executionProcessId.slice(0, 8) : t("issue.command.drawer.noRun")}
                 </span>
               </div>
-              <div className="flex-1 min-h-0">
+              <div className="flex-1 min-h-0 p-3">
                 <AgentLiveTimeline
                   executionProcessId={executionProcessId}
                   taskStartedAt={item.task?.created_at ?? null}
@@ -129,112 +191,132 @@ export function DispatchDrawer({ item, onClose }: Props) {
                   taskRole={item.task?.role ?? item.role ?? null}
                   onStop={onStop}
                   className="h-full"
-                  emptyHint="Waiting for task to start..."
+                  emptyHint={t("issue.command.drawer.waitingStart")}
                 />
               </div>
             </section>
           ) : null}
 
-          <div className="flex min-h-0 flex-[2] flex-col gap-4 overflow-auto">
-            {taskIsRunning ? (
-              <div className="rounded-2xl border border-border-subtle bg-surface-raised p-4 text-xs italic text-text-muted">
-                Task is still running. Final summary will appear here once the task completes.
-              </div>
-            ) : item.result ? (
-              <SubAgentResultCard result={item.result} />
-            ) : (
-              <div className="rounded-2xl border border-border-subtle bg-surface-raised p-4 text-sm text-text-muted">
-                No SubAgentResult was persisted for this dispatch yet.
-              </div>
-            )}
+          {/* Result Card / Running Placeholder */}
+          {taskIsRunning ? (
+            <div className="rounded-2xl border border-brand/20 bg-brand/5 p-5 flex items-center gap-3">
+              <Loader2 size={16} className="animate-spin text-brand shrink-0" />
+              <span className="text-[13px] italic text-text-muted">
+                {t("issue.command.drawer.runningSummaryPending")}
+              </span>
+            </div>
+          ) : item.result ? (
+            <SubAgentResultCard result={item.result} />
+          ) : (
+            <div className="rounded-2xl border border-border-subtle bg-surface-raised/60 p-5 text-[13px] text-text-muted text-center">
+              {t("issue.command.drawer.noResult")}
+            </div>
+          )}
 
-            {item.summary && !taskIsRunning && (
-              <section className="rounded-2xl border border-border-subtle bg-surface-raised p-4">
-                <h3 className="mb-2 text-xs font-black uppercase tracking-[0.2em] text-text-muted">
-                  Summary
+          {/* Summary Section */}
+          {item.summary && !taskIsRunning && (
+            <section className="rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden">
+              <div className="px-4 py-3 flex items-center gap-2 border-b border-border-subtle bg-surface/60">
+                <MessageSquare size={13} className="text-text-muted" />
+                <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-text-muted">
+                  {t("issue.command.drawer.summary")}
                 </h3>
-                <pre className="whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">
+              </div>
+              <div className="px-4 py-4">
+                <pre className="whitespace-pre-wrap text-[13px] leading-relaxed text-text-secondary font-sans">
                   {item.summary}
                 </pre>
-              </section>
-            )}
-
-            <section className="rounded-2xl border border-border-subtle bg-surface-raised p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">
-                  Task actions
-                </h3>
-                <span className="font-mono text-[11px] text-text-muted">
-                  {item.taskId ? item.taskId.slice(0, 8) : "no task"}
-                </span>
               </div>
+            </section>
+          )}
+
+          {/* Task Actions Section */}
+          <section className="rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden">
+            <div className="px-4 py-3 flex items-center justify-between gap-3 border-b border-border-subtle bg-surface/60">
+              <div className="flex items-center gap-2">
+                <Zap size={13} className="text-text-muted" />
+                <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-text-muted">
+                  {t("issue.command.drawer.taskActions")}
+                </h3>
+              </div>
+              <span className="font-mono text-[10px] text-text-faint bg-surface-input px-2 py-0.5 rounded-md">
+                {item.taskId ? item.taskId.slice(0, 8) : t("issue.command.drawer.noTask")}
+              </span>
+            </div>
+            <div className="p-4">
               <textarea
                 value={draft}
                 disabled={!item.taskId || busyAction != null}
                 onChange={(event) => setDraft(event.target.value)}
-                rows={4}
+                rows={3}
                 placeholder={
                   item.taskId
-                    ? "Chat or refine this dispatched task..."
-                    : "This timeline item has no task action target."
+                    ? t("issue.command.drawer.actionPlaceholder")
+                    : t("issue.command.drawer.noActionTarget")
                 }
-                className="w-full resize-none rounded-xl border border-border-subtle bg-background px-3 py-2 text-xs outline-none placeholder:text-text-muted focus:border-brand/50"
+                className="w-full resize-none rounded-xl border border-border-subtle bg-background px-4 py-3 text-[13px] leading-relaxed outline-none placeholder:text-text-muted focus:border-brand/50 focus:ring-1 focus:ring-brand/20 transition-all"
               />
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3.5 flex flex-wrap gap-2.5">
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={!item.taskId || !draft.trim() || busyAction != null}
                   onClick={() => void runTaskAction("chat")}
-                  className="gap-2 rounded-xl"
+                  className="gap-2 rounded-xl px-4 hover:border-brand/40 hover:bg-brand/5 transition-all"
                 >
                   {busyAction === "chat" ? (
                     <Loader2 size={13} className="animate-spin" />
                   ) : (
                     <Send size={13} />
                   )}
-                  Chat
+                  {t("issue.command.drawer.chat")}
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={!item.taskId || !draft.trim() || busyAction != null}
                   onClick={() => void runTaskAction("refine")}
-                  className="gap-2 rounded-xl"
+                  className="gap-2 rounded-xl px-4 hover:border-brand/40 hover:bg-brand/5 transition-all"
                 >
                   {busyAction === "refine" ? (
                     <Loader2 size={13} className="animate-spin" />
                   ) : (
                     <Sparkles size={13} />
                   )}
-                  Refine
+                  {t("issue.command.drawer.refine")}
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={!item.taskId || busyAction != null}
                   onClick={() => void runTaskAction("rerun")}
-                  className="gap-2 rounded-xl"
+                  className="gap-2 rounded-xl px-4 hover:border-brand/40 hover:bg-brand/5 transition-all"
                 >
                   {busyAction === "rerun" ? (
                     <Loader2 size={13} className="animate-spin" />
                   ) : (
                     <RotateCcw size={13} />
                   )}
-                  Rerun
+                  {t("issue.command.drawer.rerun")}
                 </Button>
               </div>
-            </section>
+            </div>
+          </section>
 
-            <section className="rounded-2xl border border-border-subtle bg-surface-raised p-4">
-              <h3 className="mb-2 text-xs font-black uppercase tracking-[0.2em] text-text-muted">
-                Raw conductor turns
+          {/* Raw Turns Section */}
+          <section className="rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden">
+            <div className="px-4 py-3 flex items-center gap-2 border-b border-border-subtle bg-surface/60">
+              <Code2 size={13} className="text-text-muted" />
+              <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-text-muted">
+                {t("issue.command.drawer.rawTurns")}
               </h3>
-              <pre className="max-h-72 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-text-secondary">
+            </div>
+            <div className="p-4">
+              <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-text-secondary font-mono bg-background/50 rounded-xl border border-border-subtle p-3.5">
                 {JSON.stringify(item.rawTurns, null, 2)}
               </pre>
-            </section>
-          </div>
+            </div>
+          </section>
         </div>
       </aside>
     </div>

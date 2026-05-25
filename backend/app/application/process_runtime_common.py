@@ -16,6 +16,27 @@ def is_agent_message_item_type(item_type: str | None) -> bool:
     return normalized in {"agent_message", "agentmessage"}
 
 
+def is_cli_control_payload(text: str | None) -> bool:
+    """True when text is a stray CLI/cmux control envelope (e.g. a SessionStart
+    hook line) rather than real agent output. Such lines must never become a
+    subagent's result/summary — when an agent fails before emitting any real
+    text, the CLI can echo its hook envelope as the final `result` string."""
+    if not text:
+        return False
+    s = text.strip()
+    if not (s.startswith("{") and s.endswith("}")):
+        return False
+    try:
+        obj = json.loads(s)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    if obj.get("type") == "system":
+        return True
+    return any(key in obj for key in ("hook_name", "hook_event", "hook_id"))
+
+
 @dataclass
 class ProcessEntry:
     proc: subprocess.Popen
@@ -579,22 +600,30 @@ class BaseProcessRuntime:
             return
 
         if msg_type == "result":
-            if parsed.get("is_error"):
+            _terminal_reason = parsed.get("terminal_reason", "")
+            if (
+                parsed.get("is_error")
+                or parsed.get("subtype") == "error_during_execution"
+                or _terminal_reason in {"aborted_streaming", "error", "interrupted"}
+            ):
                 entry.had_error = True
             result_val = parsed.get("result")
             if isinstance(result_val, str) and result_val.strip():
-                entry.result_text = result_val.strip()
+                if not is_cli_control_payload(result_val):
+                    entry.result_text = result_val.strip()
             elif isinstance(result_val, dict):
                 text = result_val.get("text") or result_val.get("content") or ""
                 if text:
-                    entry.result_text = text if isinstance(text, str) else str(text)
+                    text_str = text if isinstance(text, str) else str(text)
+                    if not is_cli_control_payload(text_str):
+                        entry.result_text = text_str
             return
 
         if msg_type == "item.completed":
             item = parsed.get("item") or {}
             if is_agent_message_item_type(item.get("type")):
                 value = item.get("text")
-                if isinstance(value, str) and value.strip():
+                if isinstance(value, str) and value.strip() and not is_cli_control_payload(value):
                     entry.result_text = value.strip()
 
     async def _mark_task_done(self, task_id: str, entry):
@@ -616,7 +645,7 @@ class BaseProcessRuntime:
                     is_chat = False
 
             task.status = "done"
-            if not is_chat and entry.result_text:
+            if not is_chat and entry.result_text and not is_cli_control_payload(entry.result_text):
                 task.result = entry.result_text
             task.updated_at = datetime.now()
 
@@ -692,7 +721,7 @@ class BaseProcessRuntime:
 
         execution_process_id = task.last_execution_process_id
         task.status = "failed"
-        if entry.result_text:
+        if entry.result_text and not is_cli_control_payload(entry.result_text):
             task.result = entry.result_text
         task.updated_at = datetime.now()
         await self.codex_store.save_codex_task(task)
@@ -1096,11 +1125,15 @@ class BaseProcessRuntime:
                     entry.pending_waiters.clear()
                     if task_id:
                         if parsed.get("type") == "result" and (parsed.get("is_error") or entry.had_error):
-                            # is_error can mean a *tool* call failed after the model
-                            # already produced the artifact JSON. If there is result
-                            # content, attempt to persist it; _mark_task_done will
-                            # call _mark_task_failed internally if persist fails.
-                            if entry.result_text:
+                            # Hard aborts (aborted_streaming, error_during_execution) mean
+                            # the stream was cut off mid-way — partial result_text is not a
+                            # valid artifact, so always fail. For softer is_error (tool call
+                            # failed but model finished), attempt to persist if content exists.
+                            _is_hard_abort = (
+                                parsed.get("subtype") == "error_during_execution"
+                                or parsed.get("terminal_reason") in {"aborted_streaming", "error", "interrupted"}
+                            )
+                            if entry.result_text and not _is_hard_abort:
                                 await self._mark_task_done(task_id, entry)
                             else:
                                 await self._mark_task_failed(task_id, entry)

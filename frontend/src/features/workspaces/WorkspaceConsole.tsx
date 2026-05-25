@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { getCodexIssues, getCodexTasks, getProject, getRuntimeCatalog, getWorkspace } from "@/lib/api";
+import { deleteCodexIssue, getCodexIssues, getCodexTasks, getProject, getRuntimeCatalog, getWorkspace } from "@/lib/api";
 import type { CodexIssue, CodexTask, Project, RuntimeCatalog, Workspace } from "@/lib/types";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { useToast } from "@/components/ui/toast";
@@ -124,6 +124,10 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
           isLoading={isLoading}
           onOpenIssue={(issueId) => router.push(`/issues/${issueId}`)}
           onClearFilter={() => setStatusFilter("all")}
+          onDelete={async (issueId) => {
+            await deleteCodexIssue(issueId);
+            setIssues((prev) => prev.filter((i) => i.id !== issueId));
+          }}
         />
       </main>
       <NewIssueDialog

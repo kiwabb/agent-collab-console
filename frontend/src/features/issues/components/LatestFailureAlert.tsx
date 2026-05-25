@@ -3,6 +3,7 @@
 import { AlertTriangle, ExternalLink, ListTree } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/providers/I18nProvider";
 import type { LatestFailure } from "../hooks/useLatestFailure";
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function LatestFailureAlert({ failure, onJump, onOpenDetail }: Props) {
+  const { locale, t } = useI18n();
   if (!failure) return null;
   return (
     <section className="rounded-2xl border border-status-failed/35 bg-status-failed/10 px-4 py-3">
@@ -19,18 +21,18 @@ export function LatestFailureAlert({ failure, onJump, onOpenDetail }: Props) {
         <div className="min-w-0">
           <div className="mb-1 flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-status-failed">
             <AlertTriangle size={15} />
-            Latest failure · {failure.role} {failure.createdAt ? `@ ${formatTime(failure.createdAt)}` : ""}
+            {t("issue.command.latestFailure", { role: failure.role, time: failure.createdAt ? `@ ${formatTime(failure.createdAt, locale)}` : "" })}
           </div>
           <p className="truncate text-sm text-foreground">{failure.summary}</p>
         </div>
         <div className="flex shrink-0 gap-2">
           <Button size="sm" variant="outline" onClick={onJump} className="gap-2 rounded-xl">
             <ListTree size={14} />
-            Jump to timeline
+            {t("issue.command.jumpToTimeline")}
           </Button>
           <Button size="sm" onClick={onOpenDetail} className="gap-2 rounded-xl bg-status-failed text-white hover:bg-status-failed/90">
             <ExternalLink size={14} />
-            Full output
+            {t("issue.command.fullOutput")}
           </Button>
         </div>
       </div>
@@ -38,6 +40,6 @@ export function LatestFailureAlert({ failure, onJump, onOpenDetail }: Props) {
   );
 }
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+function formatTime(iso: string, locale: string): string {
+  return new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 }

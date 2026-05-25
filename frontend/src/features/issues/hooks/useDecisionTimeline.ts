@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   getConductorTurns,
@@ -16,6 +16,8 @@ export interface DecisionTimelineItem {
   role: string;
   status: "running" | "done" | "failed" | "waiting" | "info";
   title: string;
+  titleKey?: string;
+  titleParams?: Record<string, string | number>;
   summary: string;
   createdAt: string | null;
   durationMs: number | null;
@@ -25,6 +27,7 @@ export interface DecisionTimelineItem {
   result?: SubAgentResultPayload | null;
   rawTurns: ConductorTurn[];
   thinkingTurns: ConductorTurn[];
+  rationale?: string | null;
   why?: string | null;
 }
 
@@ -40,6 +43,27 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
 
+/** A stray CLI/cmux control envelope (e.g. a SessionStart hook line) that a
+ * failed subagent can leave in task.result — must never render as a summary. */
+function looksLikeControlPayload(text: string): boolean {
+  const s = text.trim();
+  if (!(s.startsWith("{") && s.endsWith("}"))) return false;
+  try {
+    const obj = JSON.parse(s) as Record<string, unknown>;
+    if (!obj || typeof obj !== "object") return false;
+    if (obj.type === "system") return true;
+    return ["hook_name", "hook_event", "hook_id"].some((k) => k in obj);
+  } catch {
+    return false;
+  }
+}
+
+function cleanText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const s = value.trim();
+  return s && !looksLikeControlPayload(s) ? s : "";
+}
+
 function textFromPayload(payload: Record<string, unknown>): string {
   const candidates = [
     payload.summary,
@@ -51,9 +75,28 @@ function textFromPayload(payload: Record<string, unknown>): string {
     payload.content,
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    const cleaned = cleanText(candidate);
+    if (cleaned) return cleaned;
   }
   return "";
+}
+
+/** Pull the Conductor's free-text reasoning out of llm_response content blocks. */
+function rationaleFromThinkingTurns(thinkingTurns: ConductorTurn[]): string {
+  const parts: string[] = [];
+  for (const turn of thinkingTurns) {
+    if (turn.kind !== "llm_response") continue;
+    const payload = asRecord(turn.payload);
+    const content = payload.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      const b = asRecord(block);
+      if (b.type === "text" && typeof b.text === "string" && b.text.trim()) {
+        parts.push(b.text.trim());
+      }
+    }
+  }
+  return parts.join("\n\n").trim();
 }
 
 function taskStatusToTimeline(status: string | null | undefined): DecisionTimelineItem["status"] {
@@ -70,13 +113,19 @@ function roleFromTool(toolName: string, input: Record<string, unknown>): string 
   return DISPATCH_TO_ROLE[raw] ?? raw ?? toolName;
 }
 
-function titleForTool(toolName: string, role: string): string {
-  if (toolName === "request_user_clarification") return "Conductor asked for clarification";
-  if (toolName === "retrieve_cold_memory") return "Retrieved cold memory";
-  if (toolName === "finalize_task") return "Finalized the issue";
-  if (toolName === "spawn_custom_subagent") return `Spawned ${role || "custom agent"}`;
-  if (toolName === "dispatch_subagent") return `Dispatched ${role || "sub-agent"}`;
-  return toolName || "Tool call";
+function titleForTool(toolName: string, role: string): { title: string; titleKey: string; titleParams?: Record<string, string> } {
+  if (toolName === "request_user_clarification") return { title: "Conductor asked for clarification", titleKey: "issue.command.title.clarification" };
+  if (toolName === "retrieve_cold_memory") return { title: "Retrieved cold memory", titleKey: "issue.command.title.memory" };
+  if (toolName === "finalize_task") return { title: "Finalized the issue", titleKey: "issue.command.title.finalize" };
+  if (toolName === "spawn_custom_subagent") {
+    const fallback = role || "custom agent";
+    return { title: `Spawned ${fallback}`, titleKey: "issue.command.title.spawn", titleParams: { role: fallback } };
+  }
+  if (toolName === "dispatch_subagent") {
+    const fallback = role || "sub-agent";
+    return { title: `Dispatched ${fallback}`, titleKey: "issue.command.title.dispatch", titleParams: { role: fallback } };
+  }
+  return { title: toolName || "Tool call", titleKey: "issue.command.title.tool" };
 }
 
 export function buildDecisionTimeline(
@@ -104,6 +153,7 @@ export function buildDecisionTimeline(
         role: "user",
         status: "info",
         title: body.startsWith("[CLARIFY]") ? "You answered Conductor" : "You interrupted",
+        titleKey: body.startsWith("[CLARIFY]") ? "issue.command.title.youAnswered" : "issue.command.title.youInterrupted",
         summary: body,
         createdAt: turn.created_at,
         durationMs: null,
@@ -119,7 +169,8 @@ export function buildDecisionTimeline(
         role: "conductor",
         status: "failed",
         title: "Conductor error",
-        summary: textFromPayload(payload) || "Conductor failed",
+        titleKey: "issue.command.title.conductorError",
+        summary: textFromPayload(payload) || "",
         createdAt: turn.created_at,
         durationMs: null,
         rawTurns: [turn],
@@ -161,8 +212,9 @@ export function buildDecisionTimeline(
     const durationMs = createdAt && endedAt
       ? Math.max(0, new Date(endedAt).getTime() - new Date(createdAt).getTime())
       : null;
-    const summary = textFromPayload(output) || textFromPayload(input) || result?.summary || "";
+    const summary = textFromPayload(output) || textFromPayload(input) || cleanText(result?.summary) || "";
 
+    const title = titleForTool(toolName, role);
     items.push({
       id: `${turn.id}:${toolUseId}`,
       kind: toolName === "request_user_clarification"
@@ -176,7 +228,9 @@ export function buildDecisionTimeline(
               : "tool",
       role: role || "conductor",
       status,
-      title: titleForTool(toolName, role),
+      title: title.title,
+      titleKey: title.titleKey,
+      titleParams: title.titleParams,
       summary,
       createdAt,
       durationMs,
@@ -186,7 +240,8 @@ export function buildDecisionTimeline(
       result,
       rawTurns: matchingResult ? [turn, matchingResult] : [turn],
       thinkingTurns,
-      why: status === "failed" ? summary || task?.result || result?.summary || "Failed without a captured summary" : null,
+      rationale: rationaleFromThinkingTurns(thinkingTurns) || null,
+      why: status === "failed" ? summary || cleanText(task?.result) || cleanText(result?.summary) || "" : null,
     });
   }
 
@@ -203,6 +258,8 @@ export function useDecisionTimeline(
   results: SubAgentResultPayload[],
 ) {
   const [turns, setTurns] = useState<ConductorTurn[]>([]);
+  const [liveThinking, setLiveThinking] = useState("");
+  const liveTurnRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
     setTurns(await getConductorTurns(issueId, { limit: 300 }).catch(() => []));
@@ -217,10 +274,38 @@ export function useDecisionTimeline(
       busEventMatchers.issueId(issueId),
       busEventMatchers.typeIn("conductor_turn", "conductor_failed", "conductor_status"),
     ),
-    onEvent: () => { void refresh(); },
+    onEvent: (event) => {
+      // Once a turn's response is persisted, its rationale shows via refresh —
+      // clear the live streaming buffer so we don't double-render it.
+      if (event.type === "conductor_turn" && asRecord(event).kind === "llm_response") {
+        setLiveThinking("");
+        liveTurnRef.current = null;
+      }
+      void refresh();
+    },
     throttleMs: 600,
   });
 
+  // Stream the Conductor's in-progress reasoning token-by-token.
+  useBusEventEffect({
+    match: busEventMatchers.all(
+      busEventMatchers.issueId(issueId),
+      busEventMatchers.typeIn("conductor_turn_delta"),
+    ),
+    onEvent: (event) => {
+      const e = asRecord(event);
+      if (e.kind !== "text" || typeof e.chunk !== "string") return;
+      const turnIndex = typeof e.turn_index === "number" ? e.turn_index : null;
+      setLiveThinking((prev) => {
+        if (liveTurnRef.current !== turnIndex) {
+          liveTurnRef.current = turnIndex;
+          return e.chunk as string;
+        }
+        return prev + (e.chunk as string);
+      });
+    },
+  });
+
   const items = useMemo(() => buildDecisionTimeline(turns, tasks, results), [turns, tasks, results]);
-  return { turns, items, refresh };
+  return { turns, items, refresh, liveThinking };
 }

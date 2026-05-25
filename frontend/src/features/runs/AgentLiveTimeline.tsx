@@ -215,23 +215,6 @@ export function AgentLiveTimeline({
     useExecutionProcessLogStream(executionProcessId);
   const entries = useMemo<NormalizedEntry[]>(() => normalizeLogs(logs), [logs]);
 
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const autoStickRef = useRef(true);
-
-  useEffect(() => {
-    const node = scrollRef.current;
-    if (!node) return;
-    if (!autoStickRef.current) return;
-    node.scrollTop = node.scrollHeight;
-  }, [entries.length, streamingAssistant?.text, heartbeat?.receivedAt]);
-
-  const onScroll = () => {
-    const node = scrollRef.current;
-    if (!node) return;
-    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
-    autoStickRef.current = distanceFromBottom <= SCROLL_STICKY_PX;
-  };
-
   const isFailed = useMemo(() => {
     const status = String(taskStatus || "").toLowerCase();
     return status === "failed" || status === "killed";
@@ -247,6 +230,35 @@ export function AgentLiveTimeline({
       status === "killed"
     );
   }, [finished, taskStatus]);
+
+  // When the task is terminal, finalize any tool entries still showing "running".
+  // The last tool_result event is often lost when the WS closes before it arrives.
+  const displayEntries = useMemo<NormalizedEntry[]>(() => {
+    if (!isTerminal) return entries;
+    return entries.map((entry) => {
+      if (entry.type === "tool" && entry.status === "running") {
+        return { ...entry, status: isFailed ? ("failed" as const) : ("success" as const) };
+      }
+      return entry;
+    });
+  }, [entries, isTerminal, isFailed]);
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const autoStickRef = useRef(true);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return;
+    if (!autoStickRef.current) return;
+    node.scrollTop = node.scrollHeight;
+  }, [displayEntries.length, streamingAssistant?.text, heartbeat?.receivedAt]);
+
+  const onScroll = () => {
+    const node = scrollRef.current;
+    if (!node) return;
+    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    autoStickRef.current = distanceFromBottom <= SCROLL_STICKY_PX;
+  };
 
   const showClarifyBanner =
     String(taskStatus || "").toLowerCase() === "awaiting_review" &&
@@ -281,7 +293,7 @@ export function AgentLiveTimeline({
     return null;
   }, [isFailed, reviewComment, taskResult]);
 
-  const isEmpty = entries.length === 0 && !streamingAssistant?.text && !heartbeat;
+  const isEmpty = displayEntries.length === 0 && !streamingAssistant?.text && !heartbeat;
 
   return (
     <div className={cn("flex flex-col h-full min-h-0", className)}>
@@ -332,7 +344,7 @@ export function AgentLiveTimeline({
         </div>
       ) : null}
 
-      {disconnected ? (
+      {disconnected && !isTerminal ? (
         <div className="flex items-center gap-2 rounded-xl border border-error/30 bg-error/10 px-3 py-2 mb-2 text-[11px] text-error">
           <WifiOff size={12} />
           <span>{t("agentLive.disconnected")}</span>
@@ -350,7 +362,7 @@ export function AgentLiveTimeline({
           </div>
         ) : (
           <AnimatePresence initial={false}>
-            {entries.map((entry, idx) => (
+            {displayEntries.map((entry, idx) => (
               <motion.div
                 key={entry.id || idx}
                 initial={{ opacity: 0, y: 4 }}

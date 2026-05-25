@@ -5,7 +5,7 @@ import { DiffMergeTab } from "../tabs/DiffMergeTab";
 
 export function IssueDiffPanel({ issueId, issue }: { issueId: string; issue: CodexIssue | null }) {
   return (
-    <div className="h-[620px]">
+    <div className="h-[780px]">
       <DiffMergeTab issueId={issueId} issue={issue} active />
     </div>
   );

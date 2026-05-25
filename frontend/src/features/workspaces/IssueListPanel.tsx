@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { Inbox } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { CodexIssue, CodexTask, Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { IssueRow } from "./IssueRow";
@@ -15,6 +17,7 @@ interface Props {
   isLoading: boolean;
   onOpenIssue: (issueId: string) => void;
   onClearFilter: () => void;
+  onDelete?: (issueId: string) => Promise<void>;
 }
 
 export function IssueListPanel({
@@ -25,14 +28,29 @@ export function IssueListPanel({
   isLoading,
   onOpenIssue,
   onClearFilter,
+  onDelete,
 }: Props) {
   const { t } = useI18n();
+  const [deleteTarget, setDeleteTarget] = useState<CodexIssue | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const tasksByIssue = new Map<string, CodexTask[]>();
   for (const task of tasks) {
     if (!task.issue_id) continue;
     const bucket = tasksByIssue.get(task.issue_id) ?? [];
     bucket.push(task);
     tasksByIssue.set(task.issue_id, bucket);
+  }
+
+  async function handleDeleteConfirm() {
+    if (!deleteTarget || !onDelete) return;
+    setIsDeleting(true);
+    try {
+      await onDelete(deleteTarget.id);
+      setDeleteTarget(null);
+    } finally {
+      setIsDeleting(false);
+    }
   }
 
   return (
@@ -79,11 +97,34 @@ export function IssueListPanel({
                 tasks={tasksByIssue.get(issue.id) ?? []}
                 project={project}
                 onOpen={() => onOpenIssue(issue.id)}
+                onDelete={onDelete ? () => setDeleteTarget(issue) : undefined}
               />
             ))}
           </div>
         )}
       </div>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("issue.delete")}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-text-secondary">{t("issue.deleteConfirmBody")}</p>
+          {deleteTarget && <p className="text-sm font-semibold text-foreground">{deleteTarget.title}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={isDeleting}>
+              {t("issue.cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void handleDeleteConfirm()}
+              disabled={isDeleting}
+            >
+              {isDeleting ? t("issue.deleting") : t("issue.deleteConfirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

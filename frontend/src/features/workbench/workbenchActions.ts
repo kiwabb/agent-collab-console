@@ -5,6 +5,9 @@ type CreateCodexIssueFn = (
   title: string,
   description: string,
   baseBranch?: string | null,
+  executor?: string | null,
+  provider?: string | null,
+  model?: string | null,
 ) => Promise<CodexIssue>;
 type AutoStartIssueGraphFn = (issueId: string) => Promise<WorkflowGraph>;
 type RunCodexTaskFn = (taskId: string, overrides?: { executor?: string; provider?: string | null; model?: string | null }) => Promise<ExecutionProcess>;
@@ -17,6 +20,9 @@ export async function createIssueAndInitialTask({
   createCodexIssue,
   autoStartIssueGraph,
   baseBranch,
+  executor,
+  provider,
+  model,
 }: {
   workspaceId: string;
   title: string;
@@ -24,13 +30,21 @@ export async function createIssueAndInitialTask({
   createCodexIssue: CreateCodexIssueFn;
   autoStartIssueGraph: AutoStartIssueGraphFn;
   baseBranch?: string | null;
-  // Legacy params kept for call-site compatibility — ignored in DAG path
+  // Conductor executor selection — persisted on the issue and used by sub-agents.
   executor?: string;
   issueTitle?: string;
   provider?: string | null;
   model?: string | null;
 }): Promise<{ issue: CodexIssue }> {
-  const issue = await createCodexIssue(workspaceId, title, description, baseBranch ?? null);
+  const issue = await createCodexIssue(
+    workspaceId,
+    title,
+    description,
+    baseBranch ?? null,
+    executor ?? null,
+    provider ?? null,
+    model ?? null,
+  );
   await autoStartIssueGraph(issue.id);
   return { issue };
 }

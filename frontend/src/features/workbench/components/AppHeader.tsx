@@ -55,7 +55,7 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
       <header className="h-14 shrink-0 border-b border-border-subtle/80 bg-surface/85 backdrop-blur-md flex items-center gap-3.5 px-4 relative z-10">
         <Link
           href="/"
-          aria-label="Home"
+          aria-label={t("ui.home")}
           className="flex items-center justify-center size-[28px] rounded-[9px] font-mono font-bold text-[14px] shrink-0 transition-transform hover:scale-[1.04]"
           style={{
             background: "linear-gradient(135deg, var(--color-brand-strong), #cf7838)",
@@ -80,8 +80,9 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
 }
 
 function Breadcrumbs({ items }: { items: BreadcrumbItem[] }) {
+  const { t } = useI18n();
   return (
-    <nav aria-label="Breadcrumb" className="flex items-center min-w-0 text-[13px]">
+    <nav aria-label={t("ui.breadcrumb")} className="flex items-center min-w-0 text-[13px]">
       {items.map((b, i) => {
         const isLast = i === items.length - 1;
         const content = (
@@ -112,16 +113,17 @@ function Breadcrumbs({ items }: { items: BreadcrumbItem[] }) {
 
 function HelpButton() {
   const router = useRouter();
+  const { t } = useI18n();
   return (
     <button
       type="button"
       onClick={() => router.push("/help")}
-      title="How does this work? (?)"
+      title={t("ui.helpTitle")}
       className={cn(
         "size-8 rounded-lg flex items-center justify-center text-text-muted",
         "hover:bg-surface-hover hover:text-foreground transition-colors",
       )}
-      aria-label="Help"
+      aria-label={t("ui.help")}
     >
       <HelpCircle size={15} />
     </button>

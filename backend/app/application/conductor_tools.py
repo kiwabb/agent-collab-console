@@ -174,9 +174,9 @@ def _tool_definitions() -> list[dict[str, Any]]:
         ),
         _tool(
             "dispatch_subagent",
-            "Dispatch a workflow sub-agent by role. Waits for completion and returns the result. Available roles: pm, architect, engineer, qa. You can also use specialist role keys from the agent catalog.",
+            "Dispatch a workflow sub-agent by role. Waits for completion and returns the result. Available roles: product_manager, architect, engineer, qa. You can also use specialist role keys from the agent catalog.",
             {
-                "role": {"type": "string", "description": "Role to dispatch: pm, architect, engineer, qa, or a specialist role_key"},
+                "role": {"type": "string", "description": "Role to dispatch: product_manager, architect, engineer, qa, or a specialist role_key"},
                 "prompt": {"type": "string", "description": "Optional focused instruction for this agent run"},
                 "prev_node_key": {"type": "string", "description": "node_key of the previously dispatched node, for graph edge visualization"},
             },

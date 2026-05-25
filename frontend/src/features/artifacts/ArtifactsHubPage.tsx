@@ -15,6 +15,7 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface IssueWithArtifacts {
   issue: CodexIssue;
@@ -30,6 +31,7 @@ function artifactPath(a: Artifact): string {
 export function ArtifactsHubPage() {
   const router = useRouter();
   const { addToast } = useToast();
+  const { t } = useI18n();
   const [rows, setRows] = useState<IssueWithArtifacts[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -52,7 +54,7 @@ export function ArtifactsHubPage() {
       } catch (err) {
         addToast({
           type: "error",
-          title: "Failed to load artifacts",
+          title: t("artifacts.loadFailed"),
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
@@ -60,7 +62,7 @@ export function ArtifactsHubPage() {
         setRefreshing(false);
       }
     },
-    [addToast],
+    [addToast, t],
   );
 
   useEffect(() => {
@@ -84,9 +86,9 @@ export function ArtifactsHubPage() {
 
   return (
     <PageFrame
-      eyebrow="artifacts"
-      title="Artifacts"
-      description={`${totalArtifacts} files across ${rows.length} ${rows.length === 1 ? "issue" : "issues"} · scanning the latest ${MAX_SCAN} issues`}
+      eyebrow={t("artifacts.eyebrow")}
+      title={t("artifacts.title")}
+      description={t("artifacts.description", { files: totalArtifacts, issues: rows.length, scan: MAX_SCAN })}
       actions={(
         <Button
           size="sm"
@@ -95,7 +97,7 @@ export function ArtifactsHubPage() {
           onClick={() => void load("refresh")}
         >
           <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
-          Refresh
+          {t("artifacts.refresh")}
         </Button>
       )}
       contentClassName="space-y-5"
@@ -105,7 +107,7 @@ export function ArtifactsHubPage() {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by issue title or filename…"
+            placeholder={t("artifacts.searchPlaceholder")}
             className="pl-8 bg-surface-input border-border-subtle h-8 text-[13px]"
           />
         </div>
@@ -113,25 +115,25 @@ export function ArtifactsHubPage() {
         {loading ? (
           <InteractionEmptyState
             tone="loading"
-            title="Loading artifacts"
-            description="Scanning recent issues for PRDs, designs, QA reports, and execution outputs."
+            title={t("artifacts.loadingTitle")}
+            description={t("artifacts.loadingDescription")}
           />
         ) : filtered.length === 0 ? (
           <InteractionEmptyState
-            title={query ? "No artifacts match your search." : "No artifacts produced yet."}
+            title={query ? t("artifacts.noSearchTitle") : t("artifacts.noProducedTitle")}
             description={
               query
-                ? "Try a different filename, issue title, or clear the search query."
-                : "Run an issue through the workflow to produce PRD, design, and QA reports."
+                ? t("artifacts.noSearchDescription")
+                : t("artifacts.noProducedDescription")
             }
             action={
               query ? (
                 <EmptyStateAction onClick={() => setQuery("")}>
-                  Clear search
+                  {t("artifacts.clearSearch")}
                 </EmptyStateAction>
               ) : (
                 <EmptyStateAction onClick={() => router.push("/")}>
-                  Open Inbox
+                  {t("artifacts.openInbox")}
                 </EmptyStateAction>
               )
             }
@@ -153,8 +155,7 @@ export function ArtifactsHubPage() {
                       {issue.title || issue.id.slice(0, 8)}
                     </div>
                     <div className="text-[11px] text-text-muted">
-                      Phase {issue.current_phase ?? "—"} · {artifacts.length}{" "}
-                      {artifacts.length === 1 ? "file" : "files"}
+                      {t("artifacts.phase", { phase: issue.current_phase ?? "—" })} · {t(artifacts.length === 1 ? "artifacts.fileCountOne" : "artifacts.fileCount", { count: artifacts.length })}
                     </div>
                   </div>
                   <ChevronRight size={14} className="text-text-muted shrink-0" />
@@ -174,7 +175,7 @@ export function ArtifactsHubPage() {
                   ))}
                   {artifacts.length > 6 && (
                     <li className="px-4 py-2 text-[11px] text-text-muted">
-                      + {artifacts.length - 6} more in this issue
+                      {t("artifacts.moreInIssue", { count: artifacts.length - 6 })}
                     </li>
                   )}
                 </ul>

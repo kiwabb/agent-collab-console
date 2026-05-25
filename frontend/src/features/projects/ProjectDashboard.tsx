@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, FolderGit2, GitBranch as GitBranchIcon } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { emitDataEvent } from "@/lib/dataEvents";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface Props {
   projectId: string;
@@ -22,6 +23,7 @@ interface Props {
 export function ProjectDashboard({ projectId }: Props) {
   const router = useRouter();
   const { addToast } = useToast();
+  const { t } = useI18n();
   const [project, setProject] = useState<Project | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [stats, setStats] = useState<ProjectStats | null>(null);
@@ -42,9 +44,9 @@ export function ProjectDashboard({ projectId }: Props) {
       setStats(s);
       setBranches(b);
     } catch (err) {
-      addToast({ type: "error", title: "Failed to load project", message: err instanceof Error ? err.message : String(err) });
+      addToast({ type: "error", title: t("project.dashboard.loadFailed"), message: err instanceof Error ? err.message : String(err) });
     }
-  }, [projectId, addToast]);
+  }, [projectId, addToast, t]);
 
   useEffect(() => {
     void load();
@@ -58,12 +60,12 @@ export function ProjectDashboard({ projectId }: Props) {
       setNewTitle("");
       setCreating(false);
       emitDataEvent("workspaces:changed");
-      addToast({ type: "success", title: "Workspace created" });
+      addToast({ type: "success", title: t("project.dashboard.workspaceCreated") });
       router.push(`/workspaces/${ws.id}`);
     } catch (err) {
-      addToast({ type: "error", title: "Failed to create workspace", message: err instanceof Error ? err.message : String(err) });
+      addToast({ type: "error", title: t("project.dashboard.workspaceCreateFailed"), message: err instanceof Error ? err.message : String(err) });
     }
-  }, [newTitle, projectId, router, addToast]);
+  }, [newTitle, projectId, router, addToast, t]);
 
   if (!project) return <div className="p-8 text-text-muted">Loading…</div>;
 
@@ -73,13 +75,13 @@ export function ProjectDashboard({ projectId }: Props) {
         <div>
           <div className="flex items-center gap-2 text-text-muted text-xs mb-1">
             <FolderGit2 size={14} />
-            <span>Project</span>
+            <span>{t("project.dashboard.project")}</span>
           </div>
           <h1 className="text-2xl font-black tracking-tight">{project.name}</h1>
           <p className="font-mono text-xs text-text-muted mt-1">{project.repo_path}</p>
         </div>
         <Button onClick={() => setCreating((v) => !v)}>
-          <Plus size={14} className="mr-1" /> New workspace
+          <Plus size={14} className="mr-1" /> {t("project.dashboard.newWorkspace")}
         </Button>
       </div>
 
@@ -89,26 +91,26 @@ export function ProjectDashboard({ projectId }: Props) {
             autoFocus
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
-            placeholder="Workspace title"
+            placeholder={t("project.dashboard.workspaceTitlePlaceholder")}
             className="flex-1 bg-surface-input border border-border-subtle rounded-md px-3 py-2 text-sm outline-none focus:border-brand"
             onKeyDown={(e) => {
               if (e.key === "Enter") void handleCreate();
             }}
           />
           <Button onClick={() => void handleCreate()} disabled={!newTitle.trim()}>
-            Create
+            {t("project.dashboard.create")}
           </Button>
           <Button variant="outline" onClick={() => { setCreating(false); setNewTitle(""); }}>
-            Cancel
+            {t("project.dashboard.cancel")}
           </Button>
         </div>
       )}
 
       <section className="mb-6">
-        <h2 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">Workspaces</h2>
+        <h2 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">{t("project.dashboard.workspaces")}</h2>
         {workspaces.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border-subtle p-8 text-center text-sm text-text-muted">
-            No workspaces yet. Create one to start.
+            {t("project.dashboard.noWorkspaces")}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -130,27 +132,27 @@ export function ProjectDashboard({ projectId }: Props) {
       <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {stats && (
           <div className="rounded-lg border border-border-subtle p-4">
-            <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-2">Issues</h3>
+            <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-2">{t("project.dashboard.issues")}</h3>
             <div className="grid grid-cols-4 gap-3 text-center">
-              <Stat label="Total" value={stats.issues_total ?? 0} />
-              <Stat label="Open" value={stats.issues_open ?? 0} />
-              <Stat label="Merged" value={stats.issues_merged ?? 0} />
-              <Stat label="Abandoned" value={stats.issues_abandoned ?? 0} />
+              <Stat label={t("project.dashboard.total")} value={stats.issues_total ?? 0} />
+              <Stat label={t("project.dashboard.open")} value={stats.issues_open ?? 0} />
+              <Stat label={t("project.dashboard.merged")} value={stats.issues_merged ?? 0} />
+              <Stat label={t("project.dashboard.abandoned")} value={stats.issues_abandoned ?? 0} />
             </div>
           </div>
         )}
         <div className="rounded-lg border border-border-subtle p-4">
           <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-2 flex items-center gap-2">
-            <GitBranchIcon size={12} /> Branches
+            <GitBranchIcon size={12} /> {t("project.dashboard.branches")}
           </h3>
           {branches.length === 0 ? (
-            <div className="text-sm text-text-muted">No branches</div>
+            <div className="text-sm text-text-muted">{t("project.dashboard.noBranches")}</div>
           ) : (
             <ul className="space-y-1 text-sm">
               {branches.slice(0, 8).map((b) => (
                 <li key={b.name} className="flex justify-between items-center">
                   <span className="font-mono text-xs">{b.name}</span>
-                  {b.is_current && <span className="text-[10px] font-bold text-brand">current</span>}
+                  {b.is_current && <span className="text-[10px] font-bold text-brand">{t("project.dashboard.current")}</span>}
                 </li>
               ))}
             </ul>

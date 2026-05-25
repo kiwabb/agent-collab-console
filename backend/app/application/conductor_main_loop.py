@@ -12,14 +12,15 @@ import logging
 import traceback
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Union
 from uuid import uuid4
 
 from app.application.conductor_tools import build_conductor_tools
+from app.application.conductor_lease import get_conductor_lease_owner, get_conductor_lease_ttl_s
 from app.application.conductor_pause_registry import ConductorPauseRegistry
 from app.application.phase_duration_estimator import get_phase_duration_estimator
-from app.application.llm_runner import call_llm_with_tools, call_llm_with_tools_streaming, resolve_streaming_context
+from app.application.conductor_llm import call_conductor_llm, resolve_conductor_llm_context
 from app.application.project_conductor import ProjectConductor
 from app.application.project_memory_service import record_project_memory
 from app.application.runtime_catalog_service import RuntimeCatalogService
@@ -41,14 +42,15 @@ TokenDeltaRecorder = Callable[..., Union[Awaitable[None], None]]
 _TURN_PAYLOAD_LIMIT = 32_768
 _TRACEBACK_LIMIT = 8_000
 LEGAL_TRANSITIONS: dict[str, set[str]] = {
-    "awaiting_llm": {"streaming_llm", "dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed"},
-    "streaming_llm": {"dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed"},
-    "dispatching_subagent": {"awaiting_subagent", "awaiting_llm", "paused", "failed"},
-    "awaiting_subagent": {"awaiting_llm", "paused", "failed"},
-    "awaiting_user_clarification": {"awaiting_llm", "paused", "failed"},
-    "paused": {"awaiting_llm", "streaming_llm", "dispatching_subagent", "awaiting_subagent", "awaiting_user_clarification", "done", "failed"},
+    "awaiting_llm": {"streaming_llm", "dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed", "stalled"},
+    "streaming_llm": {"dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed", "stalled"},
+    "dispatching_subagent": {"awaiting_subagent", "awaiting_llm", "paused", "failed", "stalled"},
+    "awaiting_subagent": {"awaiting_llm", "paused", "failed", "stalled"},
+    "awaiting_user_clarification": {"awaiting_llm", "paused", "failed", "stalled"},
+    "paused": {"awaiting_llm", "streaming_llm", "dispatching_subagent", "awaiting_subagent", "awaiting_user_clarification", "done", "failed", "stalled"},
     "done": set(),
     "failed": set(),
+    "stalled": set(),
 }
 
 
@@ -329,6 +331,9 @@ async def run_issue_conductor_loop(
     """Entry point for Conductor-driven issue orchestration."""
     logger = logging.getLogger(__name__)
     pause_registry = ConductorPauseRegistry.instance()
+    lease_ttl_s = get_conductor_lease_ttl_s()
+    lease_owner = get_conductor_lease_owner()
+    started_at = datetime.now()
     conductor_task = ConductorTask(
         id=str(uuid4()),
         project_id=project_id,
@@ -341,22 +346,66 @@ async def run_issue_conductor_loop(
             "detail": None,
         },
         status="running",
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+        lease_owner=lease_owner,
+        heartbeat_at=started_at,
+        lease_expires_at=started_at + timedelta(seconds=lease_ttl_s),
+        created_at=started_at,
+        updated_at=started_at,
     )
     await store.save_conductor_task(conductor_task)
     await pause_registry.register(conductor_task.id)
+    from app.application.conductor_session_registry import ConductorSessionRegistry
+    await ConductorSessionRegistry.instance().bind_conductor_task(issue.id, conductor_task.id)
     await _emit_conductor_status(
         event_bus,
         issue_id=issue.id,
         conductor_task=conductor_task,
     )
+    # Reflect "the Conductor is actively working this issue" at the issue level.
+    # Auto-start orchestration otherwise leaves issue.status at "open" (rendered
+    # as 排队中) until the terminal seal, so the badge looks queued for the whole run.
+    if getattr(issue, "status", None) in {"open", "queued"}:
+        try:
+            issue.status = "in_progress"
+            issue.updated_at = datetime.now()
+            await store.save_codex_issue(issue)
+            await _append_event(
+                event_bus,
+                {
+                    "type": "issue_updated",
+                    "issue_id": issue.id,
+                    "session_id": issue.session_id,
+                    "status": issue.status,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("issue in_progress transition failed: %s", exc)
     estimator = get_phase_duration_estimator(store)
 
     current_turn_index = -1
+    heartbeat_pulse_task: asyncio.Task | None = None
+
+    async def heartbeat() -> None:
+        now = datetime.now()
+        conductor_task.lease_owner = lease_owner
+        conductor_task.heartbeat_at = now
+        conductor_task.lease_expires_at = now + timedelta(seconds=lease_ttl_s)
+        conductor_task.updated_at = now
+        await store.save_conductor_task(conductor_task)
+
+    async def heartbeat_pulse() -> None:
+        # Renew the lease on a background cadence so it never expires while the
+        # loop is blocked awaiting a slow subagent (up to 900s). Without this,
+        # the recovery watchdog falsely declares the live conductor an orphan
+        # once the lease TTL (default 180s) elapses and relaunches a duplicate.
+        interval = max(15, lease_ttl_s // 3)
+        while True:
+            await asyncio.sleep(interval)
+            await heartbeat()
 
     async def persist_turn(*, turn_index: int, sub_index: int, kind: str, payload: dict[str, Any]) -> None:
         nonlocal current_turn_index
+        await heartbeat()
         if kind == "llm_request":
             current_turn_index = turn_index
             await set_phase("awaiting_llm")
@@ -406,6 +455,7 @@ async def run_issue_conductor_loop(
         )
 
     async def set_phase(phase: str, detail: str | None = None, *, status: str | None = None) -> None:
+        await heartbeat()
         await transition_conductor_phase(
             store=store,
             event_bus=event_bus,
@@ -476,7 +526,7 @@ async def run_issue_conductor_loop(
         )
 
         catalog = await RuntimeCatalogService(store).load_catalog()
-        ctx = resolve_streaming_context(catalog)
+        cllm = resolve_conductor_llm_context(catalog)
 
         conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
         project_context = ""
@@ -522,7 +572,7 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
 """
 
         async def llm(messages, tools, on_token_delta=None):
-            if ctx is None:
+            if cllm is None:
                 return {
                     "stop_reason": "tool_use",
                     "content": [{
@@ -552,15 +602,19 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
 
             if on_token_delta is not None:
                 try:
-                    return await call_llm_with_tools_streaming(
+                    return await call_conductor_llm(
                         messages=messages,
                         tools=tools,
-                        ctx=ctx,
+                        cllm=cllm,
                         on_delta=handle_delta,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("conductor streaming fallback to non-streaming: %s", exc)
-            return await call_llm_with_tools(messages=messages, tools=tools, ctx=ctx)
+            return await call_conductor_llm(messages=messages, tools=tools, cllm=cllm)
+
+        heartbeat_pulse_task = asyncio.create_task(
+            heartbeat_pulse(), name=f"conductor-heartbeat-{issue.id[:8]}"
+        )
 
         result = await run_conductor_loop(
             prompt=prompt,
@@ -637,6 +691,8 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
             turn_count=0,
         )
     finally:
+        if heartbeat_pulse_task is not None:
+            heartbeat_pulse_task.cancel()
         await pause_registry.set_inflight_llm_task(conductor_task.id, None)
         await pause_registry.unregister(conductor_task.id)
 
