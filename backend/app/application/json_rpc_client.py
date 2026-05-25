@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 
 class PendingResponse:
@@ -494,8 +497,7 @@ class AppServerClient:
 
         Returns True to stop the reader loop (e.g., on shutdown).
         """
-        import sys
-        print(f"[JSON-RPC] Notification: {method} {params}", file=sys.stderr, flush=True)
+        logger.debug("[JSON-RPC] Notification: %s %s", method, params)
 
         # Log all notifications
         if self._event_bus:
@@ -526,8 +528,7 @@ class AppServerClient:
         In auto_approve mode (Phase 1): returns decision immediately.
         In manual mode (Phase 2): stores request and emits SSE event, returns None.
         """
-        import sys
-        print(f"[JSON-RPC] Server request: {request.method} {request.params}", file=sys.stderr, flush=True)
+        logger.debug("[JSON-RPC] Server request: %s %s", request.method, request.params)
 
         # Log the approval request
         if self._event_bus:
@@ -599,13 +600,11 @@ class AppServerClient:
 
     def _on_response(self, request_id: Any, result: Any):
         """Handle incoming responses."""
-        import sys
-        print(f"[JSON-RPC] Response {request_id}: {result}", file=sys.stderr, flush=True)
+        logger.debug("[JSON-RPC] Response %s: %s", request_id, result)
 
     def _on_error(self, request_id: Any, error: dict):
         """Handle incoming error responses."""
-        import sys
-        print(f"[JSON-RPC] Error {request_id}: {error}", file=sys.stderr, flush=True)
+        logger.debug("[JSON-RPC] Error %s: %s", request_id, error)
 
 
 # --- Async JSON-RPC Peer (Phase 2) ---

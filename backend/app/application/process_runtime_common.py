@@ -37,6 +37,36 @@ def is_cli_control_payload(text: str | None) -> bool:
     return any(key in obj for key in ("hook_name", "hook_event", "hook_id"))
 
 
+def is_codex_protocol_frame(text: str | None) -> bool:
+    """True when text is a raw codex app-server JSON-RPC notification frame
+    (e.g. {"method":"item/agentMessage/delta","params":{...}}) rather than the
+    agent's actual answer. codex streams its reply as many such frames; when a
+    turn is interrupted (e.g. a watchdog kill) one of them can be left behind as
+    result_text. Such a frame must never be persisted as task.result — it makes
+    the Conductor read the subagent as an empty/garbage failure."""
+    if not text:
+        return False
+    s = text.strip()
+    if not (s.startswith("{") and s.endswith("}")):
+        return False
+    try:
+        obj = json.loads(s)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    method = obj.get("method")
+    # codex methods are path-segmented (item/..., turn/..., thread/...). A real
+    # role artifact JSON never carries a top-level "method" string.
+    return isinstance(method, str) and ("params" in obj or "/" in method)
+
+
+def is_unusable_result_text(text: str | None) -> bool:
+    """A result string that must not be captured as a task result/summary:
+    either a CLI control envelope or a raw codex protocol frame."""
+    return is_cli_control_payload(text) or is_codex_protocol_frame(text)
+
+
 @dataclass
 class ProcessEntry:
     proc: subprocess.Popen
@@ -645,7 +675,7 @@ class BaseProcessRuntime:
                     is_chat = False
 
             task.status = "done"
-            if not is_chat and entry.result_text and not is_cli_control_payload(entry.result_text):
+            if not is_chat and entry.result_text and not is_unusable_result_text(entry.result_text):
                 task.result = entry.result_text
             task.updated_at = datetime.now()
 
@@ -720,7 +750,7 @@ class BaseProcessRuntime:
 
         execution_process_id = task.last_execution_process_id
         task.status = "failed"
-        if entry.result_text and not is_cli_control_payload(entry.result_text):
+        if entry.result_text and not is_unusable_result_text(entry.result_text):
             task.result = entry.result_text
         task.updated_at = datetime.now()
         await self.codex_store.save_codex_task(task)
@@ -803,7 +833,11 @@ class BaseProcessRuntime:
                     task.resume_session_id = entry.resume_session_id
                 if entry.resume_message_id:
                     task.resume_message_id = entry.resume_message_id
-                if entry.result_text and task.status not in {"done", "failed", "cancelled"}:
+                if (
+                    entry.result_text
+                    and task.status not in {"done", "failed", "cancelled"}
+                    and not is_unusable_result_text(entry.result_text)
+                ):
                     task.result = entry.result_text
                 task.updated_at = datetime.now()
                 await self.codex_store.save_codex_task(task)
@@ -831,7 +865,7 @@ class BaseProcessRuntime:
             process_status = "Failed"
         elif entry.result_text or exit_code == 0:
             task.status = "done"
-            if entry.result_text:
+            if entry.result_text and not is_unusable_result_text(entry.result_text):
                 task.result = entry.result_text
             task.updated_at = datetime.now()
             

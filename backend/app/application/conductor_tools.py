@@ -84,10 +84,35 @@ def build_conductor_tools(
             "status": "dispatched",
         })
 
+        # Activity-aware wait: a slow-but-progressing subagent (e.g. a thorough
+        # gpt-5.5 QA pass that streams for >900s) must NOT be abandoned and
+        # redispatched — that discards its work. Keep waiting while it shows
+        # recent activity; only give up on a genuine stall or the hard ceiling.
+        import os
+        from datetime import datetime
+        from app.application import task_activity
+
+        def _activity_age(tid: str) -> float | None:
+            last = task_activity.last_activity.get(tid)
+            return None if last is None else (datetime.now() - last).total_seconds()
+
+        idle_timeout = float(os.getenv("CONDUCTOR_SUBAGENT_IDLE_S", "600"))
+        hard_timeout = float(os.getenv("CONDUCTOR_SUBAGENT_MAX_S", "3600"))
         try:
-            result = await registry.wait_for(task_id, timeout=900.0)
+            result = await registry.wait_for_active(
+                task_id,
+                idle_timeout=idle_timeout,
+                hard_timeout=hard_timeout,
+                activity_age=_activity_age,
+            )
         except TimeoutError:
-            return {"error": "subagent timed out after 900s", "task_id": task_id, "role": role}
+            return {
+                "error": (
+                    f"subagent timed out (idle >{idle_timeout:.0f}s or total >{hard_timeout:.0f}s)"
+                ),
+                "task_id": task_id,
+                "role": role,
+            }
 
         return result or {"task_id": task_id, "role": role, "status": "done"}
 

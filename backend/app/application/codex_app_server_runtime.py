@@ -454,6 +454,16 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         # a healthy stream of tool_use / delta / item events keeps the task
         # alive even on a long generation; only true stdout silence trips.
         entry.last_event_at = time.monotonic()
+        # Feed the GLOBAL stall watchdog too. codex frames are JSON-RPC
+        # notifications ({"method":"item/...",...}) with no top-level "type",
+        # so the base reader's _capture_on_reader returns before its
+        # stream_event branch ever calls task_activity.touch(). Without this,
+        # the stall watchdog only sees the one touch at task start and kills
+        # every codex task at the stall threshold — even mid-stream — which
+        # then leaves a stray result and makes the Conductor see empty failures.
+        if task_id:
+            from app.application import task_activity
+            task_activity.touch(task_id)
         await self._append_log(workspace_id, "stdout", line, task_id)
         if entry.alive:
             await self._capture_on_reader(workspace_id, line, entry, task_id)
