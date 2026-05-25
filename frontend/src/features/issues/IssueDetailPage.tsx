@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderArchive, GitPullRequest, Network, Clock } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -51,7 +51,12 @@ export function IssueDetailPage({ issueId }: Props) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [subAgentResults, setSubAgentResults] = useState<SubAgentResultPayload[]>([]);
   const [agentMeshMessages, setAgentMeshMessages] = useState<AgentMessage[]>([]);
-  const [drawerItem, setDrawerItem] = useState<DecisionTimelineItem | null>(null);
+  // Track the open drawer by item id (not a snapshot): the live item is
+  // re-derived from the latest `timeline` each render, so the drawer reflects
+  // the running sub-agent's current execution-process id, status and result
+  // as they stream in — a snapshot would freeze at click time (e.g. before
+  // the EP id exists), leaving the live stream stuck on "waiting to start".
+  const [drawerItemId, setDrawerItemId] = useState<string | null>(null);
   const [steerOpen, setSteerOpen] = useState(false);
   const [steerDraft, setSteerDraft] = useState("");
   const [steerSending, setSteerSending] = useState(false);
@@ -61,6 +66,21 @@ export function IssueDetailPage({ issueId }: Props) {
   const phase = useConductorPhase(issueId);
   const { items: timeline, refresh: refreshTimeline, liveThinking } = useDecisionTimeline(issueId, tasks, subAgentResults);
   const latestFailure = useLatestFailure(tasks, timeline);
+  // Resolve the open drawer's item from the live timeline so it reflects the
+  // running sub-agent's latest EP id / status / result. A timeline refresh can
+  // momentarily not contain the item (e.g. turns refetch in flight); fall back
+  // to the last known item so a transient miss doesn't unmount the drawer —
+  // only an explicit close (drawerItemId === null) dismisses it.
+  const lastDrawerItemRef = useRef<DecisionTimelineItem | null>(null);
+  const drawerItem = useMemo<DecisionTimelineItem | null>(() => {
+    if (!drawerItemId) {
+      lastDrawerItemRef.current = null;
+      return null;
+    }
+    const live = timeline.find((it) => it.id === drawerItemId) ?? null;
+    if (live) lastDrawerItemRef.current = live;
+    return lastDrawerItemRef.current;
+  }, [timeline, drawerItemId]);
 
   const refreshCore = useCallback(async () => {
     const [nextIssue, nextTasks, nextArtifacts, nextResults, nextMesh] = await Promise.all([
@@ -195,7 +215,7 @@ export function IssueDetailPage({ issueId }: Props) {
           onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           onOpenDetail={() => {
             const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
-            setDrawerItem(item);
+            setDrawerItemId(item?.id ?? null);
           }}
         />
         <Tabs defaultValue="timeline" className="w-full flex-1 flex flex-col gap-4 min-h-0">
@@ -227,7 +247,7 @@ export function IssueDetailPage({ issueId }: Props) {
           </TabsList>
 
           <TabsContent value="timeline" className="outline-none flex-1 min-h-0 flex flex-col">
-            <DecisionTimeline items={timeline} onOpenItem={setDrawerItem} liveThinking={liveThinking} />
+            <DecisionTimeline items={timeline} onOpenItem={(it) => setDrawerItemId(it.id)} liveThinking={liveThinking} />
           </TabsContent>
           
           <TabsContent value="artifacts" className="outline-none flex-1 min-h-0 flex flex-col">
@@ -255,7 +275,7 @@ export function IssueDetailPage({ issueId }: Props) {
         <CommandCenterChatBar issueId={issueId} disabled={paused} clarifyQuestion={clarifyQuestion} onSent={() => void refreshTimeline()} />
       </div>
 
-      <DispatchDrawer item={drawerItem} onClose={() => setDrawerItem(null)} />
+      <DispatchDrawer item={drawerItem} onClose={() => setDrawerItemId(null)} />
       <SteerIssueDialog
         open={steerOpen}
         draft={steerDraft}
