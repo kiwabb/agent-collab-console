@@ -27,7 +27,6 @@ import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { StatusStrip } from "./components/StatusStrip";
 import { LatestFailureAlert } from "./components/LatestFailureAlert";
 import { DecisionTimeline } from "./components/DecisionTimeline";
-import { SecondaryAccordion } from "./components/SecondaryAccordion";
 import { ArtifactsPanel } from "./components/ArtifactsPanel";
 import { IssueDiffPanel } from "./components/IssueDiffPanel";
 import { MeshPanel } from "./components/MeshPanel";
@@ -198,26 +197,28 @@ export function IssueDetailPage({ issueId }: Props) {
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),transparent_22%)]">
-      {/* Scrollable Main Content */}
-      <main className="flex-1 overflow-y-auto no-scrollbar mx-auto w-full max-w-[1640px] flex flex-col gap-4 px-6 pb-6 pt-5">
-        <WsConnectionBanner />
-        <StatusStrip
-          issue={issue}
-          phase={phase}
-          activeTask={activeTask}
-          onPause={() => void handlePause()}
-          onResume={() => void handleResume()}
-          onSteer={() => void handleRestartOrSteer()}
-          onReset={() => setResetConfirmOpen(true)}
-        />
-        <LatestFailureAlert
-          failure={latestFailure}
-          onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          onOpenDetail={() => {
-            const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
-            setDrawerItemId(item?.id ?? null);
-          }}
-        />
+      {/* App-shell body: fixed header + status, scrolling tab content, docked chat bar */}
+      <main className="flex-1 min-h-0 overflow-hidden mx-auto w-full max-w-[1640px] flex flex-col gap-4 px-6 pb-4 pt-5">
+        <div className="shrink-0 flex flex-col gap-4">
+          <WsConnectionBanner />
+          <StatusStrip
+            issue={issue}
+            phase={phase}
+            activeTask={activeTask}
+            onPause={() => void handlePause()}
+            onResume={() => void handleResume()}
+            onSteer={() => void handleRestartOrSteer()}
+            onReset={() => setResetConfirmOpen(true)}
+          />
+          <LatestFailureAlert
+            failure={latestFailure}
+            onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            onOpenDetail={() => {
+              const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
+              setDrawerItemId(item?.id ?? null);
+            }}
+          />
+        </div>
         <Tabs defaultValue="timeline" className="w-full flex-1 flex flex-col gap-4 min-h-0">
           <TabsList className="bg-surface/50 border border-border-subtle p-1 rounded-2xl w-full max-w-2xl mx-auto grid grid-cols-4 h-11 shrink-0">
             <TabsTrigger value="timeline" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">

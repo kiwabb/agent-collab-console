@@ -20,8 +20,8 @@ export function DecisionTimeline({ items, onOpenItem, liveThinking }: Props) {
   const visible = collapsedCount > 0 && !expanded ? items.slice(-10) : items;
 
   return (
-    <section className="rounded-[28px] border border-border-subtle bg-surface/88 p-4 shadow-[0_24px_80px_rgba(2,6,23,0.08)]" data-decision-timeline>
-      <div className="mb-4 flex items-center justify-between gap-3">
+    <section className="flex h-full min-h-0 flex-col rounded-[28px] border border-border-subtle bg-surface/88 p-4 shadow-[0_24px_80px_rgba(2,6,23,0.08)]" data-decision-timeline>
+      <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-text-muted">
             <History size={15} />
@@ -36,7 +36,7 @@ export function DecisionTimeline({ items, onOpenItem, liveThinking }: Props) {
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="mb-3 w-full rounded-2xl border border-dashed border-border-subtle bg-surface-raised/60 px-4 py-3 text-sm text-text-muted hover:text-foreground"
+          className="mb-3 w-full shrink-0 rounded-2xl border border-dashed border-border-subtle bg-surface-raised/60 px-4 py-3 text-sm text-text-muted hover:text-foreground"
         >
           {t("issue.command.showOlder", { count: collapsedCount })}
         </button>
@@ -47,7 +47,7 @@ export function DecisionTimeline({ items, onOpenItem, liveThinking }: Props) {
           {t("issue.command.emptyTimeline")}
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="flex-1 min-h-0 space-y-3 overflow-y-auto no-scrollbar pr-1">
           {visible.map((item) => (
             <TimelineRow key={item.id} item={item} onOpen={() => onOpenItem(item)} />
           ))}

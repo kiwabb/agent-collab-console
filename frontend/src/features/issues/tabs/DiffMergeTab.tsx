@@ -319,7 +319,7 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
   }, [pendingAbandon, addToast, t]);
 
   return (
-    <div className="p-6 flex flex-col gap-6">
+    <div className="h-full min-h-0 overflow-y-auto no-scrollbar p-6 flex flex-col gap-6">
       <div className="flex items-center justify-between -mt-2">
         <div className="text-[11px] text-text-muted">
           {lastFetched ? <>{t("task.diffMerge.lastRefreshed", { time: formatTimeAgo(lastFetched, t) })}</> : "—"}

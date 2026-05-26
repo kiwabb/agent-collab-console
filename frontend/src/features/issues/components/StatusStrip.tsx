@@ -54,7 +54,10 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
             {issue?.created_at && <span>{t("issue.command.created", { time: formatClock(issue.created_at, locale) })}</span>}
             {issue?.updated_at && <span>{t("issue.command.updated", { time: formatClock(issue.updated_at, locale) })}</span>}
           </div>
-          <h1 className="truncate text-2xl font-black tracking-[-0.04em] text-foreground">
+          <h1
+            className="line-clamp-2 break-words text-2xl font-black leading-tight tracking-[-0.04em] text-foreground"
+            title={issue?.title ?? undefined}
+          >
             {issue?.title ?? t("issue.command.loadingIssue")}
           </h1>
           {isPaused && (
