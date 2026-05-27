@@ -180,7 +180,9 @@ class RuntimeCatalogService:
         if model is None:
             raise RuntimeCatalogValidationError(f"No model specified and no default for executor '{executor}'")
 
-        if provider_config is not None:
+        if provider_config is not None and not executor_config.api_endpoint:
+            # Skip model whitelist check when a custom api_endpoint is configured —
+            # the model list is for the UI picker only, not a hard gate for compatible APIs.
             model_config = self._find_model(catalog, executor, provider, model)
             if model_config is None:
                 raise RuntimeCatalogValidationError(
