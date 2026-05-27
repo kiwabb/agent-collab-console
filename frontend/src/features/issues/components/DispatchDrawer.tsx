@@ -97,6 +97,36 @@ export function DispatchDrawer({ item, onClose }: Props) {
         }
       : undefined;
 
+  const renderLiveStream = (heightClass: string) =>
+    showLiveStream ? (
+      <section className={`flex ${heightClass} shrink-0 flex-col rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden`}>
+        <div className="px-4 py-3 flex items-center justify-between gap-3 border-b border-border-subtle bg-surface/60">
+          <div className="flex items-center gap-2">
+            <Terminal size={13} className="text-text-muted" />
+            <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-text-muted">
+              {t("issue.command.drawer.liveStream")}
+            </h3>
+          </div>
+          <span className="font-mono text-[10px] text-text-faint bg-surface-input px-2 py-0.5 rounded-md">
+            {executionProcessId ? executionProcessId.slice(0, 8) : t("issue.command.drawer.noRun")}
+          </span>
+        </div>
+        <div className="flex-1 min-h-0 p-3">
+          <AgentLiveTimeline
+            executionProcessId={executionProcessId}
+            taskStartedAt={item.task?.created_at ?? null}
+            taskStatus={taskStatusRaw}
+            reviewComment={item.task?.review_comment ?? null}
+            taskResult={item.task?.result ?? null}
+            taskRole={item.task?.role ?? item.role ?? null}
+            onStop={onStop}
+            className="h-full"
+            emptyHint={t("issue.command.drawer.waitingStart")}
+          />
+        </div>
+      </section>
+    ) : null;
+
   return (
     <div className="fixed inset-0 z-50">
       {/* Backdrop with blur */}
@@ -166,38 +196,19 @@ export function DispatchDrawer({ item, onClose }: Props) {
         </div>
 
         {/* ─── Content area ─── */}
-        <div className="flex min-h-0 flex-1 flex-col gap-5 px-6 py-5 overflow-y-auto no-scrollbar">
-          {/* Live Stream Panel */}
-          {showLiveStream ? (
-            <section className="flex min-h-[280px] flex-col rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden">
-              <div className="px-4 py-3 flex items-center justify-between gap-3 border-b border-border-subtle bg-surface/60">
-                <div className="flex items-center gap-2">
-                  <Terminal size={13} className="text-text-muted" />
-                  <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-text-muted">
-                    {t("issue.command.drawer.liveStream")}
-                  </h3>
-                </div>
-                <span className="font-mono text-[10px] text-text-faint bg-surface-input px-2 py-0.5 rounded-md">
-                  {executionProcessId ? executionProcessId.slice(0, 8) : t("issue.command.drawer.noRun")}
-                </span>
-              </div>
-              <div className="flex-1 min-h-0 p-3">
-                <AgentLiveTimeline
-                  executionProcessId={executionProcessId}
-                  taskStartedAt={item.task?.created_at ?? null}
-                  taskStatus={taskStatusRaw}
-                  reviewComment={item.task?.review_comment ?? null}
-                  taskResult={item.task?.result ?? null}
-                  taskRole={item.task?.role ?? item.role ?? null}
-                  onStop={onStop}
-                  className="h-full"
-                  emptyHint={t("issue.command.drawer.waitingStart")}
-                />
-              </div>
-            </section>
-          ) : null}
+        {/* Block flow (not a flex column) on purpose: a flex column would shrink
+            siblings to fit and crush the result card / actions to slivers while
+            the fixed-height live stream kept its size. Block + space-y lets each
+            child keep its natural height and the panel scroll normally. */}
+        <div className="min-h-0 flex-1 space-y-5 px-6 py-5 overflow-y-auto overflow-x-hidden">
+          {/* While the task is running, the live stream is the focus — show it
+              first and tall so the user can watch it unfold. */}
+          {taskIsRunning ? renderLiveStream("h-[clamp(300px,44vh,520px)]") : null}
 
-          {/* Result Card / Running Placeholder */}
+          {/* Primary content. A finished task leads with its result (so the
+              architecture / implementation summary is visible immediately); a
+              running task shows a pending placeholder; the raw summary is the
+              fallback only when no structured SubAgentResult was persisted. */}
           {taskIsRunning ? (
             <div className="rounded-2xl border border-brand/20 bg-brand/5 p-5 flex items-center gap-3">
               <Loader2 size={16} className="animate-spin text-brand shrink-0" />
@@ -207,14 +218,7 @@ export function DispatchDrawer({ item, onClose }: Props) {
             </div>
           ) : item.result ? (
             <SubAgentResultCard result={item.result} />
-          ) : (
-            <div className="rounded-2xl border border-border-subtle bg-surface-raised/60 p-5 text-[13px] text-text-muted text-center">
-              {t("issue.command.drawer.noResult")}
-            </div>
-          )}
-
-          {/* Summary Section */}
-          {item.summary && !taskIsRunning && (
+          ) : item.summary ? (
             <section className="rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden">
               <div className="px-4 py-3 flex items-center gap-2 border-b border-border-subtle bg-surface/60">
                 <MessageSquare size={13} className="text-text-muted" />
@@ -228,7 +232,15 @@ export function DispatchDrawer({ item, onClose }: Props) {
                 </pre>
               </div>
             </section>
+          ) : (
+            <div className="rounded-2xl border border-border-subtle bg-surface-raised/60 p-5 text-[13px] text-text-muted text-center">
+              {t("issue.command.drawer.noResult")}
+            </div>
           )}
+
+          {/* Once finished, the live stream is historical — keep it below the
+              result and compact so the summary stays above the fold. */}
+          {!taskIsRunning ? renderLiveStream("h-[clamp(220px,32vh,360px)]") : null}
 
           {/* Task Actions Section */}
           <section className="rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden">

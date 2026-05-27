@@ -354,7 +354,7 @@ export function AgentLiveTimeline({
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="flex-1 min-h-0 overflow-y-auto space-y-2 pb-4"
+        className="flex-1 min-h-0 overflow-y-auto space-y-2 pb-4 pr-1.5"
       >
         {isEmpty ? (
           <div className="py-12 text-center text-[12px] text-text-muted">
