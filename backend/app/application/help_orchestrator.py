@@ -166,14 +166,10 @@ class HelpOrchestrator:
         resume_session_id = parent.resume_session_id
         resume_message_id = parent.resume_message_id
 
-        if not resume_session_id:
-            workspace = await self.codex_store.load_codex_workspace(parent.session_id)
-            if workspace is not None:
-                if parent.executor == "codex":
-                    resume_session_id = workspace.thread_id
-                elif parent.executor == "claude":
-                    resume_session_id = workspace.claude_thread_id
-
+        # Per-task session identity: a parent must resume only its OWN captured
+        # session. Never borrow the shared per-workspace thread pointer — that
+        # would resume an unrelated role's session. If the parent has no session
+        # of its own, fall through to the manual ready_to_resume path.
         if not resume_session_id:
             return False
 

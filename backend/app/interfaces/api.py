@@ -20,7 +20,7 @@ from app.application.codex_task_runner import CodexTaskRunner
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
 from app.application.phase_duration_estimator import get_phase_duration_estimator
 from app.application.role_workflow_service import RoleWorkflowService
-from app.application.process_runtime_common import is_agent_message_item_type
+from app.application.process_runtime_common import is_agent_message_item_type, is_unusable_result_text
 from app.application.project_service import ProjectError
 from app.application.skill_service import SkillError
 from app.application.worktree_manager import WorktreeError
@@ -191,20 +191,20 @@ async def _extract_task_result_from_logs(
                 item = params.get("item") or event.get("message") or {}
                 if is_agent_message_item_type(item.get("type")):
                     text = item.get("text")
-                    if isinstance(text, str) and text.strip():
+                    if isinstance(text, str) and text.strip() and not is_unusable_result_text(text):
                         # Priority: Has 'final_answer' phase
                         if item.get("phase") == "final_answer":
                             return text, True
                         return text, False
             elif event.get("type") == "result":
                 value = event.get("result")
-                if isinstance(value, str) and value.strip():
+                if isinstance(value, str) and value.strip() and not is_unusable_result_text(value):
                     return value, False
             elif event.get("type") == "item.completed":
                 item = event.get("item") or {}
                 if is_agent_message_item_type(item.get("type")):
                     text = item.get("text")
-                    if isinstance(text, str) and text.strip():
+                    if isinstance(text, str) and text.strip() and not is_unusable_result_text(text):
                         return text, False
         return None, False
 
@@ -233,7 +233,13 @@ async def _extract_task_result_from_logs(
         
     for log in logs:
         if log.stream == "stdout" and log.content:
-            return log.content.strip()
+            candidate = log.content.strip()
+            # Never fall back to a CLI control envelope (e.g. a SessionStart hook
+            # line) or a raw codex protocol frame — that is not the agent's answer
+            # and would be mis-persisted as task.result, then fail downstream
+            # schema parsing and loop on re-dispatch.
+            if candidate and not is_unusable_result_text(candidate):
+                return candidate
     return None
 
 
@@ -5145,7 +5151,7 @@ async def auto_start_issue_graph(issue_id: str):
 
     # Ensure worktree exists
     if issue.project_id and not issue.git_worktree_path and project_service is not None:
-        project = await project_service.get_project(issue.project_id)
+        project = await project_service.get(issue.project_id)
         if project is not None:
             try:
                 branch, wt_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
@@ -5521,7 +5527,7 @@ async def codex_issue_conductor_restart(issue_id: str):
 
     # Ensure worktree exists
     if issue.project_id and not issue.git_worktree_path and project_service is not None:
-        project = await project_service.get_project(issue.project_id)
+        project = await project_service.get(issue.project_id)
         if project is not None:
             try:
                 branch, wt_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
@@ -5623,7 +5629,7 @@ async def codex_issue_reset(issue_id: str):
     # 4. Remove the git worktree so generated code is fully purged
     _reset_project: Project | None = None
     if issue.project_id and project_service is not None:
-        _reset_project = await project_service.get_project(issue.project_id)
+        _reset_project = await project_service.get(issue.project_id)
     if _reset_project is not None and issue.git_worktree_path:
         try:
             await worktree_manager.cleanup_issue_worktree(_reset_project, issue)

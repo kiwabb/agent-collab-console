@@ -31,6 +31,14 @@ LLM_RUNNER_TYPE = Callable[[str], Awaitable[str | None]]
 DeltaCallback = Callable[[int, str, str], Awaitable[None] | None]
 
 
+def _sanitize_http_error(status_code: int, body: str) -> str:
+    """Return a clean error string — strips HTML bodies to avoid leaking page markup."""
+    stripped = body.strip()
+    if stripped.lower().startswith("<!doctype") or stripped.lower().startswith("<html"):
+        return f"HTTP {status_code}: server returned an HTML page (not JSON) — check API endpoint and key"
+    return f"HTTP {status_code}: {stripped[:200]}"
+
+
 def extract_tool_use_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
     """Return valid Anthropic `tool_use` content blocks from a message."""
     blocks = message.get("content") if isinstance(message, dict) else None
@@ -331,7 +339,7 @@ async def call_llm_with_tools(
             json=payload,
         )
     if response.status_code != 200:
-        raise RuntimeError(f"LLM tools HTTP {response.status_code}: {response.text[:300]}")
+        raise RuntimeError(f"LLM tools {_sanitize_http_error(response.status_code, response.text)}")
     data = response.json()
     if extract_tool_use_blocks(data):
         return data
@@ -644,7 +652,7 @@ async def call_openai_with_tools(
             json=payload,
         )
     if response.status_code != 200:
-        raise RuntimeError(f"OpenAI tools HTTP {response.status_code}: {response.text[:300]}")
+        raise RuntimeError(f"OpenAI tools {_sanitize_http_error(response.status_code, response.text)}")
     data = response.json()
     choice = (data.get("choices") or [{}])[0]
     return _openai_choice_to_anthropic(

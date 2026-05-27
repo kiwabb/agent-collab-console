@@ -158,19 +158,27 @@ class MockCodexProcessManager:
         **_extra,
     ) -> str:
         """In per-turn model: just log input and mark session done. No real process."""
+        from app.application.process_runtime_common import is_workspace_console_task
+
         session = await self.codex_store.load_codex_session(session_id)
         if session is None:
             raise KeyError(f"Codex session {session_id} not found")
         session.status = "responding"
         session.last_active_at = __import__("datetime").datetime.now()
-        if executor == "codex":
+        mock_task = await self.codex_store.load_codex_task(task_id) if task_id else None
+        is_console = mock_task is None or is_workspace_console_task(mock_task)
+        if executor == "codex" and is_console:
+            # Only the human console task touches the shared per-workspace pointer.
             session.thread_id = resume_session_id or session.thread_id or f"mock-thread-{session_id}"
         await self.codex_store.save_codex_session(session)
         await self._append_log(session_id, "stdin", input_text, task_id)
         if task_id:
-            task = await self.codex_store.load_codex_task(task_id)
+            task = mock_task
             if task is not None:
-                task.resume_session_id = resume_session_id or session.thread_id or f"mock-thread-{session_id}"
+                # Role tasks keep per-task identity: only carry the explicitly
+                # passed resume id (or a fresh mock id), never the shared pointer.
+                fallback = session.thread_id if is_console else None
+                task.resume_session_id = resume_session_id or fallback or f"mock-thread-{session_id}"
                 task.resume_message_id = resume_message_id
                 task.result = task.result or input_text.strip()
                 task.status = "done"

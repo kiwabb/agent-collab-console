@@ -464,3 +464,108 @@ async def test_finalize_task_on_reader_exit_salvages_idle_engineer_with_changed_
     assert payload["status"] == "partial"
     assert payload["project_name"] == "Recovered Workspace"
     assert "backend/app/sample.py" in payload["changed_files"]
+
+
+# ── Per-task session identity (shared-session poisoning fix) ──────────────────
+
+from app.application.process_runtime_common import is_workspace_console_task
+
+
+def test_is_workspace_console_task_discriminator():
+    now = datetime.now()
+
+    def mk(**kw):
+        base = dict(
+            id="t", session_id="ws", title="x", prompt="x",
+            created_at=now, updated_at=now,
+        )
+        base.update(kw)
+        return CodexTask(**base)
+
+    # Human workspace-console chat: no issue, normal kind, no parent → shares pointer.
+    assert is_workspace_console_task(mk()) is True
+    # Conductor role task: belongs to an issue → isolated.
+    assert is_workspace_console_task(mk(issue_id="issue-1", role="engineer")) is False
+    # Help child / continuation: has a parent → isolated.
+    assert is_workspace_console_task(mk(parent_task_id="parent-1")) is False
+    # Specialist child: non-normal kind → isolated.
+    assert is_workspace_console_task(mk(task_kind="specialist_child")) is False
+    assert is_workspace_console_task(None) is False
+
+
+@pytest.mark.asyncio
+async def test_persist_reader_metadata_role_task_does_not_touch_workspace_pointer():
+    now = datetime.now()
+    task = CodexTask(
+        id="role-task", session_id="ws-role", issue_id="issue-role",
+        title="Engineer", prompt="impl", role="engineer", executor="claude",
+        status="running", workspace_path="/tmp/ws", created_at=now, updated_at=now,
+    )
+    workspace = CodexSession(
+        id="ws-role", title="WS", cwd="/tmp/ws",
+        claude_thread_id="stale-shared-session", created_at=now, last_active_at=now,
+    )
+    store = StoreStub(task, workspace)
+    runtime = RuntimeUnderTest(codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None)
+    entry = AsyncProcessEntry(
+        proc=None, output_task=None, alive=False, session_id=task.session_id,
+        executor="claude", cwd="/tmp/ws", resume_session_id="role-own-session",
+        result_text="real result",
+    )
+    entry.produced_real_turn = True
+
+    await runtime._persist_reader_metadata(task.session_id, task.id, entry)
+
+    # Session is kept on the task, but the shared workspace pointer is untouched.
+    assert store.task.resume_session_id == "role-own-session"
+    assert store.workspace.claude_thread_id == "stale-shared-session"
+
+
+@pytest.mark.asyncio
+async def test_persist_reader_metadata_console_task_updates_workspace_pointer():
+    now = datetime.now()
+    task = CodexTask(  # console task: no issue_id, normal kind, no parent
+        id="console-task", session_id="ws-con", title="chat", prompt="hi",
+        executor="claude", status="running", created_at=now, updated_at=now,
+    )
+    workspace = CodexSession(
+        id="ws-con", title="WS", cwd="/tmp/ws",
+        claude_thread_id="old", created_at=now, last_active_at=now,
+    )
+    store = StoreStub(task, workspace)
+    runtime = RuntimeUnderTest(codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None)
+    entry = AsyncProcessEntry(
+        proc=None, output_task=None, alive=False, session_id=task.session_id,
+        executor="claude", cwd="/tmp/ws", resume_session_id="console-session",
+        result_text="hello back",
+    )
+    entry.produced_real_turn = True
+
+    await runtime._persist_reader_metadata(task.session_id, task.id, entry)
+
+    assert store.workspace.claude_thread_id == "console-session"
+
+
+@pytest.mark.asyncio
+async def test_persist_reader_metadata_drops_resume_id_when_no_real_turn():
+    now = datetime.now()
+    task = CodexTask(
+        id="empty-role-task", session_id="ws-empty", issue_id="issue-empty",
+        title="Engineer", prompt="impl", role="engineer", executor="claude",
+        status="failed", resume_session_id="previous-id",
+        workspace_path="/tmp/ws", created_at=now, updated_at=now,
+    )
+    workspace = CodexSession(id="ws-empty", title="WS", cwd="/tmp/ws", created_at=now, last_active_at=now)
+    store = StoreStub(task, workspace)
+    runtime = RuntimeUnderTest(codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None)
+    entry = AsyncProcessEntry(
+        proc=None, output_task=None, alive=False, session_id=task.session_id,
+        executor="claude", cwd="/tmp/ws",
+        resume_session_id="dead-control-only-session",  # captured but no real turn
+    )
+    # produced_real_turn stays False (control-only run)
+
+    await runtime._persist_reader_metadata(task.session_id, task.id, entry)
+
+    # The dead session must not be carried into a retry → cold start.
+    assert store.task.resume_session_id is None

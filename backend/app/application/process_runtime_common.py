@@ -67,6 +67,26 @@ def is_unusable_result_text(text: str | None) -> bool:
     return is_cli_control_payload(text) or is_codex_protocol_frame(text)
 
 
+def is_workspace_console_task(task) -> bool:
+    """True only for the human workspace-console chat task (send_workspace_input).
+
+    That task legitimately shares the per-workspace CLI session pointer
+    (`workspace.thread_id` / `workspace.claude_thread_id`) so a human's
+    consecutive messages keep one conversation. Every Conductor-dispatched role
+    task and every help child uses strict per-task session identity instead —
+    they must never read or write the shared workspace pointer, otherwise one
+    broken session poisons every role in the workspace."""
+    if task is None:
+        return False
+    if getattr(task, "issue_id", None) is not None:
+        return False
+    if getattr(task, "task_kind", "normal") not in (None, "normal"):
+        return False
+    if getattr(task, "parent_task_id", None) is not None:
+        return False
+    return True
+
+
 @dataclass
 class ProcessEntry:
     proc: subprocess.Popen
@@ -103,6 +123,11 @@ class AsyncProcessEntry:
     result_text: str | None = None
     had_error: bool = False
     help_requested: bool = False
+    # True once a genuine assistant/result turn (real text) was captured. A run
+    # that emitted only CLI control lines (e.g. a SessionStart hook) never flips
+    # this, so its captured session id is treated as dead and not carried into a
+    # retry — preventing the "resume the empty session → fail → retry" loop.
+    produced_real_turn: bool = False
     # Token-streaming state: text we last broadcasted to clients via message_delta.
     # On each new assistant partial, emit (new_text - last_emitted_assistant_text)
     # as a delta event. `delta_seq` is monotonically increasing per-entry.
@@ -473,13 +498,18 @@ class BaseProcessRuntime:
         session_id_val = parsed.get("session_id")
         if session_id_val and entry.resume_session_id is None:
             entry.resume_session_id = session_id_val
-            workspace = await self.codex_store.load_codex_workspace(workspace_id)
-            if workspace:
-                if entry.executor == "codex":
-                    workspace.thread_id = session_id_val
-                elif entry.executor == "claude":
-                    workspace.claude_thread_id = session_id_val
-                await self.codex_store.save_codex_workspace(workspace)
+            # The per-workspace thread pointer is only for the human console chat.
+            # Role/help tasks keep their session on the task alone (per-task
+            # identity), so they never pollute the shared pointer.
+            task = await self.codex_store.load_codex_task(task_id) if task_id else None
+            if task is None or is_workspace_console_task(task):
+                workspace = await self.codex_store.load_codex_workspace(workspace_id)
+                if workspace:
+                    if entry.executor == "codex":
+                        workspace.thread_id = session_id_val
+                    elif entry.executor == "claude":
+                        workspace.claude_thread_id = session_id_val
+                    await self.codex_store.save_codex_workspace(workspace)
 
         if msg_type == "system":
             return
@@ -553,6 +583,7 @@ class BaseProcessRuntime:
                             )
                 if text_parts:
                     entry.result_text = "".join(text_parts).strip()
+                    entry.produced_real_turn = True
             return
 
         if msg_type == "user":
@@ -641,12 +672,14 @@ class BaseProcessRuntime:
             if isinstance(result_val, str) and result_val.strip():
                 if not is_cli_control_payload(result_val):
                     entry.result_text = result_val.strip()
+                    entry.produced_real_turn = True
             elif isinstance(result_val, dict):
                 text = result_val.get("text") or result_val.get("content") or ""
                 if text:
                     text_str = text if isinstance(text, str) else str(text)
                     if not is_cli_control_payload(text_str):
                         entry.result_text = text_str
+                        entry.produced_real_turn = True
             return
 
         if msg_type == "item.completed":
@@ -655,6 +688,7 @@ class BaseProcessRuntime:
                 value = item.get("text")
                 if isinstance(value, str) and value.strip() and not is_cli_control_payload(value):
                     entry.result_text = value.strip()
+                    entry.produced_real_turn = True
 
     async def _mark_task_done(self, task_id: str, entry):
         if entry.help_requested:
@@ -815,9 +849,14 @@ class BaseProcessRuntime:
             })
 
     async def _persist_reader_metadata(self, workspace_id: str, task_id: str | None, entry):
+        task = await self.codex_store.load_codex_task(task_id) if task_id else None
+        is_console = task is None or is_workspace_console_task(task)
+
         workspace = await self.codex_store.load_codex_workspace(workspace_id)
         if workspace:
-            if entry.resume_session_id:
+            # Only the human console task may update the shared per-workspace
+            # thread pointer; role/help tasks keep their session on the task.
+            if entry.resume_session_id and is_console:
                 if entry.executor == "codex":
                     workspace.thread_id = entry.resume_session_id
                 elif entry.executor == "claude":
@@ -826,21 +865,24 @@ class BaseProcessRuntime:
             workspace.last_active_at = datetime.now()
             await self.codex_store.save_codex_workspace(workspace)
 
-        if task_id:
-            task = await self.codex_store.load_codex_task(task_id)
-            if task:
-                if entry.resume_session_id:
-                    task.resume_session_id = entry.resume_session_id
-                if entry.resume_message_id:
-                    task.resume_message_id = entry.resume_message_id
-                if (
-                    entry.result_text
-                    and task.status not in {"done", "failed", "cancelled"}
-                    and not is_unusable_result_text(entry.result_text)
-                ):
-                    task.result = entry.result_text
-                task.updated_at = datetime.now()
-                await self.codex_store.save_codex_task(task)
+        if task_id and task:
+            if entry.resume_session_id and entry.produced_real_turn:
+                # Only carry a session id that produced a real turn. A control-only
+                # / empty run captured a session id that is effectively dead;
+                # persisting it would make a retry resume the dead session and loop.
+                task.resume_session_id = entry.resume_session_id
+            elif not entry.produced_real_turn and not is_console:
+                task.resume_session_id = None
+            if entry.resume_message_id and entry.produced_real_turn:
+                task.resume_message_id = entry.resume_message_id
+            if (
+                entry.result_text
+                and task.status not in {"done", "failed", "cancelled"}
+                and not is_unusable_result_text(entry.result_text)
+            ):
+                task.result = entry.result_text
+            task.updated_at = datetime.now()
+            await self.codex_store.save_codex_task(task)
 
     async def _finalize_task_on_reader_exit(self, task_id: str | None, entry):
         if not task_id or entry.help_requested:

@@ -9,7 +9,7 @@ from datetime import datetime
 
 from app.application import timeouts
 from app.application.json_rpc_client import AppServerClient, AsyncJsonRpcPeer, JsonRpcCallbacks
-from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime, is_agent_message_item_type
+from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime, is_agent_message_item_type, is_workspace_console_task
 
 
 logger = logging.getLogger(__name__)
@@ -372,6 +372,11 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             })
 
         effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
+        # Per-task session identity: only the human workspace-console task may fall
+        # back to / write the shared workspace.thread_id. Role/help tasks resume
+        # only their own task.resume_session_id.
+        _task = await self.codex_store.load_codex_task(task_id) if task_id else None
+        allow_ws_fallback = _task is None or is_workspace_console_task(_task)
         cmd = list(self._app_server_cmd)
         # Per-task model: rewrite the baked-in `-c model=` flag so the selected
         # model actually reaches the codex CLI (the env var below is not enough).
@@ -462,7 +467,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             task_id=task_id,
             executor="codex",
             cwd=effective_cwd,
-            resume_session_id=workspace.thread_id,
+            resume_session_id=(resume_session_id or workspace.thread_id) if allow_ws_fallback else resume_session_id,
             pending_waiters=[waiter] if waiter else [],
         )
 
@@ -484,9 +489,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 # and surface a structured `executor_failed_to_start` on failure.
                 await self._initialize_or_fail_fast(client, proc, workspace_id, task_id)
 
-                # When force_new_session=True, do NOT fallback to workspace.thread_id
-                # When force_new_session=False, use resume_session_id or fallback to workspace.thread_id
-                effective_resume_id = resume_session_id if force_new_session else (resume_session_id or workspace.thread_id)
+                # When force_new_session=True, do NOT fallback to workspace.thread_id.
+                # Role/help tasks also never fall back to the shared pointer.
+                ws_fallback_id = workspace.thread_id if allow_ws_fallback else None
+                effective_resume_id = resume_session_id if force_new_session else (resume_session_id or ws_fallback_id)
 
                 if effective_resume_id:
                     try:
@@ -545,14 +551,15 @@ class CodexAppServerRuntime(BaseProcessRuntime):
     async def _apply_thread_result(self, workspace, entry, result: dict, task_id: str | None):
         thread_id = result.get("thread_id") or (result.get("thread", {}).get("id"))
         if thread_id:
-            workspace.thread_id = thread_id
             entry.resume_session_id = thread_id
-            await self.codex_store.save_codex_workspace(workspace)
-            if task_id:
-                task = await self.codex_store.load_codex_task(task_id)
-                if task:
-                    task.resume_session_id = thread_id
-                    await self.codex_store.save_codex_task(task)
+            task = await self.codex_store.load_codex_task(task_id) if task_id else None
+            # Only the human console task updates the shared per-workspace pointer.
+            if task is None or is_workspace_console_task(task):
+                workspace.thread_id = thread_id
+                await self.codex_store.save_codex_workspace(workspace)
+            if task:
+                task.resume_session_id = thread_id
+                await self.codex_store.save_codex_task(task)
 
     _TOOL_ITEM_TYPES = {
         "command_execution",

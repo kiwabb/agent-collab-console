@@ -4,7 +4,7 @@ import os
 import subprocess
 from datetime import datetime
 
-from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime
+from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime, is_workspace_console_task
 
 
 class ClaudeProcessRuntime(BaseProcessRuntime):
@@ -143,9 +143,15 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             })
 
         effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
-        # When force_new_session=True, do NOT fallback to workspace.claude_thread_id
-        # When force_new_session=False, use resume_session_id or fallback to workspace.claude_thread_id
-        effective_resume_id = resume_session_id if force_new_session else (resume_session_id or workspace.claude_thread_id)
+        # Per-task session identity: only the human workspace-console task may fall
+        # back to the shared workspace.claude_thread_id. Role/help tasks resume only
+        # their own task.resume_session_id (passed in), never the shared pointer —
+        # so one broken session can't poison every role in the workspace.
+        task = await self.codex_store.load_codex_task(task_id) if task_id else None
+        allow_ws_fallback = task is None or is_workspace_console_task(task)
+        ws_fallback_id = workspace.claude_thread_id if allow_ws_fallback else None
+        # When force_new_session=True, do NOT fall back to the workspace pointer.
+        effective_resume_id = resume_session_id if force_new_session else (resume_session_id or ws_fallback_id)
         cmd = self._build_claude_command(
             effective_resume_id,
             resume_message_id=resume_message_id,
