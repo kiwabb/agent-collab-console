@@ -4605,7 +4605,8 @@ async def test_runtime_executor(request: TestExecutorRequest):
     if model_id is None:
         raise HTTPException(status_code=400, detail=f"No model specified for executor '{request.executor_id}'")
 
-    if provider:
+    effective_endpoint = request.api_endpoint or executor.api_endpoint
+    if provider and not effective_endpoint:
         model = next((m for m in provider.models if m.id == model_id), None)
         if model is None:
             raise HTTPException(status_code=400, detail=f"Model '{model_id}' not found in provider '{provider_id}'")
