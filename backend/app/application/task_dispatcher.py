@@ -23,6 +23,17 @@ from app.domain.models import (
 
 logger = logging.getLogger(__name__)
 
+_ROLE_ALIASES: dict[str, str] = {
+    "pm": "product_manager",
+    "arch": "architect",
+    "eng": "engineer",
+    "dev": "engineer",
+}
+
+
+def _normalize_role(role: str) -> str:
+    return _ROLE_ALIASES.get(role.lower().strip(), role)
+
 
 def _summarize_dispatch_body(role: str, prompt: str | None, *, is_fallback: bool = False) -> str:
     if is_fallback or not prompt:
@@ -48,6 +59,7 @@ async def dispatch_role(
     Returns (task_id, node_id). The caller registers task_id in TaskCompletionRegistry
     before awaiting.
     """
+    role = _normalize_role(role)
     agents = await store.list_agents(workspace_id=None)
     agent = next(
         (a for a in agents if a.role_key == role or a.role_key.startswith(role)),
