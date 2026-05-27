@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse the existing ConductorTask, transition_conductor_phase, startup recovery, and watchdog patterns instead of inventing parallel state mechanisms."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "This change spans persisted backend state, startup recovery, event emission, and API-visible status."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Backend quality and operational diagnostics conventions for status recovery work."}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Recovery must fail safely and never crash startup or the watchdog loop."}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Adds persisted lease fields/migrations to SQLite stores."}

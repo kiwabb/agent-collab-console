@@ -1,9 +1,60 @@
+import asyncio
+
 import pytest
 
-from app.application.conductor_main_loop import run_conductor_loop
+from app.application.conductor_main_loop import _run_heartbeat_pulse, run_conductor_loop
 from app.application.conductor_tools import build_conductor_tools
 from app.application.llm_runner import extract_tool_use_blocks
 from app.domain.models import ProjectMemoryEmbedding
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_pulse_survives_transient_failures_and_alerts():
+    """GAP A: a failing heartbeat must not kill the pulse; it alerts after N."""
+    beats = {"ok": 0, "fail": 0}
+    degraded: list[tuple[int, str]] = []
+
+    async def heartbeat():
+        # Fail the first 3 renewals, then recover.
+        if beats["ok"] + beats["fail"] < 3:
+            beats["fail"] += 1
+            raise RuntimeError("db unavailable")
+        beats["ok"] += 1
+
+    async def on_degraded(n, exc):
+        degraded.append((n, str(exc)))
+
+    pulse = asyncio.create_task(
+        _run_heartbeat_pulse(heartbeat, 0.0, on_degraded=on_degraded, alert_after=3)
+    )
+    # Let the pulse run several iterations, then stop it.
+    for _ in range(200):
+        if beats["ok"] >= 2 and degraded:
+            break
+        await asyncio.sleep(0)
+    pulse.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pulse
+
+    # Loop survived the 3 failures and went on to renew successfully.
+    assert beats["fail"] == 3
+    assert beats["ok"] >= 1
+    # Degraded callback fired exactly once, at the 3rd consecutive failure.
+    assert len(degraded) == 1
+    assert degraded[0][0] == 3
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_pulse_propagates_cancellation():
+    """Cancellation must tear the pulse down cleanly (not be swallowed)."""
+    async def heartbeat():
+        return None
+
+    pulse = asyncio.create_task(_run_heartbeat_pulse(heartbeat, 0.0))
+    await asyncio.sleep(0)
+    pulse.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pulse
 
 
 @pytest.mark.asyncio

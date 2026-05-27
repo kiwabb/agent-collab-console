@@ -27,29 +27,15 @@ import logging
 import os
 from datetime import datetime
 
-from app.application import task_activity
+from app.application import task_activity, timeouts
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_INTERVAL = 30
-DEFAULT_THRESHOLD = 180
-DEFAULT_COOLDOWN = 300
 
 NUDGE_PROMPT = (
     "[WATCHDOG] 你刚才超过 {silence_s:.0f} 秒没有输出任何内容。请总结一下当前正在做的事情，"
     "然后**直接给出最终结果**（按照原本的产物 schema），不要再做更多调研——你已经收集到的信息足够了。"
     "如果某些细节不确定，按合理默认值填，并在 risks 字段简短说明。"
 )
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -61,9 +47,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+async def _emit_stall_event(event_type: str, **fields) -> None:
+    """GAP I: structured stall lifecycle events on the global bus so stalls are
+    countable per role/executor instead of grep-only. Best-effort."""
+    try:
+        from app.application.event_bus import event_bus
+        await event_bus.append({"type": event_type, **fields})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("stall event %s emit failed: %s", event_type, exc)
+
+
 async def _scan_once(store, process_manager, run_task_with_user_content) -> None:
-    threshold = _env_int("CODEX_STALL_THRESHOLD_S", DEFAULT_THRESHOLD)
-    cooldown = _env_int("CODEX_STALL_COOLDOWN_S", DEFAULT_COOLDOWN)
+    threshold = timeouts.stall_threshold_s()
+    cooldown = timeouts.stall_cooldown_s()
     now = datetime.now()
     try:
         tasks = await store.list_codex_tasks()
@@ -103,12 +99,19 @@ async def _scan_once(store, process_manager, run_task_with_user_content) -> None
         if last_nudge and (now - last_nudge).total_seconds() < cooldown:
             continue
 
+        role = _field(task, "role", "?")
+        executor = _field(task, "executor", "?")
         logger.warning(
             "watchdog: task %s (%s/%s) silent for %.0fs — terminating + nudging",
-            task_id,
-            _field(task, "role", "?"),
-            _field(task, "executor", "?"),
-            silence_s,
+            task_id, role, executor, silence_s,
+        )
+        await _emit_stall_event(
+            "stall_detected",
+            task_id=task_id,
+            issue_id=_field(task, "issue_id"),
+            role=role,
+            executor=executor,
+            silence_s=round(silence_s, 1),
         )
         task_activity.mark_nudged(task_id)
         # Shield terminate_task: process_runtime._cleanup_entry only catches
@@ -145,12 +148,60 @@ async def _scan_once(store, process_manager, run_task_with_user_content) -> None
                 "watchdog: absorbed CancelledError from chat nudge for %s; will re-evaluate next cycle",
                 task_id,
             )
+            continue
         except Exception as exc:
             logger.warning(
                 "watchdog: chat nudge for task %s failed (%s); leaving it failed for user/scheduler to handle",
                 task_id,
                 exc,
             )
+            continue
+        # GAP F: the nudge ran as kind="chat", which does NOT persist artifacts
+        # or update task.result — so an agent that DID emit its final structured
+        # result after the nudge would have it silently dropped. Recover it:
+        # promote the task to `done` and run refresh_task_result, which extracts
+        # the nudge EP's output from the logs and persists it (and runs GAP E
+        # schema validation). If nothing usable was recovered, restore `failed`
+        # so the conductor still re-dispatches — worst case identical to before.
+        recovered = await _recover_nudge_result(store, process_manager, task_id)
+        await _emit_stall_event(
+            "stall_recovered" if recovered else "stall_nudge_failed",
+            task_id=task_id,
+            issue_id=_field(task, "issue_id"),
+            role=role,
+            executor=executor,
+        )
+
+
+async def _recover_nudge_result(store, process_manager, task_id: str) -> bool:
+    """Persist a structured result the agent emitted in response to a nudge.
+
+    Returns True if a usable result was recovered and the task marked done.
+    """
+    from app.application.process_runtime_common import is_unusable_result_text
+
+    refresh = getattr(process_manager, "refresh_task_result", None)
+    if not callable(refresh):
+        return False
+    try:
+        task = await store.load_codex_task(task_id)
+        if task is None or task.status not in {"failed", "responding", "running"}:
+            return False
+        # Promote so refresh_task_result extracts + persists from the nudge EP.
+        task.status = "done"
+        await refresh(task)
+        recovered = bool(task.result) and not is_unusable_result_text(task.result)
+        if recovered:
+            logger.info("watchdog: recovered nudge result for task %s — marked done", task_id)
+            await store.save_codex_task(task)
+            return True
+        # Nothing usable; keep it failed for the conductor to re-dispatch.
+        task.status = "failed"
+        await store.save_codex_task(task)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("watchdog: nudge result recovery failed for %s: %s", task_id, exc)
+        return False
 
 
 async def run(store, get_process_manager, run_task_with_user_content) -> None:
@@ -158,8 +209,8 @@ async def run(store, get_process_manager, run_task_with_user_content) -> None:
     if not _env_bool("CODEX_STALL_WATCHDOG", True):
         logger.info("stall watchdog disabled via CODEX_STALL_WATCHDOG=false")
         return
-    interval = _env_int("CODEX_STALL_INTERVAL_S", DEFAULT_INTERVAL)
-    threshold = _env_int("CODEX_STALL_THRESHOLD_S", DEFAULT_THRESHOLD)
+    interval = timeouts.stall_interval_s()
+    threshold = timeouts.stall_threshold_s()
     logger.info(
         "stall watchdog started: scan every %ds, stall threshold %ds",
         interval, threshold,

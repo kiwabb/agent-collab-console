@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "本任务核心约束：必须复用现有 AgentMessage / save_agent_message / agent_message_posted 事件 / 前端 CollabFeedTab handoff 配色 —— 禁止新增 message_type / 新事件类型 / 新前端组件。编码前内化复用判定标准。"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "后端代码质量基线：try/except 粒度、logger 用法、不要裸 except、避免同步阻塞。新加的 mesh 写入 + event emit 必须符合。"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "本次新增一次 DB 写入（save_agent_message），需符合数据库写入规范：异步 await、不要长事务、不要在写失败时阻塞主流程。"}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "mesh 写入失败必须降级（log warning）而非中断 dispatch；event_bus emit 失败同理。错误处理路径需符合规范。"}
+{"file": ".trellis/spec/vibe-kanban/backend/logging-guidelines.md", "reason": "新增 warning 日志（mesh 写入失败时）需符合日志风格：logger 名、级别、消息格式。"}

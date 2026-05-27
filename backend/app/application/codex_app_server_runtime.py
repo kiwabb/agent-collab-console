@@ -7,6 +7,7 @@ import subprocess
 import time
 from datetime import datetime
 
+from app.application import timeouts
 from app.application.json_rpc_client import AppServerClient, AsyncJsonRpcPeer, JsonRpcCallbacks
 from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime, is_agent_message_item_type
 
@@ -14,15 +15,13 @@ from app.application.process_runtime_common import AsyncProcessEntry, BaseProces
 logger = logging.getLogger(__name__)
 
 
-# Total turn budget. Even a healthy Engineer/QA pass should fit comfortably
-# in this. Bumped 600 → 480 to fail faster than the absurd default; keep
-# overridable via env for slow runners.
-CODEX_TURN_TIMEOUT_S = int(os.getenv("CODEX_TURN_TIMEOUT_S", "480"))
-# Idle (stdout-silence) timeout. Catches the failure mode where the Codex
-# app server stops streaming after a tool_use but never feeds the tool
-# result back into the model — the total-turn timeout alone would let the
-# graph wait the full budget for nothing.
-CODEX_IDLE_TIMEOUT_S = int(os.getenv("CODEX_IDLE_TIMEOUT_S", "180"))
+# Timeout knobs are owned by app.application.timeouts (the single source of
+# truth for the whole ladder). Read once at import — same timing as before.
+# - CODEX_TURN_TIMEOUT_S: total turn budget; a healthy Engineer/QA pass fits.
+# - CODEX_IDLE_TIMEOUT_S: stdout-silence timeout; catches the Codex app server
+#   stalling after a tool_use without feeding the result back into the model.
+CODEX_TURN_TIMEOUT_S = timeouts.codex_turn_timeout_s()
+CODEX_IDLE_TIMEOUT_S = timeouts.codex_idle_timeout_s()
 
 
 class CodexAppServerRuntime(BaseProcessRuntime):
@@ -234,6 +233,77 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         except Exception:  # noqa: BLE001
             pass
 
+    async def _initialize_or_fail_fast(self, client, proc, workspace_id, task_id) -> None:
+        """Run the JSON-RPC initialize handshake, but never hang on a dead
+        app-server. Races initialize against process exit and a hard bound; on
+        early exit / timeout, captures stderr and raises (GAP K)."""
+        async def _do_init():
+            await client.initialize()
+            await client.initialized()
+
+        init_task = asyncio.ensure_future(_do_init())
+        exit_task = asyncio.ensure_future(proc.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                {init_task, exit_task},
+                timeout=timeouts.codex_handshake_timeout_s(),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except Exception:
+            init_task.cancel()
+            exit_task.cancel()
+            raise
+
+        if init_task in done:
+            exit_task.cancel()
+            init_task.result()  # propagate any handshake exception
+            return
+
+        # Handshake did not complete: process exited early or we hit the bound.
+        init_task.cancel()
+        exit_task.cancel()
+        reason = "exited" if proc.returncode is not None else "handshake_timeout"
+        stderr_text = await self._drain_stderr(proc)
+        await self._emit_executor_failed_to_start(
+            workspace_id, task_id, reason=reason, returncode=proc.returncode, stderr=stderr_text
+        )
+        raise RuntimeError(
+            f"codex app-server failed to start ({reason}, rc={proc.returncode}): "
+            f"{(stderr_text or '').strip()[:300]}"
+        )
+
+    async def _drain_stderr(self, proc) -> str:
+        """Best-effort read of whatever the dead app-server wrote to stderr."""
+        if proc.stderr is None:
+            return ""
+        try:
+            data = await asyncio.wait_for(proc.stderr.read(4096), timeout=1.0)
+            return data.decode("utf-8", "replace") if data else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    async def _emit_executor_failed_to_start(
+        self, workspace_id, task_id, *, reason: str, returncode, stderr: str
+    ) -> None:
+        logger.error(
+            "codex executor failed to start (task=%s reason=%s rc=%s): %s",
+            task_id, reason, returncode, (stderr or "").strip()[:300],
+        )
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.append({
+                "type": "executor_failed_to_start",
+                "task_id": task_id,
+                "session_id": workspace_id,
+                "executor": "codex",
+                "reason": reason,
+                "returncode": returncode,
+                "stderr": (stderr or "").strip()[:1000],
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("executor_failed_to_start emit failed: %s", exc)
+
     async def terminate_task(self, task_id: str):
         # Clean up specific client map
         self._async_clients.pop(task_id, None)
@@ -407,9 +477,13 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             try:
                 await peer.start()
                 await self._append_log(workspace_id, "runtime", "Handshaking...", task_id)
-                await client.initialize()
-                await client.initialized()
-                
+                # GAP K: a broken app-server (bad model id, missing binary, dyld
+                # crash) exits within milliseconds; initialize() would otherwise
+                # wait forever for a response that never comes, hanging the whole
+                # turn budget. Race the handshake against process exit + a bound,
+                # and surface a structured `executor_failed_to_start` on failure.
+                await self._initialize_or_fail_fast(client, proc, workspace_id, task_id)
+
                 # When force_new_session=True, do NOT fallback to workspace.thread_id
                 # When force_new_session=False, use resume_session_id or fallback to workspace.thread_id
                 effective_resume_id = resume_session_id if force_new_session else (resume_session_id or workspace.thread_id)

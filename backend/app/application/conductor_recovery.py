@@ -14,7 +14,11 @@ from app.application.conductor_lease import (
     get_conductor_lease_ttl_s,
     get_conductor_recovery_interval_s,
 )
-from app.application.conductor_main_loop import transition_conductor_phase
+from app.application.conductor_main_loop import (
+    _append_event,
+    _seal_graph_and_issue_status,
+    transition_conductor_phase,
+)
 from app.application.phase_duration_estimator import get_phase_duration_estimator
 from app.domain.models import ConductorTask
 
@@ -49,6 +53,37 @@ def _lease_owner_pid(owner: str | None) -> int | None:
         return int(parts[1])
     except ValueError:
         return None
+
+
+def _max_relaunches() -> int:
+    """Max orphan-relaunch attempts per issue before the breaker trips."""
+    raw = os.getenv("CONDUCTOR_MAX_RELAUNCHES")
+    if not raw:
+        return 3
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 3
+
+
+async def _count_orphan_stalls(store, issue_id: str) -> int:
+    """Count how many times this issue's conductor has been orphaned + stalled.
+
+    Each orphan relaunch leaves behind a ``stalled`` conductor task with reason
+    ``orphaned_conductor_runner``. Counting them is a robust, stateless relaunch
+    counter that survives across the whole relaunch chain (and across backend
+    restarts) without threading a counter through the new loop's creation path.
+    """
+    list_tasks = getattr(store, "list_conductor_tasks", None)
+    if not callable(list_tasks):
+        return 0
+    stalled = await _maybe_await(list_tasks(status="stalled")) or []
+    count = 0
+    for t in stalled:
+        payload = t.payload if isinstance(t.payload, dict) else {}
+        if t.issue_id == issue_id and payload.get("stalled_reason") == "orphaned_conductor_runner":
+            count += 1
+    return count
 
 
 def _owner_process_is_alive(owner: str | None) -> bool:
@@ -211,6 +246,49 @@ async def _try_relaunch(
                 latest.id, issue_id,
             )
             return
+
+    # GAP B — relaunch circuit breaker. Each orphan leaves a stalled task behind;
+    # if we have already exhausted the relaunch budget for this issue the
+    # conductor is crash-looping (launch -> crash -> orphan -> relaunch). Stop
+    # relaunching, seal the issue failed, and surface a structured event instead
+    # of churning forever. orphan_stalls includes the just-marked current stall,
+    # so relaunches already performed == orphan_stalls - 1 (the first stall was
+    # the original runner, not a relaunch).
+    max_relaunches = _max_relaunches()
+    orphan_stalls = await _count_orphan_stalls(store, issue_id)
+    relaunches_done = max(0, orphan_stalls - 1)
+    if relaunches_done >= max_relaunches:
+        logger.error(
+            "conductor relaunch circuit breaker tripped for issue %s: %d relaunches done "
+            "(max %d) across %d orphan stalls — giving up",
+            issue_id, relaunches_done, max_relaunches, orphan_stalls,
+        )
+        payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
+        conductor_task.payload = {
+            **payload,
+            "relaunch_exhausted": True,
+            "relaunch_attempts": relaunches_done,
+            "max_relaunches": max_relaunches,
+        }
+        conductor_task.updated_at = datetime.now()
+        await _maybe_await(store.save_conductor_task(conductor_task))
+        try:
+            await _seal_graph_and_issue_status(
+                store=store, issue=issue, event_bus=event_bus, result_status="failed",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("relaunch-exhausted issue seal failed for %s: %s", issue_id, exc)
+        await _append_event(
+            event_bus,
+            {
+                "type": "conductor_relaunch_exhausted",
+                "issue_id": issue_id,
+                "conductor_task_id": conductor_task.id,
+                "relaunch_attempts": relaunches_done,
+                "max_relaunches": max_relaunches,
+            },
+        )
+        return
 
     project_id = issue.project_id
     if not project_id:

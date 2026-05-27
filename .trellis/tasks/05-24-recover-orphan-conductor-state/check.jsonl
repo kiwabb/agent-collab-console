@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check that recovery logic reuses existing status/event/state helpers."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Check persisted state, API output, events, and UI-visible status remain consistent."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Verify tests, quality, and no broad unrelated refactors."}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Verify recovery/watchdog errors are contained and observable."}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Verify schema migration and store methods are backward compatible."}

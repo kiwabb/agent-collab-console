@@ -289,6 +289,16 @@ async def _refresh_task_result(task):
                     logger.debug("ProjectConductor notify_subagent_complete failed for task %s: %s", task.id, exc)
         except Exception as exc:  # noqa: BLE001
             logger.exception("persist_result failed for task %s (role=%s)", task.id, getattr(task, "role", None))
+            # GAP E: surface the schema/persist failure to the Conductor instead of
+            # silently leaving a `done` task with an empty artifact. This marker is
+            # read in WorkflowScheduler.on_task_completed, which then signals the
+            # Conductor with status=artifact_invalid so it can re-dispatch the role
+            # with a corrective prompt rather than proceeding on a malformed result.
+            task._validation_error = {
+                "type": type(exc).__name__,
+                "message": str(exc)[:800],
+                "role": getattr(task, "role", None),
+            }
             try:
                 await codex_store.append_project_audit(
                     project_id=getattr(task, "project_id", None),

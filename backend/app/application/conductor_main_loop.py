@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Union
 from uuid import uuid4
 
+from app.application import timeouts
 from app.application.conductor_tools import build_conductor_tools
 from app.application.conductor_lease import get_conductor_lease_owner, get_conductor_lease_ttl_s
 from app.application.conductor_pause_registry import ConductorPauseRegistry
@@ -41,6 +42,14 @@ TokenDeltaRecorder = Callable[..., Union[Awaitable[None], None]]
 
 _TURN_PAYLOAD_LIMIT = 32_768
 _TRACEBACK_LIMIT = 8_000
+# Number of consecutive heartbeat-pulse failures before we emit a structured
+# `conductor_heartbeat_degraded` event (GAP A): the pulse keeps retrying, but a
+# sustained failure means the lease is at risk of expiring, so make it visible.
+HEARTBEAT_DEGRADED_ALERT_AFTER = 3
+# Terminal phases: once a conductor reaches one of these its run is over.
+# A transition *out* of a terminal phase is a resurrection bug and is blocked
+# (GAP C) rather than silently reviving a finished run.
+_TERMINAL_PHASES: frozenset[str] = frozenset({"done", "failed", "stalled"})
 LEGAL_TRANSITIONS: dict[str, set[str]] = {
     "awaiting_llm": {"streaming_llm", "dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed", "stalled"},
     "streaming_llm": {"dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed", "stalled"},
@@ -61,6 +70,45 @@ class ConductorLoopResult:
     messages: list[dict[str, Any]]
     tool_events: list[dict[str, Any]] = field(default_factory=list)
     turn_count: int = 0
+
+
+async def _run_heartbeat_pulse(
+    heartbeat: Callable[[], Awaitable[None]],
+    interval: float,
+    *,
+    on_degraded: Callable[[int, Exception], Awaitable[None]] | None = None,
+    alert_after: int = HEARTBEAT_DEGRADED_ALERT_AFTER,
+) -> None:
+    """Background lease-renewal loop (GAP A).
+
+    Renews the conductor lease every ``interval`` seconds so it never expires
+    while the loop is blocked awaiting a slow subagent. Resilient by design: a
+    transient ``heartbeat`` failure is logged and counted but NEVER kills the
+    loop — if it did, the lease would silently expire and the recovery watchdog
+    would relaunch a duplicate conductor, the exact bug this pulse prevents.
+    After ``alert_after`` consecutive failures ``on_degraded`` is invoked once
+    so the degradation is observable instead of silent.
+    """
+    log = logging.getLogger(__name__)
+    consecutive_failures = 0
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await heartbeat()
+            consecutive_failures = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            consecutive_failures += 1
+            log.warning(
+                "conductor heartbeat pulse failed (%d consecutive): %s",
+                consecutive_failures, exc,
+            )
+            if consecutive_failures == alert_after and on_degraded is not None:
+                try:
+                    await on_degraded(consecutive_failures, exc)
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 async def run_conductor_loop(
@@ -393,19 +441,34 @@ async def run_issue_conductor_loop(
         conductor_task.updated_at = now
         await store.save_conductor_task(conductor_task)
 
+    async def _on_heartbeat_degraded(n: int, exc: Exception) -> None:
+        await _append_event(event_bus, {
+            "type": "conductor_heartbeat_degraded",
+            "issue_id": issue.id,
+            "conductor_task_id": conductor_task.id,
+            "consecutive_failures": n,
+            "error": str(exc),
+        })
+
     async def heartbeat_pulse() -> None:
-        # Renew the lease on a background cadence so it never expires while the
-        # loop is blocked awaiting a slow subagent (up to 900s). Without this,
-        # the recovery watchdog falsely declares the live conductor an orphan
-        # once the lease TTL (default 180s) elapses and relaunches a duplicate.
-        interval = max(15, lease_ttl_s // 3)
-        while True:
-            await asyncio.sleep(interval)
-            await heartbeat()
+        # Delegates to the resilient module-level pulse (GAP A): renews the lease
+        # while the loop is blocked on a slow subagent, surviving transient save
+        # failures so the lease never silently expires (which would trigger a
+        # duplicate-conductor relaunch).
+        await _run_heartbeat_pulse(
+            heartbeat,
+            timeouts.lease_pulse_interval_s(),
+            on_degraded=_on_heartbeat_degraded,
+        )
 
     async def persist_turn(*, turn_index: int, sub_index: int, kind: str, payload: dict[str, Any]) -> None:
         nonlocal current_turn_index
-        await heartbeat()
+        # Non-fatal: the background pulse is the authoritative lease renewer;
+        # a transient blip here must not crash the loop.
+        try:
+            await heartbeat()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("conductor heartbeat (persist_turn) failed for issue %s: %s", issue.id, exc)
         if kind == "llm_request":
             current_turn_index = turn_index
             await set_phase("awaiting_llm")
@@ -562,6 +625,8 @@ You can also use specialist roles: security_reviewer, perf_reviewer, doc_writer,
 - Pass `prev_node_key` as the node_key of the agent you just dispatched (for graph visualization)
 - If a subagent result shows `clarification_question`, use `request_user_clarification` to ask the user
 - If QA fails (status=failed), consider dispatching `engineer` again with the QA failure in the prompt
+- If a subagent returns `status=artifact_invalid`, its output did not match the expected schema (see `validation_error`). Re-dispatch the SAME role with a corrective prompt that restates the required output schema and what was wrong — do NOT proceed as if it succeeded
+- If a dispatch returns `status=retries_exhausted`, that role has already been retried the maximum number of times. Do NOT dispatch it again — either try a different role, `request_user_clarification`, or `finalize_task` with a summary of what's blocked
 - When all work is complete, call `finalize_task` with a summary
 - You MUST call `finalize_task` to end the loop
 
@@ -883,6 +948,31 @@ async def transition_conductor_phase(
         payload = {k: v for k, v in payload.items() if k not in {"resume_phase", "resume_detail"}}
 
     is_legal = _is_legal_transition(current_phase, phase)
+    # GAP C — force-fail policy: classify illegal transitions instead of always
+    # warn-and-apply. A transition leaving a terminal phase (done/failed/stalled)
+    # would resurrect a finished conductor into active work — corrupt state that
+    # we must not apply. Block it (keep the run terminal) and surface it. Other
+    # illegal transitions keep the historical warn-and-apply behaviour below.
+    if not is_legal and current_phase in _TERMINAL_PHASES:
+        logging.getLogger(__name__).error(
+            "Blocked illegal resurrection of terminal conductor for issue %s: %s -> %s",
+            issue_id, current_phase, phase,
+        )
+        await _append_event(
+            event_bus,
+            {
+                "type": "conductor_state_violation",
+                "issue_id": issue_id,
+                "conductor_task_id": conductor_task.id,
+                "from_phase": current_phase,
+                "to_phase": phase,
+                "from_detail": current_detail,
+                "to_detail": detail,
+                "blocked": True,
+                "transition_at": datetime.now().isoformat(),
+            },
+        )
+        return
     transition_at = datetime.now()
     conductor_task.status = new_status
     conductor_task.payload = {

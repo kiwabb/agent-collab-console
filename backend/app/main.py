@@ -26,6 +26,17 @@ async def lifespan(app: FastAPI):
     from app.application.event_bus import event_bus
     event_bus.set_loop(asyncio.get_running_loop())
 
+    # Validate the timeout ladder (single source of truth in app.application.timeouts).
+    # Logs every invariant violation at ERROR level so a bad env combo (e.g. a
+    # lease TTL longer than the subagent idle budget, which would cause orphan
+    # relaunches) is loud at boot rather than a subtle runtime bug. Non-strict so
+    # a misconfig doesn't brick the server.
+    try:
+        from app.application import timeouts
+        timeouts.validate(strict=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("timeout config validation errored: %s", exc)
+
     # Recover orphan execution_processes left over from a previous backend
     # process. Under `uvicorn --reload` the parent gets SIGKILLed mid-stream
     # and child SDK subprocesses die — the DB rows stay `status=Running`

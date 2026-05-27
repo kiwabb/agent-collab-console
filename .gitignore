@@ -9,6 +9,9 @@ backend/**/*.pyc
 backend/**/__pycache__/
 
 # Database
+/console.db
+/console.db-shm
+/console.db-wal
 backend/console.db
 backend/console.db-shm
 backend/console.db-wal

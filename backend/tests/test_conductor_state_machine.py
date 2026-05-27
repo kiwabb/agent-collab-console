@@ -70,7 +70,13 @@ async def test_transition_records_state_log_and_updates_estimates(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_illegal_transition_emits_warning_event_and_persists_flag(tmp_path):
+async def test_illegal_transition_from_terminal_is_blocked(tmp_path):
+    """GAP C: a terminal conductor must not be resurrected into active work.
+
+    The transition is blocked (the run stays terminal) and surfaced via a
+    `conductor_state_violation` event with `blocked=True`. No phase change is
+    recorded, since none happened.
+    """
     store = AsyncSQLiteStore(tmp_path / "console.db")
     event_bus = MagicMock()
     event_bus.append = AsyncMock()
@@ -98,12 +104,63 @@ async def test_illegal_transition_emits_warning_event_and_persists_flag(tmp_path
     entries = await store.list_conductor_state_logs("issue-2", limit=10, descending=False)
     await store.close()
 
-    assert len(entries) == 1
-    assert entries[0].is_legal is False
+    # Resurrection blocked: task stays terminal, no state-log transition recorded.
+    assert task.status == "done"
+    assert task.payload["phase"] == "done"
+    assert entries == []
     assert any(
         call.args[0].get("type") == "conductor_state_violation"
         and call.args[0].get("from_phase") == "done"
         and call.args[0].get("to_phase") == "awaiting_llm"
+        and call.args[0].get("blocked") is True
+        for call in event_bus.append.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_illegal_transition_from_active_phase_warns_and_applies(tmp_path):
+    """Non-terminal illegal transitions keep the historical warn-and-apply path.
+
+    `awaiting_subagent -> dispatching_subagent` is illegal (must go through
+    awaiting_llm) but the source is not terminal, so it is recorded as illegal
+    and still applied, with a (non-blocked) violation event.
+    """
+    store = AsyncSQLiteStore(tmp_path / "console.db")
+    event_bus = MagicMock()
+    event_bus.append = AsyncMock()
+    task = ConductorTask(
+        id="task-warn",
+        project_id="proj-1",
+        task_kind="issue",
+        issue_id="issue-warn",
+        payload={"phase": "awaiting_subagent", "detail": "engineer"},
+        status="running",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+
+    await transition_conductor_phase(
+        store=store,
+        event_bus=event_bus,
+        issue_id="issue-warn",
+        conductor_task=task,
+        phase="dispatching_subagent",
+        detail="qa",
+        status="running",
+        estimator=get_phase_duration_estimator(store),
+    )
+
+    entries = await store.list_conductor_state_logs("issue-warn", limit=10, descending=False)
+    await store.close()
+
+    # Applied (warn-only): phase changed and an illegal state-log entry recorded.
+    assert task.payload["phase"] == "dispatching_subagent"
+    assert len(entries) == 1
+    assert entries[0].is_legal is False
+    assert any(
+        call.args[0].get("type") == "conductor_state_violation"
+        and call.args[0].get("to_phase") == "dispatching_subagent"
+        and not call.args[0].get("blocked")
         for call in event_bus.append.call_args_list
     )
 

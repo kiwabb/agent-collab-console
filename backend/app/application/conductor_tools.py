@@ -1,6 +1,7 @@
 """Tool registry for the ProjectConductor loop."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -9,6 +10,19 @@ from app.application.project_conductor import ProjectConductor
 
 ToolCallable = Callable[[dict[str, Any]], Awaitable[Any]]
 ToolStatusCallback = Callable[[str, str | None], Awaitable[None] | None]
+
+
+def _max_dispatches_per_role() -> int:
+    """GAP G: max times the Conductor may dispatch the same role for one issue
+    before the tool returns `retries_exhausted`. Allows the initial run plus a
+    few reworks (e.g. engineer after QA failure) without unbounded looping."""
+    raw = os.getenv("CONDUCTOR_MAX_DISPATCHES_PER_ROLE")
+    if not raw:
+        return 4
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 4
 
 
 @dataclass(frozen=True)
@@ -59,6 +73,39 @@ def build_conductor_tools(
         if issue is None:
             return {"error": f"Issue {issue_id} not found"}
 
+        # GAP G: bound re-dispatch. Each dispatch of a role adds a graph node
+        # (role, role#1, role#2…); past the budget the Conductor is stuck in a
+        # rework loop, so return a terminal `retries_exhausted` to stop it from
+        # hammering the same role forever.
+        if role:
+            try:
+                graph = await store.load_workflow_graph_for_issue(issue_id)
+            except Exception:  # noqa: BLE001
+                graph = None
+            if graph is not None:
+                same_role = sum(
+                    1 for n in (graph.nodes or [])
+                    if n.node_key == role or n.node_key.startswith(f"{role}#")
+                )
+                max_dispatches = _max_dispatches_per_role()
+                if same_role >= max_dispatches:
+                    await _emit(event_bus, "conductor_tool", {
+                        "tool": "dispatch_subagent",
+                        "role": role,
+                        "status": "retries_exhausted",
+                        "dispatches": same_role,
+                    })
+                    return {
+                        "status": "retries_exhausted",
+                        "role": role,
+                        "dispatches": same_role,
+                        "max_dispatches": max_dispatches,
+                        "note": (
+                            f"role '{role}' already dispatched {same_role} times "
+                            f"(max {max_dispatches}); do not re-dispatch it"
+                        ),
+                    }
+
         try:
             await _notify_status(on_status, "dispatching_subagent", detail)
             task_id, node_id = await dispatch_role(
@@ -88,16 +135,15 @@ def build_conductor_tools(
         # gpt-5.5 QA pass that streams for >900s) must NOT be abandoned and
         # redispatched — that discards its work. Keep waiting while it shows
         # recent activity; only give up on a genuine stall or the hard ceiling.
-        import os
         from datetime import datetime
-        from app.application import task_activity
+        from app.application import task_activity, timeouts
 
         def _activity_age(tid: str) -> float | None:
             last = task_activity.last_activity.get(tid)
             return None if last is None else (datetime.now() - last).total_seconds()
 
-        idle_timeout = float(os.getenv("CONDUCTOR_SUBAGENT_IDLE_S", "600"))
-        hard_timeout = float(os.getenv("CONDUCTOR_SUBAGENT_MAX_S", "3600"))
+        idle_timeout = timeouts.subagent_idle_s()
+        hard_timeout = timeouts.subagent_max_s()
         try:
             result = await registry.wait_for_active(
                 task_id,

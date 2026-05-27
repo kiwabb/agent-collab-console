@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "审查必看：确认实现是复用 AgentMessage / save_agent_message / handoff 类型 / agent_message_posted 事件，未引入新 schema / 新枚举值 / 新前端组件。任何重写都需明确理由否则打回。"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "后端质量基线复核：try/except 粒度合理、没有裸 except、logger 用法正确、没有引入同步阻塞 IO。"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "数据库写入复核：异步、短事务、失败降级；不能因 mesh 写入失败让 task 创建回滚。"}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "错误处理复核：mesh 写入 + event emit 任一失败都不能阻塞 dispatch_role 返回 task_id；日志降级到 warning 而非 error。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层思考：后端写入 mesh + emit 事件后，前端 CollabFeedTab 是否真能拿到（事件 payload 字段名、issue_id 匹配、message_type 命中前端 TYPE_CONFIG）。"}

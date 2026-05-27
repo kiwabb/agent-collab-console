@@ -33,6 +33,13 @@ export type BusEventType =
   | "conductor_failed"
   | "conductor_status"
   | "conductor_state_violation"
+  | "conductor_heartbeat_degraded"
+  | "conductor_relaunch_exhausted"
+  | "artifact_validation_failed"
+  | "stall_detected"
+  | "stall_recovered"
+  | "stall_nudge_failed"
+  | "executor_failed_to_start"
   | "resume_gap"
   | "agent_message_posted";
 

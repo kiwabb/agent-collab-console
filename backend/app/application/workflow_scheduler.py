@@ -66,6 +66,32 @@ class WorkflowScheduler:
         except Exception as exc:  # noqa: BLE001
             logger.debug("workflow_node_updated emit failed: %s", exc)
 
+    async def _emit_artifact_validation_failed(
+        self,
+        task: CodexTask,
+        node: WorkflowNode,
+        issue: CodexIssue | None,
+        validation_error: dict,
+    ) -> None:
+        """GAP E/J: structured signal that a subagent's artifact failed schema
+        validation, so the UI can flag it and the Conductor's re-dispatch is
+        observable. Best-effort — never let observability break the hook."""
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.append({
+                "type": "artifact_validation_failed",
+                "issue_id": issue.id if issue is not None else task.issue_id,
+                "session_id": issue.session_id if issue is not None else None,
+                "task_id": task.id,
+                "node_id": node.id,
+                "node_key": node.node_key,
+                "role": task.role,
+                "validation_error": validation_error,
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("artifact_validation_failed emit failed: %s", exc)
+
     async def on_task_completed(self, task: CodexTask) -> None:
         """Hook called by the task runner once a task ends."""
         if not getattr(task, "workflow_node_id", None):
@@ -105,16 +131,28 @@ class WorkflowScheduler:
                     node=node,
                     doc=getattr(task, "_subagent_doc", None),
                 )
-                reg.signal(task.id, {
+                # GAP E: if artifact persistence failed schema validation, the task
+                # is `done` but its structured artifact is missing/malformed. Tell
+                # the Conductor explicitly (status=artifact_invalid) so it can
+                # re-dispatch with a corrective prompt instead of proceeding on a
+                # silent empty handoff. Surface a structured event for observability.
+                validation_error = getattr(task, "_validation_error", None)
+                signal_payload = {
                     "task_id": task.id,
                     "role": task.role,
-                    "status": task.status,
+                    "status": "artifact_invalid" if validation_error else task.status,
                     "summary": subagent_result.summary,
                     "artifact_json": subagent_result.artifact_json,
                     "files_changed": subagent_result.files_changed,
                     "qa_commands": subagent_result.qa_commands,
                     "clarification_question": subagent_result.clarification_question,
-                })
+                }
+                if validation_error:
+                    signal_payload["validation_error"] = validation_error
+                    await self._emit_artifact_validation_failed(
+                        task, node, issue_for_event, validation_error
+                    )
+                reg.signal(task.id, signal_payload)
             except Exception:  # noqa: BLE001
                 reg.signal(task.id, {
                     "task_id": task.id,

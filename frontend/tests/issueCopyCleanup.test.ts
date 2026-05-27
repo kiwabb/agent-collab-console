@@ -52,6 +52,8 @@ test("remaining issue-facing views are wired to i18n", () => {
   assert.match(issueBoard, /t\("issue\.toast\.created"\)/);
   assert.match(issueBoard, /t\("issue\.import\.title"\)/);
   assert.match(issueBoard, /t\("issue\.bulkDelete\.title"\)/);
+  assert.match(issueBoard, /t\("issue\.exportJson"\)/);
+  assert.match(issueBoard, /t\("issue\.importAction"\)/);
   // Acceptance checklist now lives in IssueSideStack (post-refactor).
   assert.match(sideStack, /t\("issue\.side\.acceptance"\)/);
   assert.match(steerDialog, /t\("issue\.steerDialogTitle"\)/);
@@ -59,4 +61,34 @@ test("remaining issue-facing views are wired to i18n", () => {
   assert.match(inboxDashboard, /useI18n/);
   assert.match(inboxDashboard, /t\("inbox\.firstRunTitle"\)/);
   assert.match(inboxDashboard, /t\("inbox\.firstRun\.openIssues"\)/);
+  assert.match(inboxDashboard, /t\("inbox\.statusDistribution"\)/);
+  assert.match(inboxDashboard, /t\(statusLabelKey\(issue\.status\)\)/);
+});
+
+test("complete frontend i18n pass exposes newly localized keys", () => {
+  const cases = [
+    ["zh-CN", "project.dashboard.newWorkspace", "新建工作区"],
+    ["en-US", "project.dashboard.newWorkspace", "New workspace"],
+    ["zh-CN", "taskExecution.toast.runFailed", "运行失败"],
+    ["en-US", "taskExecution.toast.runFailed", "Run failed"],
+    ["zh-CN", "issue.retryNodeTitle", "重试这个失败节点？"],
+    ["en-US", "issue.retryNodeTitle", "Retry this failed node?"],
+    ["zh-CN", "inbox.statusDistribution", "状态分布"],
+    ["en-US", "inbox.statusDistribution", "Status distribution"],
+  ] as const;
+
+  cases.forEach(([locale, key, value]) => {
+    assert.equal(getDictionaryValue(locale, key), value);
+  });
+
+  const projectDashboard = readSource("features/projects/ProjectDashboard.tsx");
+  const taskExecutionSheet = readSource("features/workbench/components/TaskExecutionSheet.tsx");
+  const tasksRunsTab = readSource("features/issues/tabs/TasksRunsTab.tsx");
+  const dagTab = readSource("features/issues/tabs/DagTab.tsx");
+
+  assert.match(projectDashboard, /t\("project\.dashboard\.workspaceCreateFailed"\)/);
+  assert.match(taskExecutionSheet, /t\("taskExecution\.toast\.terminateFailed"\)/);
+  assert.match(tasksRunsTab, /t\("task\.runDispatched"\)/);
+  assert.match(tasksRunsTab, /t\("run\.emptyDescription"\)/);
+  assert.match(dagTab, /t\("issue\.retryNodeBody"/);
 });

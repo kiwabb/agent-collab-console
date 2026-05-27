@@ -70,6 +70,77 @@ def test_is_stale_true_for_expired_lease_without_live_session():
     ) is True
 
 
+def _make_stall(issue_id: str) -> ConductorTask:
+    ct = _make_ct(issue_id=issue_id, status="stalled", expired=True)
+    ct.payload = {**ct.payload, "stalled_reason": "orphaned_conductor_runner"}
+    return ct
+
+
+async def test_count_orphan_stalls_filters_by_issue_and_reason():
+    issue_id = "issue-count"
+    other = _make_stall("issue-other")
+    unrelated = _make_ct(issue_id=issue_id, status="stalled", expired=True)  # no orphan reason
+    store = MagicMock()
+    store.list_conductor_tasks = AsyncMock(
+        return_value=[_make_stall(issue_id), _make_stall(issue_id), other, unrelated]
+    )
+    count = await conductor_recovery._count_orphan_stalls(store, issue_id)
+    assert count == 2  # only this issue's orphaned-runner stalls
+
+
+async def test_relaunch_circuit_breaker_trips_after_max(monkeypatch):
+    """A crash-looping issue stops relaunching after the budget and seals failed."""
+    monkeypatch.setenv("CONDUCTOR_MAX_RELAUNCHES", "3")
+    issue_id = "issue-loop"
+    running_ct = _make_ct(issue_id=issue_id, status="running", expired=True)
+    # 4 orphan stalls on record == 3 relaunches already done == budget exhausted.
+    prior_stalls = [_make_stall(issue_id) for _ in range(4)]
+
+    async def _list(*, status=None):
+        if status == "running":
+            return [running_ct]
+        if status == "stalled":
+            return prior_stalls
+        return []
+
+    store = MagicMock()
+    store.list_conductor_tasks = AsyncMock(side_effect=_list)
+    store.save_conductor_task = AsyncMock()
+    store.load_codex_issue = AsyncMock(
+        return_value=MagicMock(status="open", project_id="proj-1", id=issue_id, session_id="sess-1")
+    )
+    store.load_latest_conductor_task_for_issue = AsyncMock(return_value=prior_stalls[-1])
+    store.load_workflow_graph_for_issue = AsyncMock(return_value=None)
+    store.save_codex_issue = AsyncMock()
+
+    events: list[dict] = []
+    event_bus = MagicMock()
+    event_bus.append = AsyncMock(side_effect=lambda e: events.append(e))
+
+    with patch.object(conductor_recovery, "transition_conductor_phase", new=AsyncMock()), \
+         patch.object(conductor_recovery, "get_phase_duration_estimator", return_value=MagicMock()), \
+         patch("app.application.conductor_main_loop.run_issue_conductor_loop", new=AsyncMock()) as relaunch:
+        await recover_orphaned_conductors(
+            store,
+            event_bus=event_bus,
+            current_owner=get_conductor_lease_owner(),
+            stale_after_s=180,
+            recover_foreign_owner=False,
+            auto_restart=True,
+        )
+
+    relaunch.assert_not_called()  # breaker tripped — no new loop
+    assert any(e.get("type") == "conductor_relaunch_exhausted" for e in events)
+    exhausted = next(e for e in events if e.get("type") == "conductor_relaunch_exhausted")
+    assert exhausted["relaunch_attempts"] == 3
+    assert exhausted["max_relaunches"] == 3
+    # Issue sealed failed.
+    assert any(
+        e.get("type") == "issue_updated" and e.get("status") == "failed" for e in events
+    )
+    store.save_codex_issue.assert_awaited()
+
+
 async def test_recover_marks_stalled_but_skips_relaunch_when_live_session_exists():
     """A stale OLD row is cleaned up, but no duplicate loop is launched while a
     live session for the same issue still runs."""

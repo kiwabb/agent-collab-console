@@ -26,6 +26,7 @@ import { useI18n } from "@/providers/I18nProvider";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { StatusStrip } from "./components/StatusStrip";
 import { LatestFailureAlert } from "./components/LatestFailureAlert";
+import { ConductorAlerts } from "./components/ConductorAlerts";
 import { DecisionTimeline } from "./components/DecisionTimeline";
 import { ArtifactsPanel } from "./components/ArtifactsPanel";
 import { IssueDiffPanel } from "./components/IssueDiffPanel";
@@ -37,6 +38,7 @@ import { SteerIssueDialog } from "./components/SteerIssueDialog";
 import { useConductorPhase } from "./hooks/useConductorPhase";
 import { useDecisionTimeline, type DecisionTimelineItem } from "./hooks/useDecisionTimeline";
 import { useLatestFailure } from "./hooks/useLatestFailure";
+import { useConductorAlerts } from "./hooks/useConductorAlerts";
 
 interface Props {
   issueId: string;
@@ -65,6 +67,7 @@ export function IssueDetailPage({ issueId }: Props) {
   const phase = useConductorPhase(issueId);
   const { items: timeline, refresh: refreshTimeline, liveThinking } = useDecisionTimeline(issueId, tasks, subAgentResults);
   const latestFailure = useLatestFailure(tasks, timeline);
+  const { alerts: conductorAlerts, dismiss: dismissAlert } = useConductorAlerts(issueId);
   // Resolve the open drawer's item from the live timeline so it reflects the
   // running sub-agent's latest EP id / status / result. A timeline refresh can
   // momentarily not contain the item (e.g. turns refetch in flight); fall back
@@ -210,6 +213,7 @@ export function IssueDetailPage({ issueId }: Props) {
             onSteer={() => void handleRestartOrSteer()}
             onReset={() => setResetConfirmOpen(true)}
           />
+          <ConductorAlerts alerts={conductorAlerts} onDismiss={dismissAlert} />
           <LatestFailureAlert
             failure={latestFailure}
             onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
