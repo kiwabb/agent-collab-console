@@ -61,7 +61,14 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
   const Icon = BUCKET_ICON[bucket];
   const progress = getPhaseProgress(issue.current_phase);
   const currentRole = pickCurrentRole(issue, tasks);
-  const percent = Math.max(8, Math.round((progress.index / progress.total) * 100));
+  // Terminal completion is authoritative over current_phase: a Conductor-driven
+  // issue often finishes without advancing current_phase past "requirements"
+  // (no fixed DAG), so a completed issue must still render as fully done rather
+  // than stuck at 1/4. See CLAUDE.md "WorkflowGraph 是 Conductor 决策时间线".
+  const isComplete = bucket === "done";
+  const displayIndex = isComplete ? progress.total : progress.index;
+  const percent = isComplete ? 100 : Math.max(8, Math.round((progress.index / progress.total) * 100));
+  const phaseLabel = isComplete ? t("workspace.console.status.done") : progress.label;
   const statusLabel =
     bucket === "running" ? t("workspace.console.status.running")
     : bucket === "done" ? t("workspace.console.status.done")
@@ -125,13 +132,13 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
             {getWorkspaceConsoleRoleLabel(currentRole)}
           </span>
           <span className="font-mono text-text-muted">
-            {progress.index}/{progress.total}
+            {displayIndex}/{progress.total}
           </span>
         </div>
         <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-raised">
           <div className="h-full rounded-full bg-[linear-gradient(90deg,#22d3ee,#84cc16)] transition-all" style={{ width: `${percent}%` }} />
         </div>
-        <div className="mt-1 text-[11px] capitalize text-text-muted">{progress.label}</div>
+        <div className="mt-1 text-[11px] capitalize text-text-muted">{phaseLabel}</div>
       </div>
 
       <div className="flex items-center justify-end gap-2 max-lg:justify-start">
