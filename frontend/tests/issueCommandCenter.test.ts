@@ -46,16 +46,24 @@ function makeTask(overrides: Partial<CodexTask>): CodexTask {
   };
 }
 
-test("issue detail page uses command-center sections instead of six tabs", () => {
+test("issue detail page is a command-center over a 4-tab workbench", () => {
   const source = readSource("features/issues/IssueDetailPage.tsx");
 
-  assert.doesNotMatch(source, /TabsList|TabsTrigger|DagTab|TasksRunsTab|AgentTabContent/);
+  // The legacy six-tab components stay retired (no DAG/TasksRuns/Agent tabs).
+  assert.doesNotMatch(source, /DagTab|TasksRunsTab|AgentTabContent/);
+  // Command-center sections frame the workbench: status + failure alert on top,
+  // chat bar docked below, dispatch detail in a drawer.
   assert.match(source, /<StatusStrip/);
   assert.match(source, /<LatestFailureAlert/);
-  assert.match(source, /<DecisionTimeline/);
-  assert.match(source, /<SecondaryAccordion/);
-  assert.match(source, /<CommandCenterChatBar/);
   assert.match(source, /<WsConnectionBanner/);
+  assert.match(source, /<CommandCenterChatBar/);
+  assert.match(source, /<DispatchDrawer/);
+  // Workbench is a 4-tab layout with the decision timeline as the primary tab.
+  assert.match(source, /defaultValue="timeline"/);
+  assert.match(source, /<DecisionTimeline/);
+  for (const value of ["timeline", "artifacts", "diff", "mesh"]) {
+    assert.match(source, new RegExp(`value="${value}"`));
+  }
 });
 
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {
