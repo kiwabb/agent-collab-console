@@ -22,6 +22,8 @@ import { AgentDecisionDrawer } from "@/features/issues/components/AgentDecisionD
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 
+import { Loader } from "@/components/ui/loader";
+
 interface Props {
   issueId: string;
 }
@@ -207,7 +209,8 @@ export function DagTab({ issueId }: Props) {
         </div>
       )}
 
-      {view === "loading" && <div className="text-sm text-text-muted">Loading…</div>}
+      {view === "loading" && <Loader variant="card" label="Loading Workflow Graph..." />}
+
 
       {view === "no-graph" && (
         <div className="flex flex-col gap-4 items-center justify-center py-12">

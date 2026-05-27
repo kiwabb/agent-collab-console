@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import type { Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
+import { Loader } from "@/components/ui/loader";
 
 interface Props {
   projects: Project[];
@@ -110,8 +111,13 @@ export function TeamNotesEditor({ projects, projectId, onProjectChange }: Props)
         {!projectId ? (
           <Empty>{t("teamNotes.selectProject")}</Empty>
         ) : visible.length === 0 ? (
-          <Empty>{loading ? t("teamNotes.loading") : t("teamNotes.empty")}</Empty>
+          loading ? (
+            <Loader variant="card" label={t("teamNotes.loading")} className="h-64 min-h-0 border-0 bg-transparent" />
+          ) : (
+            <Empty>{t("teamNotes.empty")}</Empty>
+          )
         ) : (
+
           <ul className="flex flex-col gap-2">
             {visible.map((b) => (
               <li

@@ -5,6 +5,8 @@ import { WorkbenchShell } from "@/features/workbench/WorkbenchShell";
 import { IssueDetailPage } from "@/features/issues/IssueDetailPage";
 import { getCodexIssue } from "@/lib/api";
 
+import { Loader } from "@/components/ui/loader";
+
 export default function Page({ params }: { params: Promise<{ id: string }> }) {
   const [id, setId] = useState<string | null>(null);
   // Resolve the issue's owning workspace so WorkbenchShell can open the
@@ -41,10 +43,11 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
   if (!id) {
     return (
       <WorkbenchShell breadcrumbs={[{ label: "Issue" }]}>
-        <div className="p-8 text-sm text-text-muted">Loading…</div>
+        <Loader variant="full" label="Loading Issue Details..." />
       </WorkbenchShell>
     );
   }
+
 
   return (
     <WorkbenchShell

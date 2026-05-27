@@ -15,6 +15,7 @@ import { Plus, FolderGit2, GitBranch as GitBranchIcon } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { emitDataEvent } from "@/lib/dataEvents";
 import { useI18n } from "@/providers/I18nProvider";
+import { Loader } from "@/components/ui/loader";
 
 interface Props {
   projectId: string;
@@ -67,7 +68,8 @@ export function ProjectDashboard({ projectId }: Props) {
     }
   }, [newTitle, projectId, router, addToast, t]);
 
-  if (!project) return <div className="p-8 text-text-muted">Loading…</div>;
+  if (!project) return <Loader variant="full" label="Loading Project..." />;
+
 
   return (
     <div className="px-8 py-6 max-w-6xl mx-auto">

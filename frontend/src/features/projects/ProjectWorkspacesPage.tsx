@@ -42,6 +42,7 @@ import { emitDataEvent } from "@/lib/dataEvents";
 import { workspaceLabel } from "@/lib/workspaceLabel";
 import { useI18n } from "@/providers/I18nProvider";
 import { ProjectShell } from "@/features/projects/ProjectShell";
+import { Loader } from "@/components/ui/loader";
 
 interface Props {
   projectId: string;
@@ -258,8 +259,9 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             <div className="text-right">{t("workspace.table.actions")}</div>
           </div>
           {loading ? (
-            <div className="py-10 text-center text-sm text-text-muted">{t("workspace.loading")}</div>
-          ) : filtered.length === 0 ? (
+            <Loader variant="card" label={t("workspace.loading")} className="border-0 bg-transparent rounded-none min-h-[200px]" />
+          ) :
+ filtered.length === 0 ? (
             <div className="py-12 text-center">
               <p className="text-sm text-text-muted">
                 {query

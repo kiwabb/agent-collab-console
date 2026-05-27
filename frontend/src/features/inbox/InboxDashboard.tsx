@@ -296,6 +296,8 @@ export function InboxDashboard() {
   );
 }
 
+import { Loader } from "@/components/ui/loader";
+
 function RecentKnowledgeCard({
   items,
   onOpenProject,
@@ -315,8 +317,11 @@ function RecentKnowledgeCard({
         <span className="ml-auto text-[11px] text-text-muted">{items.length}</span>
       </div>
       {loading ? (
-        <div className="px-4 py-4 text-[12px] text-text-muted">…</div>
+        <div className="flex justify-center py-6">
+          <Loader variant="inline" label={t("teamNotes.loading")} />
+        </div>
       ) : items.length === 0 ? (
+
         <div className="px-4 py-4 text-[12px] text-text-muted">
           {t("inbox.recentKnowledgeEmpty")}
         </div>

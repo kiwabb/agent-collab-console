@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Inbox } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Loader } from "@/components/ui/loader";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { CodexIssue, CodexTask, Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
@@ -64,10 +65,9 @@ export function IssueListPanel({
 
       <div className="h-full min-h-0 overflow-auto p-3">
         {isLoading && (
-          <div className="flex h-48 items-center justify-center text-sm text-text-muted">
-            {t("workspace.console.loading")}
-          </div>
+          <Loader variant="card" label={t("workspace.console.loading")} className="border-0 bg-transparent rounded-none h-48 min-h-0" />
         )}
+
 
         {!isLoading && issues.length === 0 && (
           <div className="flex h-64 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border-subtle bg-surface-input/40 px-6 text-center">
