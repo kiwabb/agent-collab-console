@@ -28,7 +28,7 @@ export function DiffSplitView({ diff }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-[300px_minmax(0,1fr)] h-[520px] border-t border-border-subtle">
+    <div className="grid grid-cols-[300px_minmax(0,1fr)] grid-rows-1 flex-1 min-h-0 border-t border-border-subtle">
       <div className="border-r border-border-subtle overflow-y-auto py-1.5 bg-surface">
         {files.map((f, i) => (
           <FileRow
@@ -39,7 +39,7 @@ export function DiffSplitView({ diff }: Props) {
           />
         ))}
       </div>
-      <div className="flex flex-col min-w-0 bg-[#0a0a0b]">
+      <div className="flex flex-col min-w-0 min-h-0 bg-[#0a0a0b]">
         <DiffHead file={active} />
         <DiffCode lines={active?.lines ?? []} />
       </div>

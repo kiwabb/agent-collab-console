@@ -319,8 +319,8 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
   }, [pendingAbandon, addToast, t]);
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto no-scrollbar p-6 flex flex-col gap-6">
-      <div className="flex items-center justify-between -mt-2">
+    <div className="h-full min-h-0 overflow-y-auto p-6 flex flex-col gap-6">
+      <div className="flex items-center justify-between -mt-2 shrink-0">
         <div className="text-[11px] text-text-muted">
           {lastFetched ? <>{t("task.diffMerge.lastRefreshed", { time: formatTimeAgo(lastFetched, t) })}</> : "—"}
         </div>
@@ -335,7 +335,7 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         </Button>
       </div>
 
-      <section className="rounded-lg border border-border-subtle p-4">
+      <section className="rounded-lg border border-border-subtle p-4 shrink-0">
         <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">{t("task.review.title")}</h3>
         {reviewableTask ? (
           <div className="flex flex-col gap-3">
@@ -382,7 +382,7 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         )}
       </section>
 
-      <section className="rounded-lg border border-border-subtle p-4 flex flex-col gap-3">
+      <section className="rounded-lg border border-border-subtle p-4 flex flex-col gap-3 shrink-0">
         <h3 className="text-xs font-black uppercase tracking-widest text-text-muted">{t("task.diffMerge.branchOperations")}</h3>
         <div className="text-xs text-text-muted">
           {t("task.branch")}: <code className="font-mono">{issue?.git_branch ?? "—"}</code> → {t("task.base")}: <code className="font-mono">{diff?.base_branch ?? "—"}</code>
@@ -512,9 +512,9 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-border-subtle overflow-hidden">
+      <section className="rounded-2xl border border-border-subtle overflow-hidden flex-1 min-h-[420px] flex flex-col">
         {/* === diff-toolbar (matches design handoff) === */}
-        <div className="flex items-center justify-between gap-3.5 px-4 py-3 border-b border-border-subtle bg-surface flex-wrap">
+        <div className="flex items-center justify-between gap-3.5 px-4 py-3 border-b border-border-subtle bg-surface flex-wrap shrink-0">
           <div className="flex items-center gap-4 font-mono text-[12px] text-text-muted flex-wrap">
             <span>
               <b className="text-foreground font-medium">

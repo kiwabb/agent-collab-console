@@ -79,7 +79,7 @@ export function ArtifactsSplitView({ artifacts }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-[280px_minmax(0,1fr)] h-full min-h-0 border border-border-subtle rounded-2xl overflow-hidden">
+    <div className="grid grid-cols-[280px_minmax(0,1fr)] grid-rows-1 h-full min-h-0 border border-border-subtle rounded-2xl overflow-hidden">
       {/* === LEFT: file list === */}
       <ul className="border-r border-border-subtle overflow-y-auto py-1.5 bg-surface">
         {sorted.map((a) => {
@@ -118,7 +118,7 @@ export function ArtifactsSplitView({ artifacts }: Props) {
       </ul>
 
       {/* === RIGHT: preview === */}
-      <div className="flex flex-col min-w-0 bg-background/40">
+      <div className="flex flex-col min-w-0 min-h-0 bg-background/40">
         <PreviewHead artifact={active} copyLabel={t("issue.artifacts.previewCopy")} />
         <PreviewBody
           artifact={active}
