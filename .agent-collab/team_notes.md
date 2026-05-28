@@ -167,3 +167,81 @@ _intent: feature · graph status: done_
 - `cd backend && python3 -m pytest tests/test_codex_status_endpoint.py -v`
 **Actually run by QA:**
 - `cd backend && python3 -m pytest tests/test_codex_status_endpoint.py -v → exit 0`
+
+
+<!-- issue:7d520282-dc60-4b2c-b2f7-124586edbeef -->
+## 2026-05-27 17:14 — 为 backend 添加 GET /api/codex/ping 端点，返回 {"pong": true}
+_intent: feature · graph status: done_
+
+**QA verdict:** `passed`
+**Verification commands worth keeping:**
+- `cd backend && python3 -m pytest tests/test_codex_ping_endpoint.py -v`
+**Actually run by QA:**
+- `cd backend && python3 -m pytest tests/test_codex_ping_endpoint.py -v → exit 0`
+
+
+<!-- issue:3063a7b9-d15b-4511-9352-bd8091992d0e -->
+## 2026-05-27 21:31 — 为 backend 添加 GET /api/codex/version 端点，返回 {"version": "0.1.0"}
+_intent: feature · graph status: done_
+
+**Product goals:**
+- 提供一个简单、稳定的 Codex 服务版本查询端点
+- 让开发、QA 或自动化流程可以快速确认后端 API 版本
+- 遵循项目中 /api/codex/heartbeat、/api/codex/status 等轻量端点的实现模式
+
+**Files touched:**
+- `backend/app/interfaces/api.py`
+
+**QA verdict:** `passed`
+**Verification commands worth keeping:**
+- `cd backend && python3 -m pytest tests/test_codex_version_endpoint.py -v`
+**Actually run by QA:**
+- `cd backend && python3 -m pytest tests/test_codex_version_endpoint.py -v → exit 0`
+
+
+<!-- issue:d9814bd2-dab7-4ded-906b-4575845b5a91 -->
+## 2026-05-27 21:51 — 测试
+_intent: feature · graph status: done_
+
+**Product goals:**
+- 待澄清 — 当前无法从测试占位符内容中提取有效产品目标
+
+
+<!-- issue:1a3e4cef-c0c1-48ff-9968-692c3987b8a8 -->
+## 2026-05-27 22:03 — 为 backend 添加 GET /api/codex/echo 端点，返回 {"echo": true}
+_intent: feature · graph status: done_
+
+**Files touched:**
+- `backend/app/interfaces/api.py`
+- `backend/tests/test_codex_echo_endpoint.py`
+
+**QA verdict:** `passed`
+**Verification commands worth keeping:**
+- `cd backend && python3 -m pytest tests/test_codex_echo_endpoint.py -v`
+**Actually run by QA:**
+- `cd backend && python3 -m pytest tests/test_codex_echo_endpoint.py -v → exit 0`
+
+
+<!-- issue:46439409-03f8-4b0f-bb91-ff71d503a28e -->
+## 2026-05-28 09:44 — 给 worktree hook 注入加单元测试覆盖 limit 边界值
+_intent: feature · graph status: done_
+
+**Files touched:**
+- `backend/tests/test_worktree_claude_hooks.py`
+
+**QA verdict:** `passed`
+**Verification commands worth keeping:**
+- `cd backend && python3 -m pytest tests/test_worktree_claude_hooks.py -v`
+**Actually run by QA:**
+- `cd backend && python3 -m pytest tests/test_worktree_claude_hooks.py -v → exit 0`
+
+
+<!-- issue:d27edd9b-b9ed-4a85-843f-a7128cdc9127 -->
+## 2026-05-28 10:33 — 为 GET /api/codex/ping 补充响应时间字段
+_intent: feature · graph status: done_
+
+**QA verdict:** `passed`
+**Verification commands worth keeping:**
+- `cd backend && python3 -m pytest tests/test_codex_ping_endpoint.py -v`
+**Actually run by QA:**
+- `cd backend && python3 -m pytest tests/test_codex_ping_endpoint.py -v → exit 0`
