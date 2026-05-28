@@ -144,6 +144,7 @@ class SpecialistOrchestrator:
         await self.event_bus.append({
             "type": "task_status",
             "task_id": parent_task.id,
+            "issue_id": parent_task.issue_id,
             "session_id": parent_task.session_id,
             "status": parent_task.status,
         })
@@ -232,6 +233,7 @@ class SpecialistOrchestrator:
         await self.event_bus.append({
             "type": "task_status",
             "task_id": parent.id,
+            "issue_id": parent.issue_id,
             "session_id": parent.session_id,
             "status": parent.status,
         })

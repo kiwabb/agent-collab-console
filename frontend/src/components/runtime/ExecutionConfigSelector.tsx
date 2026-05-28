@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/providers/I18nProvider";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -30,6 +31,28 @@ interface ExecutionConfigSelectorProps {
 
 function getFirstEnabledExecutor(catalog: RuntimeCatalog | null): RuntimeExecutorConfig | null {
   return catalog?.executors.find((executor) => executor.enabled) ?? null;
+}
+
+/**
+ * Human-readable option text for an executor picker: the user-given name plus a
+ * disambiguating suffix (the API host, or `localLabel` when it runs the local
+ * CLI). Two executors that share a name (e.g. a local "Claude" and a hosted
+ * "Claude") stay tellable apart. Falls back to the id when unnamed.
+ */
+export function describeExecutorOption(
+  executor: { id: string; label?: string | null; api_endpoint?: string | null },
+  localLabel: string,
+): string {
+  const name = (executor.label ?? "").trim() || executor.id;
+  let where = localLabel;
+  if (executor.api_endpoint) {
+    try {
+      where = new URL(executor.api_endpoint).host || executor.api_endpoint;
+    } catch {
+      where = executor.api_endpoint;
+    }
+  }
+  return `${name} · ${where}`;
 }
 
 export function normalizeExecutionConfig(
@@ -68,6 +91,8 @@ export function ExecutionConfigSelector({
   className,
   disabled = false,
 }: ExecutionConfigSelectorProps) {
+  const { t } = useI18n();
+  const localLabel = t("runtime.executor.localCliBadge");
   const normalizedValue = useMemo(
     () => normalizeExecutionConfig(catalog, value.executor, value.provider, value.model),
     [catalog, value.executor, value.provider, value.model],
@@ -127,7 +152,7 @@ export function ExecutionConfigSelector({
           <SelectValue placeholder="Executor">
             {(value) => {
               const match = enabledExecutors.find((e) => e.id === value);
-              return match ? match.label : "Executor";
+              return match ? describeExecutorOption(match, localLabel) : "Executor";
             }}
           </SelectValue>
         </SelectTrigger>
@@ -136,7 +161,7 @@ export function ExecutionConfigSelector({
             <SelectLabel>Executor</SelectLabel>
             {enabledExecutors.map((executor) => (
               <SelectItem key={executor.id} value={executor.id}>
-                {executor.label}
+                {describeExecutorOption(executor, localLabel)}
               </SelectItem>
             ))}
           </SelectGroup>

@@ -225,6 +225,7 @@ class WorkflowScheduler:
                 await self._event_bus.append({
                     "type": "task_status",
                     "task_id": parent.id,
+                    "issue_id": parent.issue_id,
                     "session_id": parent.session_id,
                     "status": parent.status,
                 })

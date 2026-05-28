@@ -289,6 +289,71 @@ class TestRuntimeCatalogService:
         assert provider == "anthropic"
         assert model == "claude-sonnet-4-6"
 
+    def test_env_overrides_local_mode_emits_no_credentials(self, service, monkeypatch):
+        """No key anywhere -> local CLI mode: neither base URL nor key is injected,
+        even if an api_endpoint is present (the broken half-state we fixed)."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        executor = RuntimeExecutorConfig(
+            id="claude",
+            label="Claude",
+            enabled=True,
+            api_endpoint="https://example.com",
+            api_key=None,
+            default_model="claude-sonnet-4-6",
+            providers=[],
+        )
+        env = service._get_executor_env_overrides(executor)
+        assert "ANTHROPIC_BASE_URL" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+        assert env["CLAUDE_MODEL"] == "claude-sonnet-4-6"
+
+    def test_env_overrides_with_key_injects_endpoint_and_key(self, service, monkeypatch):
+        """Catalog key present -> inject both base URL and key."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        executor = RuntimeExecutorConfig(
+            id="claude",
+            label="Claude",
+            enabled=True,
+            api_endpoint="https://example.com",
+            api_key="sk-test",
+            providers=[],
+        )
+        env = service._get_executor_env_overrides(executor)
+        assert env["ANTHROPIC_BASE_URL"] == "https://example.com"
+        assert env["ANTHROPIC_API_KEY"] == "sk-test"
+
+    def test_env_overrides_key_without_endpoint(self, service, monkeypatch):
+        """Catalog key but no endpoint -> inject key only (CLI uses default endpoint)."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        executor = RuntimeExecutorConfig(
+            id="claude",
+            label="Claude",
+            enabled=True,
+            api_endpoint=None,
+            api_key="sk-test",
+            providers=[],
+        )
+        env = service._get_executor_env_overrides(executor)
+        assert "ANTHROPIC_BASE_URL" not in env
+        assert env["ANTHROPIC_API_KEY"] == "sk-test"
+
+    def test_env_overrides_env_var_key_preserves_endpoint(self, service, monkeypatch):
+        """No catalog key but ANTHROPIC_API_KEY in process env -> still inject base URL
+        (honors the 'leave blank to use env var' contract), but don't echo the key
+        into overrides (it's inherited by the child process)."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
+        executor = RuntimeExecutorConfig(
+            id="claude",
+            label="Claude",
+            enabled=True,
+            api_endpoint="https://gateway.example.com",
+            api_key=None,
+            providers=[],
+        )
+        env = service._get_executor_env_overrides(executor)
+        assert env["ANTHROPIC_BASE_URL"] == "https://gateway.example.com"
+        assert "ANTHROPIC_API_KEY" not in env
+
 
 class TestCodexTaskWithProviderModel:
     """Tests for CodexTask with provider/model fields."""

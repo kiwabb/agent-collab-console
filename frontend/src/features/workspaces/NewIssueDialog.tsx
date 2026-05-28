@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { createIssueAndInitialTask } from "@/features/workbench/workbenchActions";
+import { describeExecutorOption } from "@/components/runtime/ExecutionConfigSelector";
 import { autoStartIssueGraph, createCodexIssue } from "@/lib/api";
 import type { CodexIssue, Project, RuntimeCatalog } from "@/lib/types";
 import { formatWorkspaceConsoleRepoLabel } from "./workspaceConsoleState";
@@ -175,7 +176,7 @@ export function NewIssueDialog({ open, onOpenChange, workspaceId, project, catal
               >
                 {(enabledExecutors.length > 0 ? enabledExecutors : [{ id: "codex", label: "Codex" } as const]).map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.label}
+                    {describeExecutorOption(item, t("runtime.executor.localCliBadge"))}
                   </option>
                 ))}
               </select>

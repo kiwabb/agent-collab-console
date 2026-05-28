@@ -22,16 +22,19 @@ interface RuntimeCatalogEditorProps {
   className?: string;
 }
 
+// api_endpoint defaults to empty so a freshly-added executor runs the local CLI
+// (the backend treats "no endpoint + no key" as local-CLI mode). The user can
+// still type a remote endpoint + key to target a hosted API.
 const EXECUTOR_DEFAULTS: Record<"claude" | "codex", { label: string; api_endpoint: string; default_model: string; protocol: "anthropic" | "openai" }> = {
   claude: {
     label: "Claude",
-    api_endpoint: "https://api.anthropic.com",
+    api_endpoint: "",
     default_model: "claude-sonnet-4-6",
     protocol: "anthropic",
   },
   codex: {
     label: "Codex",
-    api_endpoint: "https://api.openai.com/v1",
+    api_endpoint: "",
     default_model: "gpt-5-codex",
     protocol: "openai",
   },
@@ -397,7 +400,11 @@ function ExecutorCard({
 }: ExecutorCardProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; latency_ms?: number; error?: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; latency_ms?: number; error?: string; mode?: string } | null>(null);
+
+  // No key configured (neither freshly typed nor persisted on the backend) means
+  // this executor runs the local CLI with its own default login.
+  const isLocalMode = !executor.api_key && !executor.api_key_configured;
 
   const handleTest = async () => {
     setTesting(true);
@@ -422,6 +429,11 @@ function ExecutorCard({
             </span>
             <span className="text-sm text-muted-foreground">{executor.label}</span>
             <span className="text-xs text-muted-foreground">({executor.id})</span>
+            {isLocalMode && (
+              <span className="rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-brand">
+                {t("runtime.executor.localCliBadge")}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -450,7 +462,11 @@ function ExecutorCard({
               )}
             </Button>
             {testResult?.success && (
-              <span className="text-xs text-green-500">{testResult.latency_ms}ms</span>
+              <span className="text-xs text-green-500">
+                {testResult.mode === "local_cli"
+                  ? t("runtime.catalog.testLocalOk")
+                  : `${testResult.latency_ms}ms`}
+              </span>
             )}
             <Button
               variant="ghost"
@@ -469,6 +485,14 @@ function ExecutorCard({
         )}
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="min-w-0 space-y-1">
+          <label className="text-xs text-muted-foreground">{t("runtime.executor.label")}</label>
+          <Input
+            value={executor.label || ""}
+            onChange={(e) => onUpdate({ label: e.target.value })}
+            placeholder={t("runtime.executor.namePlaceholder")}
+          />
+        </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="min-w-0 space-y-1">
             <label className="text-xs text-muted-foreground">{t("runtime.executor.apiEndpoint")}</label>
@@ -493,6 +517,11 @@ function ExecutorCard({
             {executor.api_key_configured && !executor.api_key && (
               <p className="text-[11px] text-muted-foreground">
                 {t("runtime.executor.keyHiddenHint")}
+              </p>
+            )}
+            {isLocalMode && (
+              <p className="text-[11px] text-brand/80">
+                {t("runtime.executor.localCliHint")}
               </p>
             )}
           </div>

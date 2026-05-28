@@ -344,6 +344,7 @@ async def _refresh_task_result(task):
                     await event_bus.append({
                         "type": "task_status",
                         "task_id": parent_task.id,
+                        "issue_id": parent_task.issue_id,
                         "session_id": parent_task.session_id,
                         "status": parent_task.status,
                         "review_comment": parent_task.review_comment,
@@ -367,6 +368,7 @@ async def _refresh_task_result(task):
             await event_bus.append({
                 "type": "task_status",
                 "task_id": task.id,
+                "issue_id": task.issue_id,
                 "session_id": task.session_id,
                 "status": task.status,
                 "review_comment": task.review_comment,
@@ -3457,6 +3459,7 @@ async def refresh_github_pr(issue_id: str):
                     await event_bus.append({
                         "type": "task_status",
                         "task_id": eng.id,
+                        "issue_id": eng.issue_id,
                         "session_id": eng.session_id,
                         "status": "pending",
                     })
@@ -3898,6 +3901,7 @@ async def run_codex_task(task_id: str, request: RunTaskRequest | None = None):
         await event_bus.append({
             "type": "task_status",
             "task_id": task.id,
+            "issue_id": task.issue_id,
             "session_id": task.session_id,
             "status": "failed",
             "result": str(e),
@@ -3986,6 +3990,7 @@ async def _run_task_with_user_content(task_id: str, content: str, kind: str):
         await event_bus.append({
             "type": "task_status",
             "task_id": task_id,
+            "issue_id": current_task.issue_id,
             "session_id": current_task.session_id,
             "status": "done",
             "result": current_task.result,
@@ -4240,6 +4245,7 @@ async def submit_codex_task_for_review(task_id: str):
     await event_bus.append({
         "type": "task_status",
         "task_id": task.id,
+        "issue_id": task.issue_id,
         "session_id": task.session_id,
         "status": "awaiting_review",
     })
@@ -4311,6 +4317,7 @@ async def review_codex_task(task_id: str, request: TaskReviewRequest):
     await event_bus.append({
         "type": "task_status",
         "task_id": task.id,
+        "issue_id": task.issue_id,
         "session_id": task.session_id,
         "status": task.status,
         "review_comment": task.review_comment,
@@ -4362,6 +4369,7 @@ async def answer_codex_task_clarification(task_id: str, request: AnswerClarifica
     await event_bus.append({
         "type": "task_status",
         "task_id": task.id,
+        "issue_id": task.issue_id,
         "session_id": task.session_id,
         "status": "pending",
         "review_comment": task.review_comment,
@@ -4647,9 +4655,35 @@ async def test_runtime_executor(request: TestExecutorRequest):
         env_var_name = "ANTHROPIC_API_KEY"
 
     if not api_key:
+        # Local CLI mode: no key anywhere (request, catalog, or backend env) means
+        # this executor runs the local `claude`/`codex` CLI with its own logged-in
+        # auth. There's no remote endpoint to ping — instead verify the CLI binary
+        # is present on PATH so the user gets a real signal from the Test button.
+        import subprocess
+
+        cli_cmd = (
+            os.getenv("CODEX_CMD", "codex")
+            if executor_type == "codex"
+            else os.getenv("CLAUDE_CMD", "claude")
+        )
+        cli_bin = cli_cmd.split()[0] if cli_cmd.split() else cli_cmd
+        try:
+            proc = subprocess.run(
+                [cli_bin, "--version"],
+                capture_output=True,
+                timeout=5,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            proc = None
+        if proc is not None and proc.returncode == 0:
+            return {
+                "success": True,
+                "mode": "local_cli",
+                "detail": f"local CLI '{cli_bin}' available",
+            }
         return {
             "success": False,
-            "error": f"No API key: fill the field or set {env_var_name} in the backend env.",
+            "error": f"local CLI '{cli_bin}' not found on PATH (or set {env_var_name} to use a remote API)",
         }
 
     start = time.monotonic()

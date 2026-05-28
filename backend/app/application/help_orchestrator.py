@@ -79,6 +79,7 @@ class HelpOrchestrator:
         await self.event_bus.append({
             "type": "task_status",
             "task_id": parent.id,
+            "issue_id": parent.issue_id,
             "session_id": parent.session_id,
             "status": parent.status,
             "execution_process_id": parent.last_execution_process_id,
@@ -155,6 +156,7 @@ class HelpOrchestrator:
         await self.event_bus.append({
             "type": "task_status",
             "task_id": parent.id,
+            "issue_id": parent.issue_id,
             "session_id": parent.session_id,
             "status": parent.status,
             "result": parent.result,

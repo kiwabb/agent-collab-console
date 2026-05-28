@@ -109,6 +109,7 @@ class CodexTaskRunner:
         await self.event_bus.append({
             "type": "task_status",
             "task_id": task.id,
+            "issue_id": task.issue_id,
             "workspace_id": task.session_id,
             "session_id": task.session_id,
             "status": "running",
@@ -157,6 +158,7 @@ class CodexTaskRunner:
             await self.event_bus.append({
                 "type": "task_status",
                 "task_id": task.id,
+                "issue_id": task.issue_id,
                 "workspace_id": task.session_id,
                 "session_id": task.session_id,
                 "status": "failed",
@@ -188,6 +190,7 @@ class CodexTaskRunner:
             await self.event_bus.append({
                 "type": "task_status",
                 "task_id": task.id,
+                "issue_id": task.issue_id,
                 "workspace_id": task.session_id,
                 "session_id": task.session_id,
                 "status": task.status,
@@ -232,6 +235,7 @@ class CodexTaskRunner:
         await self.event_bus.append({
             "type": "task_status",
             "task_id": task.id,
+            "issue_id": task.issue_id,
             "workspace_id": task.session_id,
             "session_id": task.session_id,
             "status": task.status,

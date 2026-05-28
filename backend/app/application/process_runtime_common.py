@@ -268,6 +268,7 @@ class BaseProcessRuntime:
                     await self._event_bus.append({
                         "type": "task_status",
                         "task_id": task_id,
+                        "issue_id": task.issue_id,
                         "session_id": task.session_id,
                         "status": "failed",
                         "result": task.result,
@@ -321,6 +322,7 @@ class BaseProcessRuntime:
                 await self._event_bus.append({
                     "type": "task_status",
                     "task_id": task_id,
+                    "issue_id": task.issue_id,
                     "session_id": task.session_id,
                     "status": "failed",
                     "result": task.result,
@@ -762,6 +764,7 @@ class BaseProcessRuntime:
                 await self._event_bus.append({
                     "type": "task_status",
                     "task_id": task_id,
+                    "issue_id": task.issue_id,
                     "session_id": task.session_id,
                     "status": task.status,
                     "result": task.result,
@@ -809,6 +812,7 @@ class BaseProcessRuntime:
             await self._event_bus.append({
                 "type": "task_status",
                 "task_id": task_id,
+                "issue_id": task.issue_id,
                 "session_id": task.session_id,
                 "status": task.status,
                 "result": task.result,
@@ -958,6 +962,7 @@ class BaseProcessRuntime:
             await self._event_bus.append({
                 "type": "task_status",
                 "task_id": task_id,
+                "issue_id": task.issue_id,
                 "session_id": task.session_id,
                 "status": task.status,
                 "result": task.result,
@@ -1077,6 +1082,7 @@ class BaseProcessRuntime:
                         await self._event_bus.append({
                             "type": "task_status",
                             "task_id": task_id,
+                            "issue_id": task.issue_id,
                             "session_id": task.session_id,
                             "status": "failed",
                             "result": task.result,

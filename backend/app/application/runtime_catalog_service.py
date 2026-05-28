@@ -1,5 +1,6 @@
 """Runtime catalog service for managing executor/provider/model configurations."""
 
+import os
 from typing import Any
 
 from app.domain.models import (
@@ -281,10 +282,19 @@ class RuntimeCatalogService:
 
     def _get_executor_env_overrides(self, executor: RuntimeExecutorConfig) -> dict[str, str]:
         env: dict[str, str] = {}
-        if executor.api_endpoint:
-            env["ANTHROPIC_BASE_URL"] = executor.api_endpoint
-        if executor.api_key:
-            env["ANTHROPIC_API_KEY"] = executor.api_key
+        # Only inject credential env when a key is actually available — from the
+        # catalog or the backend process env (the UI promises "leave blank to use
+        # env var"). With no key anywhere, this is *local CLI mode*: emit nothing
+        # (not even the base URL) so the spawned CLI falls back entirely to its own
+        # logged-in default. A base URL without a key is a broken half-state that
+        # points the local CLI at the wrong endpoint with no way to authenticate.
+        has_key = bool(executor.api_key) or bool(os.getenv("ANTHROPIC_API_KEY"))
+        if has_key:
+            if executor.api_endpoint:
+                env["ANTHROPIC_BASE_URL"] = executor.api_endpoint
+            if executor.api_key:
+                env["ANTHROPIC_API_KEY"] = executor.api_key
+            # else: ANTHROPIC_API_KEY is inherited from the process env.
         if executor.default_model:
             env["CLAUDE_MODEL"] = executor.default_model
         return env

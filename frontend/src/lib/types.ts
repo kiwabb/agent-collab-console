@@ -553,6 +553,8 @@ export interface TestExecutorResponse {
   success: boolean;
   latency_ms?: number;
   error?: string;
+  mode?: string;
+  detail?: string;
 }
 
 export interface IssueTemplate {
