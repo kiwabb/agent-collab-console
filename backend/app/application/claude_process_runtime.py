@@ -193,6 +193,10 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             stderr=asyncio.subprocess.PIPE,
             cwd=effective_cwd,
             env=env,
+            # Raise the StreamReader line limit (default 64KB) so a single large
+            # stream-json line (a big tool result / long assistant turn) doesn't
+            # raise LimitOverrunError and break the reader loop.
+            limit=4 * 1024 * 1024,
         )
 
         entry = AsyncProcessEntry(

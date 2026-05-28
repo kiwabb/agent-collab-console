@@ -1,4 +1,8 @@
+import asyncio
+import contextlib
 import inspect
+import logging
+import os
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Dict, Set
@@ -8,24 +12,130 @@ from app.interfaces.execution_process_views import build_execution_process_view
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+# --- Per-subscriber backpressure ------------------------------------------
+# A slow / half-open WebSocket must NEVER park the producer coroutine that is
+# draining a subprocess's stdout. So producers only ever `try_put` onto a
+# bounded per-subscriber queue (synchronous, non-blocking) and a dedicated
+# sender task — owned by the endpoint, the socket's SOLE writer — drains that
+# queue to the socket. If a queue overflows the subscriber is evicted (closed
+# with a non-1000 code) so the client reconnects and re-syncs full state.
+def _queue_maxsize(env_name: str, default: int) -> int:
+    raw = os.getenv(env_name)
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
+WORKSPACE_QUEUE_MAXSIZE = _queue_maxsize("WS_WORKSPACE_QUEUE_MAXSIZE", 256)
+LOG_QUEUE_MAXSIZE = _queue_maxsize("WS_LOG_QUEUE_MAXSIZE", 2048)
+MESSAGE_QUEUE_MAXSIZE = _queue_maxsize("WS_MESSAGE_QUEUE_MAXSIZE", 512)
+
+_QUEUE_CLOSED = object()  # sentinel: tells the sender task to stop and close
+_PONG = object()          # sentinel: tells the sender task to send_text("pong")
+
+
+class WsSubscriber:
+    """One connected client: a raw WebSocket plus a bounded outbound queue.
+
+    Producers call :meth:`try_put` (synchronous, never blocks). The endpoint
+    runs :meth:`run_sender` as the socket's only writer. On overflow the
+    subscriber self-closes with a non-1000 code so the frontend reconnects and
+    re-syncs from a full snapshot.
+    """
+
+    __slots__ = ("ws", "queue", "_closed", "evict_code", "evict_reason")
+
+    def __init__(self, ws: WebSocket, maxsize: int):
+        self.ws = ws
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self._closed = False
+        self.evict_code = 1011  # non-1000 → frontend treats as non-clean → reconnect
+        self.evict_reason = "overflow"
+
+    def try_put(self, frame) -> bool:
+        """Non-blocking enqueue. Returns False (and evicts) if full/closed."""
+        if self._closed:
+            return False
+        try:
+            self.queue.put_nowait(frame)
+            return True
+        except asyncio.QueueFull:
+            self._mark_overflow()
+            return False
+
+    def _mark_overflow(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        # Wake the sender so it stops and closes. Best-effort: if the queue is
+        # still full the sender will see _closed is irrelevant — it drains a
+        # frame then the next get may be the sentinel; force is not required
+        # because the sender closes on ANY sentinel.
+        with contextlib.suppress(asyncio.QueueFull):
+            self.queue.put_nowait(_QUEUE_CLOSED)
+
+    def close_after_flush(self, code: int = 1000, reason: str = "finished") -> None:
+        """Terminal close: drain queued frames, then close with `code`."""
+        self.evict_code, self.evict_reason = code, reason
+        try:
+            self.queue.put_nowait(_QUEUE_CLOSED)
+        except asyncio.QueueFull:
+            # Saturated already; mark closed so the sender stops after its next
+            # drained frame and closes with the code we just set.
+            self._closed = True
+
+    async def run_sender(self) -> None:
+        """Drain queue → socket until a sentinel. Sole writer of this socket."""
+        try:
+            while True:
+                frame = await self.queue.get()
+                if frame is _QUEUE_CLOSED:
+                    break
+                if frame is _PONG:
+                    await self.ws.send_text("pong")
+                else:
+                    await self.ws.send_json(frame)
+                # Overflow eviction may have been signalled while we were draining
+                # (and couldn't enqueue the sentinel because the queue was full).
+                # Stop after the current frame so the slow client is still closed.
+                if self._closed:
+                    break
+        finally:
+            with contextlib.suppress(Exception):
+                await self.ws.close(code=self.evict_code, reason=self.evict_reason)
+
+
+def _fanout(subs: "Set[WsSubscriber] | None", frame) -> None:
+    """Non-blocking broadcast: enqueue `frame` to every subscriber; drop any
+    that overflow (they self-close and the client reconnects)."""
+    if not subs:
+        return
+    for sub in [s for s in subs if not s.try_put(frame)]:
+        subs.discard(sub)
 
 
 class ExecutionProcessWorkspaceStreamManager:
     """Manages WebSocket subscriptions for workspace-level execution processes."""
 
     def __init__(self):
-        self._subscribers: Dict[str, Set[WebSocket]] = {}
+        self._subscribers: Dict[str, Set[WsSubscriber]] = {}
         self._states: Dict[str, dict] = {}
         self._pending_events: Dict[str, list[dict]] = {}
         self._approval_states: Dict[str, dict] = {}
 
-    def subscribe(self, workspace_id: str, ws: WebSocket):
-        self._subscribers.setdefault(workspace_id, set()).add(ws)
+    def subscribe(self, workspace_id: str, sub: WsSubscriber):
+        self._subscribers.setdefault(workspace_id, set()).add(sub)
 
-    def unsubscribe(self, workspace_id: str, ws: WebSocket):
+    def unsubscribe(self, workspace_id: str, sub: WsSubscriber):
         subs = self._subscribers.get(workspace_id)
         if subs:
-            subs.discard(ws)
+            subs.discard(sub)
             if not subs:
                 del self._subscribers[workspace_id]
 
@@ -34,8 +144,9 @@ class ExecutionProcessWorkspaceStreamManager:
 
     async def publish_patch(self, workspace_id: str, patch: list):
         """Publish JSON Patch and any pending events to all subscribers of a workspace."""
-        subs = self._subscribers.get(workspace_id, set())
+        subs = self._subscribers.get(workspace_id)
         if not subs:
+            # Keep buffered events intact until a subscriber connects.
             return
 
         events = self._pending_events.pop(workspace_id, [])
@@ -43,30 +154,16 @@ class ExecutionProcessWorkspaceStreamManager:
         if events:
             message["Events"] = events
 
-        dead = set()
-        for ws in list(subs):
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            subs.discard(ws)
+        _fanout(subs, message)
+
     async def publish_event(self, workspace_id: str, event: dict):
         """Broadcast a single event immediately to all workspace subscribers."""
-        subs = self._subscribers.get(workspace_id, set())
+        subs = self._subscribers.get(workspace_id)
         if not subs:
             self.buffer_pending(workspace_id, event)
             return
 
-        message = {"Events": [event]}
-        dead = set()
-        for ws in list(subs):
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            subs.discard(ws)
+        _fanout(subs, {"Events": [event]})
 
     @staticmethod
     def _serialize_process(process, task, messages, logs, pending_approval: dict | None = None) -> dict:
@@ -299,45 +396,30 @@ class ExecutionProcessLogStreamManager:
     """Manages raw log WebSocket subscriptions for a single execution process."""
 
     def __init__(self):
-        self._subscribers: Dict[str, Set[WebSocket]] = {}
+        self._subscribers: Dict[str, Set[WsSubscriber]] = {}
 
-    def subscribe(self, process_id: str, ws: WebSocket):
-        self._subscribers.setdefault(process_id, set()).add(ws)
+    def subscribe(self, process_id: str, sub: WsSubscriber):
+        self._subscribers.setdefault(process_id, set()).add(sub)
 
-    def unsubscribe(self, process_id: str, ws: WebSocket):
+    def unsubscribe(self, process_id: str, sub: WsSubscriber):
         subs = self._subscribers.get(process_id)
         if subs:
-            subs.discard(ws)
+            subs.discard(sub)
             if not subs:
                 del self._subscribers[process_id]
 
     async def publish_log(self, process_id: str, log_payload: dict):
-        subs = self._subscribers.get(process_id, set())
-        if not subs:
-            return
-
-        dead = set()
-        for ws in list(subs):
-            try:
-                await ws.send_json(log_payload)
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            subs.discard(ws)
+        _fanout(self._subscribers.get(process_id), log_payload)
 
     async def publish_finished(self, process_id: str):
-        subs = self._subscribers.get(process_id, set())
+        subs = self._subscribers.pop(process_id, None)
         if not subs:
             return
-
-        dead = set()
-        for ws in list(subs):
-            try:
-                await ws.send_json({"finished": True})
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            subs.discard(ws)
+        # Enqueue the terminal frame, then tell each sender to flush and close
+        # cleanly (1000) so the client gets …logs… → {finished:true} → close.
+        for sub in list(subs):
+            sub.try_put({"finished": True})
+            sub.close_after_flush(code=1000, reason="finished")
 
     async def get_initial_logs(self, process_id: str) -> list[dict]:
         if codex_store is None:
@@ -365,63 +447,35 @@ class ExecutionProcessMessageStreamManager:
     """Manages task message WebSocket subscriptions for a single execution process."""
 
     def __init__(self):
-        self._subscribers: Dict[str, Set[WebSocket]] = {}
+        self._subscribers: Dict[str, Set[WsSubscriber]] = {}
 
-    def subscribe(self, process_id: str, ws: WebSocket):
-        self._subscribers.setdefault(process_id, set()).add(ws)
+    def subscribe(self, process_id: str, sub: WsSubscriber):
+        self._subscribers.setdefault(process_id, set()).add(sub)
 
-    def unsubscribe(self, process_id: str, ws: WebSocket):
+    def unsubscribe(self, process_id: str, sub: WsSubscriber):
         subs = self._subscribers.get(process_id)
         if subs:
-            subs.discard(ws)
+            subs.discard(sub)
             if not subs:
                 del self._subscribers[process_id]
 
     async def publish_message(self, process_id: str, message_payload: dict):
-        subs = self._subscribers.get(process_id, set())
-        if not subs:
-            return
-
-        dead = set()
-        for ws in list(subs):
-            try:
-                await ws.send_json(message_payload)
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            subs.discard(ws)
+        _fanout(self._subscribers.get(process_id), message_payload)
 
     async def publish_delta(self, process_id: str, delta_payload: dict):
         """Broadcast a token-level partial update to subscribers.
 
         Subscribers receive {"type": "message_delta", seq, delta_text, ...}.
         They distinguish from full messages by the "type" field."""
-        subs = self._subscribers.get(process_id, set())
-        if not subs:
-            return
-        frame = {**delta_payload, "type": "message_delta"}
-        dead = set()
-        for ws in list(subs):
-            try:
-                await ws.send_json(frame)
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            subs.discard(ws)
+        _fanout(self._subscribers.get(process_id), {**delta_payload, "type": "message_delta"})
 
     async def publish_finished(self, process_id: str):
-        subs = self._subscribers.get(process_id, set())
+        subs = self._subscribers.pop(process_id, None)
         if not subs:
             return
-
-        dead = set()
-        for ws in list(subs):
-            try:
-                await ws.send_json({"finished": True})
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            subs.discard(ws)
+        for sub in list(subs):
+            sub.try_put({"finished": True})
+            sub.close_after_flush(code=1000, reason="finished")
 
     async def get_initial_messages(self, process_id: str) -> list[dict]:
         if codex_store is None:
@@ -441,6 +495,38 @@ class ExecutionProcessMessageStreamManager:
 
 
 message_stream_manager = ExecutionProcessMessageStreamManager()
+
+
+async def _serve_subscriber(websocket: WebSocket, subscribe, unsubscribe, sub: WsSubscriber) -> None:
+    """Run a subscriber connection: a dedicated sender task drains the queue to
+    the socket (sole writer) while a receiver task handles client ping → pong
+    (routed through the queue so there is never a second concurrent writer).
+
+    `subscribe`/`unsubscribe` are zero-arg callables already bound to the
+    manager + key + this `sub`.
+    """
+    subscribe()
+
+    async def receiver():
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                sub.try_put(_PONG)
+
+    sender_task = asyncio.create_task(sub.run_sender())
+    receiver_task = asyncio.create_task(receiver())
+    try:
+        await asyncio.gather(sender_task, receiver_task)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        for task in (sender_task, receiver_task):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, WebSocketDisconnect, Exception):
+                await task
+        unsubscribe()
 
 
 @router.websocket("/workspaces/{workspace_id}/execution_processes/ws")
@@ -469,17 +555,13 @@ async def execution_process_workspace_stream(websocket: WebSocket, workspace_id:
     await websocket.send_json({"JsonPatch": initial_patch})
     await websocket.send_json({"Ready": True})
 
-    workspace_stream_manager.subscribe(workspace_id, websocket)
-
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_text("pong")
-    except WebSocketDisconnect:
-        pass
-    finally:
-        workspace_stream_manager.unsubscribe(workspace_id, websocket)
+    sub = WsSubscriber(websocket, maxsize=WORKSPACE_QUEUE_MAXSIZE)
+    await _serve_subscriber(
+        websocket,
+        lambda: workspace_stream_manager.subscribe(workspace_id, sub),
+        lambda: workspace_stream_manager.unsubscribe(workspace_id, sub),
+        sub,
+    )
 
 
 execution_process_stream = execution_process_workspace_stream
@@ -510,17 +592,13 @@ async def execution_process_log_stream(websocket: WebSocket, process_id: str):
         await websocket.close(code=1000, reason="finished")
         return
 
-    raw_log_stream_manager.subscribe(process_id, websocket)
-
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_text("pong")
-    except WebSocketDisconnect:
-        pass
-    finally:
-        raw_log_stream_manager.unsubscribe(process_id, websocket)
+    sub = WsSubscriber(websocket, maxsize=LOG_QUEUE_MAXSIZE)
+    await _serve_subscriber(
+        websocket,
+        lambda: raw_log_stream_manager.subscribe(process_id, sub),
+        lambda: raw_log_stream_manager.unsubscribe(process_id, sub),
+        sub,
+    )
 
 
 @router.websocket("/execution-processes/{process_id}/messages/ws")
@@ -548,14 +626,10 @@ async def execution_process_message_stream(websocket: WebSocket, process_id: str
         await websocket.close(code=1000, reason="finished")
         return
 
-    message_stream_manager.subscribe(process_id, websocket)
-
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_text("pong")
-    except WebSocketDisconnect:
-        pass
-    finally:
-        message_stream_manager.unsubscribe(process_id, websocket)
+    sub = WsSubscriber(websocket, maxsize=MESSAGE_QUEUE_MAXSIZE)
+    await _serve_subscriber(
+        websocket,
+        lambda: message_stream_manager.subscribe(process_id, sub),
+        lambda: message_stream_manager.unsubscribe(process_id, sub),
+        sub,
+    )

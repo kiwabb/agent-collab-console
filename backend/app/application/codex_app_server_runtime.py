@@ -432,6 +432,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             stderr=asyncio.subprocess.PIPE,
             cwd=effective_cwd,
             env=env,
+            # Raise the StreamReader line limit (default 64KB) so a single large
+            # JSON-RPC frame doesn't raise LimitOverrunError and break the peer
+            # reader loop.
+            limit=4 * 1024 * 1024,
         )
 
         use_auto_approve = os.getenv("CODEX_AUTO_APPROVE", "1") == "1"

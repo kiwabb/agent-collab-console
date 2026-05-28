@@ -1188,6 +1188,21 @@ class BaseProcessRuntime:
                     entry.idle_timed_out = True
                     entry.idle_timeout_seconds = idle_timeout
                     break
+                except asyncio.LimitOverrunError as exc:
+                    # A single stdout line exceeded the StreamReader buffer limit.
+                    # Don't silently orphan the process — record the error and let
+                    # the finally block reap it + finalize the task as failed.
+                    entry.had_error = True
+                    try:
+                        await self._append_log(
+                            workspace_id,
+                            "stderr",
+                            f"stdout line exceeded buffer limit: {exc}",
+                            task_id,
+                        )
+                    except Exception:
+                        pass
+                    break
                 except Exception:
                     break
                 if not line:
@@ -1223,29 +1238,40 @@ class BaseProcessRuntime:
             pass
         finally:
             entry.alive = False
+            # Always reap the subprocess when the reader loop exits, for ANY
+            # reason (EOF, idle timeout, readline exception, cancellation). A
+            # live subprocess whose stdout we've stopped draining would orphan
+            # and leak its stdout buffer, and stderr.read() below would block
+            # forever waiting for an EOF that never comes.
             try:
-                if entry.idle_timed_out and entry.proc and entry.proc.returncode is None:
+                if entry.proc and entry.proc.returncode is None:
                     entry.proc.terminate()
                     try:
                         await asyncio.wait_for(entry.proc.wait(), timeout=2)
                     except Exception:
-                        entry.proc.kill()
-                        await entry.proc.wait()
+                        try:
+                            entry.proc.kill()
+                            await asyncio.wait_for(entry.proc.wait(), timeout=2)
+                        except Exception:
+                            pass
             except Exception:
                 pass
+            # Cancel the helper tasks and await them via gather(return_exceptions)
+            # so a cancelled child surfaces as a result, not a raised
+            # CancelledError. The old `wait_for(shield(task))` dance let a
+            # CancelledError (a BaseException, not caught by `except Exception`)
+            # escape the finally and skip task finalization entirely.
             watchdog_task.cancel()
-            try:
-                await asyncio.wait_for(asyncio.shield(watchdog_task), timeout=1)
-            except Exception:
-                pass
             heartbeat_task.cancel()
             try:
-                await asyncio.wait_for(asyncio.shield(heartbeat_task), timeout=1)
-            except Exception:
+                await asyncio.gather(watchdog_task, heartbeat_task, return_exceptions=True)
+            except asyncio.CancelledError:
                 pass
 
+            # Bounded so a still-draining / un-reaped process can't deadlock the
+            # finally. The process was reaped above, so EOF should be immediate.
             try:
-                stderr = await entry.proc.stderr.read()
+                stderr = await asyncio.wait_for(entry.proc.stderr.read(), timeout=2)
                 if stderr:
                     await self._append_log(workspace_id, "stderr", stderr.decode("utf-8", errors="replace"), task_id)
             except Exception:
