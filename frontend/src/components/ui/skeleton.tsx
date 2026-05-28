@@ -9,14 +9,20 @@ function Skeleton({ className, variant = "default", ...props }: SkeletonProps) {
     <div
       data-slot="skeleton"
       className={cn(
-        "relative overflow-hidden rounded-md bg-muted before:absolute before:inset-0 before:-translate-x-full before:animate-[shimmer_2s_infinite] before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent dark:before:via-white/5",
+        "motion-essential relative overflow-hidden rounded-md bg-muted",
         variant === "card" && "rounded-2xl min-h-[180px]",
         variant === "text" && "rounded h-4",
         variant === "circle" && "rounded-full aspect-square",
         className
       )}
       {...props}
-    />
+    >
+      {/* Sweeping shimmer (token-driven so it stays alive under reduced motion) */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 animate-shimmer-sweep bg-gradient-to-r from-transparent via-white/20 to-transparent dark:via-white/5"
+      />
+    </div>
   )
 }
 

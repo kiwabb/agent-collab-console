@@ -11,6 +11,7 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -521,7 +522,8 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
               )}
             >
               {conductorPhase && (
-                <div className="font-mono text-[11px] uppercase tracking-[0.18em]">
+                <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em]">
+                  {!isPaused && <AgentThinkingIndicator phase={conductorPhase} size={12} />}
                   {conductorPhase}
                 </div>
               )}
@@ -565,7 +567,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                         >
                           <div className={cn("flex w-[154px] shrink-0 flex-col rounded-2xl border px-3 py-2.5", nodeTone)}>
                             <div className="flex items-center gap-2">
-                              <Icon className={cn("h-3.5 w-3.5", node.isCurrent && !node.isPaused && "animate-pulse")} />
+                              <Icon className={cn("h-3.5 w-3.5", node.isCurrent && !node.isPaused && "motion-essential animate-neural-pulse")} />
                               <span className="font-mono text-[11px] uppercase tracking-wider">{node.phase}</span>
                             </div>
                             <div className="mt-1 text-[10px] leading-relaxed text-text-muted">

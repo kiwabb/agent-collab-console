@@ -9,6 +9,7 @@ import { useExecutionProcessLogStream } from "@/hooks/useExecutionProcessLogStre
 import { normalizeLogs } from "@/lib/codexLogNormalizer";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ToolBlock } from "./toolBlocks/ToolBlocks";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import type { NormalizedEntry } from "@/lib/types";
 
 interface AgentLiveTimelineProps {
@@ -43,7 +44,7 @@ function ThinkingBlock({ content }: { content: string }) {
         ) : (
           <ChevronRight size={14} className="text-amber-500 shrink-0" />
         )}
-        <Sparkles size={12} className="text-amber-500 shrink-0" />
+        <Sparkles size={12} className="text-amber-500 shrink-0 motion-essential animate-neural-pulse" />
         <span className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-500">
           {t("agentLive.thinking")}
         </span>
@@ -70,7 +71,7 @@ function StreamingAssistantBubble({ text }: { text: string }) {
         <span className="text-[9px] font-black uppercase tracking-[0.16em] text-brand">
           Assistant
         </span>
-        <span className="agent-live-cursor inline-block h-3 w-px bg-brand" aria-hidden />
+        <span className="agent-live-cursor motion-essential inline-block h-3 w-px bg-brand" aria-hidden />
       </div>
       <div className="agent-live-streaming">
         <MessageMarkdown content={text} />
@@ -160,8 +161,7 @@ function WorkingIndicator({
 
   return (
     <div className="flex items-center gap-3 rounded-xl border border-brand/20 bg-brand/5 px-3 py-2 text-[11px]">
-      <Loader2 size={14} className="animate-spin text-brand" />
-      <span className="text-text-secondary font-mono">{subtitle}</span>
+      <AgentThinkingIndicator phase={phase} label={subtitle} size={14} />
       <div className="ml-auto flex items-center gap-2">
         {startedMs ? (
           <span className="text-text-muted font-mono">{formatElapsed(elapsedTotalMs)}</span>

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { History, Loader2 } from "lucide-react";
+import { History } from "lucide-react";
 
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useI18n } from "@/providers/I18nProvider";
 import type { DecisionTimelineItem } from "../hooks/useDecisionTimeline";
 import { TimelineRow } from "./TimelineRow";
@@ -54,7 +55,7 @@ export function DecisionTimeline({ items, onOpenItem, liveThinking }: Props) {
           {liveThinking && (
             <div className="rounded-2xl border border-brand/30 bg-brand-muted/10 p-4">
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-[0.18em] text-brand">
-                <Loader2 size={12} className="animate-spin" />
+                <AgentThinkingIndicator phase="thinking" size={12} />
                 {t("issue.command.liveThinking")}
               </div>
               <p className="whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">{liveThinking}</p>

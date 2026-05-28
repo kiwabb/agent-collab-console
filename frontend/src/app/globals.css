@@ -77,16 +77,61 @@
 
   --animate-spin-slow: spin 8s linear infinite;
 
+  /* AI/agent-themed loading animations (transform/opacity only — GPU-friendly).
+     Each token has a matching @keyframes below; the duration is mirrored in the
+     reduced-motion escape hatch (@layer utilities) so loaders stay alive. */
+  --animate-orbit: orbit 1.4s linear infinite;
+  --animate-neural-pulse: neural-pulse 1.6s ease-in-out infinite;
+  --animate-particle-drift: particle-drift 2.2s ease-in-out infinite;
+  --animate-caret-blink: agent-live-blink 1.1s steps(2) infinite;
+  --animate-shimmer-sweep: shimmer-sweep 1.8s ease-in-out infinite;
+  --animate-dot-cascade: dot-cascade 1.2s ease-in-out infinite;
+  --animate-synapse-glow: synapse-glow 2.4s ease-in-out infinite;
+
   @keyframes shimmer {
     100% {
       transform: translateX(100%);
     }
   }
 
+  @keyframes shimmer-sweep {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
   @keyframes agent-live-blink {
     0%, 40% { opacity: 1; }
     50%, 90% { opacity: 0; }
     100% { opacity: 1; }
+  }
+
+  /* particle orbiting a core (dispatch / route load) */
+  @keyframes orbit {
+    to { transform: rotate(360deg); }
+  }
+
+  /* synaptic node breathing (agent thinking) */
+  @keyframes neural-pulse {
+    0%, 100% { opacity: 0.35; transform: scale(0.82); }
+    50% { opacity: 1; transform: scale(1.06); }
+  }
+
+  /* particles drifting upward (dispatch flow) */
+  @keyframes particle-drift {
+    0%, 100% { opacity: 0.25; transform: translate3d(0, 0, 0); }
+    50% { opacity: 1; transform: translate3d(0, -5px, 0); }
+  }
+
+  /* three-dot cascade (working / thinking inline) — stagger via animation-delay */
+  @keyframes dot-cascade {
+    0%, 80%, 100% { opacity: 0.3; transform: translateY(0) scale(0.85); }
+    40% { opacity: 1; transform: translateY(-4px) scale(1); }
+  }
+
+  /* ambient aura breathing (full-page loader halo) */
+  @keyframes synapse-glow {
+    0%, 100% { opacity: 0.4; transform: scale(0.9); }
+    50% { opacity: 0.85; transform: scale(1.08); }
   }
 
   /* Aliases so Tailwind utility classes (bg-popover, text-muted-foreground, etc.)
@@ -321,6 +366,77 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  /* === Essential motion =======================================================
+     Loading / progress feedback is essential, not decorative — it must keep
+     animating even when the user reduces motion (OS prefers-reduced-motion OR the
+     in-app --motion-reduced toggle). Opt in by adding `motion-essential` to the
+     loader's root (or the spinning element itself). These rules restore ONLY the
+     two longhands the reset above kills (duration + iteration-count), so each
+     utility's animation-name/timing/delay survive — staggered cascades stay intact.
+     Durations mirror the @theme tokens. They sit in @layer utilities and use class
+     specificity so they beat the universal `!important` reset (layered-!important
+     precedence — verified live). Decorative motion (no marker) still respects the
+     user's setting. ========================================================= */
+  @media (prefers-reduced-motion: reduce) {
+    /* spin / pulse / bounce / ping are always loader/status feedback in this app
+       (spinners, three-dot "typing" loaders, status & live-ping dots) — keep them
+       alive globally (no marker needed). Longhand-only so staggered negative
+       animation-delays on the bounce dots survive. */
+    .animate-spin, .animate-bounce, .animate-ping { animation-duration: 1s !important; animation-iteration-count: infinite !important; }
+    .animate-pulse { animation-duration: 2s !important; animation-iteration-count: infinite !important; }
+    .motion-essential [class*="animate-"], .motion-essential[class*="animate-"],
+    .motion-essential .agent-live-cursor, .motion-essential.agent-live-cursor {
+      animation-iteration-count: infinite !important;
+    }
+    .motion-essential .animate-spin, .motion-essential.animate-spin,
+    .motion-essential .animate-ping, .motion-essential.animate-ping,
+    .motion-essential .animate-bounce, .motion-essential.animate-bounce { animation-duration: 1s !important; }
+    .motion-essential .animate-pulse, .motion-essential.animate-pulse { animation-duration: 2s !important; }
+    .motion-essential .animate-orbit, .motion-essential.animate-orbit { animation-duration: 1.4s !important; }
+    .motion-essential .animate-neural-pulse, .motion-essential.animate-neural-pulse { animation-duration: 1.6s !important; }
+    .motion-essential .animate-particle-drift, .motion-essential.animate-particle-drift { animation-duration: 2.2s !important; }
+    .motion-essential .animate-caret-blink, .motion-essential.animate-caret-blink,
+    .motion-essential .agent-live-cursor, .motion-essential.agent-live-cursor { animation-duration: 1.1s !important; }
+    .motion-essential .animate-shimmer-sweep, .motion-essential.animate-shimmer-sweep { animation-duration: 1.8s !important; }
+    .motion-essential .animate-dot-cascade, .motion-essential.animate-dot-cascade { animation-duration: 1.2s !important; }
+    .motion-essential .animate-synapse-glow, .motion-essential.animate-synapse-glow { animation-duration: 2.4s !important; }
+  }
+  [style*="--motion-reduced: reduce"] .animate-spin,
+  [style*="--motion-reduced: reduce"] .animate-bounce,
+  [style*="--motion-reduced: reduce"] .animate-ping {
+    animation-duration: 1s !important; animation-iteration-count: infinite !important;
+  }
+  [style*="--motion-reduced: reduce"] .animate-pulse {
+    animation-duration: 2s !important; animation-iteration-count: infinite !important;
+  }
+  [style*="--motion-reduced: reduce"] .motion-essential [class*="animate-"],
+  [style*="--motion-reduced: reduce"] .motion-essential[class*="animate-"],
+  [style*="--motion-reduced: reduce"] .motion-essential .agent-live-cursor,
+  [style*="--motion-reduced: reduce"] .motion-essential.agent-live-cursor {
+    animation-iteration-count: infinite !important;
+  }
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-spin,
+  [style*="--motion-reduced: reduce"] .motion-essential.animate-spin,
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-ping,
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-bounce { animation-duration: 1s !important; }
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-pulse,
+  [style*="--motion-reduced: reduce"] .motion-essential.animate-pulse { animation-duration: 2s !important; }
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-orbit,
+  [style*="--motion-reduced: reduce"] .motion-essential.animate-orbit { animation-duration: 1.4s !important; }
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-neural-pulse,
+  [style*="--motion-reduced: reduce"] .motion-essential.animate-neural-pulse { animation-duration: 1.6s !important; }
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-particle-drift,
+  [style*="--motion-reduced: reduce"] .motion-essential.animate-particle-drift { animation-duration: 2.2s !important; }
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-caret-blink,
+  [style*="--motion-reduced: reduce"] .motion-essential .agent-live-cursor,
+  [style*="--motion-reduced: reduce"] .motion-essential.agent-live-cursor { animation-duration: 1.1s !important; }
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-shimmer-sweep,
+  [style*="--motion-reduced: reduce"] .motion-essential.animate-shimmer-sweep { animation-duration: 1.8s !important; }
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-dot-cascade,
+  [style*="--motion-reduced: reduce"] .motion-essential.animate-dot-cascade { animation-duration: 1.2s !important; }
+  [style*="--motion-reduced: reduce"] .motion-essential .animate-synapse-glow,
+  [style*="--motion-reduced: reduce"] .motion-essential.animate-synapse-glow { animation-duration: 2.4s !important; }
 }
 
 [data-theme="light"] {
