@@ -345,6 +345,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
               <AgentLiveTimeline
                 executionProcessId={selectedRunId}
                 taskStartedAt={selectedRun?.started_at ?? null}
+                taskCompletedAt={selectedRun?.completed_at ?? null}
                 taskStatus={selectedTask?.status ?? null}
                 reviewComment={selectedTask?.review_comment ?? null}
                 taskResult={selectedTask?.result ?? null}

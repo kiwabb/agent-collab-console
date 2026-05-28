@@ -14,6 +14,7 @@ import type { NormalizedEntry } from "@/lib/types";
 interface AgentLiveTimelineProps {
   executionProcessId: string | null;
   taskStartedAt?: string | null;
+  taskCompletedAt?: string | null;
   taskStatus?: string | null;
   reviewComment?: string | null;
   taskResult?: string | null;
@@ -89,6 +90,7 @@ function formatElapsed(ms: number): string {
 
 function WorkingIndicator({
   taskStartedAt,
+  taskCompletedAt,
   phase,
   elapsedSinceLastMs,
   isFinished,
@@ -97,6 +99,7 @@ function WorkingIndicator({
   stopBusy,
 }: {
   taskStartedAt?: string | null;
+  taskCompletedAt?: string | null;
   phase: string;
   elapsedSinceLastMs: number;
   isFinished: boolean;
@@ -113,7 +116,12 @@ function WorkingIndicator({
   }, [isFinished]);
 
   const startedMs = taskStartedAt ? new Date(taskStartedAt).getTime() : null;
-  const elapsedTotalMs = startedMs ? nowTick - startedMs : 0;
+  const completedMs = taskCompletedAt ? new Date(taskCompletedAt).getTime() : null;
+  // Once terminal, freeze the duration at the recorded completion time. Falling
+  // back to nowTick would measure wall-clock time since start (e.g. opening a
+  // task that finished hours ago shows "完成于 91m" instead of its real runtime).
+  const endMs = isFinished && completedMs != null ? completedMs : nowTick;
+  const elapsedTotalMs = startedMs != null ? endMs - startedMs : 0;
 
   if (isFailed) {
     return (
@@ -181,6 +189,7 @@ function WorkingIndicator({
 export function AgentLiveTimeline({
   executionProcessId,
   taskStartedAt,
+  taskCompletedAt,
   taskStatus,
   reviewComment,
   taskResult,
@@ -419,6 +428,7 @@ export function AgentLiveTimeline({
         {executionProcessId ? (
           <WorkingIndicator
             taskStartedAt={taskStartedAt}
+            taskCompletedAt={taskCompletedAt}
             phase={heartbeat?.phase || "idle"}
             elapsedSinceLastMs={heartbeat?.elapsedSinceLastMs ?? 0}
             isFinished={isTerminal}

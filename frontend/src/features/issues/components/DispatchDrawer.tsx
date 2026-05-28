@@ -115,6 +115,7 @@ export function DispatchDrawer({ item, onClose }: Props) {
           <AgentLiveTimeline
             executionProcessId={executionProcessId}
             taskStartedAt={item.task?.created_at ?? null}
+            taskCompletedAt={item.task?.updated_at ?? null}
             taskStatus={taskStatusRaw}
             reviewComment={item.task?.review_comment ?? null}
             taskResult={item.task?.result ?? null}

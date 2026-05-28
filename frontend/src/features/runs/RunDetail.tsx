@@ -546,6 +546,7 @@ export function RunDetail({
                 <AgentLiveTimeline
                   executionProcessId={process?.id ?? null}
                   taskStartedAt={process?.started_at ?? null}
+                  taskCompletedAt={process?.completed_at ?? null}
                   taskStatus={taskMeta?.status ?? null}
                   reviewComment={taskMeta?.review_comment ?? null}
                   taskResult={taskMeta?.result ?? null}
