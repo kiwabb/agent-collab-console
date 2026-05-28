@@ -1,11 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 from pathlib import Path
 import logging
 import shutil
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File
+from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 import json
 import os
@@ -2114,6 +2114,14 @@ async def codex_heartbeat():
 async def codex_ready():
     """Lightweight Codex ready check endpoint."""
     return {"ready": True}
+
+
+@router.get("/codex/echo")
+async def codex_echo(msg: str = Query(default="")):
+    """Echo endpoint that returns the message, its length, and a timestamp."""
+    length = len(msg)
+    ts = datetime.now(timezone.utc).isoformat()
+    return {"msg": msg, "length": length, "ts": ts}
 
 
 @router.get("/codex/workspaces")
