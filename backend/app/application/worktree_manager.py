@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.application.git_service import GitError, GitService
+from app.application.worktree_claude_hooks import inject_worktree_claude_hooks
 from app.domain.models import CodexIssue, CodexTask, Project
 
 
@@ -92,6 +93,7 @@ class WorktreeManager:
                 worktree_path=worktree,
                 base_branch=base,
             )
+            await inject_worktree_claude_hooks(worktree)
             if project.setup_script:
                 await self._run_setup(project.setup_script, worktree)
             return branch, str(worktree), base
@@ -166,6 +168,7 @@ class WorktreeManager:
                 worktree_path=worktree,
                 base_branch=base,
             )
+            await inject_worktree_claude_hooks(worktree)
             if project.setup_script:
                 await self._run_setup(project.setup_script, worktree)
             return branch, str(worktree), base

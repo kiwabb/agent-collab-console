@@ -2110,6 +2110,12 @@ async def codex_heartbeat():
     return {"status": "ok"}
 
 
+@router.get("/codex/ready")
+async def codex_ready():
+    """Lightweight Codex ready check endpoint."""
+    return {"ready": True}
+
+
 @router.get("/codex/workspaces")
 @router.get("/codex/sessions")
 async def list_codex_workspaces(project_id: str | None = None):

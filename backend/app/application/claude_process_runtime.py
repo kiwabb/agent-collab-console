@@ -142,12 +142,21 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
                 "status": "responding",
             })
 
-        effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
         # Per-task session identity: only the human workspace-console task may fall
         # back to the shared workspace.claude_thread_id. Role/help tasks resume only
         # their own task.resume_session_id (passed in), never the shared pointer —
         # so one broken session can't poison every role in the workspace.
         task = await self.codex_store.load_codex_task(task_id) if task_id else None
+        # Issue tasks must run in their isolated worktree, never fall back to
+        # workspace.cwd (= main project repo). Falling back would let the agent
+        # modify the main project instead of the issue branch.
+        is_issue_task = task is not None and getattr(task, "issue_id", None)
+        if is_issue_task and not cwd:
+            raise ValueError(
+                f"Issue task {task_id} (issue={task.issue_id}) has no worktree cwd. "
+                "Refusing to run in main project directory."
+            )
+        effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
         allow_ws_fallback = task is None or is_workspace_console_task(task)
         ws_fallback_id = workspace.claude_thread_id if allow_ws_fallback else None
         # When force_new_session=True, do NOT fall back to the workspace pointer.
