@@ -70,6 +70,17 @@ class CodexTaskRunner:
         if task.status == "running":
             raise ValueError("Task already running")
 
+        # Issue tasks MUST run inside their git worktree. If the worktree path
+        # was never set (setup race or failure), reject now rather than letting
+        # the runtime fall back to workspace.cwd (= the main project directory),
+        # which would cause the agent to modify the main project instead of the
+        # isolated branch.
+        if getattr(task, "issue_id", None) and not getattr(task, "workspace_path", None):
+            raise ValueError(
+                f"Issue task {task.id} (issue={task.issue_id}) has no worktree path. "
+                "Cannot run safely — aborting to prevent modification of the main project."
+            )
+
         # Non-chat runs must not carry over the previous summary/result, or the
         # refresh step may skip extracting the new run's output from logs.
         if kind != "chat":

@@ -57,7 +57,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
   ) => {
     if (timerRef.current) return;
     const attempt = attemptRef.current;
-    const baseDelay = Math.min(8000, 1000 * Math.pow(2, attempt));
+    const baseDelay = Math.min(8000, 200 * Math.pow(2, attempt));
     const jitter = Math.floor(Math.random() * 250);
     const delay = baseDelay + jitter;
     timerRef.current = setTimeout(() => {

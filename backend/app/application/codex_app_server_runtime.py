@@ -371,12 +371,20 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 "status": "responding",
             })
 
-        effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
         # Per-task session identity: only the human workspace-console task may fall
         # back to / write the shared workspace.thread_id. Role/help tasks resume
         # only their own task.resume_session_id.
         _task = await self.codex_store.load_codex_task(task_id) if task_id else None
         allow_ws_fallback = _task is None or is_workspace_console_task(_task)
+        # Issue tasks must run in their isolated worktree, never fall back to
+        # workspace.cwd (= main project repo).
+        is_issue_task = _task is not None and getattr(_task, "issue_id", None)
+        if is_issue_task and not cwd:
+            raise ValueError(
+                f"Issue task {task_id} (issue={_task.issue_id}) has no worktree cwd. "
+                "Refusing to run in main project directory."
+            )
+        effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
         cmd = list(self._app_server_cmd)
         # Per-task model: rewrite the baked-in `-c model=` flag so the selected
         # model actually reaches the codex CLI (the env var below is not enough).

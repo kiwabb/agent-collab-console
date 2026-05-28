@@ -629,12 +629,16 @@ class BaseProcessRuntime:
 
         if msg_type == "tool_use":
             tool_name_val = parsed.get("tool_name") or parsed.get("name") or ""
+            tool_use_id_val = parsed.get("tool_use_id") or parsed.get("id") or ""
+            tool_input = parsed.get("input") or {}
+            input_preview = str(tool_input)[:80]
+            logger.info("[tool_use] task=%s tool=%s id=%s input=%s", task_id, tool_name_val, tool_use_id_val[:8], input_preview)
             payload = json.dumps(
                 {
                     "kind": "tool_use",
-                    "tool_use_id": parsed.get("tool_use_id") or parsed.get("id") or "",
+                    "tool_use_id": tool_use_id_val,
                     "tool_name": tool_name_val,
-                    "input": parsed.get("input") or {},
+                    "input": tool_input,
                 },
                 ensure_ascii=False,
                 default=str,
@@ -647,12 +651,15 @@ class BaseProcessRuntime:
             return
 
         if msg_type == "tool_result":
+            tool_result_id = parsed.get("tool_use_id") or parsed.get("id") or ""
+            is_error = bool(parsed.get("is_error"))
+            logger.info("[tool_result] task=%s id=%s error=%s", task_id, tool_result_id[:8], is_error)
             payload = json.dumps(
                 {
                     "kind": "tool_result",
-                    "tool_use_id": parsed.get("tool_use_id") or parsed.get("id") or "",
+                    "tool_use_id": tool_result_id,
                     "output": parsed.get("result") if isinstance(parsed.get("result"), str) else parsed.get("output", ""),
-                    "is_error": bool(parsed.get("is_error")),
+                    "is_error": is_error,
                 },
                 ensure_ascii=False,
                 default=str,

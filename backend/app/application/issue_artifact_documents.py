@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 
@@ -13,8 +14,11 @@ class IssueArtifactDocuments:
     # Root helpers
     # -------------------------------------------------------------------------
 
-    def issue_root(self, workspace_path: str, issue_id: str) -> Path:
-        return Path(workspace_path) / "issues" / issue_id
+    def issue_root(self, workspace_path: str | None, issue_id: str) -> Path:
+        # When the issue has no git worktree yet, fall back to a temp dir so
+        # artifact reads return empty (path won't exist) without crashing.
+        base = workspace_path if workspace_path else tempfile.gettempdir()
+        return Path(base) / "issues" / issue_id
 
     def ensure_issue_root(self, workspace_path: str, issue_id: str) -> Path:
         issue_root = self.issue_root(workspace_path, issue_id)

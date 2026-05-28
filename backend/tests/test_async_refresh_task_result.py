@@ -569,3 +569,51 @@ async def test_persist_reader_metadata_drops_resume_id_when_no_real_turn():
 
     # The dead session must not be carried into a retry → cold start.
     assert store.task.resume_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_issue_task_without_worktree_fails_before_spawn():
+    """Issue tasks with no workspace_path must fail immediately, never fall back
+    to workspace.cwd (which is the main project directory)."""
+    now = datetime.now()
+    task = CodexTask(
+        id="task-noworktree",
+        session_id="ws-1",
+        issue_id="issue-42",
+        title="Engineer task",
+        prompt="implement feature",
+        role="engineer",
+        executor="codex",
+        status="pending",
+        workspace_path=None,  # worktree not set up
+        created_at=now,
+        updated_at=now,
+    )
+    workspace = CodexSession(
+        id="ws-1",
+        title="Workspace",
+        cwd="/real/main/project",  # main project — must never be used as fallback
+        created_at=now,
+        last_active_at=now,
+    )
+    store = StoreStub(task, workspace)
+    bus = EventBusStub()
+    called_with_cwd = []
+
+    class SpyManager:
+        async def write_input_async(self, *args, cwd=None, **kwargs):
+            called_with_cwd.append(cwd)
+            return "done"
+
+    runner = CodexTaskRunner(
+        codex_store=store,
+        event_bus=bus,
+        process_manager_factory=lambda: SpyManager(),
+        mock_manager_cls=SpyManager,
+        refresh_task_result=lambda t: None,
+    )
+
+    with pytest.raises(ValueError, match="no worktree path"):
+        await runner.start_task_run(task)
+
+    assert called_with_cwd == [], "SpyManager must never be called when worktree is missing"

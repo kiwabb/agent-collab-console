@@ -20,8 +20,11 @@ The ladder, innermost → outermost, and what each layer protects against::
                                     Engineer/QA pass fits comfortably.
     CODEX_STALL_THRESHOLD_S (180s)  Stall watchdog: a task silent this long is
                                     terminated + nudged (cross-executor).
-    CONDUCTOR_SUBAGENT_IDLE_S(600s) dispatch_subagent gives up on a subagent
-                                    showing no activity this long.
+    CONDUCTOR_SUBAGENT_IDLE_S(1200s) dispatch_subagent gives up on a subagent
+                                    showing no activity this long. Must be >
+                                    CODEX_STALL_THRESHOLD_S+120 so the stall
+                                    watchdog can terminate the hung subprocess
+                                    before the conductor re-dispatches.
     CONDUCTOR_SUBAGENT_MAX_S(3600s) dispatch_subagent hard ceiling.
     CONDUCTOR_LEASE_TTL_S   (180s)  Conductor lease validity. The loop renews
                                     it on a background pulse every
@@ -41,7 +44,7 @@ logger = logging.getLogger(__name__)
 # --- Defaults (kept identical to the historical inline values) -------------
 DEFAULT_LEASE_TTL_S = 180
 DEFAULT_RECOVERY_INTERVAL_S = 30
-DEFAULT_SUBAGENT_IDLE_S = 600.0
+DEFAULT_SUBAGENT_IDLE_S = 1200.0
 DEFAULT_SUBAGENT_MAX_S = 3600.0
 DEFAULT_CODEX_TURN_TIMEOUT_S = 480
 DEFAULT_CODEX_IDLE_TIMEOUT_S = 180
@@ -49,9 +52,9 @@ DEFAULT_CODEX_IDLE_TIMEOUT_S = 180
 # missing binary, dyld crash) exits within milliseconds; initialize() would then
 # wait forever for a response. This caps that wait so we fail fast (GAP K).
 DEFAULT_CODEX_HANDSHAKE_TIMEOUT_S = 30
-DEFAULT_STALL_THRESHOLD_S = 180
+DEFAULT_STALL_THRESHOLD_S = 900
 DEFAULT_STALL_INTERVAL_S = 30
-DEFAULT_STALL_COOLDOWN_S = 300
+DEFAULT_STALL_COOLDOWN_S = 900
 
 # Minimum lease-pulse cadence floor (mirrors the historical
 # ``max(15, lease_ttl // 3)`` expression in conductor_main_loop).
@@ -164,6 +167,14 @@ def check_invariants() -> list[str]:
     if idle > hard:
         violations.append(
             f"CONDUCTOR_SUBAGENT_IDLE_S ({idle:.0f}) must be <= CONDUCTOR_SUBAGENT_MAX_S ({hard:.0f})."
+        )
+    stall = stall_threshold_s()
+    if idle <= stall + 120:
+        violations.append(
+            f"CONDUCTOR_SUBAGENT_IDLE_S ({idle:.0f}) must be > "
+            f"CODEX_STALL_THRESHOLD_S+120 ({stall + 120:.0f}): "
+            "the stall watchdog must get a chance to terminate the hung subprocess "
+            "before the conductor re-dispatches."
         )
     if codex_idle > codex_turn:
         violations.append(
