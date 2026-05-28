@@ -40,6 +40,41 @@ PausePredicate = Callable[[], Union[Awaitable[bool], bool]]
 InflightTaskSetter = Callable[[asyncio.Task | None], Union[Awaitable[None], None]]
 TokenDeltaRecorder = Callable[..., Union[Awaitable[None], None]]
 
+
+def conductor_language_directive(output_language: str | None) -> str:
+    """Build a system-prompt section forcing the conductor's user-facing output
+    into the configured language.
+
+    The conductor runs in a detached server-side loop and cannot read the UI's
+    locale, so the chosen language is persisted on the runtime catalog and passed
+    in here. ``"auto"`` (the default) returns an empty string, preserving the
+    legacy behavior of matching the issue's own language.
+    """
+    lang = (output_language or "auto").strip().lower()
+    if lang in ("", "auto"):
+        return ""
+    if lang.startswith("zh"):
+        return (
+            "\n## 输出语言\n"
+            "你必须用**简体中文**输出所有面向用户的内容:推理叙述、状态说明、"
+            "通过 request_user_clarification 向用户提问、以及 finalize_task 的总结。"
+            "工具名、角色名(pm/architect/engineer/qa 等)和代码标识符保持原样。\n"
+        )
+    if lang.startswith("en"):
+        return (
+            "\n## Output language\n"
+            "You MUST write all user-facing content — reasoning narration, status notes, "
+            "questions asked via request_user_clarification, and the finalize_task summary — "
+            "in **English**. Keep tool names, role names, and code identifiers as-is.\n"
+        )
+    return (
+        "\n## Output language\n"
+        f"You MUST write all user-facing content (reasoning, questions, finalize summary) "
+        f"in the language identified by the locale code '{output_language}'. "
+        "Keep tool names, role names, and code identifiers as-is.\n"
+    )
+
+
 _TURN_PAYLOAD_LIMIT = 32_768
 _TRACEBACK_LIMIT = 8_000
 # Number of consecutive heartbeat-pulse failures before we emit a structured
@@ -590,6 +625,11 @@ async def run_issue_conductor_loop(
 
         catalog = await RuntimeCatalogService(store).load_catalog()
         cllm = resolve_conductor_llm_context(catalog)
+        language_directive = ""
+        try:
+            language_directive = conductor_language_directive(catalog.conductor_llm.output_language)
+        except Exception:  # noqa: BLE001
+            pass
 
         conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
         project_context = ""
@@ -634,7 +674,7 @@ You can also use specialist roles: security_reviewer, perf_reviewer, doc_writer,
 Think step by step. After each dispatch_subagent returns, analyze the result before deciding the next step.
 If something is unclear or blocked, use `request_user_clarification`.
 Users may inject `[USER INTERJECTION]` messages between turns. Treat them as authoritative steering for the next decision.
-"""
+{language_directive}"""
 
         async def llm(messages, tools, on_token_delta=None):
             if cllm is None:

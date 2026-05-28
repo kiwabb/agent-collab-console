@@ -66,6 +66,29 @@ export function SettingsPage() {
     { value: "large", label: t("settings.fontSize.large") },
   ];
 
+  // Switch the UI locale and persist it as the Conductor's output language. The
+  // server-side conductor loop can't read the client locale, so it reads
+  // conductor_llm.output_language from the runtime catalog.
+  const handleLocaleChange = async (value: Locale) => {
+    setLocale(value);
+    if (!runtimeCatalog || runtimeCatalog.conductor_llm?.output_language === value) return;
+    const next: RuntimeCatalog = {
+      ...runtimeCatalog,
+      conductor_llm: { ...(runtimeCatalog.conductor_llm ?? {}), output_language: value },
+    };
+    setRuntimeCatalog(next);
+    setSaveStatus("saving");
+    setSaveError(null);
+    try {
+      const saved = await updateRuntimeCatalog(next);
+      setRuntimeCatalog(saved);
+      setSaveStatus("saved");
+    } catch (err) {
+      setSaveStatus("error");
+      setSaveError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <PageFrame
       eyebrow={t("settings.preferences")}
@@ -188,7 +211,7 @@ export function SettingsPage() {
                       {localeOptions.map((option) => (
                         <button
                           key={option.value}
-                          onClick={() => setLocale(option.value)}
+                          onClick={() => void handleLocaleChange(option.value)}
                           className={cn(
                             "w-full flex items-center gap-4 p-3 rounded-xl border transition-all text-left group",
                             locale === option.value

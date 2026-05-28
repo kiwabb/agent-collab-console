@@ -399,6 +399,12 @@ class ConductorLLMConfig(BaseModel):
     model: str | None = None
     max_tokens: int = 8192
     timeout_s: float = 120.0
+    # Language for the conductor's user-facing output (reasoning narration, status
+    # notes, user questions, finalize summary). "auto" matches the issue's own
+    # language (legacy behavior); otherwise a UI locale code like "zh-CN" / "en-US"
+    # synced from Settings → the server-side loop has no other way to know the UI
+    # language, so it is persisted here.
+    output_language: str = "auto"
 
 
 class RuntimeCatalog(BaseModel):

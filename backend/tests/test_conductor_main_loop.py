@@ -2,10 +2,32 @@ import asyncio
 
 import pytest
 
-from app.application.conductor_main_loop import _run_heartbeat_pulse, run_conductor_loop
+from app.application.conductor_main_loop import (
+    _run_heartbeat_pulse,
+    conductor_language_directive,
+    run_conductor_loop,
+)
 from app.application.conductor_tools import build_conductor_tools
 from app.application.llm_runner import extract_tool_use_blocks
 from app.domain.models import ProjectMemoryEmbedding
+
+
+def test_conductor_language_directive_auto_is_empty():
+    """'auto' (default) keeps the legacy match-the-issue behavior: no directive."""
+    assert conductor_language_directive("auto") == ""
+    assert conductor_language_directive("") == ""
+    assert conductor_language_directive(None) == ""
+
+
+def test_conductor_language_directive_forces_locale():
+    """A concrete locale injects a non-empty, locale-appropriate directive."""
+    zh = conductor_language_directive("zh-CN")
+    assert "简体中文" in zh
+    en = conductor_language_directive("en-US")
+    assert "English" in en
+    # Unknown locale codes still produce a directive referencing the code.
+    other = conductor_language_directive("fr-FR")
+    assert "fr-FR" in other
 
 
 @pytest.mark.asyncio

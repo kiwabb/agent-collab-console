@@ -530,6 +530,9 @@ export interface ConductorLLMConfig {
   model?: string | null;
   max_tokens?: number;
   timeout_s?: number;
+  // Language for the conductor's user-facing output. "auto" matches the issue's
+  // language; otherwise a UI locale code ("zh-CN" / "en-US") synced from Settings.
+  output_language?: string;
 }
 
 export interface RuntimeCatalog {
