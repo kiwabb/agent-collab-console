@@ -3825,7 +3825,40 @@ async def list_codex_tasks(session_id: str | None = None, issue_id: str | None =
     """List all tasks, optionally filtered by session_id."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    return await codex_store.list_codex_tasks(session_id=session_id, issue_id=issue_id)
+    tasks = await codex_store.list_codex_tasks(session_id=session_id, issue_id=issue_id)
+
+    # Enrich each task with its last_run execution process info
+    enriched_tasks = []
+    for task in tasks:
+        last_ep_id = task.get("last_execution_process_id")
+        if last_ep_id:
+            try:
+                ep = await codex_store.load_execution_process(last_ep_id)
+                if ep:
+                    # Calculate duration
+                    duration_seconds = None
+                    if ep.started_at and ep.completed_at:
+                        duration_seconds = int((ep.completed_at - ep.started_at).total_seconds())
+                    task["last_run"] = {
+                        "executor": ep.executor,
+                        "provider": ep.provider,
+                        "model": ep.model,
+                        "input_tokens": ep.input_tokens,
+                        "output_tokens": ep.output_tokens,
+                        "cache_read_tokens": ep.cache_read_tokens,
+                        "total_cost_usd": ep.total_cost_usd,
+                        "duration_seconds": duration_seconds,
+                        "status": ep.status,
+                    }
+                else:
+                    task["last_run"] = None
+            except Exception:
+                task["last_run"] = None
+        else:
+            task["last_run"] = None
+        enriched_tasks.append(task)
+
+    return enriched_tasks
 
 
 @router.get("/codex/tasks/{task_id}")

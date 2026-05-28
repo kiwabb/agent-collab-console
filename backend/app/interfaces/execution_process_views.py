@@ -7,6 +7,11 @@ def build_execution_process_view(
     messages: list[CodexTaskMessage],
     logs: list[LogEvent],
 ) -> dict:
+    # Calculate duration in seconds if both started_at and completed_at are present
+    duration_seconds = None
+    if process.started_at and process.completed_at:
+        duration_seconds = int((process.completed_at - process.started_at).total_seconds())
+
     return {
         "id": process.id,
         "session_id": process.session_id,
@@ -18,6 +23,12 @@ def build_execution_process_view(
         "executor": process.executor if process.executor else (task.executor if task else "codex"),
         "provider": process.provider if process.provider else (task.provider if task else None),
         "model": process.model if process.model else (task.model if task else None),
+        # Token usage and cost
+        "input_tokens": process.input_tokens,
+        "output_tokens": process.output_tokens,
+        "cache_read_tokens": process.cache_read_tokens,
+        "total_cost_usd": process.total_cost_usd,
+        "duration_seconds": duration_seconds,
         "workspace_path": task.workspace_path if task else None,
         "resume_session_id": task.resume_session_id if task else None,
         "created_at": process.created_at.isoformat() if process.created_at else None,

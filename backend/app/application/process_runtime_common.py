@@ -160,6 +160,12 @@ class AsyncProcessEntry:
     # storm the event bus.
     last_worktree_dirty_at: float = 0.0
     cached_issue_id: str | None = None
+    # Token usage accumulation: tracks input/output/cache tokens seen in stream events
+    usage_input: int = 0
+    usage_output: int = 0
+    usage_cache: int = 0
+    cli_cost_usd: float | None = None
+    seen_usage_msg_ids: set = field(default_factory=set)
 
     @property
     def workspace_id(self) -> str:
@@ -481,7 +487,7 @@ class BaseProcessRuntime:
         if not msg_type:
             return
 
-        # Log every LLM token stream event in real-time
+        # Log every LLM token stream event in real-time and accumulate usage
         if msg_type == "stream_event":
             evt = parsed.get("event", {})
             delta = evt.get("delta", {})
@@ -496,6 +502,16 @@ class BaseProcessRuntime:
             # counts as live progress and resets the silence timer.
             from app.application import task_activity
             task_activity.touch(task_id)
+            # Accumulate usage from stream_event
+            from app.application.usage_utils import extract_usage, extract_message_id
+            usage = extract_usage(parsed)
+            if usage:
+                msg_id = extract_message_id(parsed)
+                if msg_id and msg_id not in entry.seen_usage_msg_ids:
+                    entry.seen_usage_msg_ids.add(msg_id)
+                    entry.usage_input += usage.get("input_tokens", 0) or 0
+                    entry.usage_output += usage.get("output_tokens", 0) or 0
+                    entry.usage_cache += usage.get("cache_read_input_tokens", 0) or 0
 
         session_id_val = parsed.get("session_id")
         if session_id_val and entry.resume_session_id is None:
@@ -520,6 +536,16 @@ class BaseProcessRuntime:
             assistant_uuid = parsed.get("uuid")
             if assistant_uuid:
                 entry.resume_message_id = assistant_uuid
+            # Accumulate usage from assistant message
+            from app.application.usage_utils import extract_usage, extract_message_id
+            usage = extract_usage(parsed)
+            if usage:
+                msg_id = extract_message_id(parsed)
+                if msg_id and msg_id not in entry.seen_usage_msg_ids:
+                    entry.seen_usage_msg_ids.add(msg_id)
+                    entry.usage_input += usage.get("input_tokens", 0) or 0
+                    entry.usage_output += usage.get("output_tokens", 0) or 0
+                    entry.usage_cache += usage.get("cache_read_input_tokens", 0) or 0
             msg = parsed.get("message") or {}
             content = msg.get("content", [])
             if isinstance(content, list):
@@ -677,6 +703,19 @@ class BaseProcessRuntime:
                 or _terminal_reason in {"aborted_streaming", "error", "interrupted"}
             ):
                 entry.had_error = True
+            # Accumulate usage and capture CLI cost from result
+            from app.application.usage_utils import extract_usage, extract_message_id
+            usage = extract_usage(parsed)
+            if usage:
+                msg_id = extract_message_id(parsed)
+                if msg_id and msg_id not in entry.seen_usage_msg_ids:
+                    entry.seen_usage_msg_ids.add(msg_id)
+                    entry.usage_input += usage.get("input_tokens", 0) or 0
+                    entry.usage_output += usage.get("output_tokens", 0) or 0
+                    entry.usage_cache += usage.get("cache_read_input_tokens", 0) or 0
+            # Claude CLI may carry total_cost_usd in the result event
+            if parsed.get("total_cost_usd") is not None:
+                entry.cli_cost_usd = parsed.get("total_cost_usd")
             result_val = parsed.get("result")
             if isinstance(result_val, str) and result_val.strip():
                 if not is_cli_control_payload(result_val):
@@ -746,6 +785,19 @@ class BaseProcessRuntime:
                     exit_code=0,
                     completed_at=datetime.now(),
                 )
+                # Persist token usage and cost
+                if entry.usage_input or entry.usage_output or entry.cli_cost_usd:
+                    from app.application.usage_utils import price_tokens
+                    cost = entry.cli_cost_usd if entry.cli_cost_usd is not None else price_tokens(
+                        entry.usage_input, entry.usage_output, entry.usage_cache
+                    )
+                    await self.codex_store.update_execution_process_usage(
+                        execution_process_id,
+                        input_tokens=entry.usage_input if entry.usage_input else None,
+                        output_tokens=entry.usage_output if entry.usage_output else None,
+                        cache_read_tokens=entry.usage_cache if entry.usage_cache else None,
+                        total_cost_usd=cost if cost > 0 else None,
+                    )
             await self.codex_store.save_codex_task(task)
             # For chat runs the agent reply is plain natural language — show it as-is.
             # For initial/rerun/refine the agent returns raw schema JSON which the
@@ -807,6 +859,19 @@ class BaseProcessRuntime:
                 exit_code=exit_code,
                 completed_at=datetime.now(),
             )
+            # Persist token usage and cost even on failure
+            if entry.usage_input or entry.usage_output or entry.cli_cost_usd:
+                from app.application.usage_utils import price_tokens
+                cost = entry.cli_cost_usd if entry.cli_cost_usd is not None else price_tokens(
+                    entry.usage_input, entry.usage_output, entry.usage_cache
+                )
+                await self.codex_store.update_execution_process_usage(
+                    execution_process_id,
+                    input_tokens=entry.usage_input if entry.usage_input else None,
+                    output_tokens=entry.usage_output if entry.usage_output else None,
+                    cache_read_tokens=entry.usage_cache if entry.usage_cache else None,
+                    total_cost_usd=cost if cost > 0 else None,
+                )
 
         if self._event_bus is not None:
             await self._event_bus.append({
@@ -957,6 +1022,19 @@ class BaseProcessRuntime:
                 exit_code=final_exit_code,
                 completed_at=datetime.now(),
             )
+            # Persist token usage and cost
+            if entry.usage_input or entry.usage_output or entry.cli_cost_usd:
+                from app.application.usage_utils import price_tokens
+                cost = entry.cli_cost_usd if entry.cli_cost_usd is not None else price_tokens(
+                    entry.usage_input, entry.usage_output, entry.usage_cache
+                )
+                await self.codex_store.update_execution_process_usage(
+                    execution_process_id,
+                    input_tokens=entry.usage_input if entry.usage_input else None,
+                    output_tokens=entry.usage_output if entry.usage_output else None,
+                    cache_read_tokens=entry.usage_cache if entry.usage_cache else None,
+                    total_cost_usd=cost if cost > 0 else None,
+                )
 
         if self._event_bus is not None:
             await self._event_bus.append({
@@ -1076,6 +1154,19 @@ class BaseProcessRuntime:
                                 exit_code=None,
                                 completed_at=datetime.now(),
                             )
+                            # Persist token usage and cost even on timeout
+                            if entry.usage_input or entry.usage_output or entry.cli_cost_usd:
+                                from app.application.usage_utils import price_tokens
+                                cost = entry.cli_cost_usd if entry.cli_cost_usd is not None else price_tokens(
+                                    entry.usage_input, entry.usage_output, entry.usage_cache
+                                )
+                                await self.codex_store.update_execution_process_usage(
+                                    execution_process_id,
+                                    input_tokens=entry.usage_input if entry.usage_input else None,
+                                    output_tokens=entry.usage_output if entry.usage_output else None,
+                                    cache_read_tokens=entry.usage_cache if entry.usage_cache else None,
+                                    total_cost_usd=cost if cost > 0 else None,
+                                )
                         except Exception:
                             pass
                     if self._event_bus:

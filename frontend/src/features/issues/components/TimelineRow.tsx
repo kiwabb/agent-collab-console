@@ -4,6 +4,7 @@ import { AlertCircle, CheckCircle2, HelpCircle, Lightbulb, Loader2, MessageCircl
 
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
+import { formatTok, formatCost } from "@/lib/format";
 import type { DecisionTimelineItem } from "../hooks/useDecisionTimeline";
 import { TimelineThinkingTurns } from "./TimelineThinkingTurns";
 import { formatDuration } from "./StatusStrip";
@@ -65,7 +66,34 @@ export function TimelineRow({ item, onOpen }: Props) {
           <h3 className="mt-2 truncate text-sm font-bold text-foreground">{title}</h3>
           {item.summary && <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{item.summary}</p>}
         </div>
-        <div className="text-xs font-semibold text-text-muted">{t("issue.command.details")}</div>
+        <div className="flex flex-col items-end justify-start gap-1">
+          {/* Cost/tokens badge for completed tasks */}
+          {(() => {
+            const lastRun = item.task?.last_run;
+            if (!lastRun) return null;
+
+            const cost = lastRun.total_cost_usd;
+            const inputTokens = lastRun.input_tokens;
+            const outputTokens = lastRun.output_tokens;
+
+            if (cost == null && inputTokens == null && outputTokens == null) return null;
+
+            const parts: string[] = [];
+            if (cost != null) parts.push(formatCost(cost));
+            if (inputTokens != null || outputTokens != null) {
+              const inp = inputTokens ?? 0;
+              const out = outputTokens ?? 0;
+              parts.push(`${formatTok(inp + out)} tok`);
+            }
+
+            return (
+              <span className="font-mono text-[10px] text-text-faint whitespace-nowrap">
+                {parts.join(" · ")}
+              </span>
+            );
+          })()}
+          <div className="text-xs font-semibold text-text-muted">{t("issue.command.details")}</div>
+        </div>
       </button>
 
       {failed && item.why && (

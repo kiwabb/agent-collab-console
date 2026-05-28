@@ -12,6 +12,7 @@ import {
   rerunCodexTask,
   terminateCodexTask,
 } from "@/lib/api";
+import { formatTok, formatCost, formatDuration } from "@/lib/format";
 import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
 import { SubAgentResultCard } from "./SubAgentResultCard";
 import type { DecisionTimelineItem } from "../hooks/useDecisionTimeline";
@@ -179,6 +180,33 @@ export function DispatchDrawer({ item, onClose }: Props) {
                 {item.status}
               </span>
             </div>
+            {/* Execution meta row (executor, model, tokens, cost, duration) */}
+            {(() => {
+              const lastRun = item.task?.last_run;
+              const executor = lastRun?.executor ?? item.task?.executor;
+              const model = lastRun?.model ?? item.task?.model;
+              const inputTokens = lastRun?.input_tokens;
+              const outputTokens = lastRun?.output_tokens;
+              const totalCost = lastRun?.total_cost_usd;
+              const duration = lastRun?.duration_seconds;
+
+              const parts: string[] = [];
+              if (executor) parts.push(executor);
+              if (model) parts.push(model);
+              if (inputTokens != null || outputTokens != null) {
+                const inp = inputTokens ?? 0;
+                const out = outputTokens ?? 0;
+                parts.push(`↑${formatTok(inp)} / ↓${formatTok(out)} tok`);
+              }
+              if (totalCost != null) parts.push(formatCost(totalCost));
+              if (duration != null) parts.push(formatDuration(duration));
+
+              return parts.length > 0 ? (
+                <p className="mt-1 text-[10px] text-text-muted font-mono">
+                  {parts.join(" · ")}
+                </p>
+              ) : null;
+            })()}
             <h2 className="text-[16px] font-black text-foreground leading-snug tracking-tight line-clamp-2">
               {item.titleKey ? t(item.titleKey, item.titleParams) : item.title}
             </h2>

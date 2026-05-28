@@ -198,6 +198,10 @@ class AsyncSQLiteStore:
                 updated_at TEXT,
                 kind TEXT NOT NULL DEFAULT 'initial',
                 triggering_message_id TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                total_cost_usd REAL,
                 FOREIGN KEY (task_id) REFERENCES codex_tasks(id),
                 FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
             );
@@ -392,6 +396,23 @@ class AsyncSQLiteStore:
             pass
         try:
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN review_comment TEXT")
+        except aiosqlite.OperationalError:
+            pass
+        # Add token usage and cost columns to execution_processes
+        try:
+            await conn.execute("ALTER TABLE execution_processes ADD COLUMN input_tokens INTEGER")
+        except aiosqlite.OperationalError:
+            pass
+        try:
+            await conn.execute("ALTER TABLE execution_processes ADD COLUMN output_tokens INTEGER")
+        except aiosqlite.OperationalError:
+            pass
+        try:
+            await conn.execute("ALTER TABLE execution_processes ADD COLUMN cache_read_tokens INTEGER")
+        except aiosqlite.OperationalError:
+            pass
+        try:
+            await conn.execute("ALTER TABLE execution_processes ADD COLUMN total_cost_usd REAL")
         except aiosqlite.OperationalError:
             pass
         # --- Project / git worktree feature additions ---
@@ -1678,10 +1699,11 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
-            "INSERT OR REPLACE INTO execution_processes (id, task_id, session_id, status, exit_code, executor, provider, model, kind, triggering_message_id, started_at, completed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO execution_processes (id, task_id, session_id, status, exit_code, executor, provider, model, kind, triggering_message_id, input_tokens, output_tokens, cache_read_tokens, total_cost_usd, started_at, completed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (process.id, process.task_id, process.session_id, process.status, process.exit_code,
              process.executor, process.provider, process.model,
              process.kind, process.triggering_message_id,
+             process.input_tokens, process.output_tokens, process.cache_read_tokens, process.total_cost_usd,
              self._format_datetime(process.started_at),
              self._format_datetime(process.completed_at),
              self._format_datetime(process.created_at),
@@ -1706,6 +1728,10 @@ class AsyncSQLiteStore:
             executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
             provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
             model=row["model"] if "model" in row.keys() and row["model"] else None,
+            input_tokens=row["input_tokens"] if "input_tokens" in row.keys() else None,
+            output_tokens=row["output_tokens"] if "output_tokens" in row.keys() else None,
+            cache_read_tokens=row["cache_read_tokens"] if "cache_read_tokens" in row.keys() else None,
+            total_cost_usd=row["total_cost_usd"] if "total_cost_usd" in row.keys() else None,
             kind=row["kind"] if "kind" in row.keys() and row["kind"] else "initial",
             triggering_message_id=row["triggering_message_id"] if "triggering_message_id" in row.keys() else None,
             started_at=self._parse_datetime(row["started_at"]),
@@ -1749,6 +1775,10 @@ class AsyncSQLiteStore:
                 executor=r["executor"] if "executor" in r.keys() and r["executor"] else None,
                 provider=r["provider"] if "provider" in r.keys() and r["provider"] else None,
                 model=r["model"] if "model" in r.keys() and r["model"] else None,
+                input_tokens=r["input_tokens"] if "input_tokens" in r.keys() else None,
+                output_tokens=r["output_tokens"] if "output_tokens" in r.keys() else None,
+                cache_read_tokens=r["cache_read_tokens"] if "cache_read_tokens" in r.keys() else None,
+                total_cost_usd=r["total_cost_usd"] if "total_cost_usd" in r.keys() else None,
                 kind=r["kind"] if "kind" in r.keys() and r["kind"] else "initial",
                 triggering_message_id=r["triggering_message_id"] if "triggering_message_id" in r.keys() else None,
                 started_at=self._parse_datetime(r["started_at"]),
@@ -1778,6 +1808,17 @@ class AsyncSQLiteStore:
         await conn.execute(
             "UPDATE execution_processes SET status = ?, exit_code = ?, completed_at = ?, updated_at = ? WHERE id = ?",
             (status, exit_code, completed_at_value, self._format_datetime(now), process_id),
+        )
+        await conn.commit()
+
+    async def update_execution_process_usage(self, process_id: str, input_tokens: int | None = None, output_tokens: int | None = None, cache_read_tokens: int | None = None, total_cost_usd: float | None = None):
+        await self._ensure_db()
+        conn = await self._get_conn()
+        from datetime import datetime as dt
+        now = dt.now()
+        await conn.execute(
+            "UPDATE execution_processes SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, total_cost_usd = ?, updated_at = ? WHERE id = ?",
+            (input_tokens, output_tokens, cache_read_tokens, total_cost_usd, self._format_datetime(now), process_id),
         )
         await conn.commit()
 

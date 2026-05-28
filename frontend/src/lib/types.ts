@@ -159,6 +159,18 @@ export interface IssuePhaseMultiTaskTransitionResult {
   created: boolean;
 }
 
+export interface TaskRunUsage {
+  executor?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  total_cost_usd?: number | null;
+  duration_seconds?: number | null;
+  status?: string | null;
+}
+
 export interface CodexTask {
   id: string;
   session_id: string;
@@ -185,6 +197,7 @@ export interface CodexTask {
   resume_session_id: string | null;
   resume_message_id: string | null;
   last_execution_process_id: string | null;
+  last_run?: TaskRunUsage | null;
   sequence_index?: number | null;
   sequence_group?: string | null;
   review_comment?: string | null;
@@ -226,6 +239,11 @@ export interface ExecutionProcess {
   executor?: string | null;
   provider?: string | null;
   model?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  total_cost_usd?: number | null;
+  duration_seconds?: number | null;
   kind?: RunKind;
   triggering_message_id?: string | null;
   started_at: string | null;

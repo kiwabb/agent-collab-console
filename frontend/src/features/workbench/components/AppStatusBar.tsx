@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useBackendStatus } from "@/hooks/useBackendStatus";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { getCodexCostStats, getEmbeddingStatus, type CodexCostStats, type EmbeddingStatus } from "@/lib/api";
+import { formatTok } from "@/lib/format";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 
@@ -125,8 +126,3 @@ export function AppStatusBar() {
   );
 }
 
-function formatTok(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
-  return `${(n / 1_000_000).toFixed(2)}M`;
-}

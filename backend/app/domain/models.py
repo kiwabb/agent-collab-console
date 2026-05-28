@@ -311,6 +311,10 @@ class ExecutionProcess(BaseModel):
     executor: str | None = None  # Resolved executor at run time
     provider: str | None = None  # Resolved provider at run time
     model: str | None = None     # Resolved model at run time
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    total_cost_usd: float | None = None
     # Run intent classification. Drives prompt building and post-run persistence:
     #   initial / rerun → role workflow prompt + persist artifact
     #   refine          → "current artifact + user changes" prompt + persist (merge)
