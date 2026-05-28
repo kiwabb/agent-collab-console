@@ -12,16 +12,19 @@ def test_defaults_pass_invariants():
     assert timeouts.check_invariants() == []
 
 
-def test_default_values_match_historical_constants():
+def test_default_values_match_shipped_ladder():
+    # These are the shipped defaults. subagent_idle was raised 600→1200 so the
+    # stall watchdog (900s) can reap a hung subprocess before the conductor
+    # gives up and re-dispatches; idle must stay > stall_threshold + 120.
     assert timeouts.lease_ttl_s() == 180
     assert timeouts.recovery_interval_s() == 30
-    assert timeouts.subagent_idle_s() == 600.0
+    assert timeouts.subagent_idle_s() == 1200.0
     assert timeouts.subagent_max_s() == 3600.0
     assert timeouts.codex_turn_timeout_s() == 480
     assert timeouts.codex_idle_timeout_s() == 180
-    assert timeouts.stall_threshold_s() == 180
+    assert timeouts.stall_threshold_s() == 900
     assert timeouts.stall_interval_s() == 30
-    assert timeouts.stall_cooldown_s() == 300
+    assert timeouts.stall_cooldown_s() == 900
 
 
 def test_lease_pulse_interval_formula(monkeypatch):
@@ -34,11 +37,20 @@ def test_lease_pulse_interval_formula(monkeypatch):
 
 def test_lease_ttl_must_be_under_subagent_idle(monkeypatch):
     # A lease TTL >= subagent idle is the classic orphan-relaunch trap.
-    monkeypatch.setenv("CONDUCTOR_LEASE_TTL_S", "900")
+    # (idle default is 1200, so use a TTL above it to trip the invariant.)
+    monkeypatch.setenv("CONDUCTOR_LEASE_TTL_S", "1300")
     violations = timeouts.check_invariants()
     assert any("CONDUCTOR_LEASE_TTL_S" in v for v in violations)
     with pytest.raises(timeouts.TimeoutConfigError):
         timeouts.validate(strict=True)
+
+
+def test_subagent_idle_must_exceed_stall_threshold(monkeypatch):
+    # The stall watchdog must get a chance to terminate a hung subprocess
+    # before the conductor's idle timeout re-dispatches.
+    monkeypatch.setenv("CONDUCTOR_SUBAGENT_IDLE_S", "600")  # < stall(900)+120
+    violations = timeouts.check_invariants()
+    assert any("CODEX_STALL_THRESHOLD_S" in v for v in violations)
 
 
 def test_codex_idle_must_not_exceed_turn_budget(monkeypatch):
@@ -63,11 +75,11 @@ def test_invalid_env_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("CONDUCTOR_LEASE_TTL_S", "not-a-number")
     assert timeouts.lease_ttl_s() == 180
     monkeypatch.setenv("CONDUCTOR_SUBAGENT_IDLE_S", "garbage")
-    assert timeouts.subagent_idle_s() == 600.0
+    assert timeouts.subagent_idle_s() == 1200.0
 
 
 def test_validate_non_strict_returns_without_raising(monkeypatch):
-    monkeypatch.setenv("CONDUCTOR_LEASE_TTL_S", "900")
+    monkeypatch.setenv("CONDUCTOR_LEASE_TTL_S", "1300")  # >= idle(1200) → violation
     # Non-strict must not raise even when invariants are violated.
     violations = timeouts.validate(strict=False)
     assert violations  # non-empty

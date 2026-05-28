@@ -70,7 +70,10 @@ def _invoke_hook(hook_path: Path, tool_name: str, file_path: str, offset=None) -
 def hook_dir(tmp_path):
     """Return a tmp dir with the hook injected."""
     import asyncio
-    asyncio.get_event_loop().run_until_complete(inject_worktree_claude_hooks(tmp_path))
+    # asyncio.run creates and owns its own loop — robust regardless of whether a
+    # prior async test left the thread's loop closed (Python 3.14 removed the
+    # implicit get_event_loop() fallback).
+    asyncio.run(inject_worktree_claude_hooks(tmp_path))
     return tmp_path
 
 

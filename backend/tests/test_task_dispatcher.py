@@ -201,18 +201,23 @@ async def test_dispatch_role_adds_edge_for_prev_node():
 
 @pytest.mark.asyncio
 async def test_dispatch_role_records_initial_handoff_message():
-    """Records conductor-to-role handoff when dispatching the first role."""
+    """Records conductor-to-role handoff when dispatching the first role.
+
+    Also exercises role-alias normalization: dispatching the alias "pm"
+    resolves the canonical "product_manager" agent and uses the canonical
+    role for the node/handoff keys.
+    """
     from app.application.task_dispatcher import dispatch_role
 
     issue = _make_issue()
     graph = _make_graph(issue.id)
-    agent = _make_agent("pm")
+    agent = _make_agent("product_manager")
     store = _make_store(issue, graph, [agent])
     event_bus = _EventBusSpy()
 
     await dispatch_role(
         issue=issue,
-        role="pm",
+        role="pm",  # alias → normalized to product_manager
         prev_node_key=None,
         prompt_override="Plan the implementation",
         store=store,
@@ -225,7 +230,7 @@ async def test_dispatch_role_records_initial_handoff_message():
     assert msg.issue_id == issue.id
     assert msg.graph_id == graph.id
     assert msg.from_node_key == "conductor"
-    assert msg.to_node_key == "pm"
+    assert msg.to_node_key == "product_manager"
     assert msg.message_type == "handoff"
     assert msg.body == "Plan the implementation"
 
@@ -235,7 +240,7 @@ async def test_dispatch_role_records_initial_handoff_message():
     assert posted_events[0]["session_id"] == issue.session_id
     assert posted_events[0]["message"]["id"] == msg.id
     assert posted_events[0]["message"]["from_node_key"] == "conductor"
-    assert posted_events[0]["message"]["to_node_key"] == "pm"
+    assert posted_events[0]["message"]["to_node_key"] == "product_manager"
     assert posted_events[0]["message"]["message_type"] == "handoff"
 
 
