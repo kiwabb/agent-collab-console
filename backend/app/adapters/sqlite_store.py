@@ -1422,8 +1422,12 @@ class SQLiteStore:
         conn = self._get_conn()
         for table in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
             name = table[0]
-            if name != "sqlite_sequence":
-                conn.execute(f"DELETE FROM {name}")
+            if name == "sqlite_sequence":
+                continue
+            # Skip FTS5 virtual table shadow tables to prevent corruption
+            if name.startswith(("issues_fts_", "artifacts_fts_")):
+                continue
+            conn.execute(f"DELETE FROM {name}")
         conn.commit()
         conn.close()
 
