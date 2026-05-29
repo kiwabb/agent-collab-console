@@ -155,81 +155,93 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   }
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-        <CardTitle className="flex items-center gap-2 text-sm font-medium flex-wrap">
-          <GitBranch size={14} />
-          {t("task.git.title")}
-          <Badge variant={statusVariant(issue.git_merge_status)}>
+    <Card className="enterprise-card border-border-subtle/40 bg-surface-raised/40 backdrop-blur-xl shadow-xl rounded-[24px] overflow-hidden p-1.5 transition-all duration-300 hover:border-border-strong/40">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4 pt-5 px-5">
+        <CardTitle className="flex items-center gap-2 text-sm font-bold flex-wrap tracking-wide text-foreground">
+          <GitBranch size={15} className="text-brand shrink-0 animate-pulse" />
+          <span>{t("task.git.title")}</span>
+          <Badge variant={statusVariant(issue.git_merge_status)} className="rounded-md uppercase text-[10px] tracking-wider font-extrabold">
             {t(MERGE_STATUS_KEY[issue.git_merge_status])}
           </Badge>
           {stat && stat.files > 0 && (
-            <span className="text-xs font-normal font-mono text-muted-foreground">
-              <span className="text-success">+{stat.insertions}</span>{" "}
-              <span className="text-error">−{stat.deletions}</span>{" "}
+            <span className="text-xs font-bold font-mono text-text-secondary bg-surface-input px-2 py-0.5 rounded border border-border-subtle/40">
+              <span className="text-status-done">+{stat.insertions}</span>{" "}
+              <span className="text-status-failed">−{stat.deletions}</span>{" "}
               <span>/ {formatFileCount(stat.files, t)}</span>
             </span>
           )}
           {commitsAhead > 0 && (
-            <Badge variant="outline" className="font-mono">
-              ↑{commitsAhead}
+            <Badge variant="outline" className="font-mono border-brand/40 text-brand bg-brand-muted/10 rounded">
+              ↑ {commitsAhead} {commitsAhead === 1 ? "commit" : "commits"}
             </Badge>
           )}
         </CardTitle>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-1.5">
           <Button
             size="sm"
             variant="outline"
             onClick={handleViewDiff}
             disabled={!issue.git_worktree_path}
+            className="rounded-xl h-8 text-[11px] font-bold cursor-pointer transition-all border-border-subtle hover:bg-surface-hover"
           >
-            <FileText size={14} className="mr-1" />
+            <FileText size={13} className="mr-1 text-text-muted" />
             {t("task.viewDiff")}
           </Button>
+          
           <Button
             size="sm"
             variant="outline"
             onClick={() => setAbandonOpen(true)}
             disabled={!issue.git_branch || issue.git_merge_status !== "open"}
             title={t("task.abandonHelp")}
+            className="rounded-xl h-8 text-[11px] font-bold border-status-failed/25 text-status-failed bg-status-failed-bg hover:bg-status-failed/12 hover:border-status-failed/50 hover:text-status-failed cursor-pointer transition-all"
           >
-            <Ban size={14} className="mr-1" />
+            <Ban size={13} className="mr-1" />
             {t("task.abandon")}
           </Button>
+          
           <Button
             size="sm"
-            onClick={() => setConfirmOpen(true)}
+            onClick={handleConfirmMerge}
             disabled={!issue.git_branch || issue.git_merge_status !== "open"}
+            className="rounded-xl h-8 text-[11px] font-bold bg-brand text-background hover:bg-brand-strong cursor-pointer transition-all"
           >
-            <GitMerge size={14} className="mr-1" />
+            <GitMerge size={13} className="mr-1" />
             {t("task.mergeBack")}
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-2 text-xs">
-        <div>
-          <div className="text-muted-foreground">{t("task.branch")}</div>
-          <div className="font-mono truncate">{issue.git_branch ?? "—"}</div>
+      
+      <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs bg-slate-950/30 p-4 m-3.5 rounded-2xl border border-border-subtle/40 backdrop-blur-md">
+        <div className="flex flex-col gap-1.5 min-w-0">
+          <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">{t("task.branch")}</div>
+          <div className="font-mono text-foreground font-bold truncate bg-surface-input px-2 py-1 rounded border border-border-subtle/50 select-all" title={issue.git_branch ?? undefined}>
+            {issue.git_branch ?? "—"}
+          </div>
         </div>
-        <div>
-          <div className="text-muted-foreground">{t("task.base")}</div>
-          <div className="font-mono truncate">{issue.git_base_branch ?? "—"}</div>
+        
+        <div className="flex flex-col gap-1.5 min-w-0">
+          <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">{t("task.base")}</div>
+          <div className="font-mono text-foreground font-bold truncate bg-surface-input px-2 py-1 rounded border border-border-subtle/50 select-all" title={issue.git_base_branch ?? undefined}>
+            {issue.git_base_branch ?? "—"}
+          </div>
         </div>
-        <div>
-          <div className="text-muted-foreground">{t("task.worktree")}</div>
-          <div className="flex items-center gap-1.5 min-w-0">
-            <div className="font-mono truncate" title={issue.git_worktree_path ?? undefined}>
+        
+        <div className="flex flex-col gap-1.5 min-w-0">
+          <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">{t("task.worktree")}</div>
+          <div className="flex items-center gap-1 min-w-0 bg-surface-input px-2 py-1 rounded border border-border-subtle/50">
+            <div className="font-mono text-foreground font-bold truncate flex-1 select-all" title={issue.git_worktree_path ?? undefined}>
               {issue.git_worktree_path ?? "—"}
             </div>
             {issue.git_worktree_path && (
               <button
                 type="button"
                 onClick={copyWorktreePath}
-                className="shrink-0 p-0.5 text-muted-foreground hover:text-foreground"
+                className="shrink-0 p-0.5 text-text-muted hover:text-foreground cursor-pointer transition-all"
                 aria-label={t("task.copyPath")}
                 title={t("task.copyPath")}
               >
-                {copiedPath ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+                {copiedPath ? <Check size={12} className="text-status-done animate-pulse" /> : <Copy size={12} />}
               </button>
             )}
           </div>
@@ -261,15 +273,18 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
       />
 
       <Dialog open={diffOpen} onOpenChange={setDiffOpen}>
-        <DialogContent className="sm:w-[95vw] sm:max-w-[1200px] p-0 gap-0">
-          <DialogHeader className="px-4 py-3 border-b border-border">
-            <DialogTitle>{t("task.viewDiff")}</DialogTitle>
+        <DialogContent className="sm:w-[95vw] sm:max-w-[1200px] p-0 gap-0 border-border-subtle bg-background">
+          <DialogHeader className="px-4 py-3 border-b border-border-subtle/60">
+            <DialogTitle className="font-bold text-base text-foreground flex items-center gap-2">
+              <FileText size={16} className="text-brand" />
+              <span>{t("task.viewDiff")}</span>
+            </DialogTitle>
           </DialogHeader>
           {/* Explicit maxHeight so overflow-y-auto has a constraint to work against */}
           <div className="overflow-y-auto" style={{ maxHeight: "calc(82vh - 4rem)" }}>
             {diffLoading ? (
-              <span className="inline-flex items-center gap-2 p-4 text-sm">
-                <Loader2 className="animate-spin" size={14} /> {t("task.diffMerge.loading")}
+              <span className="inline-flex items-center gap-2 p-4 text-sm font-semibold text-text-secondary">
+                <Loader2 className="animate-spin text-brand" size={14} /> {t("task.diffMerge.loading")}
               </span>
             ) : (
               <DiffPanel

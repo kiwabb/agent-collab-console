@@ -206,56 +206,60 @@ export function IssueDetailPage({ issueId }: Props) {
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),transparent_22%)]">
+    <div className="h-full flex flex-col overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.06),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_22%)]">
       {/* App-shell body: fixed header + status, scrolling tab content, docked chat bar */}
       <main className="flex-1 min-h-0 overflow-hidden mx-auto w-full max-w-[1640px] flex flex-col gap-4 px-6 pb-4 pt-5">
-        <WsConnectionBanner />
+        
+        {/* Stationary Header Stack (Always visible) */}
+        <div className="shrink-0 flex flex-col gap-4">
+          <WsConnectionBanner />
+          
+          <StatusStrip
+            issue={issue}
+            phase={phase}
+            activeTask={activeTask}
+            onPause={() => void handlePause()}
+            onResume={() => void handleResume()}
+            onSteer={() => void handleRestartOrSteer()}
+            onReset={() => setResetConfirmOpen(true)}
+          />
+          
+          <ConductorAlerts alerts={conductorAlerts} onDismiss={dismissAlert} />
+          
+          <LatestFailureAlert
+            failure={latestFailure}
+            onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            onOpenDetail={() => {
+              const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
+              setDrawerItemId(item?.id ?? null);
+            }}
+          />
+        </div>
 
         {/* Two-Column Grid Layout */}
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-6">
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-6 overflow-hidden">
           
           {/* Main Area (Left Column) */}
-          <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-y-auto pr-1">
-            <StatusStrip
-              issue={issue}
-              phase={phase}
-              activeTask={activeTask}
-              onPause={() => void handlePause()}
-              onResume={() => void handleResume()}
-              onSteer={() => void handleRestartOrSteer()}
-              onReset={() => setResetConfirmOpen(true)}
-            />
-            
-            <ConductorAlerts alerts={conductorAlerts} onDismiss={dismissAlert} />
-            
-            <LatestFailureAlert
-              failure={latestFailure}
-              onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              onOpenDetail={() => {
-                const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
-                setDrawerItemId(item?.id ?? null);
-              }}
-            />
-
-            <Tabs defaultValue="timeline" className="w-full flex-1 flex flex-col gap-4 min-h-0">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border-subtle pb-2 shrink-0">
-                <TabsList className="bg-surface/50 border border-border-subtle p-1 rounded-2xl grid grid-cols-4 h-11 w-full sm:max-w-md">
-                  <TabsTrigger value="timeline" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
+          <div className="flex-1 min-h-0 flex flex-col gap-4">
+            <Tabs defaultValue="timeline" className="w-full flex-1 flex flex-col gap-4 min-h-0 overflow-hidden">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border-subtle/50 pb-2 shrink-0">
+                <TabsList className="bg-surface/50 border border-border-subtle/50 p-1.5 rounded-2xl grid grid-cols-4 h-12 w-full sm:max-w-md backdrop-blur-md">
+                  <TabsTrigger value="timeline" className="gap-2 text-[12px] font-black py-2 rounded-xl transition-all cursor-pointer">
                     <Clock size={14} className="shrink-0" />
                     <span>{t("issue.command.timelineTitle")}</span>
                   </TabsTrigger>
-                  <TabsTrigger value="artifacts" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
+                  <TabsTrigger value="artifacts" className="gap-2 text-[12px] font-black py-2 rounded-xl transition-all cursor-pointer">
                     <FolderArchive size={14} className="shrink-0" />
                     <span>{t("issue.command.artifacts")}</span>
                     <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded-full font-black font-mono">
                       {artifacts.length}
                     </span>
                   </TabsTrigger>
-                  <TabsTrigger value="diff" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
+                  <TabsTrigger value="diff" className="gap-2 text-[12px] font-black py-2 rounded-xl transition-all cursor-pointer">
                     <GitPullRequest size={14} className="shrink-0" />
                     <span>{t("issue.command.diff")}</span>
                   </TabsTrigger>
-                  <TabsTrigger value="mesh" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
+                  <TabsTrigger value="mesh" className="gap-2 text-[12px] font-black py-2 rounded-xl transition-all cursor-pointer">
                     <Network size={14} className="shrink-0" />
                     <span>{t("issue.command.mesh")}</span>
                     {agentMeshMessages.length > 0 && (
@@ -267,24 +271,24 @@ export function IssueDetailPage({ issueId }: Props) {
                 </TabsList>
               </div>
 
-              <TabsContent value="timeline" className="outline-none flex-1 min-h-0 flex flex-col">
+              <TabsContent value="timeline" className="outline-none flex-1 min-h-0 flex flex-col overflow-y-auto pr-1">
                 <DecisionTimeline items={timeline} onOpenItem={(it) => setDrawerItemId(it.id)} liveThinking={liveThinking} />
               </TabsContent>
               
-              <TabsContent value="artifacts" className="outline-none flex-1 min-h-0 flex flex-col">
-                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/88 p-1 flex-1 min-h-0 flex flex-col">
+              <TabsContent value="artifacts" className="outline-none flex-1 min-h-0 flex flex-col overflow-hidden">
+                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/80 p-1 flex-1 min-h-0 flex flex-col">
                   <ArtifactsPanel issueId={issueId} issue={issue} />
                 </div>
               </TabsContent>
 
-              <TabsContent value="diff" className="outline-none flex-1 min-h-0 flex flex-col">
-                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/88 p-1 flex-1 min-h-0 flex flex-col">
+              <TabsContent value="diff" className="outline-none flex-1 min-h-0 flex flex-col overflow-hidden">
+                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/80 p-1 flex-1 min-h-0 flex flex-col">
                   <IssueDiffPanel issueId={issueId} issue={issue} />
                 </div>
               </TabsContent>
 
-              <TabsContent value="mesh" className="outline-none flex-1 min-h-0 flex flex-col">
-                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/88 p-1 flex-1 min-h-0 flex flex-col">
+              <TabsContent value="mesh" className="outline-none flex-1 min-h-0 flex flex-col overflow-hidden">
+                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/80 p-1 flex-1 min-h-0 flex flex-col">
                   <MeshPanel issueId={issueId} />
                 </div>
               </TabsContent>

@@ -113,14 +113,14 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <div className="enterprise-panel rounded-[24px] overflow-hidden">
-      <div className="px-4 py-3.5 flex items-center gap-2.5 border-b border-border-subtle bg-surface/60">
-        <Icon size={14} className={cn("text-text-muted", iconClass)} />
-        <span className="text-[13px] font-semibold text-foreground">
+    <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden shadow-xl hover:border-border-strong/45 transition-all duration-300">
+      <div className="px-5 py-4 flex items-center gap-2.5 border-b border-border-subtle/50 bg-slate-900/30">
+        <Icon size={15} className={cn("text-brand shrink-0 animate-pulse", iconClass)} />
+        <span className="text-[13px] font-bold tracking-wide text-foreground">
           {title}
         </span>
         {sub && (
-          <span className="ml-auto font-mono text-[11px] text-text-muted">
+          <span className="ml-auto font-mono text-[9px] text-text-muted uppercase tracking-wider font-black bg-surface-input px-2.5 py-0.5 rounded border border-border-subtle/40">
             {sub}
           </span>
         )}
@@ -149,14 +149,14 @@ function AcceptanceCard({
       icon={CheckCircle2}
       iconClass="text-status-done"
     >
-      <div className="px-4 py-3.5 flex items-center gap-3">
-        <span className="font-mono text-[22px] font-semibold tracking-tight leading-none text-foreground tabular-nums">
+      <div className="px-5 py-4 flex items-center gap-3 bg-slate-950/20 m-3.5 rounded-2xl border border-border-subtle/40 backdrop-blur-md shadow-inner">
+        <span className="font-mono text-[22px] font-black tracking-tight leading-none text-foreground tabular-nums">
           {covered}
-          <em className="not-italic text-text-muted font-normal">
+          <em className="not-italic text-text-muted font-normal text-sm">
             /{total}
           </em>
         </span>
-        <div className="flex-1 h-[6px] bg-surface-input rounded-full overflow-hidden relative">
+        <div className="flex-1 h-2 bg-surface-input rounded-full overflow-hidden relative">
           <span
             className="block h-full rounded-full"
             style={{
@@ -168,27 +168,27 @@ function AcceptanceCard({
             }}
           />
         </div>
-        <span className="font-mono text-[11px] text-status-done tabular-nums">
+        <span className="font-mono text-[11px] font-bold text-status-done tabular-nums bg-status-done/10 px-1.5 py-0.5 rounded border border-status-done/20">
           {pct}%
         </span>
       </div>
       {total === 0 ? (
-        <div className="px-4 pb-4 text-[12px] text-text-muted">
+        <div className="px-5 pb-5 text-[12px] text-text-muted">
           {t("issue.side.acceptanceEmpty")}
         </div>
       ) : (
-        <ul className="px-1.5 pb-2.5 flex flex-col">
+        <ul className="px-2 pb-3.5 flex flex-col gap-0.5">
           {criteria.map((c, i) => (
             <li
               key={i}
-              className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl hover:bg-surface-hover/70"
+              className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl hover:bg-surface-hover/50 cursor-pointer transition-all duration-200"
             >
               <span
                 className={cn(
-                  "shrink-0 size-[18px] rounded-full flex items-center justify-center mt-px",
+                  "shrink-0 size-[18px] rounded-full flex items-center justify-center mt-px transition-all duration-200",
                   c.covered
-                    ? "bg-status-done/12 text-status-done"
-                    : "bg-surface-input text-text-muted",
+                    ? "bg-status-done/12 text-status-done border border-status-done/20"
+                    : "bg-surface-input text-text-muted border border-border-subtle/40",
                 )}
                 style={
                   c.covered
@@ -205,7 +205,7 @@ function AcceptanceCard({
               <div className="text-[13px] leading-snug text-foreground">
                 {c.text}
                 {c.source && (
-                  <span className="block font-mono text-[10.5px] text-text-faint mt-0.5 uppercase tracking-wider">
+                  <span className="block font-mono text-[10px] text-text-faint mt-1 uppercase tracking-wider font-extrabold">
                     verified by {c.source}
                   </span>
                 )}
@@ -246,14 +246,14 @@ function ActivityCard({
       icon={Clock}
     >
       {events.length === 0 ? (
-        <div className="px-4 py-4 text-[12px] text-text-muted">
+        <div className="px-5 py-5 text-[12px] text-text-muted">
           {t("issue.side.activityEmpty")}
         </div>
       ) : (
-        <div className="relative px-4 pb-4 pt-1">
+        <div className="relative px-5 pb-5 pt-1">
           <span
             aria-hidden
-            className="absolute left-[25px] top-3.5 bottom-3.5 w-px"
+            className="absolute left-[29px] top-3.5 bottom-3.5 w-px"
             style={{
               background:
                 "linear-gradient(180deg, transparent 0%, var(--color-border-muted) 8%, var(--color-border-muted) 92%, transparent 100%)",
@@ -274,7 +274,7 @@ function ActivityCard({
               />
               <div className="min-w-0">
                 <div
-                  className="font-mono text-[10.5px] uppercase tracking-[0.08em] font-semibold mb-0.5"
+                  className="font-mono text-[10px] uppercase tracking-[0.08em] font-black mb-0.5"
                   style={{ color: evt.actorColor }}
                 >
                   {evt.actor}
@@ -319,7 +319,7 @@ function TelemetryCard({
       sub={t("issue.side.telemetrySub")}
       icon={BarChart3}
     >
-      <div className="grid grid-cols-2 gap-2.5 px-4 py-3.5">
+      <div className="grid grid-cols-2 gap-3 p-3.5">
         <TeleCell label={t("issue.side.tokens")}>
           {totalTokens != null ? (
             <>
@@ -363,11 +363,11 @@ function TeleCell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="p-3 rounded-xl bg-surface-raised/80 border border-border-subtle">
-      <div className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-text-muted">
+    <div className="p-3.5 rounded-2xl bg-surface-input/35 border border-border-subtle/50 backdrop-blur-md shadow-inner transition-all hover:bg-surface-input/50">
+      <div className="font-mono text-[9px] uppercase tracking-[0.18em] font-extrabold text-text-muted">
         {label}
       </div>
-      <div className="text-[18px] font-semibold text-foreground tracking-tight mt-1.5 font-mono">
+      <div className="text-[18px] font-black text-foreground tracking-tight mt-2 font-mono">
         {children}
       </div>
     </div>
