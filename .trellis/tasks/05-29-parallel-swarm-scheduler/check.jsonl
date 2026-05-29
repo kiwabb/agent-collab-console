@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "后端质量门禁基线"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验 worktree→dispatcher→merge→reconcile→前端可视化的跨层数据流一致"}
+{"file": ".trellis/tasks/05-29-parallel-swarm-scheduler/research/parallel-orchestration-patterns.md", "reason": "校验失败语义(部分 join)与 reconcile join 是否符合设计"}
+{"file": ".trellis/tasks/05-29-parallel-swarm-scheduler/research/concurrent-worktree-isolation.md", "reason": "校验 per-agent worktree 隔离/顺序合并/分叉检测/清理正确无泄漏"}

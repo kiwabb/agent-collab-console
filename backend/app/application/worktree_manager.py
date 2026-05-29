@@ -39,6 +39,10 @@ def _chat_branch_name(task: CodexTask) -> str:
     return f"chat/{task.id[:8]}-{_slugify(task.title)}"
 
 
+def _agent_branch_name(issue: CodexIssue, agent_key: str) -> str:
+    return f"swarm/{issue.id[:8]}-{_slugify(agent_key)}"
+
+
 def _worktree_path(project: Project, kind: str, item_id: str) -> Path:
     """`{repo}/../{name}-worktrees/{kind}-{id}/`."""
     repo = Path(project.repo_path)
@@ -143,6 +147,62 @@ class WorktreeManager:
             return ""
         base = issue.git_base_branch or project.default_branch
         return await self.git.worktree_diff(issue.git_worktree_path, base)
+
+    # ---- Per-agent (swarm / parallel) ----
+
+    async def prepare_agent_worktree(
+        self,
+        project: Project,
+        issue: CodexIssue,
+        agent_key: str,
+    ) -> tuple[str, str, str]:
+        """Create an isolated per-agent worktree forked from the issue branch.
+
+        For parallel swarm dispatch: each concurrent agent gets its own worktree
+        + branch (`swarm/<issue>-<agent_key>`) so file edits never clobber each
+        other. The fork point is the issue integration branch (not the project
+        default), so each agent starts from the issue's accumulated state and its
+        changes can later be squash-merged back into the issue branch (PR3).
+
+        Returns (branch, worktree_path, base_branch). Safe to call repeatedly for
+        the same agent_key (idempotent on an existing worktree).
+        """
+        if not issue.git_branch:
+            raise WorktreeError(
+                "issue has no git branch; prepare_issue_worktree must run first"
+            )
+        lock = await self._lock_for(f"swarm:{issue.id}:{agent_key}")
+        async with lock:
+            branch = _agent_branch_name(issue, agent_key)
+            base = issue.git_branch
+            worktree = _worktree_path(project, "swarm", f"{issue.id}-{agent_key}")
+            if worktree.exists() and await self.git.is_git_repo(worktree):
+                return branch, str(worktree), base
+            if worktree.exists():
+                raise WorktreeError(f"worktree path exists but is not a git repo: {worktree}")
+            await self.git.create_worktree(
+                repo_path=project.repo_path,
+                branch=branch,
+                worktree_path=worktree,
+                base_branch=base,
+            )
+            await inject_worktree_claude_hooks(worktree)
+            if project.setup_script:
+                await self._run_setup(project.setup_script, worktree)
+            return branch, str(worktree), base
+
+    async def cleanup_agent_worktree(
+        self,
+        project: Project,
+        issue: CodexIssue,
+        agent_key: str,
+    ) -> None:
+        """Remove a per-agent swarm worktree. Idempotent: a missing worktree is a
+        no-op, so this is safe to call on failed/aborted batches for cleanup."""
+        lock = await self._lock_for(f"swarm:{issue.id}:{agent_key}")
+        async with lock:
+            worktree = _worktree_path(project, "swarm", f"{issue.id}-{agent_key}")
+            await self._cleanup_path(project.repo_path, str(worktree))
 
     # ---- Chat-task-level (standalone, no issue) ----
 

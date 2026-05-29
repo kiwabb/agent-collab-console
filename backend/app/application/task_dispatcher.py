@@ -68,11 +68,17 @@ async def dispatch_role(
     task_dispatcher_fn,
     event_bus=None,
     prev_node_key: str | None = None,
+    agent_worktree_path: str | None = None,
 ) -> tuple[str, str]:  # (task_id, node_id)
     """Dispatch a role task for Conductor-driven orchestration.
 
     Creates a CodexTask, dynamically adds a WorkflowNode to the issue's graph
     (for visualization), then invokes `task_dispatcher_fn(task)` to start execution.
+
+    `agent_worktree_path`: when provided (parallel swarm dispatch), the task runs
+    in this isolated per-agent worktree instead of the shared issue worktree, so
+    concurrent agents don't clobber each other. When omitted (default / serial
+    path), behaviour is unchanged: the task uses the shared issue worktree.
 
     Returns (task_id, node_id). The caller registers task_id in TaskCompletionRegistry
     before awaiting.
@@ -107,6 +113,10 @@ async def dispatch_role(
         task_provider = agent.default_provider
         task_model = agent.default_model
 
+    # Parallel swarm dispatch isolates each agent in its own worktree; the serial
+    # path (agent_worktree_path is None) keeps the shared issue worktree as cwd.
+    workspace_path = agent_worktree_path or issue.git_worktree_path
+
     now = datetime.now()
     node_id = str(uuid4())
     task = CodexTask(
@@ -122,10 +132,10 @@ async def dispatch_role(
         provider=task_provider,
         model=task_model,
         status="pending",
-        workspace_path=issue.git_worktree_path,
+        workspace_path=workspace_path,
         git_branch=issue.git_branch,
         git_base_branch=issue.git_base_branch,
-        git_worktree_path=issue.git_worktree_path,
+        git_worktree_path=workspace_path,
         created_at=now,
         updated_at=now,
     )

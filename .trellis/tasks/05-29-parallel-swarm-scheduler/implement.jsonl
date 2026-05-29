@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "参考编排器(vibe-kanban)的后端质量规范与必备模式"}
+{"file": ".trellis/spec/ccgui/frontend/index.md", "reason": "PR4 并行可视化(WorkflowGraph/mesh 分组)需遵循的前端规范入口"}
+{"file": ".trellis/tasks/05-29-parallel-swarm-scheduler/research/parallel-orchestration-patterns.md", "reason": "并发表达/join/失败语义/纯fan-out的设计决策与依据；含 conductor_main_loop gather 现状 file:line"}
+{"file": ".trellis/tasks/05-29-parallel-swarm-scheduler/research/concurrent-worktree-isolation.md", "reason": "per-agent worktree + 顺序 squash_merge 回 issue 分支实现路径、git_service 原语清单、vibe-kanban 可抄 file:line、需补 conflicted_files"}

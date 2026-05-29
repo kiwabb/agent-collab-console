@@ -112,6 +112,59 @@ async def test_dispatch_role_creates_task():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_role_uses_shared_issue_worktree_by_default():
+    """Regression: without agent_worktree_path, the task uses the shared issue
+    worktree path (serial path behaviour must be unchanged)."""
+    from app.application.task_dispatcher import dispatch_role
+
+    issue = _make_issue()
+    issue.git_worktree_path = "/repos/demo-worktrees/issue-xyz"
+    graph = _make_graph(issue.id)
+    agent = _make_agent("engineer")
+    store = _make_store(issue, graph, [agent])
+
+    await dispatch_role(
+        issue=issue,
+        role="engineer",
+        store=store,
+        task_dispatcher_fn=None,
+    )
+
+    created_task = store.save_codex_task.call_args[0][0]
+    assert created_task.workspace_path == issue.git_worktree_path
+    assert created_task.git_worktree_path == issue.git_worktree_path
+
+
+@pytest.mark.asyncio
+async def test_dispatch_role_injects_agent_worktree_path_when_provided():
+    """When agent_worktree_path is supplied (parallel swarm dispatch), the task
+    runs in the isolated per-agent worktree, not the shared issue worktree."""
+    from app.application.task_dispatcher import dispatch_role
+
+    issue = _make_issue()
+    issue.git_worktree_path = "/repos/demo-worktrees/issue-xyz"
+    graph = _make_graph(issue.id)
+    agent = _make_agent("engineer")
+    store = _make_store(issue, graph, [agent])
+
+    agent_path = "/repos/demo-worktrees/swarm-issue-engineerA"
+    await dispatch_role(
+        issue=issue,
+        role="engineer",
+        store=store,
+        task_dispatcher_fn=None,
+        agent_worktree_path=agent_path,
+    )
+
+    created_task = store.save_codex_task.call_args[0][0]
+    assert created_task.workspace_path == agent_path
+    assert created_task.git_worktree_path == agent_path
+    # The branch/base still reference the issue (agent branch is handled by the
+    # worktree manager; the task tracks issue lineage).
+    assert created_task.git_branch == issue.git_branch
+
+
+@pytest.mark.asyncio
 async def test_dispatch_role_retry_creates_fresh_task():
     """Re-dispatching a role after it completed creates a new task with a new node_key.
 

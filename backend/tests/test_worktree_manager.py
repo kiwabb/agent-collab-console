@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.application.git_service import GitService
-from app.application.worktree_manager import WorktreeManager
+from app.application.worktree_manager import WorktreeError, WorktreeManager
 from app.domain.models import CodexIssue, CodexTask, Project
 
 
@@ -99,3 +99,65 @@ async def test_prepare_chat_task_worktree(project: Project, manager: WorktreeMan
     assert branch.startswith("chat/task-ddd")
     assert Path(path).exists()
     assert base == "main"
+
+
+# ---- Per-agent (swarm) worktree ----
+
+
+async def _issue_with_worktree(project: Project, manager: WorktreeManager, issue_id: str) -> CodexIssue:
+    issue = CodexIssue(id=issue_id, session_id="s1", project_id=project.id, title="swarm work")
+    branch, path, base = await manager.prepare_issue_worktree(project, issue)
+    issue.git_branch = branch
+    issue.git_worktree_path = path
+    issue.git_base_branch = base
+    return issue
+
+
+@pytest.mark.asyncio
+async def test_prepare_agent_worktree_forks_from_issue_branch(project: Project, manager: WorktreeManager):
+    issue = await _issue_with_worktree(project, manager, "issue-swrm0001")
+    branch, path, base = await manager.prepare_agent_worktree(project, issue, "engineerA")
+    assert branch == f"swarm/{issue.id[:8]}-engineera"
+    assert Path(path).exists()
+    # base is the issue integration branch, not the project default
+    assert base == issue.git_branch
+    assert base != project.default_branch
+
+
+@pytest.mark.asyncio
+async def test_prepare_agent_worktree_requires_issue_branch(project: Project, manager: WorktreeManager):
+    issue = CodexIssue(id="issue-swrm0002", session_id="s1", project_id=project.id, title="no branch yet")
+    with pytest.raises(WorktreeError):
+        await manager.prepare_agent_worktree(project, issue, "engineerA")
+
+
+@pytest.mark.asyncio
+async def test_agent_worktrees_are_isolated(project: Project, manager: WorktreeManager):
+    issue = await _issue_with_worktree(project, manager, "issue-swrm0003")
+    _, path_a, _ = await manager.prepare_agent_worktree(project, issue, "engineerA")
+    _, path_b, _ = await manager.prepare_agent_worktree(project, issue, "engineerB")
+    assert path_a != path_b
+    # Writes in one agent worktree are not visible in the other.
+    (Path(path_a) / "a_only.txt").write_text("from A")
+    (Path(path_b) / "b_only.txt").write_text("from B")
+    assert not (Path(path_b) / "a_only.txt").exists()
+    assert not (Path(path_a) / "b_only.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_prepare_agent_worktree_is_idempotent(project: Project, manager: WorktreeManager):
+    issue = await _issue_with_worktree(project, manager, "issue-swrm0004")
+    b1, p1, _ = await manager.prepare_agent_worktree(project, issue, "engineerA")
+    b2, p2, _ = await manager.prepare_agent_worktree(project, issue, "engineerA")
+    assert (b1, p1) == (b2, p2)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_agent_worktree_removes_and_is_idempotent(project: Project, manager: WorktreeManager):
+    issue = await _issue_with_worktree(project, manager, "issue-swrm0005")
+    _, path, _ = await manager.prepare_agent_worktree(project, issue, "engineerA")
+    assert Path(path).exists()
+    await manager.cleanup_agent_worktree(project, issue, "engineerA")
+    assert not Path(path).exists()
+    # Calling again on a now-missing worktree must not raise.
+    await manager.cleanup_agent_worktree(project, issue, "engineerA")
