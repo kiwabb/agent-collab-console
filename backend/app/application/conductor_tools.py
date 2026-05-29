@@ -106,61 +106,91 @@ def build_conductor_tools(
                         ),
                     }
 
-        try:
-            await _notify_status(on_status, "dispatching_subagent", detail)
-            task_id, node_id = await dispatch_role(
-                issue=issue,
-                role=role,
-                prompt_override=prompt_override,
-                store=store,
-                task_dispatcher_fn=task_dispatcher_fn,
-                event_bus=event_bus,
-                prev_node_key=prev_node_key,
-            )
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        registry = TaskCompletionRegistry.get()
-        registry.register(task_id)
-        await _notify_status(on_status, "awaiting_subagent", detail)
-
-        await _emit(event_bus, "conductor_tool", {
-            "tool": "dispatch_subagent",
-            "role": role,
-            "task_id": task_id,
-            "status": "dispatched",
-        })
-
-        # Activity-aware wait: a slow-but-progressing subagent (e.g. a thorough
-        # gpt-5.5 QA pass that streams for >900s) must NOT be abandoned and
-        # redispatched — that discards its work. Keep waiting while it shows
-        # recent activity; only give up on a genuine stall or the hard ceiling.
         from datetime import datetime
         from app.application import task_activity, timeouts
+        from app.application.role_concurrency import RoleConcurrencyLimiter
 
-        def _activity_age(tid: str) -> float | None:
-            last = task_activity.last_activity.get(tid)
-            return None if last is None else (datetime.now() - last).total_seconds()
+        # GAP: enforce MAX_CONCURRENT_INSTANCES_PER_ROLE. Acquire a process-wide
+        # slot for this role BEFORE dispatching, so we never create a task/node
+        # we can't actually run within the cap. The slot is held for the whole
+        # subagent run and released when wait_for_active returns or times out.
+        # If every slot is busy past role_slot_wait_s, return a structured
+        # `role_busy` so the Conductor re-plans instead of blocking forever.
+        limiter = RoleConcurrencyLimiter.instance()
+        slot_role = role or "subagent"
+        slot_wait = timeouts.role_slot_wait_s()
+        async with limiter.slot(slot_role, timeout=slot_wait) as acquired:
+            if not acquired:
+                limit = timeouts.max_concurrent_instances_per_role()
+                await _emit(event_bus, "conductor_tool", {
+                    "tool": "dispatch_subagent",
+                    "role": role,
+                    "status": "role_busy",
+                    "limit": limit,
+                })
+                return {
+                    "status": "role_busy",
+                    "role": role,
+                    "limit": limit,
+                    "note": (
+                        f"all {limit} concurrent slots for role '{role}' are busy and none "
+                        f"freed within {slot_wait:.0f}s; dispatch a different role, wait and "
+                        "retry, or finalize_task if blocked"
+                    ),
+                }
 
-        idle_timeout = timeouts.subagent_idle_s()
-        hard_timeout = timeouts.subagent_max_s()
-        try:
-            result = await registry.wait_for_active(
-                task_id,
-                idle_timeout=idle_timeout,
-                hard_timeout=hard_timeout,
-                activity_age=_activity_age,
-            )
-        except TimeoutError:
-            return {
-                "error": (
-                    f"subagent timed out (idle >{idle_timeout:.0f}s or total >{hard_timeout:.0f}s)"
-                ),
-                "task_id": task_id,
+            try:
+                await _notify_status(on_status, "dispatching_subagent", detail)
+                task_id, node_id = await dispatch_role(
+                    issue=issue,
+                    role=role,
+                    prompt_override=prompt_override,
+                    store=store,
+                    task_dispatcher_fn=task_dispatcher_fn,
+                    event_bus=event_bus,
+                    prev_node_key=prev_node_key,
+                )
+            except ValueError as exc:
+                return {"error": str(exc)}
+
+            registry = TaskCompletionRegistry.get()
+            registry.register(task_id)
+            await _notify_status(on_status, "awaiting_subagent", detail)
+
+            await _emit(event_bus, "conductor_tool", {
+                "tool": "dispatch_subagent",
                 "role": role,
-            }
+                "task_id": task_id,
+                "status": "dispatched",
+            })
 
-        return result or {"task_id": task_id, "role": role, "status": "done"}
+            # Activity-aware wait: a slow-but-progressing subagent (e.g. a thorough
+            # gpt-5.5 QA pass that streams for >900s) must NOT be abandoned and
+            # redispatched — that discards its work. Keep waiting while it shows
+            # recent activity; only give up on a genuine stall or the hard ceiling.
+            def _activity_age(tid: str) -> float | None:
+                last = task_activity.last_activity.get(tid)
+                return None if last is None else (datetime.now() - last).total_seconds()
+
+            idle_timeout = timeouts.subagent_idle_s()
+            hard_timeout = timeouts.subagent_max_s()
+            try:
+                result = await registry.wait_for_active(
+                    task_id,
+                    idle_timeout=idle_timeout,
+                    hard_timeout=hard_timeout,
+                    activity_age=_activity_age,
+                )
+            except TimeoutError:
+                return {
+                    "error": (
+                        f"subagent timed out (idle >{idle_timeout:.0f}s or total >{hard_timeout:.0f}s)"
+                    ),
+                    "task_id": task_id,
+                    "role": role,
+                }
+
+            return result or {"task_id": task_id, "role": role, "status": "done"}
 
     async def spawn_custom_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
         payload = {

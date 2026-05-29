@@ -35,10 +35,14 @@ class TaskCompletionRegistry:
         return task_id in self._events
 
     def signal(self, task_id: str, result: Any) -> None:
-        self._results[task_id] = result
         ev = self._events.get(task_id)
-        if ev is not None:
-            ev.set()
+        if ev is None:
+            # No waiter: the dispatch already timed out (and popped its event) or
+            # was never registered. Storing the result here would orphan it in
+            # `_results` forever, since nothing will ever pop it. Drop it instead.
+            return
+        self._results[task_id] = result
+        ev.set()
 
     async def wait_for(self, task_id: str, timeout: float = 600.0) -> Any:
         ev = self._events.get(task_id)

@@ -30,6 +30,21 @@ _ROLE_ALIASES: dict[str, str] = {
     "dev": "engineer",
 }
 
+# Per-issue locks serialising the graph-ledger section of dispatch_role
+# (load graph → compute node_key from node count → persist task/node/edge).
+# Without this, two same-turn parallel dispatches of the same role would each
+# read the same node count and mint a COLLIDING node_key. The lock only guards
+# the cheap bookkeeping; the slow subagent run happens outside it in the caller.
+_issue_dispatch_locks: dict[str, asyncio.Lock] = {}
+
+
+def _issue_dispatch_lock(issue_id: str) -> asyncio.Lock:
+    lock = _issue_dispatch_locks.get(issue_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _issue_dispatch_locks[issue_id] = lock
+    return lock
+
 
 def _normalize_role(role: str) -> str:
     return _ROLE_ALIASES.get(role.lower().strip(), role)
@@ -38,7 +53,10 @@ def _normalize_role(role: str) -> str:
 def _summarize_dispatch_body(role: str, prompt: str | None, *, is_fallback: bool = False) -> str:
     if is_fallback or not prompt:
         return f"Dispatch {role}"
-    return prompt.strip()
+    p = prompt.strip()
+    if len(p) > 200:
+        return p[:200] + "…"
+    return p
 
 
 async def dispatch_role(
@@ -68,19 +86,7 @@ async def dispatch_role(
     if agent is None:
         raise ValueError(f"No agent found for role '{role}'")
 
-    graph = await store.load_workflow_graph_for_issue(issue.id)
-    if graph is None:
-        raise ValueError(f"No workflow graph for issue {issue.id}")
-
-    # Compute node_key: each dispatch gets a unique key (engineer, engineer#1, …)
-    # so Conductor can legitimately re-dispatch the same role (e.g. after QA failure).
-    same_role_count = sum(
-        1 for n in graph.nodes
-        if n.node_key == role or n.node_key.startswith(f"{role}#")
-    )
-    node_key = role if same_role_count == 0 else f"{role}#{same_role_count}"
-
-    # Build the task
+    # Build the task (graph-independent) ahead of the locked ledger section.
     effective_prompt = prompt_override
     is_fallback_prompt = False
     if not effective_prompt:
@@ -102,6 +108,7 @@ async def dispatch_role(
         task_model = agent.default_model
 
     now = datetime.now()
+    node_id = str(uuid4())
     task = CodexTask(
         id=str(uuid4()),
         session_id=issue.session_id,
@@ -122,39 +129,55 @@ async def dispatch_role(
         created_at=now,
         updated_at=now,
     )
-
-    node_id = str(uuid4())
-
-    node = WorkflowNode(
-        id=node_id,
-        graph_id=graph.id,
-        node_key=node_key,
-        agent_id=agent.id,
-        title=f"{role.replace('_', ' ').title()}",
-        status="running",
-        task_id=task.id,
-        started_at=now,
-        created_at=now,
-        updated_at=now,
-    )
     task.workflow_node_id = node_id
 
-    # Add edge from previous node (if any)
-    new_edge: WorkflowEdge | None = None
-    if prev_node_key:
-        new_edge = WorkflowEdge(
-            id=str(uuid4()),
+    # Locked ledger section: count existing same-role nodes → mint a unique
+    # node_key (engineer, engineer#1, …) → persist task/node/edge atomically.
+    # The lock spans count→add_node so two concurrent same-turn dispatches of the
+    # same role can't both read the same count and mint a COLLIDING node_key.
+    # Each dispatch still gets a unique key, so the Conductor can legitimately
+    # re-dispatch a role (e.g. engineer after QA failure). The slow subagent run
+    # happens outside this lock, back in the caller.
+    async with _issue_dispatch_lock(issue.id):
+        graph = await store.load_workflow_graph_for_issue(issue.id)
+        if graph is None:
+            raise ValueError(f"No workflow graph for issue {issue.id}")
+
+        same_role_count = sum(
+            1 for n in graph.nodes
+            if n.node_key == role or n.node_key.startswith(f"{role}#")
+        )
+        node_key = role if same_role_count == 0 else f"{role}#{same_role_count}"
+
+        node = WorkflowNode(
+            id=node_id,
             graph_id=graph.id,
-            from_node_key=prev_node_key,
-            to_node_key=node_key,
-            edge_type="sequence",
+            node_key=node_key,
+            agent_id=agent.id,
+            title=f"{role.replace('_', ' ').title()}",
+            status="running",
+            task_id=task.id,
+            started_at=now,
             created_at=now,
+            updated_at=now,
         )
 
-    await store.save_codex_task(task)
-    await store.add_workflow_node(node)
-    if new_edge:
-        await store.add_workflow_edge(new_edge)
+        # Add edge from previous node (if any)
+        new_edge: WorkflowEdge | None = None
+        if prev_node_key:
+            new_edge = WorkflowEdge(
+                id=str(uuid4()),
+                graph_id=graph.id,
+                from_node_key=prev_node_key,
+                to_node_key=node_key,
+                edge_type="sequence",
+                created_at=now,
+            )
+
+        await store.save_codex_task(task)
+        await store.add_workflow_node(node)
+        if new_edge:
+            await store.add_workflow_edge(new_edge)
 
     mesh_msg: AgentMessage | None = None
     try:

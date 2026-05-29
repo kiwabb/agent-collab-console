@@ -19,7 +19,8 @@ def _make_git_repo(path: Path) -> Path:
     subprocess.run(["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("hello")
-    subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)
+    (path / ".gitignore").write_text(".claude\n")
+    subprocess.run(["git", "add", "README.md", ".gitignore"], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)
     return path
 

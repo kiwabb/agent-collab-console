@@ -9,6 +9,7 @@ import asyncio
 import inspect
 import json
 import logging
+import time
 import traceback
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -73,6 +74,23 @@ def conductor_language_directive(output_language: str | None) -> str:
         f"in the language identified by the locale code '{output_language}'. "
         "Keep tool names, role names, and code identifiers as-is.\n"
     )
+
+
+def detect_text_language(*texts: str | None) -> str:
+    """Best-effort language guess for the conductor's ``"auto"`` mode.
+
+    Returns ``"zh"`` if any CJK ideograph appears in the given text, else
+    ``"en"``. This makes ``output_language="auto"`` actually match the issue's
+    own language (its documented intent) instead of leaving the model to default
+    to English narration on a Chinese issue.
+    """
+    for text in texts:
+        if not text:
+            continue
+        for ch in text:
+            if "一" <= ch <= "鿿":
+                return "zh"
+    return "en"
 
 
 _TURN_PAYLOAD_LIMIT = 32_768
@@ -153,6 +171,7 @@ async def run_conductor_loop(
     tools: dict[str, ToolCallable],
     tool_definitions: list[dict[str, Any]],
     max_turns: int = 8,
+    max_wall_s: float | None = None,
     turn_recorder: TurnRecorder | None = None,
     inbox_drain: InboxDrainer | None = None,
     wait_if_paused: PauseGate | None = None,
@@ -160,12 +179,34 @@ async def run_conductor_loop(
     on_inflight_llm_task: InflightTaskSetter | None = None,
     on_token_delta: TokenDeltaRecorder | None = None,
 ) -> ConductorLoopResult:
-    """Run a conductor session until it reaches final text or a final tool."""
+    """Run a conductor session until it reaches final text or a final tool.
+
+    ``max_wall_s`` (0/None disables) is a whole-loop wall-clock ceiling: even
+    within ``max_turns``, a single turn can block up to the subagent hard limit,
+    so without this a pathological issue could run for tens of hours. When the
+    ceiling is crossed the loop seals as ``status="max_wall"``.
+    """
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
     tool_events: list[dict[str, Any]] = []
     final_text = ""
+    loop_started = time.monotonic()
 
     for turn_index in range(max_turns):
+        if max_wall_s and (time.monotonic() - loop_started) >= max_wall_s:
+            await _record_turn(
+                turn_recorder,
+                turn_index=turn_index,
+                sub_index=0,
+                kind="finalize",
+                payload={"status": "max_wall", "answer": final_text},
+            )
+            return ConductorLoopResult(
+                status="max_wall",
+                final_text=final_text,
+                messages=messages,
+                tool_events=tool_events,
+                turn_count=turn_index,
+            )
         if inbox_drain is not None:
             injected_messages = await _maybe_await(inbox_drain())
             for text in injected_messages:
@@ -244,7 +285,12 @@ async def run_conductor_loop(
                 turn_count=turn_index + 1,
             )
 
-        result_blocks: list[dict[str, Any]] = []
+        # Record every tool_use block first (cheap metadata), then execute them.
+        # Multiple tool_use blocks in one turn run CONCURRENTLY: the Conductor can
+        # fan out independent subagents (e.g. several reviewers) and we await them
+        # together instead of serially. Results are still consumed in the LLM's
+        # original block order, so tool_result ordering and first-finalize-wins
+        # detection stay deterministic regardless of which finished first.
         for sub_index, tool_use in enumerate(tool_uses, start=1):
             await _record_turn(
                 turn_recorder,
@@ -257,7 +303,10 @@ async def run_conductor_loop(
                     "input": tool_use.get("input") if isinstance(tool_use.get("input"), dict) else {},
                 },
             )
-            event = await _execute_tool_use(tool_use, tools)
+        events = await _execute_tool_uses(tool_uses, tools)
+
+        result_blocks: list[dict[str, Any]] = []
+        for sub_index, event in enumerate(events, start=1):
             tool_events.append(event)
             result_blocks.append(
                 {
@@ -314,6 +363,21 @@ async def run_conductor_loop(
         tool_events=tool_events,
         turn_count=max_turns,
     )
+
+
+async def _execute_tool_uses(
+    tool_uses: list[dict[str, Any]],
+    tools: dict[str, ToolCallable],
+) -> list[dict[str, Any]]:
+    """Execute one turn's tool_use blocks, concurrently when there are several.
+
+    Each ``_execute_tool_use`` already converts its own failure into an error
+    event, so ``gather`` never raises and results stay positionally aligned with
+    ``tool_uses``. The single-block case stays a plain await (no task overhead).
+    """
+    if len(tool_uses) == 1:
+        return [await _execute_tool_use(tool_uses[0], tools)]
+    return list(await asyncio.gather(*(_execute_tool_use(tu, tools) for tu in tool_uses)))
 
 
 async def _execute_tool_use(
@@ -627,7 +691,13 @@ async def run_issue_conductor_loop(
         cllm = resolve_conductor_llm_context(catalog)
         language_directive = ""
         try:
-            language_directive = conductor_language_directive(catalog.conductor_llm.output_language)
+            output_language = catalog.conductor_llm.output_language
+            if (output_language or "auto").strip().lower() in ("", "auto"):
+                # "auto": match the issue's own language (its documented intent)
+                # rather than emitting no directive — otherwise the model defaults
+                # to English narration even on a Chinese issue.
+                output_language = detect_text_language(issue.title, issue.description)
+            language_directive = conductor_language_directive(output_language)
         except Exception:  # noqa: BLE001
             pass
 
@@ -667,6 +737,8 @@ You can also use specialist roles: security_reviewer, perf_reviewer, doc_writer,
 - If QA fails (status=failed), consider dispatching `engineer` again with the QA failure in the prompt
 - If a subagent returns `status=artifact_invalid`, its output did not match the expected schema (see `validation_error`). Re-dispatch the SAME role with a corrective prompt that restates the required output schema and what was wrong — do NOT proceed as if it succeeded
 - If a dispatch returns `status=retries_exhausted`, that role has already been retried the maximum number of times. Do NOT dispatch it again — either try a different role, `request_user_clarification`, or `finalize_task` with a summary of what's blocked
+- If a dispatch returns `status=role_busy`, every concurrent slot for that role is occupied right now. Do other useful work first (dispatch a different role, or wait by re-dispatching later) — do NOT spam the same role; the slot will free up when a running instance finishes
+- You may dispatch several INDEPENDENT subagents in a single turn (multiple `dispatch_subagent` calls at once) and they will run in parallel — do this only when their work genuinely does not depend on each other's output
 - When all work is complete, call `finalize_task` with a summary
 - You MUST call `finalize_task` to end the loop
 
@@ -727,6 +799,7 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
             tools=registry.tools,
             tool_definitions=registry.definitions,
             max_turns=30,
+            max_wall_s=timeouts.conductor_loop_max_s(),
             turn_recorder=persist_turn,
             inbox_drain=drain_inbox_messages,
             wait_if_paused=wait_until_resumed,
@@ -757,12 +830,15 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
             result_status=result.status,
         )
 
+        # max_wall (whole-loop ceiling hit) is a non-success terminal, same as
+        # failed: the issue did not complete, so the phase must reflect that.
+        is_failed_terminal = result.status in {"failed", "max_wall"}
         await transition_conductor_phase(
             store=store,
             event_bus=event_bus,
             issue_id=issue.id,
             conductor_task=conductor_task,
-            phase="done" if result.status != "failed" else "failed",
+            phase="failed" if is_failed_terminal else "done",
             detail=result.final_text[:160] if result.final_text else None,
             status=result.status,
             estimator=estimator,

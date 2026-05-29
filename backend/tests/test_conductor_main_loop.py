@@ -5,6 +5,7 @@ import pytest
 from app.application.conductor_main_loop import (
     _run_heartbeat_pulse,
     conductor_language_directive,
+    detect_text_language,
     run_conductor_loop,
 )
 from app.application.conductor_tools import build_conductor_tools
@@ -28,6 +29,21 @@ def test_conductor_language_directive_forces_locale():
     # Unknown locale codes still produce a directive referencing the code.
     other = conductor_language_directive("fr-FR")
     assert "fr-FR" in other
+
+
+def test_detect_text_language_matches_issue_language():
+    """'auto' resolution: CJK content => zh, otherwise en. This is what un-froze
+    the conductor's English narration on Chinese issues when output_language is
+    unset/auto."""
+    assert detect_text_language("为 backend 添加 GET /api/codex/echo 端点", None) == "zh"
+    assert detect_text_language("Add GET /api/codex/echo endpoint", None) == "en"
+    # Description carries the language even when the title is English.
+    assert detect_text_language("Add endpoint", "需要返回时间戳") == "zh"
+    assert detect_text_language("", None) == "en"
+    # A concrete zh locale produced by auto-resolution drives a Chinese directive.
+    assert "简体中文" in conductor_language_directive(
+        detect_text_language("为 backend 添加端点", None)
+    )
 
 
 @pytest.mark.asyncio
@@ -277,6 +293,108 @@ async def test_conductor_loop_injects_user_interjection_before_next_llm_call():
 
     assert result.status == "done"
     assert result.final_text == "Skipping architect."
+
+
+@pytest.mark.asyncio
+async def test_conductor_loop_runs_multiple_tool_uses_in_one_turn_concurrently():
+    """A single turn that emits several tool_use blocks executes them in parallel
+    (overlapping in time) and feeds back tool_results in the original order."""
+    running = 0
+    max_concurrent = 0
+
+    async def slow_dispatch(tool_input):
+        nonlocal running, max_concurrent
+        running += 1
+        max_concurrent = max(max_concurrent, running)
+        try:
+            await asyncio.sleep(0.05)
+            return {"role": tool_input.get("role"), "status": "done"}
+        finally:
+            running -= 1
+
+    calls = []
+
+    async def fake_llm(messages, tools):
+        calls.append(messages)
+        if len(calls) == 1:
+            return {
+                "stop_reason": "tool_use",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "dispatch_subagent", "input": {"role": "reviewer_a"}},
+                    {"type": "tool_use", "id": "t2", "name": "dispatch_subagent", "input": {"role": "reviewer_b"}},
+                    {"type": "tool_use", "id": "t3", "name": "dispatch_subagent", "input": {"role": "reviewer_c"}},
+                ],
+            }
+        # tool_results must come back aligned with the original tool_use ids/order.
+        blocks = messages[-1]["content"]
+        assert [b["tool_use_id"] for b in blocks] == ["t1", "t2", "t3"]
+        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "all reviewed"}]}
+
+    result = await run_conductor_loop(
+        prompt="Review from three angles.",
+        llm=fake_llm,
+        tools={"dispatch_subagent": slow_dispatch},
+        tool_definitions=[{"name": "dispatch_subagent"}],
+    )
+
+    assert result.final_text == "all reviewed"
+    assert len(result.tool_events) == 3
+    # If execution were serial, max_concurrent would be 1. Parallel => 3.
+    assert max_concurrent == 3
+
+
+@pytest.mark.asyncio
+async def test_conductor_loop_seals_max_wall_when_wall_clock_exceeded():
+    """The whole-loop wall-clock ceiling stops a loop that never finalizes, even
+    if it is still under max_turns."""
+    async def fake_llm(messages, tools):
+        # Always asks for more work; would loop until max_turns without the ceiling.
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "tool_use", "id": "tx", "name": "dispatch_subagent", "input": {"role": "engineer"}}
+            ],
+        }
+
+    async def dispatch(tool_input):
+        await asyncio.sleep(0.03)
+        return {"status": "done"}
+
+    result = await run_conductor_loop(
+        prompt="Never-ending work.",
+        llm=fake_llm,
+        tools={"dispatch_subagent": dispatch},
+        tool_definitions=[{"name": "dispatch_subagent"}],
+        max_turns=50,
+        max_wall_s=0.05,
+    )
+
+    assert result.status == "max_wall"
+    assert result.turn_count < 50
+
+
+@pytest.mark.asyncio
+async def test_conductor_loop_wall_clock_disabled_when_zero():
+    """max_wall_s=0 disables the ceiling; the loop runs to its natural finalize."""
+    async def fake_llm(messages, tools):
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "tool_use", "id": "f", "name": "finalize_task", "input": {"status": "done", "answer": "ok"}}
+            ],
+        }
+
+    async def finalize_task(tool_input):
+        return tool_input
+
+    result = await run_conductor_loop(
+        prompt="Quick.",
+        llm=fake_llm,
+        tools={"finalize_task": finalize_task},
+        tool_definitions=[{"name": "finalize_task"}],
+        max_wall_s=0,
+    )
+    assert result.status == "done"
 
 
 @pytest.mark.asyncio

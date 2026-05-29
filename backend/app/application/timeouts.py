@@ -30,6 +30,23 @@ The ladder, innermost → outermost, and what each layer protects against::
                                     it on a background pulse every
                                     ``max(15, ttl // 3)`` s, so it stays fresh
                                     while blocked on a slow subagent.
+    CONDUCTOR_LOOP_MAX_S    (7200s) Whole-loop wall-clock ceiling. Bounds the
+                                    total runtime of one conductor session so a
+                                    pathological issue (30 turns each blocking
+                                    near the subagent hard ceiling) cannot run
+                                    for tens of hours. 0 disables the ceiling.
+
+There are also two non-ladder knobs documented here for discoverability:
+
+    MAX_CONCURRENT_INSTANCES_PER_ROLE (3) Process-wide cap on how many subagents
+                                    of the SAME role may run concurrently across
+                                    all issues. dispatch_subagent acquires a slot
+                                    before dispatching and releases it when the
+                                    subagent finishes.
+    CONDUCTOR_ROLE_SLOT_WAIT_S (=subagent_max) How long dispatch_subagent waits
+                                    for a free role slot before giving up and
+                                    returning ``status=role_busy`` so the
+                                    Conductor can re-plan instead of blocking.
 
 Env-var names and defaults are unchanged from the pre-refactor call sites, so
 this module is behaviour-preserving on its own.
@@ -55,6 +72,11 @@ DEFAULT_CODEX_HANDSHAKE_TIMEOUT_S = 30
 DEFAULT_STALL_THRESHOLD_S = 900
 DEFAULT_STALL_INTERVAL_S = 30
 DEFAULT_STALL_COOLDOWN_S = 900
+# Whole-conductor-loop wall-clock ceiling (0 disables). Defends against a loop
+# that never finalizes yet keeps each turn just under the subagent ceiling.
+DEFAULT_CONDUCTOR_LOOP_MAX_S = 7200.0
+# Process-wide concurrency cap per role (across all issues/conductors).
+DEFAULT_MAX_CONCURRENT_INSTANCES_PER_ROLE = 3
 
 # Minimum lease-pulse cadence floor (mirrors the historical
 # ``max(15, lease_ttl // 3)`` expression in conductor_main_loop).
@@ -110,6 +132,28 @@ def subagent_idle_s() -> float:
 
 def subagent_max_s() -> float:
     return _env_float("CONDUCTOR_SUBAGENT_MAX_S", DEFAULT_SUBAGENT_MAX_S)
+
+
+def conductor_loop_max_s() -> float:
+    """Whole-loop wall-clock ceiling in seconds (0 disables)."""
+    return _env_float("CONDUCTOR_LOOP_MAX_S", DEFAULT_CONDUCTOR_LOOP_MAX_S)
+
+
+# --- Per-role concurrency --------------------------------------------------
+def max_concurrent_instances_per_role() -> int:
+    """Process-wide cap on concurrently-running subagents of the same role."""
+    raw = _env_int("MAX_CONCURRENT_INSTANCES_PER_ROLE", DEFAULT_MAX_CONCURRENT_INSTANCES_PER_ROLE)
+    return max(1, raw)
+
+
+def role_slot_wait_s() -> float:
+    """Seconds dispatch_subagent waits for a free role slot before giving up.
+
+    Defaults to the subagent hard ceiling: a slot that never frees within the
+    time a single subagent could itself run is a genuine saturation signal, so
+    we return ``role_busy`` and let the Conductor re-plan rather than block.
+    """
+    return _env_float("CONDUCTOR_ROLE_SLOT_WAIT_S", subagent_max_s())
 
 
 # --- Codex app-server turn / idle ------------------------------------------
@@ -179,6 +223,17 @@ def check_invariants() -> list[str]:
     if codex_idle > codex_turn:
         violations.append(
             f"CODEX_IDLE_TIMEOUT_S ({codex_idle}) must be <= CODEX_TURN_TIMEOUT_S ({codex_turn})."
+        )
+    loop_max = conductor_loop_max_s()
+    if loop_max and loop_max < hard:
+        violations.append(
+            f"CONDUCTOR_LOOP_MAX_S ({loop_max:.0f}) must be >= CONDUCTOR_SUBAGENT_MAX_S "
+            f"({hard:.0f}) or 0: the whole-loop ceiling cannot be shorter than a single "
+            "subagent's hard limit, or the loop dies before its first subagent can."
+        )
+    if max_concurrent_instances_per_role() < 1:
+        violations.append(
+            f"MAX_CONCURRENT_INSTANCES_PER_ROLE ({max_concurrent_instances_per_role()}) must be >= 1."
         )
     for name, value in (
         ("CONDUCTOR_RECOVERY_INTERVAL_S", recovery_interval_s()),

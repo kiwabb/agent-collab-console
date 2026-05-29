@@ -786,16 +786,20 @@ class BaseProcessRuntime:
                     completed_at=datetime.now(),
                 )
                 # Persist token usage and cost
-                if entry.usage_input or entry.usage_output or entry.cli_cost_usd:
+                usage_input = getattr(entry, "usage_input", 0) or 0
+                usage_output = getattr(entry, "usage_output", 0) or 0
+                usage_cache = getattr(entry, "usage_cache", 0) or 0
+                cli_cost_usd = getattr(entry, "cli_cost_usd", None)
+                if usage_input or usage_output or cli_cost_usd is not None:
                     from app.application.usage_utils import price_tokens
-                    cost = entry.cli_cost_usd if entry.cli_cost_usd is not None else price_tokens(
-                        entry.usage_input, entry.usage_output, entry.usage_cache
+                    cost = cli_cost_usd if cli_cost_usd is not None else price_tokens(
+                        usage_input, usage_output, usage_cache
                     )
                     await self.codex_store.update_execution_process_usage(
                         execution_process_id,
-                        input_tokens=entry.usage_input if entry.usage_input else None,
-                        output_tokens=entry.usage_output if entry.usage_output else None,
-                        cache_read_tokens=entry.usage_cache if entry.usage_cache else None,
+                        input_tokens=usage_input if usage_input else None,
+                        output_tokens=usage_output if usage_output else None,
+                        cache_read_tokens=usage_cache if usage_cache else None,
                         total_cost_usd=cost if cost > 0 else None,
                     )
             await self.codex_store.save_codex_task(task)
@@ -860,16 +864,20 @@ class BaseProcessRuntime:
                 completed_at=datetime.now(),
             )
             # Persist token usage and cost even on failure
-            if entry.usage_input or entry.usage_output or entry.cli_cost_usd:
+            usage_input = getattr(entry, "usage_input", 0) or 0
+            usage_output = getattr(entry, "usage_output", 0) or 0
+            usage_cache = getattr(entry, "usage_cache", 0) or 0
+            cli_cost_usd = getattr(entry, "cli_cost_usd", None)
+            if usage_input or usage_output or cli_cost_usd is not None:
                 from app.application.usage_utils import price_tokens
-                cost = entry.cli_cost_usd if entry.cli_cost_usd is not None else price_tokens(
-                    entry.usage_input, entry.usage_output, entry.usage_cache
+                cost = cli_cost_usd if cli_cost_usd is not None else price_tokens(
+                    usage_input, usage_output, usage_cache
                 )
                 await self.codex_store.update_execution_process_usage(
                     execution_process_id,
-                    input_tokens=entry.usage_input if entry.usage_input else None,
-                    output_tokens=entry.usage_output if entry.usage_output else None,
-                    cache_read_tokens=entry.usage_cache if entry.usage_cache else None,
+                    input_tokens=usage_input if usage_input else None,
+                    output_tokens=usage_output if usage_output else None,
+                    cache_read_tokens=usage_cache if usage_cache else None,
                     total_cost_usd=cost if cost > 0 else None,
                 )
 
@@ -1023,16 +1031,20 @@ class BaseProcessRuntime:
                 completed_at=datetime.now(),
             )
             # Persist token usage and cost
-            if entry.usage_input or entry.usage_output or entry.cli_cost_usd:
+            usage_input = getattr(entry, "usage_input", 0) or 0
+            usage_output = getattr(entry, "usage_output", 0) or 0
+            usage_cache = getattr(entry, "usage_cache", 0) or 0
+            cli_cost_usd = getattr(entry, "cli_cost_usd", None)
+            if usage_input or usage_output or cli_cost_usd is not None:
                 from app.application.usage_utils import price_tokens
-                cost = entry.cli_cost_usd if entry.cli_cost_usd is not None else price_tokens(
-                    entry.usage_input, entry.usage_output, entry.usage_cache
+                cost = cli_cost_usd if cli_cost_usd is not None else price_tokens(
+                    usage_input, usage_output, usage_cache
                 )
                 await self.codex_store.update_execution_process_usage(
                     execution_process_id,
-                    input_tokens=entry.usage_input if entry.usage_input else None,
-                    output_tokens=entry.usage_output if entry.usage_output else None,
-                    cache_read_tokens=entry.usage_cache if entry.usage_cache else None,
+                    input_tokens=usage_input if usage_input else None,
+                    output_tokens=usage_output if usage_output else None,
+                    cache_read_tokens=usage_cache if usage_cache else None,
                     total_cost_usd=cost if cost > 0 else None,
                 )
 
@@ -1155,16 +1167,20 @@ class BaseProcessRuntime:
                                 completed_at=datetime.now(),
                             )
                             # Persist token usage and cost even on timeout
-                            if entry.usage_input or entry.usage_output or entry.cli_cost_usd:
+                            usage_input = getattr(entry, "usage_input", 0) or 0
+                            usage_output = getattr(entry, "usage_output", 0) or 0
+                            usage_cache = getattr(entry, "usage_cache", 0) or 0
+                            cli_cost_usd = getattr(entry, "cli_cost_usd", None)
+                            if usage_input or usage_output or cli_cost_usd is not None:
                                 from app.application.usage_utils import price_tokens
-                                cost = entry.cli_cost_usd if entry.cli_cost_usd is not None else price_tokens(
-                                    entry.usage_input, entry.usage_output, entry.usage_cache
+                                cost = cli_cost_usd if cli_cost_usd is not None else price_tokens(
+                                    usage_input, usage_output, usage_cache
                                 )
                                 await self.codex_store.update_execution_process_usage(
                                     execution_process_id,
-                                    input_tokens=entry.usage_input if entry.usage_input else None,
-                                    output_tokens=entry.usage_output if entry.usage_output else None,
-                                    cache_read_tokens=entry.usage_cache if entry.usage_cache else None,
+                                    input_tokens=usage_input if usage_input else None,
+                                    output_tokens=usage_output if usage_output else None,
+                                    cache_read_tokens=usage_cache if usage_cache else None,
                                     total_cost_usd=cost if cost > 0 else None,
                                 )
                         except Exception:

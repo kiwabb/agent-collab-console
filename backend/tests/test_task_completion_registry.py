@@ -120,6 +120,25 @@ async def test_wait_for_active_times_out_when_idle():
 
 
 @pytest.mark.asyncio
+async def test_late_signal_after_timeout_does_not_orphan_result():
+    """If a dispatch times out (its event is popped) and the subagent later
+    completes, the late signal must NOT leave an entry stranded in `_results`
+    forever — `signal` with no waiter is a no-op."""
+    reg = TaskCompletionRegistry.get()
+    task_id = "task-late-completer"
+    reg.register(task_id)
+
+    with pytest.raises(TimeoutError):
+        await reg.wait_for(task_id, timeout=0.02)
+
+    # The subagent finishes after the conductor already gave up.
+    reg.signal(task_id, {"status": "done", "role": "qa"})
+
+    assert task_id not in reg._results
+    assert task_id not in reg._events
+
+
+@pytest.mark.asyncio
 async def test_wait_for_active_hard_ceiling():
     """Without activity info, only the hard ceiling applies."""
     reg = TaskCompletionRegistry.get()

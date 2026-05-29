@@ -294,7 +294,7 @@ async def test_dispatch_role_uses_generic_handoff_body_for_issue_fallback_prompt
 
 @pytest.mark.asyncio
 async def test_dispatch_role_stores_full_handoff_body():
-    """Handoff message body stores the full prompt without truncation."""
+    """Handoff message body truncates the prompt to 200 characters and appends an ellipsis."""
     from app.application.task_dispatcher import dispatch_role
 
     issue = _make_issue()
@@ -312,7 +312,7 @@ async def test_dispatch_role_stores_full_handoff_body():
     )
 
     msg = store.save_agent_message.call_args[0][0]
-    assert msg.body == long_prompt
+    assert msg.body == "x" * 200 + "…"
 
 
 @pytest.mark.asyncio
@@ -363,3 +363,71 @@ async def test_dispatch_role_skips_handoff_message_for_idempotent_path():
 
     # A retry (engineer → engineer#1) DOES write a handoff message
     store2.save_agent_message.assert_called_once()
+
+
+class _ConcurrencyStore:
+    """Async store stub whose add_workflow_node actually appends to the live
+    graph, and whose awaits yield, so a missing lock around the
+    count→mint-key→add-node section would expose a node_key collision."""
+
+    def __init__(self, issue, graph, agents):
+        self.issue = issue
+        self.graph = graph
+        self.agents = agents
+        self.nodes: list = []
+        self.tasks: list = []
+
+    async def list_agents(self, workspace_id=None):
+        await asyncio.sleep(0)
+        return self.agents
+
+    async def load_workflow_graph_for_issue(self, issue_id):
+        await asyncio.sleep(0)  # yield point: exposes races if unlocked
+        return self.graph
+
+    async def save_codex_task(self, task):
+        await asyncio.sleep(0)
+        self.tasks.append(task)
+
+    async def add_workflow_node(self, node):
+        await asyncio.sleep(0)
+        self.graph.nodes.append(node)  # the next dispatch must see this
+        self.nodes.append(node)
+
+    async def add_workflow_edge(self, edge):
+        await asyncio.sleep(0)
+
+    async def save_agent_message(self, msg):
+        await asyncio.sleep(0)
+
+    async def load_codex_issue(self, issue_id):
+        return self.issue
+
+
+@pytest.mark.asyncio
+async def test_concurrent_same_role_dispatch_gets_unique_node_keys():
+    """Two same-role dispatches fired concurrently (the new same-turn parallel
+    path) must each mint a distinct node_key. The per-issue lock serialises the
+    count→add-node section; without it both would read an empty graph and collide
+    on 'engineer'."""
+    from app.application.task_dispatcher import dispatch_role, _issue_dispatch_locks
+
+    _issue_dispatch_locks.clear()
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    agent = _make_agent("engineer")
+    store = _ConcurrencyStore(issue, graph, [agent])
+
+    async def noop(task):
+        await asyncio.sleep(0)
+
+    results = await asyncio.gather(
+        dispatch_role(issue=issue, role="engineer", store=store, task_dispatcher_fn=noop),
+        dispatch_role(issue=issue, role="engineer", store=store, task_dispatcher_fn=noop),
+    )
+
+    node_keys = sorted(n.node_key for n in store.nodes)
+    assert node_keys == ["engineer", "engineer#1"]
+    # Two distinct tasks were created.
+    assert results[0][0] != results[1][0]
+    assert len(store.tasks) == 2
