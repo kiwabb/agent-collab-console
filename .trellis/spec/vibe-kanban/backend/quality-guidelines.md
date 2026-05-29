@@ -323,6 +323,128 @@ if _is_safe_artifact_file(path, safe_roots):
 
 ---
 
+### Scenario: Worktree-Scoped Branch Merge (Swarm-Safe)
+
+#### 1. Scope / Trigger
+
+- Trigger: merging a source branch into a target branch when the target branch is **NOT checked out in the primary repo** but lives in a separate `git worktree` (the parallel-swarm case: agent branches merge back into the issue integration branch, which is checked out in the issue worktree while the primary repo sits on `main`).
+- Why code-spec depth: this is a destructive git operation that, done naively, **silently advances the primary repo's checked-out branch (`main`)** onto unreviewed changes — bypassing the human review gate. Discovered empirically during PR3 of `05-29-parallel-swarm-scheduler` (real-git repro: `main` fast-forwarded onto agent changes).
+
+#### 2. Signatures
+
+```python
+# git_service.py
+async def squash_merge(repo, source_branch, base_branch, message) -> str
+#   ^ fast-forwards the PRIMARY repo (assumes base_branch is checked out there).
+#     Safe ONLY for the issue→default merge (merge_issue, base=main checked out in primary repo).
+
+async def squash_merge_into_branch(
+    repo, source_branch, target_branch, message, target_worktree_path=None
+) -> str
+#   ^ swarm-safe: squash-merges in a throwaway DETACHED temp worktree,
+#     advances ONLY refs/heads/<target_branch> via update-ref,
+#     resets the target worktree's index/tree ONLY if it has target_branch checked out.
+#     NEVER touches the primary repo's checked-out branch.
+```
+
+#### 3. Contracts
+
+- `squash_merge_into_branch` advances exactly one ref: `refs/heads/<target_branch>`. The primary repo's `HEAD`/working tree is invariant.
+- Conflict → `reset --hard` in the temp worktree + raise `GitError`; no half-state, no partial ref move.
+- `target_worktree_path` index sync happens **iff** that worktree actually has `target_branch` checked out (else a bare `update-ref` leaves the worktree index stale → phantom deletions on next `commit_all`).
+
+#### 4. Validation & Error Matrix
+
+- target branch checked out in primary repo (issue→default) → use `squash_merge` (fast-forward is correct there).
+- target branch checked out in a worktree, primary on another branch → use `squash_merge_into_branch` (plain `squash_merge` would pollute the primary branch).
+- merge conflict → `GitError` raised; caller collects `conflicted_files` + `worktree_diff` and surfaces for reconcile; already-merged refs are NOT rolled back.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: agent branch → issue branch via `squash_merge_into_branch`; `main` byte-for-byte unchanged, issue branch accumulates, issue worktree clean.
+- Base: issue branch → `main` via `squash_merge` (primary repo on `main`).
+- Bad: agent branch → issue branch via plain `squash_merge`; `main` silently fast-forwards onto unreviewed agent changes.
+
+#### 6. Tests Required
+
+- Regression: after merging ≥2 agent branches into the issue branch, assert the default branch ref **and tree** are unchanged and contain none of the agent files (`test_merge_agent_worktrees_does_not_pollute_default_branch`).
+- Conflict: stop-on-first-conflict, conflicting worktree kept, earlier merges not rolled back, structured `conflicted_files`+diff returned.
+- No temp/probe worktree leaks across success/conflict/cleanup paths.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+# target (issue branch) lives in a worktree, primary repo is on main:
+await git.squash_merge(repo, agent_branch, issue_branch, msg)  # ff's main onto agent work
+```
+
+Correct:
+
+```python
+await git.squash_merge_into_branch(
+    repo, agent_branch, issue_branch, msg,
+    target_worktree_path=issue.git_worktree_path,
+)
+```
+
+---
+
+### Scenario: Isolated Worktree Upstream Visibility
+
+#### 1. Scope / Trigger
+
+- Trigger: forking a per-agent worktree (`prepare_agent_worktree`, base = issue branch) for parallel fan-out where the agent must see upstream artifacts (PM/architect output) produced earlier in the same issue.
+- Why: a worktree forked from a branch sees **only what is committed to that branch**. Upstream roles write artifacts into the shared issue worktree but do not auto-commit, so a freshly forked agent worktree would see a stale tree.
+
+#### 2. Signatures
+
+```python
+# worktree_manager.py
+async def commit_issue_worktree(issue, message=None) -> str | None
+#   flush the shared issue worktree's uncommitted changes onto the issue branch.
+async def prepare_agent_worktree(project, issue, agent_key) -> (branch, path, base)
+```
+
+#### 3. Contracts
+
+- `commit_issue_worktree` MUST run **before** `prepare_agent_worktree` in any fan-out path.
+- Idempotent: returns `None` when there is nothing to commit.
+
+#### 4. Validation & Error Matrix
+
+- uncommitted upstream artifacts present → commit them, then fork → agent sees them.
+- nothing to commit → `None`, fork proceeds.
+- issue has no `git_branch` yet → `prepare_agent_worktree` raises `WorktreeError` (prepare the issue worktree first).
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `dispatch_batch` flushes once, then forks N agent worktrees that all see upstream output.
+- Bad: fork first, then agent reads `task.workspace_path` and misses uncommitted upstream artifacts.
+
+#### 6. Tests Required
+
+- Assert a forked agent worktree contains an upstream artifact that was uncommitted in the issue worktree before the batch (flush-then-fork).
+- Assert `commit_issue_worktree` is idempotent (`None` on clean tree).
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+wt = await wm.prepare_agent_worktree(project, issue, key)  # forks stale tree
+```
+
+Correct:
+
+```python
+await wm.commit_issue_worktree(issue)                      # flush upstream first
+wt = await wm.prepare_agent_worktree(project, issue, key)
+```
+
+---
+
 ## Testing Requirements
 
 <!-- What level of testing is expected -->
