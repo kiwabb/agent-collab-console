@@ -50,7 +50,8 @@ Issue 创建 → `auto_start_issue_graph` 起空 `WorkflowGraph` + 后台 `run_i
 - **WorkflowGraph 是 Conductor 决策时间线可视化**，不是预设 DAG；同 role 多次调度 node_key 加 `#N`
 
 ## Env vars
-`REAL_CLI=true` (默认；false→mock) / `CODEX_LAUNCH_ENABLED=true` / `QA_EXECUTE_COMMANDS` (跟 REAL_CLI 同源) / `QA_COMMAND_TIMEOUT_S=120` / `QA_TOTAL_BUDGET_S=300` / `CODEX_WORKSPACE_ROOT` / `SQLITE_DB_PATH` / `CLAUDE_CMD` (默认 "claude") / `CODEX_CMD` (默认 "codex") / `MAX_CONCURRENT_INSTANCES_PER_ROLE=3`
+`REAL_CLI=true` (默认；false→mock) / `CODEX_LAUNCH_ENABLED=true` / `QA_EXECUTE_COMMANDS` (跟 REAL_CLI 同源) / `QA_COMMAND_TIMEOUT_S=120` / `QA_TOTAL_BUDGET_S=300` / `CODEX_WORKSPACE_ROOT` / `SQLITE_DB_PATH` / `CLAUDE_CMD` (默认 "claude") / `CODEX_CMD` (默认 "codex")
+- 并发/超时旋钮集中在 `timeouts.py` (启动期 `validate()` 校验不变量)：`MAX_CONCURRENT_INSTANCES_PER_ROLE=3` (同 role 跨 issue 进程级并发上限，`dispatch_subagent` 占 slot 跑完释放，满则返回 `status=role_busy`) / `CONDUCTOR_ROLE_SLOT_WAIT_S` (等不到 slot 的超时，默认=`CONDUCTOR_SUBAGENT_MAX_S`) / `CONDUCTOR_LOOP_MAX_S=7200` (整个 conductor loop 墙钟上限，0 禁用；命中 → `status=max_wall` 按 failed 收尾)
 
 ## 诊断 Conductor
 - 后台异常 → `conductor_tasks.status=failed` + traceback 写 `result_json`

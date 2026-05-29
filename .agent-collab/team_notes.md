@@ -245,3 +245,38 @@ _intent: feature · graph status: done_
 - `cd backend && python3 -m pytest tests/test_codex_ping_endpoint.py -v`
 **Actually run by QA:**
 - `cd backend && python3 -m pytest tests/test_codex_ping_endpoint.py -v → exit 0`
+
+
+<!-- issue:88c67377-728c-4a74-804b-f507314fbbe9 -->
+## 2026-05-28 15:35 — 为 backend 添加 GET /api/codex/echo 端点
+_intent: feature · graph status: done_
+
+**Product goals:**
+- 提供一个简单、稳定的调试/测试用 HTTP 端点，无需数据库即可验证系统连通性
+- 遵循项目中 /api/codex/heartbeat、/api/codex/status 等轻量端点的实现模式
+- 返回丰富的响应信息（消息内容、长度、时间戳），便于客户端验证和调试
+
+**Files touched:**
+- `backend/app/interfaces/api.py`
+- `backend/tests/test_codex_echo_endpoint.py`
+
+**QA verdict:** `passed`
+**Verification commands worth keeping:**
+- `cd backend && python3 -m pytest tests/test_codex_echo_endpoint.py -v`
+**Actually run by QA:**
+- `cd backend && python3 -m pytest tests/test_codex_echo_endpoint.py -v → exit 0`
+
+
+<!-- issue:4a5eb8f4-9ed1-4dd4-b193-e1444be8e18a -->
+## 2026-05-28 17:31 — 新增 GET /api/codex/health/cli 健康检查端点
+_intent: feature · graph status: done_
+
+**Files touched:**
+- `backend/app/interfaces/api.py`
+- `backend/tests/test_codex_health_cli_endpoint.py`
+
+**QA verdict:** `passed`
+**Verification commands worth keeping:**
+- `cd backend && python3 -m pytest tests/test_codex_health_cli_endpoint.py -v`
+**Actually run by QA:**
+- `cd backend && python3 -m pytest tests/test_codex_health_cli_endpoint.py -v → exit 0`
