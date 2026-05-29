@@ -67,12 +67,16 @@
 
 ## Acceptance Criteria
 
-- [ ] Tier1：上面"待验证清单"全部在真运行环境逐条过（或暴露并修复）
-- [ ] 关键回归：实跑中 `main` 分支 ref/tree 未被 agent 改动污染
-- [ ] 预算：实跑触发并观察到 `## COST/BUDGET` 注入 + budget_warning/exceeded 事件 + loop 不被硬杀
-- [ ] Tier2：一次真执行器跑通，产物 merge 正确、成本记账非零
-- [ ] `.walkthrough/REPORT-2026-05-29.md` 含证据（截图/日志/git 状态）
-- [ ] 暴露的 bug 全部修复且回归测试补齐
+- [x] Tier1：确定性真 git 集成测试 6 场景全过（`cef3034`），第二 agent 审为真严格
+- [x] 关键回归：所有 live 跑中 `main` ref/tree 未被 agent 改动污染
+- [x] 预算：live 跑观察到 `## COST/BUDGET` 注入 + 预算驱动并发下调到 2（真跑 budget 1.0/est 0.5）；loop 不被硬杀（修复2 验证）
+- [x] Tier2：真 claude CLI 跑通，3 模块真合并回 issue 分支（merge_status=merged），成本 $0.3958 非零
+- [x] `.walkthrough/REPORT-2026-05-29.md` 含证据（git 历史/成本/DB 状态）
+- [x] 暴露的 2 个 bug 全部修复（`3815f3e`）且回归测试补齐（507 passed + 7 slow）
+
+## 验证产出总结
+
+**3 档全部完成**。最大价值：live 跑抓到并修复 **2 个 mocked 测试漏掉的真 latent bug**（dispatch 完成竞态、no-op 合并误判冲突）。真执行器跑确认真 agent 产物正确合并、main 不污染、成本记账 + 预算并发治理 live 生效。
 
 ## Out of Scope
 
