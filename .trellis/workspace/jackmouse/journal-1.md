@@ -354,3 +354,39 @@ Phase 2 of the swarm work: made cost a first-class input to Conductor decisions.
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: E2E validation of parallel swarm + cost-aware: integration test, 2 latent bugs fixed, real-executor run
+
+**Date**: 2026-05-29
+**Task**: E2E validation of parallel swarm + cost-aware: integration test, 2 latent bugs fixed, real-executor run
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Validated the parallel-swarm + cost-aware work end-to-end across 3 tiers. Tier 1: deterministic real-git integration test (6 scenarios) driving the real dispatch_batch tool. Tier 1.5: live mock-mode run (real MiniMax brain, mock subagents, throwaway repo) that surfaced TWO latent bugs 500+ unit tests missed — a dispatch completion race (signal-before-register, fixed via register-before-launch + bounded registry buffering) and a no-op merge misclassified as a phantom conflict (fixed via commits_ahead==0 pre-check). Tier 2: real claude CLI agents created module_a/b/c in isolated worktrees, dispatch_batch merged all three into the issue branch (real diffs), main never polluted, 0 worktree leaks, real cost $0.3958 under the $1.0 budget, budget-driven concurrency downscaled to 2. Full suite 507 passed + 7 slow integration.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cef3034` | (see git log) |
+| `3815f3e` | (see git log) |
+| `31e6c40` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
