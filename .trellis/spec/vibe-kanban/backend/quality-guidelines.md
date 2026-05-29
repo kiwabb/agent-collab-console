@@ -445,6 +445,77 @@ wt = await wm.prepare_agent_worktree(project, issue, key)
 
 ---
 
+### Scenario: Cost / Budget Is Soft, Not a Hard Gate
+
+#### 1. Scope / Trigger
+
+- Trigger: anything touching issue cost aggregation, per-model pricing, or budget-driven Conductor behavior (`budget_service.py`, `usage_utils.price_tokens`, `dispatch_batch` concurrency).
+- Why code-spec depth: budget is **advisory** — it steers via prompt + concurrency, it must NEVER hard-kill the loop. A future dev "tightening" this into a hard stop would break the design contract. Also, naive cost aggregation double-counts.
+
+#### 2. Signatures
+
+```python
+# usage_utils.py
+def price_tokens(input_tokens, output_tokens, cache_read_tokens, pricing=None) -> float
+#   pricing: RuntimeModelConfig|dict|None. Per-rate: model price if set, else global env rate.
+def price_tokens_for_model(model, ...) -> float
+
+# budget_service.py
+def aggregate_issue_spend_usd(store, issue_id) -> float   # COMPLETED runs only
+def budget_steering_event(status) -> dict | None          # None when no ceiling / healthy
+
+# timeouts.py
+def resolve_issue_budget_usd(issue_budget) -> float       # None -> global default; 0 -> unlimited
+def budget_supported_concurrency(remaining, configured_cap, over_budget) -> int
+```
+
+#### 3. Contracts
+
+- `price_tokens(pricing=None)` is byte-identical to the legacy global-rate path (backward compat). Per-rate fallback: a model with only `input_usd_per_m` set uses env rates for output/cache.
+- Spend aggregation counts only `ExecutionProcess.status in {Completed, Failed, Killed}` — never `Running` (its `total_cost_usd` is not final).
+- `budget_usd`: `None` → global default; `0` → unlimited (no warnings, no wind-down, no concurrency squeeze).
+- `budget_supported_concurrency` only ever **lowers** the cap: `min(cap, floor(remaining / EST_COST_PER_AGENT_USD))`, clamped ≥ 1; `remaining is None` (unlimited) → cap unchanged; `over_budget` → 1.
+
+#### 4. Validation & Error Matrix
+
+- spend ≥ `BUDGET_SOFT_WARN_RATIO * budget` → `budget_warning` event + WARNING-tone block (no kill).
+- spend ≥ budget (over) → `budget_exceeded` event + wind-down steer toward `finalize_task` (no kill).
+- aggregation / price collection / concurrency calc raises → best-effort: omit budget block / fall back to configured cap; loop and batch proceed.
+- budget = 0 (unlimited) → no events, no squeeze, no false "over".
+
+#### 5. Good/Base/Bad Cases
+
+- Good: over budget → loop keeps running, gets a strong wind-down steer, batch concurrency drops to 1.
+- Base: healthy budget → neutral block, configured cap, no events.
+- Bad: over budget hard-kills the loop or forces batch concurrency to 0 — violates the soft-semantics contract.
+
+#### 6. Tests Required
+
+- price: per-rate model pricing + env fallback (priced + partial + unpriced regression).
+- aggregation: a `Running` process is excluded from the sum.
+- soft semantics: over-budget loop still returns `status="done"` (asserted no hard kill).
+- concurrency: tight budget downscales effective `dispatch_batch` peak (≥1); unlimited does not.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+if status.over_budget:
+    raise BudgetExceeded()        # hard-kills the loop — violates the contract
+spent = sum(p.total_cost_usd for p in all_processes)   # counts Running → double-count
+```
+
+Correct:
+
+```python
+if (ev := budget_steering_event(status)):
+    emit(ev)                      # soft: event + prompt steer, loop continues
+spent = aggregate_issue_spend_usd(store, issue_id)     # completed runs only
+```
+
+---
+
 ## Testing Requirements
 
 <!-- What level of testing is expected -->
