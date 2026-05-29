@@ -245,3 +245,37 @@ Diagnosed missing live token stream after issue-detail redesign (commit 774963c)
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Refactor IssueDetailPage into a premium Cyber-Console dashboard
+
+**Date**: 2026-05-29
+**Task**: Refactor IssueDetailPage into a premium Cyber-Console dashboard
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Overhauled the frontend Issue Detail Page to lock viewport bounds to 100vh with independent scrolling tabs and side panel, and introduced real-time breathing status indicators with HSL glowing styles.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eb2b407` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-05-24
+- **Total Sessions**: 8
+- **Last Active**: 2026-05-29
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~247 | Active |
+| `journal-1.md` | ~281 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-05-29 | Refactor IssueDetailPage into a premium Cyber-Console dashboard | `eb2b407` | `main` |
 | 7 | 2026-05-24 | Restore live agent streaming in Issue DispatchDrawer | `914a73d` | `main` |
 | 6 | 2026-05-22 | Fix conductor streaming not live | `2b9dbc4` | `main` |
 | 5 | 2026-05-22 | Conductor 完整状态机 + Stepper/Timeline + 预估剩余时间 | `f7c912d` | `main` |
