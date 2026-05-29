@@ -192,5 +192,9 @@ async def test_loop_budget_injection_failure_is_non_fatal():
         )
 
     assert result.status == "done"
-    # Loop proceeded; budget block was simply omitted from the prompt.
-    assert "COST / BUDGET" not in str(captured["messages"][0]["content"])
+    # Loop proceeded; the injected budget block was simply omitted from the
+    # prompt. (The static prompt guidelines reference the "## COST / BUDGET"
+    # header by name, so we assert on the block BODY, which only the injected
+    # render emits, rather than the header substring.)
+    content = str(captured["messages"][0]["content"])
+    assert "Spent so far:" not in content

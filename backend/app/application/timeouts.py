@@ -102,6 +102,12 @@ DEFAULT_ISSUE_BUDGET_USD = 5.0
 # Fraction of the budget at which the Conductor should start being warned to
 # economise (soft warning, PR3 acts on it). Must be in (0, 1].
 DEFAULT_BUDGET_SOFT_WARN_RATIO = 0.8
+# Rough per-agent cost estimate (USD) used ONLY to derive how many concurrent
+# agents the remaining budget can support when dispatch_batch fans out (PR3).
+# It is a deliberately coarse, explainable knob: budget_supported_concurrency =
+# floor(remaining / this). It does NOT change actual billing — pricing stays
+# the per-model / env path in usage_utils. Must be > 0.
+DEFAULT_EST_COST_PER_AGENT_USD = 0.50
 
 
 class TimeoutConfigError(ValueError):
@@ -193,6 +199,44 @@ def resolve_issue_budget_usd(issue_budget: float | None) -> float:
     if issue_budget is None:
         return default_issue_budget_usd()
     return issue_budget
+
+
+def est_cost_per_agent_usd() -> float:
+    """Coarse per-agent cost estimate driving budget-aware batch concurrency."""
+    raw = _env_float("EST_COST_PER_AGENT_USD", DEFAULT_EST_COST_PER_AGENT_USD)
+    return raw if raw > 0 else DEFAULT_EST_COST_PER_AGENT_USD
+
+
+def budget_supported_concurrency(
+    remaining_usd: float | None,
+    configured_cap: int,
+    *,
+    over_budget: bool = False,
+) -> int:
+    """Effective dispatch_batch fan-out the remaining budget can support.
+
+    Simple, explainable rule:
+      - unlimited budget (``remaining_usd is None``) → no downscale, returns the
+        configured cap unchanged.
+      - over budget → squeeze to the floor of 1 (wind-down is steered by prompt /
+        events elsewhere; we never make a batch 0-wide here).
+      - otherwise → ``floor(remaining / est_cost_per_agent)`` clamped into
+        ``[1, configured_cap]`` so a tight budget shrinks fan-out but always
+        allows at least one agent to make progress.
+
+    The result is ``min(configured_cap, budget-supported)`` and never exceeds the
+    configured cap, so this can only ever *reduce* parallelism, never raise it.
+    """
+    cap = max(1, int(configured_cap))
+    if remaining_usd is None:
+        return cap
+    if over_budget:
+        return 1
+    per_agent = est_cost_per_agent_usd()
+    supported = int(remaining_usd // per_agent)
+    if supported < 1:
+        supported = 1
+    return min(cap, supported)
 
 
 def role_slot_wait_s() -> float:
@@ -297,6 +341,11 @@ def check_invariants() -> list[str]:
     if budget < 0:
         violations.append(
             f"DEFAULT_ISSUE_BUDGET_USD ({budget}) must be >= 0 (0 == no ceiling)."
+        )
+    est_agent = est_cost_per_agent_usd()
+    if est_agent <= 0:
+        violations.append(
+            f"EST_COST_PER_AGENT_USD ({est_agent}) must be > 0."
         )
     for name, value in (
         ("CONDUCTOR_RECOVERY_INTERVAL_S", recovery_interval_s()),

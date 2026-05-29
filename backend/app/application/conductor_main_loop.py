@@ -18,7 +18,12 @@ from typing import Any, Awaitable, Callable, Union
 from uuid import uuid4
 
 from app.application import timeouts
-from app.application.budget_service import compute_issue_budget_status, render_budget_summary
+from app.application.budget_service import (
+    budget_steering_event,
+    collect_candidate_model_prices,
+    compute_issue_budget_status,
+    render_budget_summary,
+)
 from app.application.conductor_tools import build_conductor_tools
 from app.application.conductor_lease import get_conductor_lease_owner, get_conductor_lease_ttl_s
 from app.application.conductor_pause_registry import ConductorPauseRegistry
@@ -716,14 +721,24 @@ async def run_issue_conductor_loop(
         except Exception:  # noqa: BLE001
             pass
 
-        # Cost-aware scheduling (PR2): make accrued spend + budget visible to the
-        # orchestrating brain. PR2 is visibility-only — no steering / no enforcement
-        # (budget-driven selection, soft-warning behaviour, and concurrency
-        # downscaling are PR3). Best-effort: a failure here must never block the loop.
+        # Cost-aware scheduling (PR2 + PR3): make accrued spend + budget visible to
+        # the orchestrating brain, and (PR3) steer model choice / wind-down by it.
+        # PR3 injects candidate model unit prices (cheap→expensive) and escalates
+        # the block's tone at the soft-warn threshold / over budget, plus emits a
+        # structured steering event for observability. This is soft guidance only —
+        # the loop is never hard-killed here. Best-effort: a failure must never
+        # block the loop.
         budget_context = ""
         try:
             budget_status = await compute_issue_budget_status(store, issue)
-            budget_context = "\n\n" + render_budget_summary(budget_status)
+            candidates = collect_candidate_model_prices(catalog)
+            budget_context = "\n\n" + render_budget_summary(budget_status, candidates)
+            steering = budget_steering_event(budget_status)
+            if steering is not None:
+                await _append_event(
+                    event_bus,
+                    {**steering, "conductor_task_id": conductor_task.id},
+                )
         except Exception:  # noqa: BLE001
             pass
 
@@ -752,6 +767,7 @@ You can also use specialist roles: security_reviewer, perf_reviewer, doc_writer,
 - If a dispatch returns `status=role_busy`, every concurrent slot for that role is occupied right now. Do other useful work first (dispatch a different role, or wait by re-dispatching later) — do NOT spam the same role; the slot will free up when a running instance finishes
 - When several pieces of work are genuinely INDEPENDENT (no agent needs another's output — e.g. unrelated parts of an implementation), prefer `dispatch_batch` to fan them out concurrently in a single decision. Each runs in its own isolated worktree and their changes are auto-merged back into the issue branch when the batch completes
 - If a `dispatch_batch` returns `merge_status=conflict`, two agents touched the same code. The `conflicts` list gives the conflicting agent, files, and diff. Resolve it: dispatch a single `engineer` (via `dispatch_subagent`) with a prompt that includes the conflicting files + diff and instructs it to reconcile them, OR `request_user_clarification` to escalate. Agents merged before the conflict are already on the issue branch — do NOT re-run them
+- Mind the `## COST / BUDGET` block: when budget is healthy you may pick stronger/more expensive models for hard work; as remaining budget shrinks (or on a BUDGET WARNING) prefer cheaper models from the candidate list and dispatch fewer/narrower; if it says OVER BUDGET, wind down — finalize as soon as the work is deliverable and avoid new expensive dispatches
 - When all work is complete, call `finalize_task` with a summary
 - You MUST call `finalize_task` to end the loop
 

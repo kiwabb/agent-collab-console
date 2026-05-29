@@ -296,7 +296,25 @@ def build_conductor_tools(
                 "prev_node_key": raw.get("prev_node_key") or None,
             })
 
-        cap = timeouts.max_parallel_dispatch_per_batch()
+        # Budget-aware concurrency (PR3): the configured fan-out cap is the upper
+        # bound, but a tight remaining budget dynamically downscales the EFFECTIVE
+        # concurrency (concurrency = cost multiplier). Unlimited budget (or a
+        # comfortable one) leaves the cap untouched; over budget squeezes to 1.
+        # This can only ever REDUCE parallelism, never raise it. Best-effort: a
+        # budget-status failure falls back to the plain configured cap.
+        configured_cap = timeouts.max_parallel_dispatch_per_batch()
+        cap = configured_cap
+        try:
+            from app.application.budget_service import compute_issue_budget_status
+
+            budget_status = await compute_issue_budget_status(store, issue)
+            cap = timeouts.budget_supported_concurrency(
+                budget_status.remaining_usd,
+                configured_cap,
+                over_budget=budget_status.over_budget,
+            )
+        except Exception:  # noqa: BLE001
+            cap = configured_cap
         sem = asyncio.Semaphore(cap)
 
         # One shared batch_key tags every node this dispatch_batch call creates, so
@@ -327,6 +345,7 @@ def build_conductor_tools(
             "batch_key": batch_key,
             "agent_count": len(specs),
             "concurrency_cap": cap,
+            "configured_cap": configured_cap,
             "roles": [s["role"] for s in specs],
         })
 
