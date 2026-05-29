@@ -279,3 +279,41 @@ Overhauled the frontend Issue Detail Page to lock viewport bounds to 100vh with 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Parallel swarm scheduler: per-agent worktree isolation, dispatch_batch, in-flow join+reconcile, batch visualization
+
+**Date**: 2026-05-29
+**Task**: Parallel swarm scheduler: per-agent worktree isolation, dispatch_batch, in-flow join+reconcile, batch visualization
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Upgraded the serial Conductor into a true parallel swarm: dispatch_batch fans out N subagents concurrently (capped, partial-join failure semantics), each in an isolated per-agent worktree forked from the issue branch; on completion they squash-merge back sequentially under the issue lock with conflict→Conductor reconcile. Caught+fixed a real bug where squash_merge would fast-forward agent changes onto main (new swarm-safe squash_merge_into_branch). Added batch_key + parallel-swimlane visualization. 4 PRs, each implement→check→commit; full backend suite 432 passed, frontend tsc clean + 121 tests. Cost-aware governance deferred to subtask (Phase 2).
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ab70812` | (see git log) |
+| `8081b86` | (see git log) |
+| `f201e8d` | (see git log) |
+| `aee6ecf` | (see git log) |
+| `e40764f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
