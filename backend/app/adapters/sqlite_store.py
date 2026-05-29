@@ -156,6 +156,7 @@ class SQLiteStore:
                     executor TEXT,
                     provider TEXT,
                     model TEXT,
+                    budget_usd REAL,
                     created_at TEXT,
                     updated_at TEXT,
                     FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
@@ -349,6 +350,11 @@ class SQLiteStore:
                     conn.execute(f"ALTER TABLE codex_issues ADD COLUMN {_issue_exec_col} TEXT")
                 except sqlite3.OperationalError:
                     pass
+            # Per-issue cost budget (cost-aware conductor scheduling, PR2)
+            try:
+                conn.execute("ALTER TABLE codex_issues ADD COLUMN budget_usd REAL")
+            except sqlite3.OperationalError:
+                pass
             try:
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN review_comment TEXT")
             except sqlite3.OperationalError:
@@ -1111,7 +1117,7 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO codex_issues (id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, executor, provider, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO codex_issues (id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, executor, provider, model, budget_usd, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 issue.id,
                 issue.session_id,
@@ -1133,6 +1139,7 @@ class SQLiteStore:
                 getattr(issue, "executor", None),
                 getattr(issue, "provider", None),
                 getattr(issue, "model", None),
+                getattr(issue, "budget_usd", None),
                 self._format_datetime(issue.created_at),
                 self._format_datetime(issue.updated_at),
             ),
@@ -1169,6 +1176,7 @@ class SQLiteStore:
             executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
             provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
             model=row["model"] if "model" in row.keys() and row["model"] else None,
+            budget_usd=row["budget_usd"] if "budget_usd" in row.keys() and row["budget_usd"] is not None else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1177,7 +1185,7 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, created_at, updated_at FROM codex_issues"
+        select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, budget_usd, created_at, updated_at FROM codex_issues"
         if session_id:
             rows = conn.execute(f"{select_sql} WHERE session_id = ? ORDER BY is_pinned DESC, updated_at DESC, created_at DESC", (session_id,)).fetchall()
         else:

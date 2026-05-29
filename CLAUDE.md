@@ -53,6 +53,10 @@ Issue 创建 → `auto_start_issue_graph` 起空 `WorkflowGraph` + 后台 `run_i
 ## Env vars
 `REAL_CLI=true` (默认；false→mock) / `CODEX_LAUNCH_ENABLED=true` / `QA_EXECUTE_COMMANDS` (跟 REAL_CLI 同源) / `QA_COMMAND_TIMEOUT_S=120` / `QA_TOTAL_BUDGET_S=300` / `CODEX_WORKSPACE_ROOT` / `SQLITE_DB_PATH` / `CLAUDE_CMD` (默认 "claude") / `CODEX_CMD` (默认 "codex")
 - 并发/超时旋钮集中在 `timeouts.py` (启动期 `validate()` 校验不变量)：`MAX_CONCURRENT_INSTANCES_PER_ROLE=3` (同 role 跨 issue 进程级并发上限，`dispatch_subagent` 占 slot 跑完释放，满则返回 `status=role_busy`) / `CONDUCTOR_ROLE_SLOT_WAIT_S` (等不到 slot 的超时，默认=`CONDUCTOR_SUBAGENT_MAX_S`) / `CONDUCTOR_LOOP_MAX_S=7200` (整个 conductor loop 墙钟上限，0 禁用；命中 → `status=max_wall` 按 failed 收尾)
+- 成本/预算旋钮也在 `timeouts.py`：`DEFAULT_ISSUE_BUDGET_USD=5.0` (per-issue 预算全局默认；issue 不填 `budget_usd` 则用它，0=无上限) / `BUDGET_SOFT_WARN_RATIO=0.8` (软警告阈值比例，∈(0,1])。`price_tokens` 分模型定价回落 `COST_USD_PER_M_INPUT=0.30`/`_OUTPUT=1.20`/`_CACHE_READ=0.075`
+
+## Cost-aware scheduling
+- **成本感知 (PR2)**：`CodexIssue.budget_usd` (per-issue USD 上限，None=全局默认)；`budget_service.py` 按 issue 聚合**已完成** `ExecutionProcess.total_cost_usd` (status ∈ Completed/Failed/Killed，跳过 Running 避免重复计)，`conductor_main_loop.py` 每个 loop run 把「已花/预算/剩余」`## COST / BUDGET` 块注入系统提示。**仅可见，不改决策**；选型引导/软警告收尾/预算压缩并发是 PR3
 
 ## 诊断 Conductor
 - 后台异常 → `conductor_tasks.status=failed` + traceback 写 `result_json`

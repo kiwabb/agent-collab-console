@@ -94,6 +94,15 @@ DEFAULT_MAX_PARALLEL_DISPATCH_PER_BATCH = 3
 # ``max(15, lease_ttl // 3)`` expression in conductor_main_loop).
 LEASE_PULSE_FLOOR_S = 15
 
+# --- Cost / budget (cost-aware conductor scheduling, PR2) ------------------
+# Global default per-issue USD budget. An issue with no explicit budget_usd
+# resolves to this value at runtime. 0 (or negative) means "no budget" /
+# unlimited: budget awareness still reports accrued spend but no ceiling.
+DEFAULT_ISSUE_BUDGET_USD = 5.0
+# Fraction of the budget at which the Conductor should start being warned to
+# economise (soft warning, PR3 acts on it). Must be in (0, 1].
+DEFAULT_BUDGET_SOFT_WARN_RATIO = 0.8
+
 
 class TimeoutConfigError(ValueError):
     """Raised by :func:`validate` (strict mode) when an invariant is broken."""
@@ -162,6 +171,28 @@ def max_parallel_dispatch_per_batch() -> int:
     """Max agents one dispatch_batch call may run concurrently (>= 1)."""
     raw = _env_int("MAX_PARALLEL_DISPATCH_PER_BATCH", DEFAULT_MAX_PARALLEL_DISPATCH_PER_BATCH)
     return max(1, raw)
+
+
+# --- Cost / budget ---------------------------------------------------------
+def default_issue_budget_usd() -> float:
+    """Global default per-issue USD budget (0 or negative == no ceiling)."""
+    return _env_float("DEFAULT_ISSUE_BUDGET_USD", DEFAULT_ISSUE_BUDGET_USD)
+
+
+def budget_soft_warn_ratio() -> float:
+    """Fraction of budget at which the soft warning kicks in (in (0, 1])."""
+    return _env_float("BUDGET_SOFT_WARN_RATIO", DEFAULT_BUDGET_SOFT_WARN_RATIO)
+
+
+def resolve_issue_budget_usd(issue_budget: float | None) -> float:
+    """Resolve an issue's effective budget: explicit value, else global default.
+
+    Returns a value <= 0 to signal "no ceiling" (unlimited); callers that gate
+    on a budget should treat <= 0 as disabled.
+    """
+    if issue_budget is None:
+        return default_issue_budget_usd()
+    return issue_budget
 
 
 def role_slot_wait_s() -> float:
@@ -256,6 +287,16 @@ def check_invariants() -> list[str]:
     if max_parallel_dispatch_per_batch() < 1:
         violations.append(
             f"MAX_PARALLEL_DISPATCH_PER_BATCH ({max_parallel_dispatch_per_batch()}) must be >= 1."
+        )
+    ratio = budget_soft_warn_ratio()
+    if not (0 < ratio <= 1):
+        violations.append(
+            f"BUDGET_SOFT_WARN_RATIO ({ratio}) must be in (0, 1]."
+        )
+    budget = default_issue_budget_usd()
+    if budget < 0:
+        violations.append(
+            f"DEFAULT_ISSUE_BUDGET_USD ({budget}) must be >= 0 (0 == no ceiling)."
         )
     for name, value in (
         ("CONDUCTOR_RECOVERY_INTERVAL_S", recovery_interval_s()),

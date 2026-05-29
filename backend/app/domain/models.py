@@ -189,6 +189,11 @@ class CodexIssue(BaseModel):
     executor: str | None = None
     provider: str | None = None
     model: str | None = None
+    # Per-issue cost ceiling in USD. None = use the global default
+    # (timeouts.default_issue_budget_usd). Cost-aware scheduling (PR2) injects
+    # the resolved budget + accrued spend into the Conductor's context each loop
+    # so the orchestrating brain can see how much of its budget remains.
+    budget_usd: float | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

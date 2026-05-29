@@ -137,6 +137,7 @@ class AsyncSQLiteStore:
                 executor TEXT,
                 provider TEXT,
                 model TEXT,
+                budget_usd REAL,
                 created_at TEXT,
                 updated_at TEXT,
                 FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
@@ -365,6 +366,11 @@ class AsyncSQLiteStore:
                 await conn.execute(f"ALTER TABLE codex_issues ADD COLUMN {_issue_exec_col} TEXT")
             except aiosqlite.OperationalError:
                 pass
+        # Per-issue cost budget (cost-aware conductor scheduling, PR2)
+        try:
+            await conn.execute("ALTER TABLE codex_issues ADD COLUMN budget_usd REAL")
+        except aiosqlite.OperationalError:
+            pass
         # Add executor/provider/model snapshot columns to execution_processes
         try:
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
@@ -1149,8 +1155,9 @@ class AsyncSQLiteStore:
                 git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha,
                 github_pr_url, github_pr_state,
                 executor, provider, model,
+                budget_usd,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 issue.id,
                 issue.session_id,
@@ -1172,6 +1179,7 @@ class AsyncSQLiteStore:
                 getattr(issue, "executor", None),
                 getattr(issue, "provider", None),
                 getattr(issue, "model", None),
+                getattr(issue, "budget_usd", None),
                 self._format_datetime(issue.created_at),
                 self._format_datetime(issue.updated_at),
             ),
@@ -1217,6 +1225,7 @@ class AsyncSQLiteStore:
             executor=row["executor"] if "executor" in keys and row["executor"] else None,
             provider=row["provider"] if "provider" in keys and row["provider"] else None,
             model=row["model"] if "model" in keys and row["model"] else None,
+            budget_usd=row["budget_usd"] if "budget_usd" in keys and row["budget_usd"] is not None else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1225,7 +1234,7 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, created_at, updated_at FROM codex_issues"
+        select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, budget_usd, created_at, updated_at FROM codex_issues"
         clauses, params = [], []
         if session_id:
             clauses.append("session_id = ?")

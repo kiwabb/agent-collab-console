@@ -2584,6 +2584,9 @@ class CreateIssueRequest(BaseModel):
     executor: str | None = None
     provider: str | None = None
     model: str | None = None
+    # Per-issue cost ceiling in USD. Omit to use the global default
+    # (timeouts.default_issue_budget_usd). 0 means "no ceiling" (unlimited).
+    budget_usd: float | None = None
 
 
 class UpdateIssuePhaseRequest(BaseModel):
@@ -2625,6 +2628,7 @@ async def create_codex_issue(request: CreateIssueRequest):
         executor=request.executor,
         provider=request.provider,
         model=request.model,
+        budget_usd=request.budget_usd,
         created_at=now,
         updated_at=now,
     )

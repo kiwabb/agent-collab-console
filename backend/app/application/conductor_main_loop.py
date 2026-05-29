@@ -18,6 +18,7 @@ from typing import Any, Awaitable, Callable, Union
 from uuid import uuid4
 
 from app.application import timeouts
+from app.application.budget_service import compute_issue_budget_status, render_budget_summary
 from app.application.conductor_tools import build_conductor_tools
 from app.application.conductor_lease import get_conductor_lease_owner, get_conductor_lease_ttl_s
 from app.application.conductor_pause_registry import ConductorPauseRegistry
@@ -715,12 +716,23 @@ async def run_issue_conductor_loop(
         except Exception:  # noqa: BLE001
             pass
 
+        # Cost-aware scheduling (PR2): make accrued spend + budget visible to the
+        # orchestrating brain. PR2 is visibility-only — no steering / no enforcement
+        # (budget-driven selection, soft-warning behaviour, and concurrency
+        # downscaling are PR3). Best-effort: a failure here must never block the loop.
+        budget_context = ""
+        try:
+            budget_status = await compute_issue_budget_status(store, issue)
+            budget_context = "\n\n" + render_budget_summary(budget_status)
+        except Exception:  # noqa: BLE001
+            pass
+
         prompt = f"""You are the ProjectConductor orchestrating work on this issue.
 
 ## Issue
 Title: {issue.title}
 Description: {issue.description or "(no description provided)"}
-{project_context}
+{project_context}{budget_context}
 
 ## Your Job
 Use the `dispatch_subagent` tool to run the agents needed to complete this issue.
