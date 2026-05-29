@@ -47,6 +47,11 @@ There are also two non-ladder knobs documented here for discoverability:
                                     for a free role slot before giving up and
                                     returning ``status=role_busy`` so the
                                     Conductor can re-plan instead of blocking.
+    MAX_PARALLEL_DISPATCH_PER_BATCH (3) Fan-out cap for a single dispatch_batch
+                                    call: at most this many agents in one batch
+                                    run concurrently. Orthogonal to the per-role
+                                    cap above; bounds a batch that fans out
+                                    several different roles at once.
 
 Env-var names and defaults are unchanged from the pre-refactor call sites, so
 this module is behaviour-preserving on its own.
@@ -77,6 +82,13 @@ DEFAULT_STALL_COOLDOWN_S = 900
 DEFAULT_CONDUCTOR_LOOP_MAX_S = 7200.0
 # Process-wide concurrency cap per role (across all issues/conductors).
 DEFAULT_MAX_CONCURRENT_INSTANCES_PER_ROLE = 3
+# Batch-level fan-out cap: how many agents one dispatch_batch call may run
+# concurrently. This is orthogonal to MAX_CONCURRENT_INSTANCES_PER_ROLE (which
+# is per-role across the whole process): a single batch fanning out N *different*
+# roles would not be bounded by the per-role cap, so this knob bounds the batch's
+# own parallelism. Concurrency = cost multiplier, so this also becomes the hook
+# for the cost/budget gate in the follow-up cost-aware scheduling task.
+DEFAULT_MAX_PARALLEL_DISPATCH_PER_BATCH = 3
 
 # Minimum lease-pulse cadence floor (mirrors the historical
 # ``max(15, lease_ttl // 3)`` expression in conductor_main_loop).
@@ -143,6 +155,12 @@ def conductor_loop_max_s() -> float:
 def max_concurrent_instances_per_role() -> int:
     """Process-wide cap on concurrently-running subagents of the same role."""
     raw = _env_int("MAX_CONCURRENT_INSTANCES_PER_ROLE", DEFAULT_MAX_CONCURRENT_INSTANCES_PER_ROLE)
+    return max(1, raw)
+
+
+def max_parallel_dispatch_per_batch() -> int:
+    """Max agents one dispatch_batch call may run concurrently (>= 1)."""
+    raw = _env_int("MAX_PARALLEL_DISPATCH_PER_BATCH", DEFAULT_MAX_PARALLEL_DISPATCH_PER_BATCH)
     return max(1, raw)
 
 
@@ -234,6 +252,10 @@ def check_invariants() -> list[str]:
     if max_concurrent_instances_per_role() < 1:
         violations.append(
             f"MAX_CONCURRENT_INSTANCES_PER_ROLE ({max_concurrent_instances_per_role()}) must be >= 1."
+        )
+    if max_parallel_dispatch_per_batch() < 1:
+        violations.append(
+            f"MAX_PARALLEL_DISPATCH_PER_BATCH ({max_parallel_dispatch_per_batch()}) must be >= 1."
         )
     for name, value in (
         ("CONDUCTOR_RECOVERY_INTERVAL_S", recovery_interval_s()),

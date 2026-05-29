@@ -1,7 +1,9 @@
 """Tool registry for the ProjectConductor loop."""
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -39,76 +41,85 @@ def build_conductor_tools(
     task_dispatcher_fn=None,
     issue_id: str | None = None,
     on_status: ToolStatusCallback | None = None,
+    worktree_manager=None,
 ) -> ConductorToolRegistry:
     conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
+
+    def _resolve_worktree_manager():
+        """Per-agent worktree isolation needs the shared WorktreeManager. Tests
+        inject one explicitly; production falls back to the bootstrap singleton.
+        Imported lazily so importing this module never pulls in bootstrap."""
+        if worktree_manager is not None:
+            return worktree_manager
+        from app.bootstrap import worktree_manager as _wm
+        return _wm
 
     async def retrieve_cold_memory(tool_input: dict[str, Any]) -> dict[str, Any]:
         query = str(tool_input.get("query") or "")
         top_k = int(tool_input.get("top_k") or 3)
         return {"memories": await conductor.retrieve_cold(query, top_k=max(1, min(top_k, 10)))}
 
-    async def dispatch_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
-        if task_dispatcher_fn is None or not issue_id:
-            # Fallback stub (project-level ad-hoc usage without issue context)
-            payload = {
-                "project_id": project_id,
-                "node_key": tool_input.get("node_key"),
-                "role": tool_input.get("role"),
-                "prompt": tool_input.get("prompt"),
-                "status": "queued",
-                "note": "no issue context",
-            }
-            await _emit(event_bus, "conductor_tool", {"tool": "dispatch_subagent", **payload})
-            return payload
+    async def _check_redispatch_budget(role: str, *, tool: str) -> dict[str, Any] | None:
+        """GAP G: bound re-dispatch. Each dispatch of a role adds a graph node
+        (role, role#1, role#2…); past the budget the Conductor is stuck in a
+        rework loop. Returns a terminal `retries_exhausted` dict when exhausted,
+        else None. Shared by dispatch_subagent and dispatch_batch."""
+        if not role or not issue_id:
+            return None
+        try:
+            graph = await store.load_workflow_graph_for_issue(issue_id)
+        except Exception:  # noqa: BLE001
+            graph = None
+        if graph is None:
+            return None
+        same_role = sum(
+            1 for n in (graph.nodes or [])
+            if n.node_key == role or n.node_key.startswith(f"{role}#")
+        )
+        max_dispatches = _max_dispatches_per_role()
+        if same_role < max_dispatches:
+            return None
+        await _emit(event_bus, "conductor_tool", {
+            "tool": tool,
+            "role": role,
+            "status": "retries_exhausted",
+            "dispatches": same_role,
+        })
+        return {
+            "status": "retries_exhausted",
+            "role": role,
+            "dispatches": same_role,
+            "max_dispatches": max_dispatches,
+            "note": (
+                f"role '{role}' already dispatched {same_role} times "
+                f"(max {max_dispatches}); do not re-dispatch it"
+            ),
+        }
 
-        from app.application.task_completion_registry import TaskCompletionRegistry
-        from app.application.task_dispatcher import dispatch_role
+    async def _run_single_dispatch(
+        *,
+        issue,
+        role: str,
+        prompt_override: str | None,
+        prev_node_key: str | None,
+        agent_worktree_path: str | None,
+        tool: str,
+    ) -> dict[str, Any]:
+        """Run one subagent dispatch end-to-end: acquire a per-role concurrency
+        slot, dispatch the role task, then activity-aware wait for completion.
 
-        role = str(tool_input.get("role") or "")
-        prompt_override = tool_input.get("prompt") or None
-        prev_node_key = tool_input.get("prev_node_key") or None
-        detail = role or prev_node_key or "subagent"
-
-        issue = await store.load_codex_issue(issue_id)
-        if issue is None:
-            return {"error": f"Issue {issue_id} not found"}
-
-        # GAP G: bound re-dispatch. Each dispatch of a role adds a graph node
-        # (role, role#1, role#2…); past the budget the Conductor is stuck in a
-        # rework loop, so return a terminal `retries_exhausted` to stop it from
-        # hammering the same role forever.
-        if role:
-            try:
-                graph = await store.load_workflow_graph_for_issue(issue_id)
-            except Exception:  # noqa: BLE001
-                graph = None
-            if graph is not None:
-                same_role = sum(
-                    1 for n in (graph.nodes or [])
-                    if n.node_key == role or n.node_key.startswith(f"{role}#")
-                )
-                max_dispatches = _max_dispatches_per_role()
-                if same_role >= max_dispatches:
-                    await _emit(event_bus, "conductor_tool", {
-                        "tool": "dispatch_subagent",
-                        "role": role,
-                        "status": "retries_exhausted",
-                        "dispatches": same_role,
-                    })
-                    return {
-                        "status": "retries_exhausted",
-                        "role": role,
-                        "dispatches": same_role,
-                        "max_dispatches": max_dispatches,
-                        "note": (
-                            f"role '{role}' already dispatched {same_role} times "
-                            f"(max {max_dispatches}); do not re-dispatch it"
-                        ),
-                    }
-
+        This is the single source of truth for the dispatch lifecycle, shared by
+        both dispatch_subagent (serial path, agent_worktree_path=None → shared
+        issue worktree) and dispatch_batch (parallel path, agent_worktree_path
+        set → isolated per-agent worktree). Returns the subagent result dict or a
+        structured status/error dict (role_busy / timeout / value error)."""
         from datetime import datetime
         from app.application import task_activity, timeouts
         from app.application.role_concurrency import RoleConcurrencyLimiter
+        from app.application.task_completion_registry import TaskCompletionRegistry
+        from app.application.task_dispatcher import dispatch_role
+
+        detail = role or prev_node_key or "subagent"
 
         # GAP: enforce MAX_CONCURRENT_INSTANCES_PER_ROLE. Acquire a process-wide
         # slot for this role BEFORE dispatching, so we never create a task/node
@@ -123,7 +134,7 @@ def build_conductor_tools(
             if not acquired:
                 limit = timeouts.max_concurrent_instances_per_role()
                 await _emit(event_bus, "conductor_tool", {
-                    "tool": "dispatch_subagent",
+                    "tool": tool,
                     "role": role,
                     "status": "role_busy",
                     "limit": limit,
@@ -149,16 +160,17 @@ def build_conductor_tools(
                     task_dispatcher_fn=task_dispatcher_fn,
                     event_bus=event_bus,
                     prev_node_key=prev_node_key,
+                    agent_worktree_path=agent_worktree_path,
                 )
             except ValueError as exc:
-                return {"error": str(exc)}
+                return {"error": str(exc), "role": role}
 
             registry = TaskCompletionRegistry.get()
             registry.register(task_id)
             await _notify_status(on_status, "awaiting_subagent", detail)
 
             await _emit(event_bus, "conductor_tool", {
-                "tool": "dispatch_subagent",
+                "tool": tool,
                 "role": role,
                 "task_id": task_id,
                 "status": "dispatched",
@@ -191,6 +203,200 @@ def build_conductor_tools(
                 }
 
             return result or {"task_id": task_id, "role": role, "status": "done"}
+
+    async def dispatch_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
+        if task_dispatcher_fn is None or not issue_id:
+            # Fallback stub (project-level ad-hoc usage without issue context)
+            payload = {
+                "project_id": project_id,
+                "node_key": tool_input.get("node_key"),
+                "role": tool_input.get("role"),
+                "prompt": tool_input.get("prompt"),
+                "status": "queued",
+                "note": "no issue context",
+            }
+            await _emit(event_bus, "conductor_tool", {"tool": "dispatch_subagent", **payload})
+            return payload
+
+        role = str(tool_input.get("role") or "")
+        prompt_override = tool_input.get("prompt") or None
+        prev_node_key = tool_input.get("prev_node_key") or None
+
+        issue = await store.load_codex_issue(issue_id)
+        if issue is None:
+            return {"error": f"Issue {issue_id} not found"}
+
+        exhausted = await _check_redispatch_budget(role, tool="dispatch_subagent")
+        if exhausted is not None:
+            return exhausted
+
+        # Serial path: no per-agent worktree, the task runs in the shared issue
+        # worktree exactly as before.
+        return await _run_single_dispatch(
+            issue=issue,
+            role=role,
+            prompt_override=prompt_override,
+            prev_node_key=prev_node_key,
+            agent_worktree_path=None,
+            tool="dispatch_subagent",
+        )
+
+    async def dispatch_batch(tool_input: dict[str, Any]) -> dict[str, Any]:
+        """Fan out N INDEPENDENT subagents concurrently, each in its own isolated
+        worktree. Partial-join semantics: a single agent failing/timing out does
+        not abort the batch; its error is collected as a `failed` result item."""
+        if task_dispatcher_fn is None or not issue_id:
+            payload = {
+                "project_id": project_id,
+                "status": "queued",
+                "note": "no issue context",
+                "agents": tool_input.get("agents"),
+            }
+            await _emit(event_bus, "conductor_tool", {"tool": "dispatch_batch", **payload})
+            return payload
+
+        from app.application import timeouts
+
+        raw_agents = tool_input.get("agents")
+        if not isinstance(raw_agents, list) or not raw_agents:
+            return {"error": "dispatch_batch requires a non-empty 'agents' list"}
+
+        issue = await store.load_codex_issue(issue_id)
+        if issue is None:
+            return {"error": f"Issue {issue_id} not found"}
+
+        project = await store.load_project(issue.project_id)
+        if project is None:
+            return {"error": f"Project {issue.project_id} not found"}
+
+        wm = _resolve_worktree_manager()
+
+        # Normalize specs and assign a unique agent_key per spec (used for the
+        # per-agent worktree branch/path and for cleanup). Same role twice in one
+        # batch gets distinct keys (role, role-2, …) so worktrees never collide.
+        specs: list[dict[str, Any]] = []
+        seen_keys: dict[str, int] = {}
+        for idx, raw in enumerate(raw_agents):
+            if not isinstance(raw, dict):
+                return {"error": f"agents[{idx}] must be an object with at least a 'role'"}
+            role = str(raw.get("role") or "").strip()
+            if not role:
+                return {"error": f"agents[{idx}] is missing 'role'"}
+            base_key = _sanitize_agent_key(role)
+            n = seen_keys.get(base_key, 0)
+            seen_keys[base_key] = n + 1
+            agent_key = base_key if n == 0 else f"{base_key}-{n + 1}"
+            specs.append({
+                "agent_key": agent_key,
+                "role": role,
+                "prompt": raw.get("prompt") or None,
+                "prev_node_key": raw.get("prev_node_key") or None,
+            })
+
+        cap = timeouts.max_parallel_dispatch_per_batch()
+        sem = asyncio.Semaphore(cap)
+
+        await _emit(event_bus, "conductor_tool", {
+            "tool": "dispatch_batch",
+            "status": "batch_started",
+            "agent_count": len(specs),
+            "concurrency_cap": cap,
+            "roles": [s["role"] for s in specs],
+        })
+
+        async def _run_one(spec: dict[str, Any]) -> dict[str, Any]:
+            agent_key = spec["agent_key"]
+            role = spec["role"]
+            async with sem:
+                # Budget check per role, mirroring dispatch_subagent.
+                exhausted = await _check_redispatch_budget(role, tool="dispatch_batch")
+                if exhausted is not None:
+                    return {"agent_key": agent_key, **exhausted}
+
+                worktree_path: str | None = None
+                cleanup_on_exit = False
+                try:
+                    _, worktree_path, _ = await wm.prepare_agent_worktree(
+                        project, issue, agent_key
+                    )
+                    result = await _run_single_dispatch(
+                        issue=issue,
+                        role=role,
+                        prompt_override=spec["prompt"],
+                        prev_node_key=spec["prev_node_key"],
+                        agent_worktree_path=worktree_path,
+                        tool="dispatch_batch",
+                    )
+                    # PR3 will merge these per-agent branches back into the issue
+                    # branch, so on success we KEEP the worktree (its commits are
+                    # the agent's output). Failed/never-dispatched agents have no
+                    # mergeable output → clean their worktree now to avoid leaks.
+                    status = result.get("status")
+                    if "error" in result or status in {"role_busy", "retries_exhausted"}:
+                        cleanup_on_exit = True
+                    return {
+                        "agent_key": agent_key,
+                        "role": role,
+                        "worktree_path": worktree_path,
+                        **result,
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    cleanup_on_exit = True
+                    return {
+                        "agent_key": agent_key,
+                        "role": role,
+                        "worktree_path": worktree_path,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                finally:
+                    if cleanup_on_exit:
+                        try:
+                            await wm.cleanup_agent_worktree(project, issue, agent_key)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+        # return_exceptions=True → partial join: a crashing coroutine does not
+        # propagate and kill its siblings (research §3 asyncio pitfall). _run_one
+        # already converts in-band failures to result dicts, so this is a final
+        # safety net for anything that escapes it.
+        gathered = await asyncio.gather(
+            *(_run_one(spec) for spec in specs), return_exceptions=True
+        )
+
+        results: list[dict[str, Any]] = []
+        for spec, item in zip(specs, gathered):
+            if isinstance(item, BaseException):
+                results.append({
+                    "agent_key": spec["agent_key"],
+                    "role": spec["role"],
+                    "error": f"{type(item).__name__}: {item}",
+                })
+            else:
+                results.append(item)
+
+        succeeded = [r for r in results if "error" not in r and r.get("status") not in {"role_busy", "retries_exhausted"}]
+        failed = [r for r in results if r not in succeeded]
+
+        await _emit(event_bus, "conductor_tool", {
+            "tool": "dispatch_batch",
+            "status": "batch_complete",
+            "succeeded": len(succeeded),
+            "failed": len(failed),
+        })
+
+        return {
+            "status": "batch_complete",
+            "agent_count": len(results),
+            "succeeded_count": len(succeeded),
+            "failed_count": len(failed),
+            "results": results,
+            "note": (
+                "Partial join: each result has agent_key/role and either a result "
+                "payload or an 'error'. Successful agents' changes are isolated in "
+                "their per-agent worktree (worktree_path) and are NOT yet merged "
+                "into the issue branch (merge-back is a later step)."
+            ),
+        }
 
     async def spawn_custom_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
         payload = {
@@ -233,12 +439,19 @@ def build_conductor_tools(
     tools: dict[str, ToolCallable] = {
         "retrieve_cold_memory": retrieve_cold_memory,
         "dispatch_subagent": dispatch_subagent,
+        "dispatch_batch": dispatch_batch,
         "spawn_custom_subagent": spawn_custom_subagent,
         "inject_context_into_node": inject_context_into_node,
         "request_user_clarification": request_user_clarification,
         "finalize_task": finalize_task,
     }
     return ConductorToolRegistry(definitions=_tool_definitions(), tools=tools)
+
+
+def _sanitize_agent_key(role: str) -> str:
+    """Turn a role into a filesystem/branch-safe agent key for swarm worktrees."""
+    key = re.sub(r"[^a-zA-Z0-9._-]+", "-", role.strip()).strip("-").lower()
+    return key or "agent"
 
 
 async def _emit(event_bus, event_type: str, payload: dict[str, Any]) -> None:
@@ -282,6 +495,36 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 "prev_node_key": {"type": "string", "description": "node_key of the previously dispatched node, for graph edge visualization"},
             },
             ["role"],
+        ),
+        _tool(
+            "dispatch_batch",
+            (
+                "Fan out MULTIPLE INDEPENDENT sub-agents concurrently in a single "
+                "decision and wait for the whole batch. Use this ONLY when the "
+                "agents are truly independent (no agent needs another's output) — "
+                "for example splitting unrelated parts of the work across several "
+                "engineers. Each agent runs in its own isolated worktree so their "
+                "file edits never clobber each other. If agents depend on each "
+                "other, dispatch them sequentially with dispatch_subagent across "
+                "turns instead. Returns one result per agent (success payload or "
+                "an 'error'); a single agent failing does not abort the batch."
+            ),
+            {
+                "agents": {
+                    "type": "array",
+                    "description": "List of independent agents to run concurrently.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role": {"type": "string", "description": "Role to dispatch: product_manager, architect, engineer, qa, or a specialist role_key"},
+                            "prompt": {"type": "string", "description": "Optional focused instruction for this agent run"},
+                            "prev_node_key": {"type": "string", "description": "node_key of a previously dispatched node, for graph edge visualization"},
+                        },
+                        "required": ["role"],
+                    },
+                },
+            },
+            ["agents"],
         ),
         _tool(
             "spawn_custom_subagent",

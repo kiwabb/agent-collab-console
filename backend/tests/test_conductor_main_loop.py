@@ -419,6 +419,7 @@ async def test_conductor_tools_expose_phase6_tool_schema_and_memory_lookup(tmp_p
     assert names == {
         "retrieve_cold_memory",
         "dispatch_subagent",
+        "dispatch_batch",
         "spawn_custom_subagent",
         "inject_context_into_node",
         "request_user_clarification",
