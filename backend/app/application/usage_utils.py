@@ -34,17 +34,44 @@ def extract_message_id(obj) -> str | None:
     return None
 
 
-def price_tokens(input_tokens: int | None = None, output_tokens: int | None = None, cache_read_tokens: int | None = None) -> float:
+def _env_rates() -> tuple[float, float, float]:
+    """Global flat per-million-tokens USD rates from env (the legacy fallback)."""
+    return (
+        float(os.getenv("COST_USD_PER_M_INPUT", "0.30")),
+        float(os.getenv("COST_USD_PER_M_OUTPUT", "1.20")),
+        float(os.getenv("COST_USD_PER_M_CACHE_READ", "0.075")),
+    )
+
+
+def price_tokens(
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cache_read_tokens: int | None = None,
+    pricing=None,
+) -> float:
     """Compute the USD cost of token usage.
 
-    Reads env vars:
+    Model-aware: when ``pricing`` is supplied (a ``RuntimeModelConfig`` or any
+    object/dict exposing ``input_usd_per_m`` / ``output_usd_per_m`` /
+    ``cache_read_usd_per_m``), each per-token rate uses the model's explicit
+    price when set; any rate left ``None`` falls back to the global flat env
+    rate below — so partially-priced models still work and unpriced models /
+    ``pricing=None`` behave exactly like the legacy global-rate path.
+
+    Env fallback rates:
       COST_USD_PER_M_INPUT (default "0.30")
       COST_USD_PER_M_OUTPUT (default "1.20")
       COST_USD_PER_M_CACHE_READ (default "0.075")
     """
-    input_per_m = float(os.getenv("COST_USD_PER_M_INPUT", "0.30"))
-    output_per_m = float(os.getenv("COST_USD_PER_M_OUTPUT", "1.20"))
-    cache_per_m = float(os.getenv("COST_USD_PER_M_CACHE_READ", "0.075"))
+    env_input, env_output, env_cache = _env_rates()
+
+    model_input = _read_price(pricing, "input_usd_per_m")
+    model_output = _read_price(pricing, "output_usd_per_m")
+    model_cache = _read_price(pricing, "cache_read_usd_per_m")
+
+    input_per_m = model_input if model_input is not None else env_input
+    output_per_m = model_output if model_output is not None else env_output
+    cache_per_m = model_cache if model_cache is not None else env_cache
 
     cost = 0.0
     if input_tokens is not None and input_tokens > 0:
@@ -55,3 +82,38 @@ def price_tokens(input_tokens: int | None = None, output_tokens: int | None = No
         cost += (cache_read_tokens / 1_000_000) * cache_per_m
 
     return cost
+
+
+def _read_price(pricing, attr: str) -> float | None:
+    """Read a per-million price field from a model config object or dict."""
+    if pricing is None:
+        return None
+    if isinstance(pricing, dict):
+        value = pricing.get(attr)
+    else:
+        value = getattr(pricing, attr, None)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def price_tokens_for_model(
+    model,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cache_read_tokens: int | None = None,
+) -> float:
+    """Convenience wrapper to price usage against a model's catalog pricing.
+
+    ``model`` is a ``RuntimeModelConfig`` (or dict/None). Missing per-rate
+    prices fall back to the global env rates via :func:`price_tokens`.
+    """
+    return price_tokens(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        pricing=model,
+    )

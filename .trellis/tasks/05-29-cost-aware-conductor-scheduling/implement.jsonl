@@ -1,1 +1,3 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "后端质量规范 + 幂等 DB 迁移模式(PR1 catalog 价格字段 / PR2 issue 预算字段都要加列迁移)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验 pricing→catalog/store→conductor 上下文注入→dispatch_batch 并发下调 的跨层数据流"}

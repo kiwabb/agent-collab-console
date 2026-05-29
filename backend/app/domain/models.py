@@ -359,6 +359,13 @@ class RuntimeModelConfig(BaseModel):
     id: str  # Unique ID within the catalog (e.g., "claude-sonnet-4-6")
     label: str  # Human-readable label (e.g., "Claude Sonnet 4.6")
     enabled: bool = True
+    # Per-million-tokens USD pricing. None = no explicit price for this model,
+    # callers fall back to the global flat env rates (COST_USD_PER_M_*).
+    # Single source of truth for cost estimation (PR1 of cost-aware scheduling);
+    # cheap/expensive ordering is later derived from these prices (no separate tier field).
+    input_usd_per_m: float | None = None
+    output_usd_per_m: float | None = None
+    cache_read_usd_per_m: float | None = None
 
 
 class RuntimeProviderConfig(BaseModel):

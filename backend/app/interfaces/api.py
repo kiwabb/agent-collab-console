@@ -4551,6 +4551,9 @@ def _public_runtime_catalog(catalog: RuntimeCatalog) -> dict:
                                 "id": model.id,
                                 "label": model.label,
                                 "enabled": model.enabled,
+                                "input_usd_per_m": model.input_usd_per_m,
+                                "output_usd_per_m": model.output_usd_per_m,
+                                "cache_read_usd_per_m": model.cache_read_usd_per_m,
                             }
                             for model in provider.models
                         ],
