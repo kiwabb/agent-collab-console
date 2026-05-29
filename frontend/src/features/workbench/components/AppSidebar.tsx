@@ -130,13 +130,6 @@ export function AppSidebar() {
     if (!projectId && projects.length > 0) setProjectId(projects[0].id);
   }, [projectId, projects, setProjectId]);
 
-  // Auto-expand current workspace
-  useEffect(() => {
-    if (workspaceId && !expanded[workspaceId]) {
-      setExpanded((p) => ({ ...p, [workspaceId]: true }));
-    }
-  }, [workspaceId, expanded]);
-
   const ensureIssuesLoaded = useCallback(
     async (wsId: string) => {
       if (issuesByWs[wsId]) return;
@@ -149,6 +142,14 @@ export function AppSidebar() {
     },
     [issuesByWs],
   );
+
+  // Auto-expand current workspace and load its issues list
+  useEffect(() => {
+    if (workspaceId && !expanded[workspaceId]) {
+      setExpanded((p) => ({ ...p, [workspaceId]: true }));
+      void ensureIssuesLoaded(workspaceId);
+    }
+  }, [workspaceId, expanded, ensureIssuesLoaded]);
 
   const toggleWorkspace = useCallback(
     (wsId: string) => {

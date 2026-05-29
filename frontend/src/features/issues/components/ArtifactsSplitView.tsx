@@ -79,9 +79,9 @@ export function ArtifactsSplitView({ artifacts }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-[280px_minmax(0,1fr)] grid-rows-1 h-full min-h-0 border border-border-subtle rounded-2xl overflow-hidden">
+    <div className="grid grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)] grid-rows-[160px_minmax(0,1fr)] md:grid-rows-1 h-full min-h-0 border border-border-subtle rounded-2xl overflow-hidden">
       {/* === LEFT: file list === */}
-      <ul className="border-r border-border-subtle overflow-y-auto py-1.5 bg-surface">
+      <ul className="border-b md:border-b-0 md:border-r border-border-subtle overflow-y-auto py-1.5 bg-surface">
         {sorted.map((a) => {
           const kind = inferKind(a.name);
           return (

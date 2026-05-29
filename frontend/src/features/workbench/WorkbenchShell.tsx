@@ -13,11 +13,12 @@ interface Props {
   breadcrumbs?: BreadcrumbItem[];
   headerRight?: React.ReactNode;
   workspaceId?: string | null;
+  issueId?: string | null;
 }
 
-export function WorkbenchShell({ children, breadcrumbs, headerRight, workspaceId }: Props) {
+export function WorkbenchShell({ children, breadcrumbs, headerRight, workspaceId, issueId }: Props) {
   return (
-    <SelectionProvider initial={{ workspaceId: workspaceId ?? undefined }}>
+    <SelectionProvider initial={{ workspaceId: workspaceId ?? undefined, issueId: issueId ?? undefined }}>
       <ExecutionProcessesProvider workspaceId={workspaceId ?? null}>
         <WorkbenchInner
           breadcrumbs={breadcrumbs}

@@ -15,8 +15,10 @@ import {
   restartConductor,
   resetIssue,
   steerCodexIssue,
+  getCodexIssueChecklist,
   type AgentMessage,
   type SubAgentResultPayload,
+  type IssueChecklist,
 } from "@/lib/api";
 import type { Artifact, CodexIssue, CodexTask } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -39,6 +41,8 @@ import { useConductorPhase } from "./hooks/useConductorPhase";
 import { useDecisionTimeline, type DecisionTimelineItem } from "./hooks/useDecisionTimeline";
 import { useLatestFailure } from "./hooks/useLatestFailure";
 import { useConductorAlerts } from "./hooks/useConductorAlerts";
+import { GitInfoCard } from "./components/GitInfoCard";
+import { IssueSideStack } from "./components/IssueSideStack";
 
 interface Props {
   issueId: string;
@@ -52,6 +56,7 @@ export function IssueDetailPage({ issueId }: Props) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [subAgentResults, setSubAgentResults] = useState<SubAgentResultPayload[]>([]);
   const [agentMeshMessages, setAgentMeshMessages] = useState<AgentMessage[]>([]);
+  const [checklist, setChecklist] = useState<IssueChecklist | null>(null);
   // Track the open drawer by item id (not a snapshot): the live item is
   // re-derived from the latest `timeline` each render, so the drawer reflects
   // the running sub-agent's current execution-process id, status and result
@@ -85,18 +90,20 @@ export function IssueDetailPage({ issueId }: Props) {
   }, [timeline, drawerItemId]);
 
   const refreshCore = useCallback(async () => {
-    const [nextIssue, nextTasks, nextArtifacts, nextResults, nextMesh] = await Promise.all([
+    const [nextIssue, nextTasks, nextArtifacts, nextResults, nextMesh, nextChecklist] = await Promise.all([
       getCodexIssue(issueId).catch(() => null),
       getCodexTasks(null, issueId).catch(() => []),
       getCodexIssueArtifacts(issueId).catch(() => []),
       getSubAgentResults(issueId).catch(() => []),
       getAgentMesh(issueId).catch(() => []),
+      getCodexIssueChecklist(issueId).catch(() => null),
     ]);
     setIssue(nextIssue);
     setTasks(nextTasks);
     setArtifacts(nextArtifacts);
     setSubAgentResults(nextResults);
     setAgentMeshMessages(nextMesh);
+    setChecklist(nextChecklist);
   }, [issueId]);
 
   useEffect(() => {
@@ -202,81 +209,99 @@ export function IssueDetailPage({ issueId }: Props) {
     <div className="h-full flex flex-col overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),transparent_22%)]">
       {/* App-shell body: fixed header + status, scrolling tab content, docked chat bar */}
       <main className="flex-1 min-h-0 overflow-hidden mx-auto w-full max-w-[1640px] flex flex-col gap-4 px-6 pb-4 pt-5">
-        <div className="shrink-0 flex flex-col gap-4">
-          <WsConnectionBanner />
-          <StatusStrip
-            issue={issue}
-            phase={phase}
-            activeTask={activeTask}
-            onPause={() => void handlePause()}
-            onResume={() => void handleResume()}
-            onSteer={() => void handleRestartOrSteer()}
-            onReset={() => setResetConfirmOpen(true)}
-          />
-          <ConductorAlerts alerts={conductorAlerts} onDismiss={dismissAlert} />
-          <LatestFailureAlert
-            failure={latestFailure}
-            onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-            onOpenDetail={() => {
-              const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
-              setDrawerItemId(item?.id ?? null);
-            }}
-          />
-        </div>
-        <Tabs defaultValue="timeline" className="w-full flex-1 flex flex-col gap-4 min-h-0">
-          <TabsList className="bg-surface/50 border border-border-subtle p-1 rounded-2xl w-full max-w-2xl mx-auto grid grid-cols-4 h-11 shrink-0">
-            <TabsTrigger value="timeline" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
-              <Clock size={14} />
-              <span>{t("issue.command.timelineTitle")}</span>
-            </TabsTrigger>
-            <TabsTrigger value="artifacts" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
-              <FolderArchive size={14} />
-              <span>{t("issue.command.artifacts")}</span>
-              <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded-full font-black font-mono">
-                {artifacts.length}
-              </span>
-            </TabsTrigger>
-            <TabsTrigger value="diff" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
-              <GitPullRequest size={14} />
-              <span>{t("issue.command.diff")}</span>
-            </TabsTrigger>
-            <TabsTrigger value="mesh" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
-              <Network size={14} />
-              <span>{t("issue.command.mesh")}</span>
-              {agentMeshMessages.length > 0 && (
-                <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded-full font-black font-mono">
-                  {agentMeshMessages.length}
-                </span>
-              )}
-            </TabsTrigger>
-          </TabsList>
+        <WsConnectionBanner />
 
-          <TabsContent value="timeline" className="outline-none flex-1 min-h-0 flex flex-col">
-            <DecisionTimeline items={timeline} onOpenItem={(it) => setDrawerItemId(it.id)} liveThinking={liveThinking} />
-          </TabsContent>
+        {/* Two-Column Grid Layout */}
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-6">
           
-          <TabsContent value="artifacts" className="outline-none flex-1 min-h-0 flex flex-col">
-            <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/88 p-1 flex-1 min-h-0 flex flex-col">
-              <ArtifactsPanel issueId={issueId} issue={issue} />
-            </div>
-          </TabsContent>
+          {/* Main Area (Left Column) */}
+          <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-y-auto pr-1">
+            <StatusStrip
+              issue={issue}
+              phase={phase}
+              activeTask={activeTask}
+              onPause={() => void handlePause()}
+              onResume={() => void handleResume()}
+              onSteer={() => void handleRestartOrSteer()}
+              onReset={() => setResetConfirmOpen(true)}
+            />
+            
+            <ConductorAlerts alerts={conductorAlerts} onDismiss={dismissAlert} />
+            
+            <LatestFailureAlert
+              failure={latestFailure}
+              onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              onOpenDetail={() => {
+                const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
+                setDrawerItemId(item?.id ?? null);
+              }}
+            />
 
-          <TabsContent value="diff" className="outline-none flex-1 min-h-0 flex flex-col">
-            <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/88 p-1 flex-1 min-h-0 flex flex-col">
-              <IssueDiffPanel issueId={issueId} issue={issue} />
-            </div>
-          </TabsContent>
+            <Tabs defaultValue="timeline" className="w-full flex-1 flex flex-col gap-4 min-h-0">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border-subtle pb-2 shrink-0">
+                <TabsList className="bg-surface/50 border border-border-subtle p-1 rounded-2xl grid grid-cols-4 h-11 w-full sm:max-w-md">
+                  <TabsTrigger value="timeline" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
+                    <Clock size={14} className="shrink-0" />
+                    <span>{t("issue.command.timelineTitle")}</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="artifacts" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
+                    <FolderArchive size={14} className="shrink-0" />
+                    <span>{t("issue.command.artifacts")}</span>
+                    <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded-full font-black font-mono">
+                      {artifacts.length}
+                    </span>
+                  </TabsTrigger>
+                  <TabsTrigger value="diff" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
+                    <GitPullRequest size={14} className="shrink-0" />
+                    <span>{t("issue.command.diff")}</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="mesh" className="gap-2 text-[12px] font-bold py-2 rounded-xl transition-all cursor-pointer">
+                    <Network size={14} className="shrink-0" />
+                    <span>{t("issue.command.mesh")}</span>
+                    {agentMeshMessages.length > 0 && (
+                      <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded-full font-black font-mono">
+                        {agentMeshMessages.length}
+                      </span>
+                    )}
+                  </TabsTrigger>
+                </TabsList>
+              </div>
 
-          <TabsContent value="mesh" className="outline-none flex-1 min-h-0 flex flex-col">
-            <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/88 p-1 flex-1 min-h-0 flex flex-col">
-              <MeshPanel issueId={issueId} />
-            </div>
-          </TabsContent>
-        </Tabs>
+              <TabsContent value="timeline" className="outline-none flex-1 min-h-0 flex flex-col">
+                <DecisionTimeline items={timeline} onOpenItem={(it) => setDrawerItemId(it.id)} liveThinking={liveThinking} />
+              </TabsContent>
+              
+              <TabsContent value="artifacts" className="outline-none flex-1 min-h-0 flex flex-col">
+                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/88 p-1 flex-1 min-h-0 flex flex-col">
+                  <ArtifactsPanel issueId={issueId} issue={issue} />
+                </div>
+              </TabsContent>
+
+              <TabsContent value="diff" className="outline-none flex-1 min-h-0 flex flex-col">
+                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/88 p-1 flex-1 min-h-0 flex flex-col">
+                  <IssueDiffPanel issueId={issueId} issue={issue} />
+                </div>
+              </TabsContent>
+
+              <TabsContent value="mesh" className="outline-none flex-1 min-h-0 flex flex-col">
+                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/88 p-1 flex-1 min-h-0 flex flex-col">
+                  <MeshPanel issueId={issueId} />
+                </div>
+              </TabsContent>
+            </Tabs>
+          </div>
+
+          {/* Control & Insights Sidebar (Right Column) */}
+          <aside className="hidden lg:flex flex-col gap-4 w-[380px] shrink-0 overflow-y-auto pr-1 pb-16 sticky top-0 self-start max-h-[calc(100vh-140px)]">
+            {issue && <GitInfoCard issue={issue} onIssueUpdated={setIssue} />}
+            <IssueSideStack issueId={issueId} checklist={checklist} />
+          </aside>
+
+        </div>
       </main>
 
       {/* Permanently Docked Bottom Chat Bar */}
-      <div className="shrink-0">
+      <div className="shrink-0 pb-[env(safe-area-inset-bottom)] bg-background">
         <CommandCenterChatBar issueId={issueId} disabled={paused} clarifyQuestion={clarifyQuestion} onSent={() => void refreshTimeline()} />
       </div>
 

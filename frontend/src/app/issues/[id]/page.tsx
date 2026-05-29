@@ -53,6 +53,7 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
     <WorkbenchShell
       breadcrumbs={[{ label: "Issue" }, { label: id.slice(0, 8) }]}
       workspaceId={workspaceId ?? null}
+      issueId={id}
     >
       <IssueDetailPage issueId={id} />
     </WorkbenchShell>

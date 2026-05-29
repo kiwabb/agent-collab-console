@@ -28,8 +28,8 @@ export function DiffSplitView({ diff }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-[300px_minmax(0,1fr)] grid-rows-1 flex-1 min-h-0 border-t border-border-subtle">
-      <div className="border-r border-border-subtle overflow-y-auto py-1.5 bg-surface">
+    <div className="grid grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)] grid-rows-[160px_minmax(0,1fr)] md:grid-rows-1 flex-1 min-h-0 border-t border-border-subtle">
+      <div className="border-b md:border-b-0 md:border-r border-border-subtle overflow-y-auto py-1.5 bg-surface">
         {files.map((f, i) => (
           <FileRow
             key={f.header + i}
