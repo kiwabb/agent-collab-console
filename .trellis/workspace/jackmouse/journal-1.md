@@ -317,3 +317,40 @@ Upgraded the serial Conductor into a true parallel swarm: dispatch_batch fans ou
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Cost-aware conductor scheduling: per-model pricing, per-issue budget awareness, budget-driven steering
+
+**Date**: 2026-05-29
+**Task**: Cost-aware conductor scheduling: per-model pricing, per-issue budget awareness, budget-driven steering
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Phase 2 of the swarm work: made cost a first-class input to Conductor decisions. PR1 per-model token pricing (RuntimeModelConfig price fields + model-aware price_tokens, backward compatible). PR2 per-issue budget (global default + override, idempotent migration both stores) + completed-run spend aggregation injected into the loop's COST/BUDGET prompt block. PR3 budget-driven soft steering: sorted candidate prices + selection guidance, budget_warning/budget_exceeded events, wind-down on overage (no hard kill per ADR), and dispatch_batch concurrency downscaled by remaining budget. 3 PRs each implement->check->commit; full backend suite 495 passed. Captured cost/budget soft-semantics contracts into spec.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1aa4c7f` | (see git log) |
+| `41b988e` | (see git log) |
+| `592e187` | (see git log) |
+| `9595db5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
