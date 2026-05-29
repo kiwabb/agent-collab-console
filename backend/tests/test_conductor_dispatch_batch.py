@@ -143,12 +143,15 @@ def _patch_dispatch(monkeypatch, *, run, register_only=True):
     """
     counter = {"n": 0}
     paths: dict[str, str | None] = {}
+    batch_keys: dict[str, str | None] = {}
 
     async def fake_dispatch_role(*, issue, role, prompt_override, store, task_dispatcher_fn,
-                                 event_bus, prev_node_key, agent_worktree_path=None):
+                                 event_bus, prev_node_key, agent_worktree_path=None,
+                                 batch_key=None):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"
         paths[task_id] = agent_worktree_path
+        batch_keys[task_id] = batch_key
         return task_id, f"node-{counter['n']}"
 
     monkeypatch.setattr(task_dispatcher, "dispatch_role", fake_dispatch_role)
@@ -158,7 +161,7 @@ def _patch_dispatch(monkeypatch, *, run, register_only=True):
         return await run(task_id, wt)
 
     monkeypatch.setattr(TaskCompletionRegistry, "wait_for_active", fake_wait)
-    return paths
+    return paths, batch_keys
 
 
 @pytest.mark.asyncio
@@ -200,6 +203,47 @@ async def test_dispatch_batch_fans_out_with_isolated_worktrees(monkeypatch):
     assert sorted(wm.cleaned) == ["engineer", "engineer-2", "qa"]
     # Branch lineage is carried in-memory to the merge step.
     assert all("branch" in c for c in wm.merged_candidates[0])
+
+
+@pytest.mark.asyncio
+async def test_dispatch_batch_tags_all_nodes_with_one_batch_key(monkeypatch):
+    """Every agent fanned out in one dispatch_batch call must carry the SAME,
+    non-null batch_key so the UI can group them into a parallel swimlane."""
+    wm = _WorktreeManagerStub()
+    store = _Store(_issue(), _project())
+    reg = _build(store, wm)
+
+    async def run(task_id, wt):
+        return {"status": "done", "task_id": task_id}
+
+    _paths, batch_keys = _patch_dispatch(monkeypatch, run=run)
+
+    await reg.tools["dispatch_batch"]({"agents": [
+        {"role": "engineer"},
+        {"role": "engineer"},
+        {"role": "qa"},
+    ]})
+
+    keys = [batch_keys[f"task-{i}"] for i in (1, 2, 3)]
+    assert all(k is not None for k in keys), keys
+    assert len(set(keys)) == 1, f"all batch nodes must share one batch_key, got {keys}"
+    assert keys[0].startswith("batch-")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_subagent_carries_no_batch_key(monkeypatch):
+    """The serial path must leave batch_key None so its node is not grouped."""
+    wm = _WorktreeManagerStub()
+    store = _Store(_issue(), _project())
+    reg = _build(store, wm)
+
+    async def run(task_id, wt):
+        return {"status": "done", "task_id": task_id}
+
+    _paths, batch_keys = _patch_dispatch(monkeypatch, run=run)
+
+    await reg.tools["dispatch_subagent"]({"role": "engineer"})
+    assert batch_keys["task-1"] is None
 
 
 @pytest.mark.asyncio

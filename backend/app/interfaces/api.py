@@ -5163,6 +5163,7 @@ async def get_issue_graph_stats(issue_id: str):
         out_nodes[n.node_key] = {
             "task_id": n.task_id,
             "role_key": role,
+            "batch_key": n.batch_key,
             "tokens": {
                 "input": tokens_in,
                 "output": tokens_out,

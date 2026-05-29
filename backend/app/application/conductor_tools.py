@@ -6,6 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
+from uuid import uuid4
 
 from app.application.project_conductor import ProjectConductor
 
@@ -104,6 +105,7 @@ def build_conductor_tools(
         prev_node_key: str | None,
         agent_worktree_path: str | None,
         tool: str,
+        batch_key: str | None = None,
     ) -> dict[str, Any]:
         """Run one subagent dispatch end-to-end: acquire a per-role concurrency
         slot, dispatch the role task, then activity-aware wait for completion.
@@ -161,6 +163,7 @@ def build_conductor_tools(
                     event_bus=event_bus,
                     prev_node_key=prev_node_key,
                     agent_worktree_path=agent_worktree_path,
+                    batch_key=batch_key,
                 )
             except ValueError as exc:
                 return {"error": str(exc), "role": role}
@@ -296,6 +299,11 @@ def build_conductor_tools(
         cap = timeouts.max_parallel_dispatch_per_batch()
         sem = asyncio.Semaphore(cap)
 
+        # One shared batch_key tags every node this dispatch_batch call creates, so
+        # the WorkflowGraph / mesh UI can render the concurrent agents in a single
+        # parallel swimlane (vs. the serial chain). Short, sortable, unique enough.
+        batch_key = f"batch-{uuid4().hex[:8]}"
+
         # Upstream-visibility fix (PR1 check): isolated agent worktrees fork from
         # the issue branch and only see what's committed there. Flush any
         # uncommitted upstream artifacts (PM / architect) onto the issue branch
@@ -316,6 +324,7 @@ def build_conductor_tools(
         await _emit(event_bus, "conductor_tool", {
             "tool": "dispatch_batch",
             "status": "batch_started",
+            "batch_key": batch_key,
             "agent_count": len(specs),
             "concurrency_cap": cap,
             "roles": [s["role"] for s in specs],
@@ -344,6 +353,7 @@ def build_conductor_tools(
                         prev_node_key=spec["prev_node_key"],
                         agent_worktree_path=worktree_path,
                         tool="dispatch_batch",
+                        batch_key=batch_key,
                     )
                     # PR3 will merge these per-agent branches back into the issue
                     # branch, so on success we KEEP the worktree (its commits are

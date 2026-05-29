@@ -670,6 +670,9 @@ export interface WorkflowNode {
   artifact_dir: string | null;
   retries: number;
   max_retries: number;
+  /** Shared key for nodes dispatched together via dispatch_batch (parallel
+   * swarm fan-out); null for serial dispatches. */
+  batch_key: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string | null;

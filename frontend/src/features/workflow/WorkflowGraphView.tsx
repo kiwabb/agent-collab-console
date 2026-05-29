@@ -8,6 +8,7 @@ import ReactFlow, {
   MarkerType,
   type Node,
   type NodeMouseHandler,
+  type NodeProps,
   useReactFlow,
 } from "reactflow";
 import "reactflow/dist/style.css";
@@ -66,6 +67,7 @@ interface GraphLike {
     role_key?: string;
     status?: string;
     task_id?: string | null;
+    batch_key?: string | null;
   }>;
   edges: Array<{
     from_node_key: string;
@@ -74,12 +76,13 @@ interface GraphLike {
   }>;
 }
 
-const nodeTypes = { agent: AgentDagNode };
+const nodeTypes = { agent: AgentDagNode, batchGroup: BatchGroupNode };
 
 function toReactFlow(
   graph: GraphLike,
   onNodeClick?: (payload: WorkflowNodeClickPayload) => void,
   stats?: GraphStatsResponse | null,
+  batchLabel = "Parallel batch",
 ) {
   const colWidth = 280;
   const rowHeight = 120;
@@ -144,6 +147,12 @@ function toReactFlow(
   }
 
   const rowSeenInDepth = new Map<number, number>();
+  // Track each node's laid-out box so we can draw a swimlane behind any group
+  // of nodes that were fanned out together via dispatch_batch (same batch_key).
+  const nodeBox = new Map<
+    string,
+    { x: number; y: number; batchKey: string | null }
+  >();
   const rfNodes: Node<AgentDagNodeData>[] = nodesWithConductor.map((n) => {
     const depth = depthByKey.get(n.node_key) ?? 0;
     const seen = rowSeenInDepth.get(depth) ?? 0;
@@ -161,10 +170,13 @@ function toReactFlow(
     const stat: AgentDagNodeStats | null = isConductor
       ? stats?.conductor ?? null
       : stats?.nodes?.[n.node_key] ?? null;
+    const x = depth * colWidth;
+    const y = seen * rowHeight + 60;
+    nodeBox.set(n.node_key, { x, y, batchKey: n.batch_key ?? null });
     return {
       id: n.node_key,
       type: "agent",
-      position: { x: depth * colWidth, y: seen * rowHeight + 60 },
+      position: { x, y },
       data: {
         role,
         label: n.title || n.role_key || n.node_key,
@@ -176,6 +188,48 @@ function toReactFlow(
         onClick: onNodeClick,
       },
     };
+  });
+
+  // ---- Parallel swimlanes ----
+  // Nodes sharing a batch_key were dispatched concurrently in one
+  // `dispatch_batch` decision. Draw a translucent rounded box behind each such
+  // group (≥2 nodes) so the user can see at a glance "these ran in parallel".
+  // Group nodes are prepended so ReactFlow paints them behind the agent cards.
+  const NODE_W = 170;
+  const NODE_H = 96;
+  const PAD = 18;
+  const batches = new Map<string, string[]>();
+  nodeBox.forEach((box, key) => {
+    if (!box.batchKey) return;
+    const list = batches.get(box.batchKey) ?? [];
+    list.push(key);
+    batches.set(box.batchKey, list);
+  });
+  const groupNodes: Node<BatchGroupNodeData>[] = [];
+  batches.forEach((memberKeys, batchKey) => {
+    if (memberKeys.length < 2) return; // a lone agent isn't a visible "lane"
+    const boxes = memberKeys
+      .map((k) => nodeBox.get(k))
+      .filter((b): b is { x: number; y: number; batchKey: string | null } => !!b);
+    const minX = Math.min(...boxes.map((b) => b.x));
+    const minY = Math.min(...boxes.map((b) => b.y));
+    const maxX = Math.max(...boxes.map((b) => b.x + NODE_W));
+    const maxY = Math.max(...boxes.map((b) => b.y + NODE_H));
+    groupNodes.push({
+      id: `__batch__${batchKey}`,
+      type: "batchGroup",
+      // Lift the box above its members so the title chip clears the top card.
+      position: { x: minX - PAD, y: minY - PAD - 22 },
+      draggable: false,
+      selectable: false,
+      data: {
+        width: maxX - minX + PAD * 2,
+        height: maxY - minY + PAD * 2 + 22,
+        count: memberKeys.length,
+        label: batchLabel,
+      },
+      zIndex: -1,
+    });
   });
 
   const rfEdges: Edge[] = edgesWithConductor.map((e, idx) => {
@@ -203,7 +257,8 @@ function toReactFlow(
       markerEnd: { type: MarkerType.ArrowClosed, color },
     };
   });
-  return { nodes: rfNodes, edges: rfEdges };
+  // Group (swimlane) nodes first so they paint behind the agent cards.
+  return { nodes: [...groupNodes, ...rfNodes], edges: rfEdges };
 }
 
 interface Props {
@@ -234,6 +289,7 @@ export function WorkflowGraphView({
             role_key: n.node_key,
             status: n.status,
             task_id: n.task_id,
+            batch_key: n.batch_key,
           })),
           edges: graph.edges.map((e) => ({
             from_node_key: e.from_node_key,
@@ -243,8 +299,9 @@ export function WorkflowGraphView({
         },
         onNodeClick,
         stats,
+        t("issue.dag.parallelBatch"),
       ),
-    [graph, onNodeClick, stats],
+    [graph, onNodeClick, stats, t],
   );
 
   const handleNodeClick = useCallback<NodeMouseHandler>(
@@ -390,5 +447,38 @@ function FabButton({
     >
       {children}
     </button>
+  );
+}
+
+export interface BatchGroupNodeData {
+  width: number;
+  height: number;
+  /** Number of agents that fanned out in this batch. */
+  count: number;
+  label: string;
+}
+
+/** Non-interactive swimlane drawn behind a set of agents that were dispatched
+ * concurrently via `dispatch_batch`. Uses the brand-tinted dashed treatment so
+ * it reads as "these ran in parallel" without competing with the agent cards. */
+function BatchGroupNode({ data }: NodeProps<BatchGroupNodeData>) {
+  return (
+    <div
+      className="pointer-events-none rounded-2xl border border-dashed"
+      style={{
+        width: data.width,
+        height: data.height,
+        borderColor: "color-mix(in srgb, var(--color-brand) 55%, transparent)",
+        background: "var(--color-brand-bg)",
+      }}
+    >
+      <div className="absolute left-2.5 top-1.5 inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md bg-background/80 backdrop-blur-sm border border-border-subtle font-mono text-[10.5px] uppercase tracking-[0.08em] text-brand">
+        <span
+          className="size-1.5 rounded-full"
+          style={{ background: "var(--color-brand)" }}
+        />
+        {data.label} · {data.count}
+      </div>
+    </div>
   );
 }

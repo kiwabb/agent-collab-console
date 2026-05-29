@@ -592,6 +592,7 @@ class AsyncSQLiteStore:
                 retries INTEGER NOT NULL DEFAULT 0,
                 max_retries INTEGER NOT NULL DEFAULT 1,
                 instance_index INTEGER NOT NULL DEFAULT 0,
+                batch_key TEXT,
                 started_at TEXT,
                 completed_at TEXT,
                 created_at TEXT,
@@ -855,6 +856,13 @@ class AsyncSQLiteStore:
         try:
             await conn.execute(
                 "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
+            )
+        except aiosqlite.OperationalError:
+            pass
+        # Parallel swarm: add batch_key to group nodes from one dispatch_batch call
+        try:
+            await conn.execute(
+                "ALTER TABLE workflow_nodes ADD COLUMN batch_key TEXT"
             )
         except aiosqlite.OperationalError:
             pass
@@ -2014,6 +2022,7 @@ class AsyncSQLiteStore:
             retries=row["retries"] or 0,
             max_retries=row["max_retries"] or 1,
             instance_index=row["instance_index"] if "instance_index" in row.keys() else 0,
+            batch_key=row["batch_key"] if "batch_key" in row.keys() else None,
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
@@ -2069,8 +2078,8 @@ class AsyncSQLiteStore:
                     INSERT INTO workflow_nodes (
                         id, graph_id, node_key, agent_id, title, prompt_override,
                         status, task_id, artifact_dir, retries, max_retries,
-                        instance_index, started_at, completed_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instance_index, batch_key, started_at, completed_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         n.id,
@@ -2085,6 +2094,7 @@ class AsyncSQLiteStore:
                         n.retries,
                         n.max_retries,
                         n.instance_index,
+                        n.batch_key,
                         self._format_datetime(n.started_at),
                         self._format_datetime(n.completed_at),
                         self._format_datetime(n.created_at) or now_iso,
@@ -2198,13 +2208,13 @@ class AsyncSQLiteStore:
             INSERT OR IGNORE INTO workflow_nodes (
                 id, graph_id, node_key, agent_id, title, prompt_override,
                 status, task_id, artifact_dir, retries, max_retries,
-                instance_index, started_at, completed_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                instance_index, batch_key, started_at, completed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 node.id, node.graph_id, node.node_key, node.agent_id, node.title,
                 node.prompt_override, node.status, node.task_id, node.artifact_dir,
-                node.retries, node.max_retries, node.instance_index,
+                node.retries, node.max_retries, node.instance_index, node.batch_key,
                 self._format_datetime(node.started_at),
                 self._format_datetime(node.completed_at),
                 self._format_datetime(node.created_at) or now_iso,

@@ -69,6 +69,7 @@ async def dispatch_role(
     event_bus=None,
     prev_node_key: str | None = None,
     agent_worktree_path: str | None = None,
+    batch_key: str | None = None,
 ) -> tuple[str, str]:  # (task_id, node_id)
     """Dispatch a role task for Conductor-driven orchestration.
 
@@ -79,6 +80,10 @@ async def dispatch_role(
     in this isolated per-agent worktree instead of the shared issue worktree, so
     concurrent agents don't clobber each other. When omitted (default / serial
     path), behaviour is unchanged: the task uses the shared issue worktree.
+
+    `batch_key`: when provided (parallel swarm dispatch via dispatch_batch), all
+    nodes created in the same batch share this key so the UI can group them into a
+    parallel swimlane. None for serial dispatches.
 
     Returns (task_id, node_id). The caller registers task_id in TaskCompletionRegistry
     before awaiting.
@@ -167,6 +172,7 @@ async def dispatch_role(
             title=f"{role.replace('_', ' ').title()}",
             status="running",
             task_id=task.id,
+            batch_key=batch_key,
             started_at=now,
             created_at=now,
             updated_at=now,
@@ -220,6 +226,7 @@ async def dispatch_role(
                 "node_key": node_key,
                 "status": "running",
                 "task_id": task.id,
+                "batch_key": batch_key,
             })
             if mesh_msg is not None:
                 await event_bus.append({

@@ -512,6 +512,7 @@ class SQLiteStore:
                     retries INTEGER NOT NULL DEFAULT 0,
                     max_retries INTEGER NOT NULL DEFAULT 1,
                     instance_index INTEGER NOT NULL DEFAULT 0,
+                    batch_key TEXT,
                     started_at TEXT,
                     completed_at TEXT,
                     created_at TEXT,
@@ -759,6 +760,13 @@ class SQLiteStore:
             try:
                 conn.execute(
                     "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass
+            # Parallel swarm: add batch_key to group nodes from one dispatch_batch call
+            try:
+                conn.execute(
+                    "ALTER TABLE workflow_nodes ADD COLUMN batch_key TEXT"
                 )
             except sqlite3.OperationalError:
                 pass

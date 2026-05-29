@@ -165,6 +165,40 @@ async def test_dispatch_role_injects_agent_worktree_path_when_provided():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_role_sets_batch_key_on_node():
+    """When batch_key is supplied (parallel swarm fan-out), the created node
+    carries it so the UI can group same-batch agents into a parallel swimlane.
+    The serial path leaves it None."""
+    from app.application.task_dispatcher import dispatch_role
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    agent = _make_agent("engineer")
+    store = _make_store(issue, graph, [agent])
+
+    await dispatch_role(
+        issue=issue,
+        role="engineer",
+        store=store,
+        task_dispatcher_fn=None,
+        batch_key="batch-abc123",
+    )
+    node = store.add_workflow_node.call_args[0][0]
+    assert node.batch_key == "batch-abc123"
+
+    # Serial path: omitting batch_key leaves the node ungrouped.
+    store2 = _make_store(issue, _make_graph(issue.id), [agent])
+    await dispatch_role(
+        issue=issue,
+        role="engineer",
+        store=store2,
+        task_dispatcher_fn=None,
+    )
+    node2 = store2.add_workflow_node.call_args[0][0]
+    assert node2.batch_key is None
+
+
+@pytest.mark.asyncio
 async def test_dispatch_role_retry_creates_fresh_task():
     """Re-dispatching a role after it completed creates a new task with a new node_key.
 

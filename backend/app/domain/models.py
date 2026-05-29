@@ -488,6 +488,7 @@ class WorkflowNode(BaseModel):
     retries: int = 0
     max_retries: int = 1
     instance_index: int = 0  # For multi-instance same-role nodes: engineer#0, engineer#1, etc.
+    batch_key: str | None = None  # Shared key for nodes dispatched together via dispatch_batch (parallel swarm fan-out); None for serial dispatches
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime | None = None

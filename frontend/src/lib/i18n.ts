@@ -1513,6 +1513,7 @@ export const dictionaries = {
     "issue.dag.legendDone": "done",
     "issue.dag.legendQueued": "queued",
     "issue.dag.legendHint": "drag to pan · scroll to zoom",
+    "issue.dag.parallelBatch": "并行",
   },
   "en-US": {
     "nav.home": "Home",
@@ -3024,6 +3025,7 @@ export const dictionaries = {
     "issue.dag.legendDone": "done",
     "issue.dag.legendQueued": "queued",
     "issue.dag.legendHint": "drag to pan · scroll to zoom",
+    "issue.dag.parallelBatch": "parallel",
   },
 } as const;
 

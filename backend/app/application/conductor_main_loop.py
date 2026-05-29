@@ -744,7 +744,7 @@ You can also use specialist roles: security_reviewer, perf_reviewer, doc_writer,
 - You MUST call `finalize_task` to end the loop
 
 ## Important
-Think step by step. After each dispatch_subagent returns, analyze the result before deciding the next step.
+Think step by step and pick the right shape for the work: dispatch INDEPENDENT work together with `dispatch_batch` to run it in parallel, and only chain DEPENDENT work serially across turns (one `dispatch_subagent`, analyze its result, then decide the next step). Do not serialize agents that have no data dependency on each other.
 If something is unclear or blocked, use `request_user_clarification`.
 Users may inject `[USER INTERJECTION]` messages between turns. Treat them as authoritative steering for the next decision.
 {language_directive}"""
