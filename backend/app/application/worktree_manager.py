@@ -308,11 +308,22 @@ class WorktreeManager:
         return structured conflict info (agent_key, role, files, diff) so the
         Conductor LLM can decide (re-dispatch a resolver / escalate to the user).
 
+        No-op semantics: an agent branch with NO changes relative to the issue
+        branch (e.g. a pure-analysis role, or an agent that chose not to touch
+        any files) is NOT a conflict. Such a branch would make `git merge
+        --squash` produce an empty tree and the follow-up `git commit` raise
+        `GitError` ("nothing to commit"); treating that as a conflict wrongly
+        stops the rest of the batch, leaks the agent's worktree, and feeds the
+        Conductor a phantom (empty) conflict. We pre-check `commits_ahead` (and
+        catch empty conflicts as a fallback) and record these in `noop`:
+        cleanup + continue, no conflict, no stop.
+
         Returns:
             {
               "merged": [{agent_key, role, branch, sha}],
               "conflict": {agent_key, role, branch, worktree_path, files, diff} | None,
               "skipped": [{agent_key, role, branch}],   # not attempted after a conflict
+              "noop": [{agent_key, role, branch}],      # no changes to merge (cleaned up)
             }
         """
         if not issue.git_branch:
@@ -321,6 +332,7 @@ class WorktreeManager:
         merged: list[dict] = []
         conflict: dict | None = None
         skipped: list[dict] = []
+        noop: list[dict] = []
 
         lock = await self._lock_for(f"issue:{issue.id}")
         async with lock:
@@ -349,6 +361,22 @@ class WorktreeManager:
                             )
                     except GitError:
                         pass
+
+                # No-op pre-check: if the agent branch has nothing ahead of the
+                # issue branch (no produced changes after the flush above), there
+                # is nothing to merge. `squash_merge_into_branch` would fail at
+                # the empty `git commit` and raise GitError; without this check
+                # that GitError is misread as a conflict. Treat it as a clean
+                # no-op: clean up the worktree and continue (no conflict, no stop).
+                if worktree_path:
+                    try:
+                        ahead = await self.git.commits_ahead(worktree_path, issue.git_branch)
+                    except GitError:
+                        ahead = 1  # be conservative: attempt the merge below
+                    if ahead == 0:
+                        noop.append({"agent_key": agent_key, "role": role, "branch": branch})
+                        await self.cleanup_agent_worktree(project, issue, agent_key)
+                        continue
 
                 # Divergence detection: the issue branch may have advanced from
                 # an earlier merge in this loop. We don't rebase (squash_merge
@@ -386,11 +414,20 @@ class WorktreeManager:
                     # Merged successfully → its worktree+branch are no longer needed.
                     await self.cleanup_agent_worktree(project, issue, agent_key)
                 except GitError:
-                    # Conflict (or other merge failure). Keep this agent's worktree
-                    # so the reconcile turn can inspect it; collect conflict detail.
+                    # Merge failure: distinguish a real conflict from a no-op.
+                    # Probe for unmerged paths. If there are NONE, this was an
+                    # empty merge (e.g. "nothing to commit" from a branch with no
+                    # mergeable content that the pre-check above didn't catch),
+                    # not a conflict — treat it as a no-op (cleanup + continue).
                     detail = await self._collect_conflict(
                         project, issue, branch, worktree_path
                     )
+                    if not detail["files"]:
+                        noop.append({"agent_key": agent_key, "role": role, "branch": branch})
+                        await self.cleanup_agent_worktree(project, issue, agent_key)
+                        continue
+                    # Real conflict. Keep this agent's worktree so the reconcile
+                    # turn can inspect it; collect conflict detail.
                     conflict = {
                         "agent_key": agent_key,
                         "role": role,
@@ -404,7 +441,7 @@ class WorktreeManager:
             issue.git_last_commit_sha = merged[-1]["sha"]
             issue.updated_at = datetime.now()
 
-        return {"merged": merged, "conflict": conflict, "skipped": skipped}
+        return {"merged": merged, "conflict": conflict, "skipped": skipped, "noop": noop}
 
     # ---- Chat-task-level (standalone, no issue) ----
 

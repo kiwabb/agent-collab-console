@@ -101,7 +101,8 @@ async def _measure_peak_concurrency(reg, n_agents):
     state = {"current": 0, "peak": 0}
 
     async def fake_dispatch_role(*, issue, role, prompt_override, store, task_dispatcher_fn,
-                                 event_bus, prev_node_key, agent_worktree_path=None, batch_key=None):
+                                 event_bus, prev_node_key, agent_worktree_path=None, batch_key=None,
+                                 register_completion=False):
         fake_dispatch_role.n += 1
         return f"task-{fake_dispatch_role.n}", f"node-{fake_dispatch_role.n}"
 

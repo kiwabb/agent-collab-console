@@ -154,6 +154,12 @@ def build_conductor_tools(
 
             try:
                 await _notify_status(on_status, "dispatching_subagent", detail)
+                # register_completion=True makes dispatch_role register the task
+                # in the completion registry BEFORE launching its runner, so an
+                # instantly-completing task (e.g. executor_failed_to_start
+                # fail-fast) can't signal before we're listening. This closes the
+                # signal-before-register race that stalled dispatch until
+                # hard_timeout (and leaked agent worktrees in dispatch_batch).
                 task_id, node_id = await dispatch_role(
                     issue=issue,
                     role=role,
@@ -164,11 +170,14 @@ def build_conductor_tools(
                     prev_node_key=prev_node_key,
                     agent_worktree_path=agent_worktree_path,
                     batch_key=batch_key,
+                    register_completion=True,
                 )
             except ValueError as exc:
                 return {"error": str(exc), "role": role}
 
             registry = TaskCompletionRegistry.get()
+            # Idempotent safety net: dispatch_role already registered task_id
+            # (register_completion=True). Re-registering never clobbers a set event.
             registry.register(task_id)
             await _notify_status(on_status, "awaiting_subagent", detail)
 
@@ -448,7 +457,7 @@ def build_conductor_tools(
             if r.get("branch")
         ]
 
-        merge_summary: dict[str, Any] = {"merged": [], "conflict": None, "skipped": []}
+        merge_summary: dict[str, Any] = {"merged": [], "conflict": None, "skipped": [], "noop": []}
         if merge_candidates:
             await _emit(event_bus, "conductor_tool", {
                 "tool": "dispatch_batch",
@@ -462,6 +471,7 @@ def build_conductor_tools(
                     "merged": [],
                     "conflict": None,
                     "skipped": [],
+                    "noop": [],
                     "error": f"{type(exc).__name__}: {exc}",
                 }
             await _emit(event_bus, "conductor_tool", {
@@ -470,6 +480,7 @@ def build_conductor_tools(
                 "merged": len(merge_summary.get("merged") or []),
                 "conflict": bool(merge_summary.get("conflict")),
                 "skipped": len(merge_summary.get("skipped") or []),
+                "noop": len(merge_summary.get("noop") or []),
             })
 
         conflict = merge_summary.get("conflict")
@@ -484,6 +495,7 @@ def build_conductor_tools(
             "merge_status": merge_status,
             "merged": merge_summary.get("merged") or [],
             "skipped_merges": merge_summary.get("skipped") or [],
+            "noop_merges": merge_summary.get("noop") or [],
         }
         if conflict:
             out["conflicts"] = [conflict]
@@ -499,10 +511,18 @@ def build_conductor_tools(
                 "were NOT rolled back."
             )
         else:
+            noop_note = ""
+            if out["noop_merges"]:
+                noop_keys = [n.get("agent_key") for n in out["noop_merges"]]
+                noop_note = (
+                    f" Agents with no changes to merge were treated as clean no-ops "
+                    f"and cleaned up (not conflicts): {noop_keys}."
+                )
             out["note"] = (
                 "Partial join complete: successful agents were squash-merged into the "
                 "issue branch in order; their per-agent worktrees were cleaned up. "
                 "Failed agents (see 'error' on their result) produced no mergeable output."
+                + noop_note
             )
         return out
 

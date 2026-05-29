@@ -311,3 +311,91 @@ async def test_merge_agent_worktrees_does_not_pollute_default_branch(project: Pr
     assert status.strip() == ""
     assert (Path(issue.git_worktree_path) / "a.txt").exists()
     assert (Path(issue.git_worktree_path) / "b.txt").exists()
+
+
+async def _noop_candidate(project, manager, issue, agent_key):
+    """An agent worktree with NO changes relative to the issue branch.
+
+    Production flushes the issue worktree (committing the injected `.claude/`
+    hooks) before forking agents, so a fork that writes nothing is truly even
+    with the issue branch. Mirror that here.
+    """
+    await manager.commit_issue_worktree(issue)
+    branch, path, _ = await manager.prepare_agent_worktree(project, issue, agent_key)
+    return {"agent_key": agent_key, "role": "engineer", "branch": branch, "worktree_path": path}
+
+
+@pytest.mark.asyncio
+async def test_merge_agent_worktrees_noop_agent_is_not_conflict(project: Project, manager: WorktreeManager):
+    """Core regression: an agent that produced NO changes must not be treated as
+    a conflict. Its branch has nothing ahead of the issue branch, so the squash
+    merge would fail at the empty commit; that must be a clean no-op (worktree
+    cleaned, no conflict, no stop)."""
+    issue = await _issue_with_worktree(project, manager, "issue-noop0001")
+    b = await _noop_candidate(project, manager, issue, "engineerB")
+
+    summary = await manager.merge_agent_worktrees(project, issue, [b])
+
+    assert summary["conflict"] is None
+    assert summary["merged"] == []
+    assert summary["skipped"] == []
+    assert [n["agent_key"] for n in summary["noop"]] == ["engineerB"]
+    # No-op agent's worktree was cleaned up (no leak).
+    assert not Path(b["worktree_path"]).exists()
+
+
+@pytest.mark.asyncio
+async def test_merge_agent_worktrees_mixed_noop_does_not_stop_others(project: Project, manager: WorktreeManager):
+    """[changed A, no-op B, changed C] → A and C merge, B is a clean no-op, no
+    conflict, no worktree leak, B does not stop C."""
+    issue = await _issue_with_worktree(project, manager, "issue-noop0002")
+    a = await _merge_candidate(project, manager, issue, "engineerA", "a.txt", "AAA")
+    b = await _noop_candidate(project, manager, issue, "engineerB")
+    c = await _merge_candidate(project, manager, issue, "engineerC", "c.txt", "CCC")
+
+    summary = await manager.merge_agent_worktrees(project, issue, [a, b, c])
+
+    assert summary["conflict"] is None
+    assert summary["skipped"] == []
+    assert [m["agent_key"] for m in summary["merged"]] == ["engineerA", "engineerC"]
+    assert [n["agent_key"] for n in summary["noop"]] == ["engineerB"]
+
+    # All three worktrees cleaned up (merged A/C + no-op B), none leaked.
+    assert not Path(a["worktree_path"]).exists()
+    assert not Path(b["worktree_path"]).exists()
+    assert not Path(c["worktree_path"]).exists()
+
+    # Both changed agents landed on the issue branch.
+    issue_tree = subprocess.run(
+        ["git", "ls-tree", "--name-only", issue.git_branch], cwd=project.repo_path,
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "a.txt" in issue_tree and "c.txt" in issue_tree
+
+
+@pytest.mark.asyncio
+async def test_merge_agent_worktrees_real_conflict_still_stops_after_noop(project: Project, manager: WorktreeManager):
+    """A real conflict (two agents editing the same file) must STILL stop-on-first
+    and keep the conflicting worktree, even when a no-op agent precedes it — the
+    no-op handling must not weaken real-conflict semantics."""
+    issue = await _issue_with_worktree(project, manager, "issue-noop0003")
+    n = await _noop_candidate(project, manager, issue, "engineerN")
+    a = await _merge_candidate(project, manager, issue, "engineerA", "shared.txt", "from A\n")
+    b = await _merge_candidate(project, manager, issue, "engineerB", "shared.txt", "from B\n")
+    c = await _merge_candidate(project, manager, issue, "engineerC", "c.txt", "CCC")
+
+    summary = await manager.merge_agent_worktrees(project, issue, [n, a, b, c])
+
+    assert [nn["agent_key"] for nn in summary["noop"]] == ["engineerN"]
+    assert [m["agent_key"] for m in summary["merged"]] == ["engineerA"]
+    conflict = summary["conflict"]
+    assert conflict is not None
+    assert conflict["agent_key"] == "engineerB"
+    assert "shared.txt" in conflict["files"]
+    assert conflict["diff"]
+    # C skipped (stop on first real conflict).
+    assert [s["agent_key"] for s in summary["skipped"]] == ["engineerC"]
+    # Conflicting worktree KEPT for reconcile; no-op + merged cleaned.
+    assert not Path(n["worktree_path"]).exists()
+    assert not Path(a["worktree_path"]).exists()
+    assert Path(b["worktree_path"]).exists()

@@ -147,7 +147,7 @@ def _patch_dispatch(monkeypatch, *, run, register_only=True):
 
     async def fake_dispatch_role(*, issue, role, prompt_override, store, task_dispatcher_fn,
                                  event_bus, prev_node_key, agent_worktree_path=None,
-                                 batch_key=None):
+                                 batch_key=None, register_completion=False):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"
         paths[task_id] = agent_worktree_path

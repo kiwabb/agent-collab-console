@@ -70,6 +70,7 @@ async def dispatch_role(
     prev_node_key: str | None = None,
     agent_worktree_path: str | None = None,
     batch_key: str | None = None,
+    register_completion: bool = False,
 ) -> tuple[str, str]:  # (task_id, node_id)
     """Dispatch a role task for Conductor-driven orchestration.
 
@@ -85,8 +86,14 @@ async def dispatch_role(
     nodes created in the same batch share this key so the UI can group them into a
     parallel swimlane. None for serial dispatches.
 
-    Returns (task_id, node_id). The caller registers task_id in TaskCompletionRegistry
-    before awaiting.
+    Returns (task_id, node_id). When `register_completion` is True, this function
+    registers task_id in TaskCompletionRegistry BEFORE launching the task runner,
+    closing a signal-before-register race: a task that completes instantly (e.g.
+    an `executor_failed_to_start` fail-fast handshake) could otherwise fire its
+    completion signal before the caller registered, and the result would be lost
+    until hard_timeout. Callers that await completion must pass
+    `register_completion=True`; fire-and-forget callers leave it False so they
+    never create an orphan event nobody waits on.
     """
     role = _normalize_role(role)
     agents = await store.list_agents(workspace_id=None)
@@ -246,6 +253,13 @@ async def dispatch_role(
                 })
         except Exception as exc:  # noqa: BLE001
             logger.warning("dispatch_role emit failed: %s", exc)
+
+    # Register the task in the completion registry BEFORE launching the runner so
+    # an instantly-completing task can't signal into the void. Idempotent: the
+    # caller (e.g. _run_single_dispatch) may register again with no effect.
+    if register_completion:
+        from app.application.task_completion_registry import TaskCompletionRegistry
+        TaskCompletionRegistry.get().register(task.id)
 
     # Start task execution
     if task_dispatcher_fn is not None:

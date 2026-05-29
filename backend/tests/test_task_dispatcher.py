@@ -492,6 +492,110 @@ class _ConcurrencyStore:
 
 
 @pytest.mark.asyncio
+async def test_dispatch_role_registers_before_launching_runner():
+    """RACE FIX: with register_completion=True, dispatch_role must register the
+    task in TaskCompletionRegistry BEFORE invoking the task runner, so an
+    instantly-completing runner can't signal into the void. We assert ordering by
+    checking the task is already registered at the moment the runner is called."""
+    from app.application.task_dispatcher import dispatch_role
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+    reg = TaskCompletionRegistry.get()
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    agent = _make_agent("engineer")
+    store = _make_store(issue, graph, [agent])
+
+    registered_at_launch: dict[str, bool] = {}
+
+    async def fake_dispatcher(task):
+        # The runner is launched here; the task MUST already be registered.
+        registered_at_launch["value"] = reg.is_registered(task.id)
+
+    try:
+        task_id, _ = await dispatch_role(
+            issue=issue,
+            role="engineer",
+            store=store,
+            task_dispatcher_fn=fake_dispatcher,
+            register_completion=True,
+        )
+        assert registered_at_launch.get("value") is True
+        assert reg.is_registered(task_id)
+    finally:
+        TaskCompletionRegistry._instance = None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_role_does_not_register_by_default():
+    """Fire-and-forget callers (no await) must NOT leave an orphan event: with
+    register_completion=False (default), dispatch_role does not register."""
+    from app.application.task_dispatcher import dispatch_role
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+    reg = TaskCompletionRegistry.get()
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    agent = _make_agent("engineer")
+    store = _make_store(issue, graph, [agent])
+
+    try:
+        task_id, _ = await dispatch_role(
+            issue=issue,
+            role="engineer",
+            store=store,
+            task_dispatcher_fn=None,
+        )
+        assert not reg.is_registered(task_id)
+    finally:
+        TaskCompletionRegistry._instance = None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_role_instant_completion_result_survives_race():
+    """End-to-end race regression at the dispatch_role boundary: a runner that
+    signals completion INSTANTLY (before register_completion would have run if it
+    were post-launch) still lands its result, because dispatch_role registers
+    first. The result is retrievable via wait_for_active without timeout."""
+    from app.application.task_dispatcher import dispatch_role
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+    reg = TaskCompletionRegistry.get()
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    agent = _make_agent("engineer")
+    store = _make_store(issue, graph, [agent])
+
+    expected = {"status": "done", "role": "engineer"}
+
+    async def instant_runner(task):
+        # Simulate an instant fail-fast completion firing inside the launch.
+        reg.signal(task.id, expected)
+
+    try:
+        task_id, _ = await dispatch_role(
+            issue=issue,
+            role="engineer",
+            store=store,
+            task_dispatcher_fn=instant_runner,
+            register_completion=True,
+        )
+        result = await reg.wait_for_active(
+            task_id, idle_timeout=0.5, hard_timeout=0.5,
+            activity_age=lambda _t: 999.0,
+        )
+        assert result == expected
+    finally:
+        TaskCompletionRegistry._instance = None
+
+
+@pytest.mark.asyncio
 async def test_concurrent_same_role_dispatch_gets_unique_node_keys():
     """Two same-role dispatches fired concurrently (the new same-turn parallel
     path) must each mint a distinct node_key. The per-issue lock serialises the

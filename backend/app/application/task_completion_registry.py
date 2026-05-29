@@ -16,11 +16,19 @@ class TaskCompletionRegistry:
 
     _instance: "TaskCompletionRegistry | None" = None
 
+    # Defensive buffer of results that arrived BEFORE their task was registered.
+    # Bounded + time-pruned so a truly-never-registered task can't leak forever
+    # (see _prune_pending / _PENDING_TTL_S / _PENDING_MAX).
+    _PENDING_TTL_S: float = 1800.0
+    _PENDING_MAX: int = 256
+
     def __new__(cls) -> "TaskCompletionRegistry":
         if cls._instance is None:
             obj = super().__new__(cls)
             obj._events: dict[str, asyncio.Event] = {}
             obj._results: dict[str, Any] = {}
+            # task_id -> (result, monotonic_ts) for signal-before-register.
+            obj._pending: dict[str, tuple[Any, float]] = {}
             cls._instance = obj
         return cls._instance
 
@@ -29,17 +37,48 @@ class TaskCompletionRegistry:
         return cls()
 
     def register(self, task_id: str) -> None:
-        self._events[task_id] = asyncio.Event()
+        # Idempotent: never clobber an existing event (which may already be set
+        # by an early signal). Re-registering the same task_id is a no-op.
+        ev = self._events.get(task_id)
+        if ev is None:
+            ev = asyncio.Event()
+            self._events[task_id] = ev
+        # Drain a result that arrived before this register (signal-before-register
+        # race). Surface it immediately so the waiter doesn't block.
+        pending = self._pending.pop(task_id, None)
+        if pending is not None:
+            self._results[task_id] = pending[0]
+            ev.set()
 
     def is_registered(self, task_id: str) -> bool:
         return task_id in self._events
 
+    def _prune_pending(self) -> None:
+        """Evict stale/excess buffered results so truly-never-registered tasks
+        cannot grow `_pending` without bound."""
+        if not self._pending:
+            return
+        now = time.monotonic()
+        stale = [tid for tid, (_, ts) in self._pending.items() if now - ts >= self._PENDING_TTL_S]
+        for tid in stale:
+            self._pending.pop(tid, None)
+        if len(self._pending) > self._PENDING_MAX:
+            # Drop oldest first until under the cap.
+            ordered = sorted(self._pending.items(), key=lambda kv: kv[1][1])
+            for tid, _ in ordered[: len(self._pending) - self._PENDING_MAX]:
+                self._pending.pop(tid, None)
+
     def signal(self, task_id: str, result: Any) -> None:
         ev = self._events.get(task_id)
         if ev is None:
-            # No waiter: the dispatch already timed out (and popped its event) or
-            # was never registered. Storing the result here would orphan it in
-            # `_results` forever, since nothing will ever pop it. Drop it instead.
+            # Signal-before-register: the task runner finished (e.g. instant
+            # executor_failed_to_start fail-fast) before the dispatcher called
+            # register(). Buffer the result so register()/wait_for_active() can
+            # pick it up instead of dropping it and stalling the dispatch until
+            # hard_timeout. Bounded + TTL-pruned so a task that is NEVER
+            # registered can't orphan the buffer forever.
+            self._pending[task_id] = (result, time.monotonic())
+            self._prune_pending()
             return
         self._results[task_id] = result
         ev.set()
@@ -47,6 +86,10 @@ class TaskCompletionRegistry:
     async def wait_for(self, task_id: str, timeout: float = 600.0) -> Any:
         ev = self._events.get(task_id)
         if ev is None:
+            # If a result was buffered before registration, surface it now.
+            pending = self._pending.pop(task_id, None)
+            if pending is not None:
+                return pending[0]
             raise LookupError(f"Task {task_id} not registered in completion registry")
         try:
             await asyncio.wait_for(asyncio.shield(ev.wait()), timeout=timeout)
@@ -79,6 +122,10 @@ class TaskCompletionRegistry:
         """
         ev = self._events.get(task_id)
         if ev is None:
+            # If a result was buffered before registration, surface it now.
+            pending = self._pending.pop(task_id, None)
+            if pending is not None:
+                return pending[0]
             raise LookupError(f"Task {task_id} not registered in completion registry")
         start = time.monotonic()
         try:

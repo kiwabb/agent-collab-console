@@ -167,7 +167,8 @@ def _patch_subagent_execution(monkeypatch, *, write_plan):
 
     async def fake_dispatch_role(*, issue, role, prompt_override, store,
                                  task_dispatcher_fn, event_bus, prev_node_key,
-                                 agent_worktree_path=None, batch_key=None):
+                                 agent_worktree_path=None, batch_key=None,
+                                 register_completion=False):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"
         paths[task_id] = agent_worktree_path
@@ -327,6 +328,63 @@ async def test_dispatch_batch_real_conflict_surfaces_structured(
 
 
 # --------------------------------------------------------------------------- #
+# Scenario 2b: no-op agent (no produced changes) -> clean no-op, not a conflict.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_dispatch_batch_noop_agent_is_clean_not_conflict(
+    monkeypatch, store, manager, repo
+):
+    """Regression: an agent that produces NO files (pure-analysis role / chose not
+    to edit anything) must NOT be reported as a conflict. Its branch has nothing
+    ahead of the issue branch, so the squash-merge would fail at the empty commit
+    — that must be a clean no-op (worktree cleaned, no conflict, others not
+    stopped). Drives the full dispatch_batch path through real git.
+    """
+    project, issue = await _seed_project_and_issue(store, manager, repo)
+    reg = _build_tools(store, manager, project, issue)
+
+    def write_plan(wt: str):
+        # First agent writes a real file; second agent writes nothing (no-op).
+        if wt.endswith("engineer"):
+            def _do(p: Path):
+                (p / "a.txt").write_text("content of a.txt\n")
+            return _do
+        return None  # no-op agent: no files produced
+
+    _patch_subagent_execution(monkeypatch, write_plan=write_plan)
+
+    out = await reg.tools["dispatch_batch"]({"agents": [
+        {"role": "engineer", "prompt": "write a.txt"},
+        {"role": "qa", "prompt": "analyze only, write nothing"},
+    ]})
+
+    assert out["status"] == "batch_complete"
+    assert out["succeeded_count"] == 2
+    # No phantom conflict; the no-op agent is recorded as a no-op merge.
+    assert out["merge_status"] == "merged"
+    assert "conflicts" not in out
+    assert len(out["merged"]) == 1
+    assert len(out["noop_merges"]) == 1
+
+    # The real agent's file landed; the no-op agent contributed nothing.
+    issue_tree = _git("ls-tree", "-r", "--name-only", issue.git_branch, cwd=repo)
+    assert "a.txt" in issue_tree
+
+    # No swarm worktrees leaked (neither the merged nor the no-op agent).
+    leaked = [
+        p for p in await manager.git.list_worktree_paths(str(repo))
+        if "swarm-" in Path(p).name
+    ]
+    assert leaked == [], f"agent worktrees leaked: {leaked}"
+
+    # main untouched.
+    main_tree = _git("ls-tree", "-r", "--name-only", "main", cwd=repo)
+    assert "a.txt" not in main_tree
+
+
+# --------------------------------------------------------------------------- #
 # Scenario 3: upstream visibility (flush-then-fork) through dispatch_batch.
 # --------------------------------------------------------------------------- #
 
@@ -442,7 +500,8 @@ async def test_dispatch_batch_tight_budget_downscales_concurrency(
 
     async def fake_dispatch_role(*, issue, role, prompt_override, store,
                                  task_dispatcher_fn, event_bus, prev_node_key,
-                                 agent_worktree_path=None, batch_key=None):
+                                 agent_worktree_path=None, batch_key=None,
+                                 register_completion=False):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"
         paths[task_id] = agent_worktree_path
