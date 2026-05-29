@@ -296,6 +296,23 @@ def build_conductor_tools(
         cap = timeouts.max_parallel_dispatch_per_batch()
         sem = asyncio.Semaphore(cap)
 
+        # Upstream-visibility fix (PR1 check): isolated agent worktrees fork from
+        # the issue branch and only see what's committed there. Flush any
+        # uncommitted upstream artifacts (PM / architect) onto the issue branch
+        # BEFORE creating per-agent worktrees, else fan-out agents start stale.
+        try:
+            flushed = await wm.commit_issue_worktree(issue)
+            if flushed:
+                await _emit(event_bus, "conductor_tool", {
+                    "tool": "dispatch_batch",
+                    "status": "upstream_flushed",
+                    "sha": flushed,
+                })
+        except Exception:  # noqa: BLE001
+            # Best-effort: a flush failure shouldn't block fan-out, but agents
+            # may not see the freshest uncommitted upstream state.
+            pass
+
         await _emit(event_bus, "conductor_tool", {
             "tool": "dispatch_batch",
             "status": "batch_started",
@@ -314,9 +331,10 @@ def build_conductor_tools(
                     return {"agent_key": agent_key, **exhausted}
 
                 worktree_path: str | None = None
+                agent_branch: str | None = None
                 cleanup_on_exit = False
                 try:
-                    _, worktree_path, _ = await wm.prepare_agent_worktree(
+                    agent_branch, worktree_path, _ = await wm.prepare_agent_worktree(
                         project, issue, agent_key
                     )
                     result = await _run_single_dispatch(
@@ -337,6 +355,7 @@ def build_conductor_tools(
                     return {
                         "agent_key": agent_key,
                         "role": role,
+                        "branch": agent_branch,
                         "worktree_path": worktree_path,
                         **result,
                     }
@@ -345,6 +364,7 @@ def build_conductor_tools(
                     return {
                         "agent_key": agent_key,
                         "role": role,
+                        "branch": agent_branch,
                         "worktree_path": worktree_path,
                         "error": f"{type(exc).__name__}: {exc}",
                     }
@@ -384,19 +404,78 @@ def build_conductor_tools(
             "failed": len(failed),
         })
 
-        return {
+        # Join / reconcile (PR3): sequentially squash-merge the successful agents'
+        # branches back into the issue branch. Lineage is passed in-memory (branch
+        # + worktree_path captured per result), so nothing extra is persisted.
+        # Only agents that actually produced a branch are merge candidates.
+        merge_candidates = [
+            {
+                "agent_key": r["agent_key"],
+                "role": r.get("role"),
+                "branch": r.get("branch"),
+                "worktree_path": r.get("worktree_path"),
+            }
+            for r in succeeded
+            if r.get("branch")
+        ]
+
+        merge_summary: dict[str, Any] = {"merged": [], "conflict": None, "skipped": []}
+        if merge_candidates:
+            await _emit(event_bus, "conductor_tool", {
+                "tool": "dispatch_batch",
+                "status": "merge_started",
+                "candidate_count": len(merge_candidates),
+            })
+            try:
+                merge_summary = await wm.merge_agent_worktrees(project, issue, merge_candidates)
+            except Exception as exc:  # noqa: BLE001
+                merge_summary = {
+                    "merged": [],
+                    "conflict": None,
+                    "skipped": [],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            await _emit(event_bus, "conductor_tool", {
+                "tool": "dispatch_batch",
+                "status": "merge_complete",
+                "merged": len(merge_summary.get("merged") or []),
+                "conflict": bool(merge_summary.get("conflict")),
+                "skipped": len(merge_summary.get("skipped") or []),
+            })
+
+        conflict = merge_summary.get("conflict")
+        merge_status = "conflict" if conflict else ("merged" if merge_summary.get("merged") else "noop")
+
+        out: dict[str, Any] = {
             "status": "batch_complete",
             "agent_count": len(results),
             "succeeded_count": len(succeeded),
             "failed_count": len(failed),
             "results": results,
-            "note": (
-                "Partial join: each result has agent_key/role and either a result "
-                "payload or an 'error'. Successful agents' changes are isolated in "
-                "their per-agent worktree (worktree_path) and are NOT yet merged "
-                "into the issue branch (merge-back is a later step)."
-            ),
+            "merge_status": merge_status,
+            "merged": merge_summary.get("merged") or [],
+            "skipped_merges": merge_summary.get("skipped") or [],
         }
+        if conflict:
+            out["conflicts"] = [conflict]
+            out["note"] = (
+                "MERGE CONFLICT during join: agent "
+                f"'{conflict.get('agent_key')}' (role '{conflict.get('role')}') "
+                f"could not be merged into the issue branch — conflicting files: "
+                f"{conflict.get('files')}. The conflicting agent's worktree is kept "
+                "for reconcile. To resolve: dispatch a subagent (e.g. engineer) with "
+                "a prompt that includes the conflicting files + diff and instructs it "
+                "to reconcile the change, or use request_user_clarification to escalate. "
+                "Agents merged before the conflict are already on the issue branch and "
+                "were NOT rolled back."
+            )
+        else:
+            out["note"] = (
+                "Partial join complete: successful agents were squash-merged into the "
+                "issue branch in order; their per-agent worktrees were cleaned up. "
+                "Failed agents (see 'error' on their result) produced no mergeable output."
+            )
+        return out
 
     async def spawn_custom_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
         payload = {
@@ -507,7 +586,13 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 "file edits never clobber each other. If agents depend on each "
                 "other, dispatch them sequentially with dispatch_subagent across "
                 "turns instead. Returns one result per agent (success payload or "
-                "an 'error'); a single agent failing does not abort the batch."
+                "an 'error'); a single agent failing does not abort the batch. "
+                "After the agents finish, their changes are automatically "
+                "squash-merged back into the issue branch in order. The return "
+                "value has 'merge_status': 'merged' (all clean), 'noop' (nothing "
+                "to merge), or 'conflict'. On 'conflict', a 'conflicts' list gives "
+                "the conflicting agent, files, and diff — resolve it by dispatching "
+                "a subagent to reconcile those files, or request_user_clarification."
             ),
             {
                 "agents": {

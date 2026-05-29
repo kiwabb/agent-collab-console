@@ -72,11 +72,20 @@ class _Store:
 
 
 class _WorktreeManagerStub:
-    """Hands out a unique worktree path per agent_key and records cleanups."""
+    """Hands out a unique worktree path per agent_key and records cleanups.
 
-    def __init__(self):
+    Also stubs the PR3 join surface: commit_issue_worktree (upstream flush) and
+    merge_agent_worktrees (sequential merge-back). By default every candidate
+    merges cleanly; set `conflict_on` to a list of agent_keys to simulate a
+    conflict on the first matching candidate.
+    """
+
+    def __init__(self, conflict_on: list[str] | None = None):
         self.prepared: list[str] = []
         self.cleaned: list[str] = []
+        self.merged_candidates: list[list[dict]] = []
+        self.flushed = 0
+        self._conflict_on = set(conflict_on or [])
 
     async def prepare_agent_worktree(self, project, issue, agent_key):
         path = f"/tmp/wt/{issue.id}-{agent_key}"
@@ -86,6 +95,33 @@ class _WorktreeManagerStub:
 
     async def cleanup_agent_worktree(self, project, issue, agent_key):
         self.cleaned.append(agent_key)
+
+    async def commit_issue_worktree(self, issue, message=None):
+        self.flushed += 1
+        return None
+
+    async def merge_agent_worktrees(self, project, issue, agents):
+        self.merged_candidates.append(agents)
+        merged: list[dict] = []
+        conflict = None
+        skipped: list[dict] = []
+        for spec in agents:
+            if conflict is not None:
+                skipped.append(spec)
+                continue
+            if spec["agent_key"] in self._conflict_on:
+                conflict = {
+                    "agent_key": spec["agent_key"],
+                    "role": spec.get("role"),
+                    "branch": spec.get("branch"),
+                    "worktree_path": spec.get("worktree_path"),
+                    "files": ["shared.txt"],
+                    "diff": "diff --git a/shared.txt b/shared.txt",
+                }
+            else:
+                merged.append({**spec, "sha": f"sha-{spec['agent_key']}"})
+                self.cleaned.append(spec["agent_key"])
+        return {"merged": merged, "conflict": conflict, "skipped": skipped}
 
 
 def _build(store, wm, *, dispatcher_fn=lambda task: None):
@@ -156,8 +192,14 @@ async def test_dispatch_batch_fans_out_with_isolated_worktrees(monkeypatch):
     # Two engineers in one batch get distinct agent keys (no worktree collision).
     keys = sorted(r["agent_key"] for r in out["results"])
     assert keys == ["engineer", "engineer-2", "qa"]
-    # Successful agents' worktrees are KEPT for later merge-back (not cleaned).
-    assert wm.cleaned == []
+    # Upstream artifacts were flushed once before fan-out.
+    assert wm.flushed == 1
+    # PR3 join: all succeeded agents were handed to merge-back, then cleaned.
+    assert out["merge_status"] == "merged"
+    assert len(out["merged"]) == 3
+    assert sorted(wm.cleaned) == ["engineer", "engineer-2", "qa"]
+    # Branch lineage is carried in-memory to the merge step.
+    assert all("branch" in c for c in wm.merged_candidates[0])
 
 
 @pytest.mark.asyncio
@@ -216,9 +258,13 @@ async def test_dispatch_batch_partial_join_on_failure(monkeypatch):
     failed = [r for r in out["results"] if "error" in r]
     assert len(failed) == 1
     assert "agent_key" in failed[0] and "role" in failed[0]
-    # The failed agent's worktree is cleaned up (no leak); succeeded ones kept.
-    assert len(wm.cleaned) == 1
-    assert wm.cleaned[0] == failed[0]["agent_key"]
+    # The failed agent's worktree is cleaned up immediately (no leak); the two
+    # succeeded agents are merged back then cleaned by merge_agent_worktrees.
+    assert failed[0]["agent_key"] in wm.cleaned
+    assert out["merge_status"] == "merged"
+    assert len(out["merged"]) == 2
+    # Only the two succeeded agents were merge candidates.
+    assert {c["agent_key"] for c in wm.merged_candidates[0]} == {"engineer", "architect"}
 
 
 @pytest.mark.asyncio
@@ -228,6 +274,36 @@ async def test_dispatch_batch_empty_agents_errors(monkeypatch):
     reg = _build(store, wm)
     out = await reg.tools["dispatch_batch"]({"agents": []})
     assert "error" in out
+
+
+@pytest.mark.asyncio
+async def test_dispatch_batch_merge_conflict_surfaces_structured(monkeypatch):
+    """When merge-back hits a conflict, the tool returns merge_status=conflict
+    with a structured `conflicts` list so the Conductor can reconcile it."""
+    wm = _WorktreeManagerStub(conflict_on=["qa"])
+    store = _Store(_issue(), _project())
+    reg = _build(store, wm)
+
+    async def run(task_id, wt):
+        return {"status": "done", "task_id": task_id}
+
+    _patch_dispatch(monkeypatch, run=run)
+
+    out = await reg.tools["dispatch_batch"]({"agents": [
+        {"role": "engineer"},
+        {"role": "qa"},
+    ]})
+
+    assert out["merge_status"] == "conflict"
+    assert len(out["conflicts"]) == 1
+    conflict = out["conflicts"][0]
+    assert conflict["agent_key"] == "qa"
+    assert conflict["files"] == ["shared.txt"]
+    assert conflict["diff"]
+    # The clean engineer was merged before the conflict (not rolled back).
+    assert len(out["merged"]) == 1
+    assert out["merged"][0]["agent_key"] == "engineer"
+    assert "conflicting files" in out["note"].lower() or "conflict" in out["note"].lower()
 
 
 @pytest.mark.asyncio

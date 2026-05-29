@@ -312,6 +312,116 @@ class GitService:
             )
             await self._run(["worktree", "prune"], cwd=repo_p, check=False)
 
+    async def squash_merge_into_branch(
+        self,
+        repo_path: str | Path,
+        source_branch: str,
+        target_branch: str,
+        message: str,
+        target_worktree_path: str | Path | None = None,
+    ) -> str:
+        """Squash-merge `source_branch` into `target_branch` WITHOUT touching the
+        primary repo's checked-out branch.
+
+        Unlike :meth:`squash_merge`, this never runs a fast-forward in the
+        primary repo. That matters for the swarm merge-back: the swarm target
+        (the issue integration branch) is *not* checked out in the primary repo
+        — the primary repo is usually on the project default branch (e.g.
+        ``main``). Because the issue branch descends from the default branch,
+        the default branch IS an ancestor of the squash commit, so a
+        ``merge --ff-only`` in the primary repo would happily fast-forward the
+        DEFAULT branch onto unreviewed agent changes, polluting it and bypassing
+        the normal ``merge_issue`` review flow.
+
+        Instead this:
+
+        1. squash-merges in a throwaway detached worktree at ``target_branch``'s
+           tip (conflicts ``reset --hard`` + raise ``GitError``, no half state),
+        2. advances ``refs/heads/<target_branch>`` to the squash commit via
+           ``update-ref`` (the only branch ref touched),
+        3. if ``target_worktree_path`` is provided and that worktree has
+           ``target_branch`` checked out, syncs its index/working tree to the
+           new commit with ``reset --hard`` so the worktree doesn't go stale
+           under a moved branch ref.
+
+        Returns the new commit SHA on ``target_branch``.
+        """
+        _validate_path(repo_path)
+        _validate_branch(source_branch)
+        _validate_branch(target_branch)
+        if not message.strip():
+            raise GitError("merge message must not be empty")
+
+        repo_p = Path(repo_path)
+        tmp_path = repo_p.parent / f".jm-swarm-merge-{source_branch[:24].replace('/', '-')}"
+
+        await self._run(["worktree", "prune"], cwd=repo_p, check=False)
+        if tmp_path.exists():
+            await self._run(["worktree", "remove", "--force", str(tmp_path)], cwd=repo_p, check=False)
+            if tmp_path.exists():
+                shutil.rmtree(tmp_path, ignore_errors=True)
+
+        # Detach at the target branch tip so we never hold the branch ref (the
+        # target worktree may already have it checked out).
+        await self._run(
+            ["worktree", "add", "--detach", str(tmp_path), target_branch],
+            cwd=repo_p,
+        )
+        try:
+            merge_result = await self._run(
+                ["merge", "--squash", "--", source_branch],
+                cwd=tmp_path,
+                check=False,
+            )
+            if merge_result.returncode != 0:
+                await self._run(["reset", "--hard", "HEAD"], cwd=tmp_path, check=False)
+                raise GitError(
+                    f"squash merge failed: {merge_result.stderr.strip() or merge_result.stdout.strip()}"
+                )
+            commit_result = await self._run(
+                ["commit", "-m", message],
+                cwd=tmp_path,
+                check=False,
+            )
+            if commit_result.returncode != 0:
+                await self._run(["reset", "--hard", "HEAD"], cwd=tmp_path, check=False)
+                raise GitError(
+                    f"squash commit failed: {commit_result.stderr.strip() or commit_result.stdout.strip()}"
+                )
+            head = await self._run(["rev-parse", "HEAD"], cwd=tmp_path)
+            new_sha = head.stdout.strip()
+            # Advance ONLY the target branch ref. Primary repo's checked-out
+            # branch (default) is never touched.
+            await self._run(
+                ["update-ref", f"refs/heads/{target_branch}", new_sha],
+                cwd=repo_p,
+                check=False,
+            )
+            # Keep the target worktree consistent with the moved ref. We only
+            # reset when that worktree actually has target_branch checked out;
+            # otherwise the ref move doesn't concern it.
+            if target_worktree_path is not None:
+                _validate_path(target_worktree_path)
+                current = await self._run(
+                    ["rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=target_worktree_path,
+                    check=False,
+                )
+                if current.stdout.strip() == target_branch:
+                    await self._run(
+                        ["reset", "--hard", new_sha],
+                        cwd=target_worktree_path,
+                        check=False,
+                    )
+            return new_sha
+        finally:
+            await self._run(
+                ["worktree", "remove", "--force", str(tmp_path)],
+                cwd=repo_p,
+                check=False,
+            )
+            await self._run(["worktree", "prune"], cwd=repo_p, check=False)
+
     # --- Diff / inspection ---
 
     async def worktree_diff(self, worktree_path: str | Path, base_branch: str) -> str:
@@ -448,6 +558,23 @@ class GitService:
             if m:
                 out[key] = int(m.group(1))
         return out
+
+    async def conflicted_files(self, worktree_path: str | Path) -> list[str]:
+        """Return the list of files currently in merge-conflict state.
+
+        Runs `git diff --name-only --diff-filter=U` in the worktree. This is the
+        input the swarm reconcile flow feeds to the Conductor when a per-agent
+        squash-merge back into the issue branch fails (see vibe-kanban
+        `get_conflicted_files`). Returns an empty list when there are no
+        unmerged paths.
+        """
+        _validate_path(worktree_path)
+        result = await self._run(
+            ["diff", "--name-only", "--diff-filter=U"],
+            cwd=worktree_path,
+            check=False,
+        )
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
     async def prune_worktrees(self, repo_path: str | Path) -> None:
         _validate_path(repo_path)

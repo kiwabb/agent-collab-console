@@ -96,6 +96,34 @@ async def test_remove_worktree_cleans_metadata(repo: Path, tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_conflicted_files_empty_on_clean_tree(repo: Path):
+    svc = GitService()
+    assert await svc.conflicted_files(repo) == []
+
+
+@pytest.mark.asyncio
+async def test_conflicted_files_lists_unmerged_paths(repo: Path):
+    svc = GitService()
+    # Two branches edit the same line so a merge produces a conflict.
+    _git("checkout", "-b", "branch-a", cwd=repo)
+    (repo / "shared.txt").write_text("from A\n")
+    _git("add", "shared.txt", cwd=repo)
+    _git("-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "A edit", cwd=repo)
+
+    _git("checkout", "main", cwd=repo)
+    _git("checkout", "-b", "branch-b", cwd=repo)
+    (repo / "shared.txt").write_text("from B\n")
+    _git("add", "shared.txt", cwd=repo)
+    _git("-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "B edit", cwd=repo)
+
+    # Merge A into B → conflict on shared.txt (merge leaves conflict state behind).
+    subprocess.run(["git", "merge", "branch-a"], cwd=str(repo), capture_output=True)
+    files = await svc.conflicted_files(repo)
+    assert files == ["shared.txt"]
+    subprocess.run(["git", "merge", "--abort"], cwd=str(repo), capture_output=True)
+
+
+@pytest.mark.asyncio
 async def test_create_worktree_rejects_branch_starting_with_dash(repo: Path, tmp_path: Path):
     svc = GitService()
     with pytest.raises(GitError):

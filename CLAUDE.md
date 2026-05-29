@@ -18,7 +18,8 @@ FastAPI+aiosqlite(9000) / Next.js14+Tailwind v4+Base UI(4000) / SQLite(`console.
 Issue 创建 → `auto_start_issue_graph` 起空 `WorkflowGraph` + 后台 `run_issue_conductor_loop(issue)` → Conductor 用 Anthropic tool-use 决定调谁。**没有固定 DAG**，流水线 = Conductor 决策序列。
 
 **核心工具**（`conductor_tools.py`）：
-- `dispatch_subagent(role, prompt?, prev_node_key?)` → `task_dispatcher.dispatch_role` 建 `CodexTask` + add `WorkflowNode/Edge` + 写一条 `AgentMessage(handoff)` 给 Mesh + 启 task runner；`TaskCompletionRegistry` (asyncio.Event 单例) await 完成 (900s timeout)
+- `dispatch_subagent(role, prompt?, prev_node_key?)` → `task_dispatcher.dispatch_role` 建 `CodexTask` + add `WorkflowNode/Edge` + 写一条 `AgentMessage(handoff)` 给 Mesh + 启 task runner；`TaskCompletionRegistry` (asyncio.Event 单例) await 完成 (900s timeout)。**串行路径**：跑在共享 issue worktree。
+- `dispatch_batch(agents=[{role,prompt?}])` — **并行 swarm fan-out**：一轮并发起 N 个独立 subagent (`asyncio.gather`, `return_exceptions=True` 部分 join，`MAX_PARALLEL_DISPATCH_PER_BATCH` 限并发)，每个跑在**隔离 per-agent worktree** (`worktree_manager.prepare_agent_worktree`，fork 自 issue 分支，`swarm/<issue>-<key>`)。fan-out 前先 `commit_issue_worktree` flush 上游产物到 issue 分支(否则隔离 agent 看不到)。批次完成后 **in-flow join**：issue 锁内顺序 `merge_agent_worktrees` squash_merge 各 agent 分支回 issue 分支(分支 lineage 内存传递不持久化)；冲突→`squash_merge` reset+raise→`git_service.conflicted_files`+`worktree_diff` 收集→`merge_status=conflict`/`conflicts:[{agent,files,diff}]` 返回，Conductor 下一轮 LLM 决策(重派 resolver / `request_user_clarification`)。**遇冲突即停止后续 merge**，已成功的不回滚。纯 fan-out 无批内 DAG；串行路径零回归。
 - `spawn_custom_subagent` — 注册项目专属 specialist
 - `request_user_clarification` — 走 `awaiting_review` 状态对接 Approvals 页
 - `retrieve_cold_memory` / `finalize_task`
