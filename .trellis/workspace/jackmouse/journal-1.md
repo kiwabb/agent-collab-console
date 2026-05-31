@@ -390,3 +390,37 @@ Validated the parallel-swarm + cost-aware work end-to-end across 3 tiers. Tier 1
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Engineer real-codegen reconciliation + Architect-Review diff-vs-plan guard
+
+**Date**: 2026-05-31
+**Task**: Engineer real-codegen reconciliation + Architect-Review diff-vs-plan guard
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+4-PR feature: Architect emits expected_files; deterministic tiered review guard (review_guard.py) hard-rejects claim-vs-reality contradictions before invoking the LLM, soft-injects plan_drift + real diff otherwise; Engineer C1/C2 reconcile to git ground truth; QA D1 independent git check. Two AC4 false-positive bugs (completed_tasks treated as landing signal) caught and fixed during check passes. Fast suite 531 passed, slow integration 14 passed. Committed 2cc5b96 to main.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2cc5b96` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

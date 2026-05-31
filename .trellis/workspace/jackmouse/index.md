@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
-- **Last Active**: 2026-05-29
+- **Total Sessions**: 12
+- **Last Active**: 2026-05-31
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~392 | Active |
+| `journal-1.md` | ~426 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-05-31 | Engineer real-codegen reconciliation + Architect-Review diff-vs-plan guard | `2cc5b96` | `main` |
 | 11 | 2026-05-29 | E2E validation of parallel swarm + cost-aware: integration test, 2 latent bugs fixed, real-executor run | `cef3034`, `3815f3e`, `31e6c40` | `main` |
 | 10 | 2026-05-29 | Cost-aware conductor scheduling: per-model pricing, per-issue budget awareness, budget-driven steering | `1aa4c7f`, `41b988e`, `592e187`, `9595db5` | `main` |
 | 9 | 2026-05-29 | Parallel swarm scheduler: per-agent worktree isolation, dispatch_batch, in-flow join+reconcile, batch visualization | `ab70812`, `8081b86`, `f201e8d`, `aee6ecf`, `e40764f` | `main` |
