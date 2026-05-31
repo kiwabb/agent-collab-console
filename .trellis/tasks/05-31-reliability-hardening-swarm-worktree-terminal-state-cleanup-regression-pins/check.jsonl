@@ -1,0 +1,2 @@
+{"file": "research/reliability-gap-verification.md", "reason": "校验 PR1 修复正确且不越界：只清理 swarm worktree+ref、幂等、best-effort 不阻断收尾；校验 PR2 钉的不变量与亲验结论一致；确认没去动 7 个伪缺口。"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "校验零 main 污染：清理逻辑符合 Worktree-Scoped Branch Merge 契约，集成测试须断言主仓 main byte-for-byte 不变。"}

@@ -622,3 +622,99 @@ async def test_dispatch_batch_over_budget_is_soft_not_killed(
     # Over budget squeezed concurrency to the floor of 1 (soft, not 0).
     started = next(e for e in events if e.get("status") == "batch_started")
     assert started["concurrency_cap"] == 1, started
+
+
+# --------------------------------------------------------------------------- #
+# Scenario 7: terminal-state swarm worktree cleanup (PR1 — the one real gap).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_cleanup_issue_swarm_worktrees_removes_residue_main_clean(
+    store, manager, repo
+):
+    """Conductor terminal-state sweep: residual per-agent swarm worktrees +
+    `swarm/*` branch refs (left when a batch is kept for reconcile / a loop ends
+    mid-flight) are removed by ``cleanup_issue_swarm_worktrees``. Asserts:
+      1. the swarm worktree directories are gone,
+      2. the `swarm/*` branch refs are gone,
+      3. main is byte-for-byte unchanged (zero pollution),
+      4. idempotent: a second call is a no-op (no raise).
+    """
+    project, issue = await _seed_project_and_issue(store, manager, repo)
+    main_before = _git("rev-parse", "main", cwd=repo).strip()
+
+    # Create two residual per-agent worktrees (simulating a kept-for-reconcile
+    # batch that the conductor finalized without cleaning up).
+    br_a, wt_a, _ = await manager.prepare_agent_worktree(project, issue, "engineer")
+    br_b, wt_b, _ = await manager.prepare_agent_worktree(project, issue, "qa")
+    # Each agent writes + commits a file on its own branch (real divergence).
+    (Path(wt_a) / "a.txt").write_text("from engineer\n")
+    await manager.git.commit_all(wt_a, "engineer change")
+    (Path(wt_b) / "b.txt").write_text("from qa\n")
+    await manager.git.commit_all(wt_b, "qa change")
+
+    # Sanity: the worktrees + branches really exist before cleanup.
+    live_before = await manager.git.list_worktree_paths(str(repo))
+    assert any(Path(p).name.startswith(f"swarm-{issue.id}-") for p in live_before)
+    branches_before = await manager.git.list_branch_names(str(repo), f"swarm/{issue.id[:8]}-")
+    assert br_a in branches_before and br_b in branches_before
+
+    # --- The terminal sweep. ---
+    await manager.cleanup_issue_swarm_worktrees(project, issue)
+
+    # 1) swarm worktree directories gone.
+    assert not Path(wt_a).exists()
+    assert not Path(wt_b).exists()
+    live_after = await manager.git.list_worktree_paths(str(repo))
+    assert not any(Path(p).name.startswith(f"swarm-{issue.id}-") for p in live_after)
+
+    # 2) swarm branch refs gone.
+    branches_after = await manager.git.list_branch_names(str(repo), f"swarm/{issue.id[:8]}-")
+    assert branches_after == [], branches_after
+    assert not await manager.git.branch_exists(str(repo), br_a)
+    assert not await manager.git.branch_exists(str(repo), br_b)
+
+    # 3) main untouched (byte-for-byte: same ref, none of the agent files).
+    assert _git("rev-parse", "main", cwd=repo).strip() == main_before
+    main_tree = _git("ls-tree", "-r", "--name-only", "main", cwd=repo)
+    assert "a.txt" not in main_tree and "b.txt" not in main_tree
+
+    # The issue branch is also untouched (no merge happened — cleanup never merges).
+    assert "a.txt" not in _git("ls-tree", "-r", "--name-only", issue.git_branch, cwd=repo)
+
+    # 4) idempotent: second call is a no-op, no raise.
+    await manager.cleanup_issue_swarm_worktrees(project, issue)
+    assert _git("rev-parse", "main", cwd=repo).strip() == main_before
+
+
+@pytest.mark.asyncio
+async def test_cleanup_issue_swarm_worktrees_seal_path_main_clean(
+    monkeypatch, store, manager, repo
+):
+    """Wired through the conductor terminal seal: ``_seal_graph_and_issue_status``
+    must invoke the swarm cleanup (best-effort) so a conductor-finalized issue
+    leaves no residual swarm worktrees/branches and never pollutes main."""
+    import app.application.conductor_main_loop as cml
+    import app.bootstrap as bootstrap
+
+    project, issue = await _seed_project_and_issue(store, manager, repo)
+    main_before = _git("rev-parse", "main", cwd=repo).strip()
+
+    br_a, wt_a, _ = await manager.prepare_agent_worktree(project, issue, "engineer")
+    (Path(wt_a) / "a.txt").write_text("from engineer\n")
+    await manager.git.commit_all(wt_a, "engineer change")
+
+    # The seal resolves the worktree manager from the bootstrap singleton.
+    monkeypatch.setattr(bootstrap, "worktree_manager", manager)
+
+    await cml._seal_graph_and_issue_status(
+        store=store, issue=issue, event_bus=None, result_status="done"
+    )
+
+    # Residual swarm worktree + branch cleaned by the seal.
+    assert not Path(wt_a).exists()
+    assert not await manager.git.branch_exists(str(repo), br_a)
+    # main untouched.
+    assert _git("rev-parse", "main", cwd=repo).strip() == main_before
+    assert "a.txt" not in _git("ls-tree", "-r", "--name-only", "main", cwd=repo)

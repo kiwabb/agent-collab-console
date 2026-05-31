@@ -45,6 +45,16 @@ def test_lease_ttl_must_be_under_subagent_idle(monkeypatch):
         timeouts.validate(strict=True)
 
 
+def test_lease_pulse_must_be_under_ttl(monkeypatch):
+    # pulse < ttl < idle is the lease ladder. The pulse floor is 15s, so a TTL at
+    # or below the floor makes the heartbeat fire no sooner than the lease
+    # expires — the orphan-relaunch trap this invariant guards against.
+    monkeypatch.setenv("CONDUCTOR_LEASE_TTL_S", "10")  # pulse=max(15,3)=15 >= ttl=10
+    assert timeouts.lease_pulse_interval_s() >= timeouts.lease_ttl_s()
+    violations = timeouts.check_invariants()
+    assert any("lease pulse interval" in v and "CONDUCTOR_LEASE_TTL_S" in v for v in violations)
+
+
 def test_subagent_idle_must_exceed_stall_threshold(monkeypatch):
     # The stall watchdog must get a chance to terminate a hung subprocess
     # before the conductor's idle timeout re-dispatches.

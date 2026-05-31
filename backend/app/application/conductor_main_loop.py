@@ -1020,6 +1020,20 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning("graph status seal / project memory failed: %s", exc)
 
+    # Terminal-state swarm worktree cleanup (best-effort). Conductor finalizes
+    # issues without the API merge/delete path, so residual per-agent swarm
+    # worktrees + `swarm/*` branch refs have no other cleanup owner and would
+    # leak across issues. Idempotent + never touches main. Mirrors the
+    # fault-tolerant style of the record_project_memory block above: a failure
+    # here only warns and never blocks the terminal seal.
+    try:
+        project = await store.load_project(issue.project_id)
+        if project is not None:
+            from app.bootstrap import worktree_manager as _wm
+            await _wm.cleanup_issue_swarm_worktrees(project, issue)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("swarm worktree terminal cleanup failed: %s", exc)
+
 
 async def _append_event(event_bus, payload: dict[str, Any]) -> None:
     if event_bus is None or not hasattr(event_bus, "append"):

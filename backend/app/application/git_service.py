@@ -589,5 +589,32 @@ class GitService:
                 out.append(line[len("worktree "):].strip())
         return out
 
+    async def list_branch_names(self, repo_path: str | Path, prefix: str) -> list[str]:
+        """Return local branch names matching `<prefix>*` (refs/heads only).
+
+        Used to discover residual swarm branches for terminal cleanup without
+        relying on in-memory lineage (which is not persisted). `prefix` is a
+        literal branch-name prefix; the trailing `*` glob is appended here.
+        """
+        _validate_path(repo_path)
+        if not prefix or not _BRANCH_RE.fullmatch(prefix):
+            return []
+        result = await self._run(
+            ["branch", "--list", "--format=%(refname:short)", f"{prefix}*"],
+            cwd=repo_path,
+            check=False,
+        )
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    async def delete_branch(self, repo_path: str | Path, branch: str) -> None:
+        """Force-delete a local branch ref (`git branch -D`). Idempotent: a
+        missing branch is ignored. Only touches `refs/heads/<branch>`; never
+        checks out or rewrites any other ref, so the primary repo's HEAD is
+        untouched."""
+        _validate_path(repo_path)
+        if not branch or not _BRANCH_RE.fullmatch(branch):
+            return
+        await self._run(["branch", "-D", branch], cwd=repo_path, check=False)
+
 
 git_service = GitService()

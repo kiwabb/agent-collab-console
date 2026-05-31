@@ -234,6 +234,69 @@ class WorktreeManager:
             worktree = _worktree_path(project, "swarm", f"{issue.id}-{agent_key}")
             await self._cleanup_path(project.repo_path, str(worktree))
 
+    async def cleanup_issue_swarm_worktrees(
+        self,
+        project: Project,
+        issue: CodexIssue,
+    ) -> None:
+        """Remove ALL residual per-agent swarm worktrees + branches for an issue.
+
+        Conductor-driven issues finalize themselves (done / max_wall /
+        relaunch-exhausted) without going through the API merge/delete path, so
+        any per-agent worktree that ``dispatch_batch`` intentionally KEEPS (the
+        conflict-reconcile path leaves the conflicting agent's worktree, and a
+        loop that ends mid-reconcile leaks it) has no cleanup owner. Left
+        unattended these `swarm/<issue>-<key>` worktrees + branch refs accumulate
+        across issues (disk / ref leak). This is the terminal-state sweep.
+
+        Discovery is from real git state — ``git worktree list`` +
+        ``git branch --list 'swarm/<issue-prefix>*'`` — NOT in-memory lineage
+        (lineage isn't persisted and may already be gone at terminal time).
+
+        Hard constraints (Worktree-Scoped Branch Merge contract): this ONLY
+        removes worktrees and force-deletes `swarm/*` branch refs. It NEVER
+        merges, NEVER checks out, and NEVER advances/touches the primary repo's
+        default branch (`main`). Idempotent: already-gone worktrees/branches are
+        silently skipped; safe to call repeatedly and on an issue that never ran
+        a swarm batch.
+        """
+        repo_path = project.repo_path
+        # Path discriminator: per-agent worktrees live at
+        # `{repo}/../{name}-worktrees/swarm-{issue.id}-<key>` (see _worktree_path).
+        swarm_dir_prefix = f"swarm-{issue.id}-"
+        # Branch discriminator: `swarm/<issue.id[:8]>-<slug>` (see _agent_branch_name).
+        branch_prefix = f"swarm/{issue.id[:8]}-"
+
+        lock = await self._lock_for(f"issue:{issue.id}")
+        async with lock:
+            # 1) Remove residual swarm worktree directories for this issue.
+            try:
+                worktree_paths = await self.git.list_worktree_paths(repo_path)
+            except GitError:
+                worktree_paths = []
+            for wt_path in worktree_paths:
+                if Path(wt_path).name.startswith(swarm_dir_prefix):
+                    # _cleanup_path is best-effort + idempotent (swallows GitError,
+                    # rmtree ignore_errors). It only removes the worktree, never
+                    # touches the primary repo's checked-out branch.
+                    await self._cleanup_path(repo_path, wt_path)
+
+            # 2) Force-delete residual swarm branch refs for this issue. After
+            # removing the worktrees above the branches are no longer checked
+            # out anywhere, so `branch -D` is safe (and idempotent on misses).
+            try:
+                branches = await self.git.list_branch_names(repo_path, branch_prefix)
+            except GitError:
+                branches = []
+            for branch in branches:
+                await self.git.delete_branch(repo_path, branch)
+
+            # 3) Drop any stale worktree metadata left behind.
+            try:
+                await self.git.prune_worktrees(repo_path)
+            except GitError:
+                pass
+
     async def _collect_conflict(
         self,
         project: Project,

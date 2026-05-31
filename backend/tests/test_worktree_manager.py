@@ -163,6 +163,81 @@ async def test_cleanup_agent_worktree_removes_and_is_idempotent(project: Project
     await manager.cleanup_agent_worktree(project, issue, "engineerA")
 
 
+@pytest.mark.asyncio
+async def test_cleanup_issue_swarm_worktrees_noop_when_no_swarm(project: Project, manager: WorktreeManager):
+    """Terminal-state sweep is a safe no-op on an issue that never ran a swarm
+    batch: no worktrees/branches to remove, no raise, idempotent."""
+    issue = await _issue_with_worktree(project, manager, "issue-swrm0006")
+    main_before = subprocess.run(
+        ["git", "rev-parse", "main"], cwd=project.repo_path, capture_output=True, text=True
+    ).stdout.strip()
+
+    # No swarm worktree exists -> no-op, no raise.
+    await manager.cleanup_issue_swarm_worktrees(project, issue)
+    # Idempotent: a second call is also a no-op.
+    await manager.cleanup_issue_swarm_worktrees(project, issue)
+
+    # main untouched and the issue worktree/branch still intact.
+    main_after = subprocess.run(
+        ["git", "rev-parse", "main"], cwd=project.repo_path, capture_output=True, text=True
+    ).stdout.strip()
+    assert main_after == main_before
+    assert Path(issue.git_worktree_path).exists()
+    assert await manager.git.branch_exists(project.repo_path, issue.git_branch)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_issue_swarm_worktrees_removes_residual_agents(project: Project, manager: WorktreeManager):
+    """Removes residual per-agent swarm worktrees + `swarm/*` branch refs while
+    leaving the shared issue worktree/branch and main untouched."""
+    issue = await _issue_with_worktree(project, manager, "issue-swrm0007")
+    br_a, wt_a, _ = await manager.prepare_agent_worktree(project, issue, "engineerA")
+    br_b, wt_b, _ = await manager.prepare_agent_worktree(project, issue, "qaB")
+    assert Path(wt_a).exists() and Path(wt_b).exists()
+
+    await manager.cleanup_issue_swarm_worktrees(project, issue)
+
+    # swarm worktrees + branches gone.
+    assert not Path(wt_a).exists() and not Path(wt_b).exists()
+    assert not await manager.git.branch_exists(project.repo_path, br_a)
+    assert not await manager.git.branch_exists(project.repo_path, br_b)
+    # Shared issue worktree/branch survive (cleanup is swarm-scoped only).
+    assert Path(issue.git_worktree_path).exists()
+    assert await manager.git.branch_exists(project.repo_path, issue.git_branch)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_issue_swarm_worktrees_does_not_touch_sibling_issue(
+    project: Project, manager: WorktreeManager
+):
+    """Cross-issue isolation boundary (risk #1): cleaning issue A must NOT remove
+    issue B's swarm worktrees or branches when the two issues have DISTINCT
+    ``id[:8]`` prefixes (the production case — issue ids are uuid4, so an 8-hex
+    prefix collision is astronomically unlikely). Locks the invariant that the
+    discovery prefixes (`swarm-<full-id>-` for dirs, `swarm/<id[:8]>-` for
+    branches) are issue-scoped, not a blanket `swarm/*` sweep that would delete a
+    concurrently-finalizing sibling issue's branches."""
+    # Distinct ids => distinct id[:8] => distinct branch prefixes.
+    issue_a = await _issue_with_worktree(project, manager, "aaaa1111-issueA")
+    issue_b = await _issue_with_worktree(project, manager, "bbbb2222-issueB")
+    assert issue_a.id[:8] != issue_b.id[:8]
+
+    br_a, wt_a, _ = await manager.prepare_agent_worktree(project, issue_a, "engineer")
+    br_b, wt_b, _ = await manager.prepare_agent_worktree(project, issue_b, "engineer")
+
+    # Sweep ONLY issue A.
+    await manager.cleanup_issue_swarm_worktrees(project, issue_a)
+
+    # A is cleaned.
+    assert not Path(wt_a).exists()
+    assert not await manager.git.branch_exists(project.repo_path, br_a)
+    # B is fully untouched: worktree dir + swarm branch + issue branch all survive.
+    assert Path(wt_b).exists()
+    assert await manager.git.branch_exists(project.repo_path, br_b)
+    assert Path(issue_b.git_worktree_path).exists()
+    assert await manager.git.branch_exists(project.repo_path, issue_b.git_branch)
+
+
 # ---- PR3: upstream visibility + merge-back ----
 
 

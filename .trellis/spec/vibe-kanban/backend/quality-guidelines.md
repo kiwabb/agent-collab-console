@@ -389,6 +389,13 @@ await git.squash_merge_into_branch(
 )
 ```
 
+#### 8. Terminal-state swarm cleanup (resource hygiene)
+
+- `dispatch_batch` retains per-agent `swarm/<issue.id[:8]>-*` branches + `swarm-<issue.id>-*` worktrees on the conflict / non-merged path (intentional — for reconcile). Their cleanup owner is the conductor terminal seal: `worktree_manager.cleanup_issue_swarm_worktrees(project, issue)`, called best-effort at the end of `_seal_graph_and_issue_status` (`conductor_main_loop.py`).
+- Contract: enumerate residuals from **real git state** (`git worktree list` + `git branch --list 'swarm/<prefix>*'`), NOT in-memory lineage (not persisted; gone at terminal time). Discovery prefixes MUST byte-match creation (`_worktree_path` / `_agent_branch_name`): dir uses full `issue.id`, branch uses `issue.id[:8]`.
+- HARD: only removes worktrees + force-deletes `swarm/*` refs (`git branch -D`, regex-gated). NEVER merge/checkout/advance `main` or the issue branch. Idempotent + best-effort: missing residuals skip silently; a cleanup failure logs a warning and never blocks the terminal seal.
+- Tests: real-git integration asserting residual worktree+branch removed, `git rev-parse main` byte-identical before/after, sibling-issue swarm branches survive (issue-scoped discovery).
+
 ---
 
 ### Scenario: Isolated Worktree Upstream Visibility

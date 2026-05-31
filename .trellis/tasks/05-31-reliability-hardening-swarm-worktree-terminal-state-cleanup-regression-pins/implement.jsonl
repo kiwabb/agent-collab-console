@@ -1,0 +1,2 @@
+{"file": "research/reliability-gap-verification.md", "reason": "PR1 唯一真缺口的精确落点(conductor_tools.py:400-414 cleanup_on_exit 仅异常路径 / _seal_graph_and_issue_status:996 不碰 worktree / 可复用清理原语)，以及 7 个伪缺口的不做依据(防止实现者跑偏去补已覆盖的)。已亲验真代码。"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "PR1 动 worktree/git 必读：Worktree-Scoped Branch Merge (Swarm-Safe) 契约——只删 worktree+swarm 分支 ref，绝不 ff/污染主仓 main。本项目真契约(挂参考仓库命名空间)。"}
