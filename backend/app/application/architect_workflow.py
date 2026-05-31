@@ -15,6 +15,10 @@ class ImplementationTask(BaseModel):
     title: str
     description: str
     priority: str = "P1"
+    # Best-effort prediction of repo-relative files this task is expected to
+    # change or create. Default [] keeps old implementation_plan.json payloads
+    # (which lack this field) valid for model_validate.
+    expected_files: list[str] = []
 
 
 class SystemDesignDocument(BaseModel):
@@ -45,6 +49,9 @@ class ReviewReportDocument(BaseModel):
     reason: str
     suggestions: list[str]
     risks_identified: list[str]
+    # Deterministic diff-guard conclusion (verdict/missing/extra/...). Set by the
+    # framework, not the LLM. Optional + default None keeps old payloads valid.
+    framework_guard: dict | None = None
 
 
 class ArchitectWorkflow:
@@ -130,6 +137,13 @@ class ArchitectWorkflow:
             "4. Consider the natural cohesion of the work:\n"
             "   - If functionality naturally belongs together in one file, keep it in one task\n"
             "   - If functionality spans multiple modules/files, split into separate tasks\n\n"
+            "EXPECTED_FILES PREDICTION:\n"
+            "- For each implementation task, predict `expected_files`: the repo-relative paths of files\n"
+            "  you expect that task to change or newly create (include files that do not exist yet).\n"
+            "- This is a BEST-EFFORT prediction made before any code is written, so it does NOT need to be\n"
+            "  precise or exhaustive. Provide your best guess; downstream tooling treats it as a soft signal.\n"
+            "- Use repo-relative paths without a leading './' (e.g. 'backend/app/foo.py', 'frontend/src/Bar.tsx').\n"
+            "- If you genuinely cannot predict any files for a task, use an empty list [].\n\n"
             "OUTPUT FORMAT RULES:\n"
             "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
             "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
@@ -145,7 +159,7 @@ class ArchitectWorkflow:
             '"data_models": ["string"],\n'
             '"interfaces": ["string"],\n'
             '"data_flow": "string",\n'
-            '"implementation_tasks": [{"title": "string", "description": "string", "priority": "P0|P1|P2"}],\n'
+            '"implementation_tasks": [{"title": "string", "description": "string", "priority": "P0|P1|P2", "expected_files": ["repo/relative/path.ext"]}],\n'
             '"development_task_list": ["string"], // MUST exactly match the titles in implementation_tasks in the desired order of execution\n'
             '"risks": ["string"],\n'
             '"open_questions": ["string"]\n'
@@ -278,6 +292,19 @@ class ArchitectWorkflow:
         architect_artifacts = self._read_existing_design_artifacts(task.workspace_path, issue_id)
         engineer_artifacts = self._read_engineer_artifacts(task.workspace_path, issue_id)
 
+        # Deterministic diff guard (B4 soft signal): give the reviewer the REAL
+        # git diff plus the expected/actual file delta as ground truth. The hard
+        # short-circuit (B2) lives at the dispatch site, so by the time we build
+        # this prompt the guard is at worst a soft `plan_drift`/`ok`.
+        guard_block = ""
+        try:
+            from app.application.review_guard import compute_review_guard, render_guard_context
+
+            guard = compute_review_guard(task.workspace_path, issue_id)
+            guard_block = "\n" + render_guard_context(guard) + "\n"
+        except Exception:  # noqa: BLE001
+            guard_block = ""
+
         return (
             "You are acting as Architect performing a Code Review. "
             "Examine the requirements, the system design, and the engineer's implementation report. "
@@ -289,7 +316,8 @@ class ArchitectWorkflow:
             "context_documents:\n"
             f"requirement: {pm_artifacts.get('requirement', 'N/A')}\n"
             f"system_design: {architect_artifacts.get('system_design_json', 'N/A')}\n"
-            f"implementation_report: {engineer_artifacts.get('implementation_md', 'N/A')}\n\n"
+            f"implementation_report: {engineer_artifacts.get('implementation_md', 'N/A')}\n"
+            f"{guard_block}\n"
             "OUTPUT FORMAT RULES:\n"
             "- Output the JSON object directly. Do NOT wrap it in markdown code blocks (no ```json or ```).\n"
             "- The entire response must be a single raw JSON object starting with { and ending with }.\n"
@@ -389,7 +417,15 @@ class ArchitectWorkflow:
         if not tasks:
             return "[]"
         return json.dumps(
-            [{"title": t.title, "description": t.description, "priority": t.priority} for t in tasks],
+            [
+                {
+                    "title": t.title,
+                    "description": t.description,
+                    "priority": t.priority,
+                    "expected_files": t.expected_files,
+                }
+                for t in tasks
+            ],
             indent=2,
             ensure_ascii=False,
         )

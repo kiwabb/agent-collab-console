@@ -1,0 +1,3 @@
+{"file": "research/architect-review-guard.md", "reason": "校验 guard 行为正确性：硬底线只在 claim-vs-reality 矛盾时短路(非'diff为空')、软信号不短路、guard 结论入 artifact、决策写回字段对(status done/rework + review_comment)。"}
+{"file": "research/engineer-codegen-chain.md", "reason": "校验关键回归点：合法空 diff(已实现/blocked)不被误杀、Engineer partial 降级与 changed_files 对账正确、QA 独立核查沿用软语义不破坏现有 reconcile。"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "校验零 main 污染：任何动 git 合并/worktree 的改动须符合 Worktree-Scoped Branch Merge 契约，PR4 集成测试不得 ff 主仓 main。"}

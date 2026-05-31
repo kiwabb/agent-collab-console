@@ -320,47 +320,7 @@ async def _refresh_task_result(task):
         if task.role == "architect" and getattr(task, "task_kind", "normal") == "review" and task.parent_task_id:
             from app.application.architect_workflow import ReviewReportDocument
             if isinstance(artifact, ReviewReportDocument):
-                parent_task = await codex_store.load_codex_task(task.parent_task_id)
-                if parent_task:
-                    if artifact.decision == "approve":
-                        parent_task.status = "done"
-                    else:
-                        parent_task.status = "rework"
-                    
-                    # Format complete review feedback
-                    review_parts = [artifact.reason]
-                    if artifact.suggestions:
-                        review_parts.append("\n\n**改进建议：**")
-                        for i, suggestion in enumerate(artifact.suggestions, 1):
-                            review_parts.append(f"{i}. {suggestion}")
-                    if artifact.risks_identified:
-                        review_parts.append("\n\n**识别的风险：**")
-                        for i, risk in enumerate(artifact.risks_identified, 1):
-                            review_parts.append(f"{i}. {risk}")
-                    
-                    parent_task.review_comment = "\n".join(review_parts)
-                    parent_task.updated_at = datetime.now()
-                    await codex_store.save_codex_task(parent_task)
-                    await event_bus.append({
-                        "type": "task_status",
-                        "task_id": parent_task.id,
-                        "issue_id": parent_task.issue_id,
-                        "session_id": parent_task.session_id,
-                        "status": parent_task.status,
-                        "review_comment": parent_task.review_comment,
-                    })
-                    
-                    # Push to WebSocket for real-time update
-                    try:
-                        from app.interfaces.codex_ws import stream_manager
-                        stream_manager.buffer_pending(parent_task.session_id, {
-                            "type": "task_status",
-                            "task_id": parent_task.id,
-                            "status": parent_task.status,
-                            "review_comment": parent_task.review_comment,
-                        })
-                    except Exception:
-                        pass
+                await _apply_automated_review_to_parent(task.parent_task_id, artifact)
 
         # QA verdict bridge: push failure reason to the WebSocket so the UI can
         # render the review_comment banner without polling.
@@ -4261,6 +4221,57 @@ async def get_codex_task_logs(task_id: str):
     return await codex_store.load_log_events(task.session_id, task_id=task_id, limit=1000)
 
 
+def _format_review_feedback(artifact) -> str:
+    """Render a ReviewReportDocument into the parent task's review_comment."""
+    review_parts = [artifact.reason]
+    if artifact.suggestions:
+        review_parts.append("\n\n**改进建议：**")
+        for i, suggestion in enumerate(artifact.suggestions, 1):
+            review_parts.append(f"{i}. {suggestion}")
+    if artifact.risks_identified:
+        review_parts.append("\n\n**识别的风险：**")
+        for i, risk in enumerate(artifact.risks_identified, 1):
+            review_parts.append(f"{i}. {risk}")
+    return "\n".join(review_parts)
+
+
+async def _apply_automated_review_to_parent(parent_task_id: str, artifact) -> None:
+    """Write an automated review decision back onto the parent development task.
+
+    Shared by the normal LLM-review writeback and the deterministic
+    hard-short-circuit path so both produce identical status/review_comment/
+    WS-event behavior. ``approve`` -> parent ``done``; anything else -> ``rework``.
+    """
+    if codex_store is None:
+        return
+    parent_task = await codex_store.load_codex_task(parent_task_id)
+    if not parent_task:
+        return
+    parent_task.status = "done" if artifact.decision == "approve" else "rework"
+    parent_task.review_comment = _format_review_feedback(artifact)
+    parent_task.updated_at = datetime.now()
+    await codex_store.save_codex_task(parent_task)
+    await event_bus.append({
+        "type": "task_status",
+        "task_id": parent_task.id,
+        "issue_id": parent_task.issue_id,
+        "session_id": parent_task.session_id,
+        "status": parent_task.status,
+        "review_comment": parent_task.review_comment,
+    })
+    # Push to WebSocket for real-time update
+    try:
+        from app.interfaces.codex_ws import stream_manager
+        stream_manager.buffer_pending(parent_task.session_id, {
+            "type": "task_status",
+            "task_id": parent_task.id,
+            "status": parent_task.status,
+            "review_comment": parent_task.review_comment,
+        })
+    except Exception:
+        pass
+
+
 @router.post("/codex/tasks/{task_id}/submit")
 async def submit_codex_task_for_review(task_id: str):
     """Mark a completed development task as awaiting review and trigger automated AI review."""
@@ -4317,6 +4328,55 @@ async def submit_codex_task_for_review(task_id: str):
         "session_id": task.session_id,
         "task": _serialize_task_payload(review_task),
     })
+
+    # 2b. Deterministic hard short-circuit (B2/B3): if the Engineer claimed it
+    # landed code but the worktree shows zero file changes, this is a
+    # claim-vs-reality contradiction (a hard fact, not a judgement call). Reject
+    # deterministically WITHOUT dispatching the LLM review — same writeback path
+    # as a normal reject so the parent goes to `rework` with a [FRAMEWORK] reason.
+    try:
+        from app.application.architect_workflow import ReviewReportDocument
+        from app.application.review_guard import compute_review_guard
+
+        guard = compute_review_guard(
+            task.workspace_path, task.issue_id or task.id, include_diff_summary=False
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("review guard computation failed for task %s: %s", task.id, exc)
+        guard = None
+
+    if guard is not None and guard.is_hard_mismatch:
+        synthetic = ReviewReportDocument(
+            project_name=task.title or "workspace-project",
+            issue_id=task.issue_id or task.id,
+            issue_title=task.title or "",
+            decision="reject",
+            reason=(
+                "[FRAMEWORK] report-claim mismatch: claimed implementation but zero "
+                f"file changes. claimed={guard.claimed_files} status={guard.claimed_status}"
+            ),
+            suggestions=[
+                "Actually modify files in the workspace (Write/Edit/Bash); a markdown "
+                "report alone is not an implementation.",
+            ],
+            risks_identified=[],
+            framework_guard=guard.to_artifact(),
+        )
+        # Mark the review task complete WITHOUT running the LLM, and write the
+        # decision back onto the parent (parent -> rework).
+        review_task.status = "done"
+        review_task.result = f"Review completed (framework guard): {synthetic.decision}. Reason: {synthetic.reason}"
+        review_task.updated_at = datetime.now()
+        await codex_store.save_codex_task(review_task)
+        await event_bus.append({
+            "type": "task_status",
+            "task_id": review_task.id,
+            "issue_id": review_task.issue_id,
+            "session_id": review_task.session_id,
+            "status": review_task.status,
+        })
+        await _apply_automated_review_to_parent(task.id, synthetic)
+        return task
 
     # 3. Run the review task automatically
     try:

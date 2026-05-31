@@ -260,3 +260,86 @@ def test_execution_failed_command_sets_task_status_failed(workflow, workspace, v
     assert getattr(task, "status", None) == "failed"
     rc = getattr(task, "review_comment", None)
     assert rc is not None
+
+
+# --- D1: independent git cross-check -------------------------------------
+
+
+def _write_engineer_report(workspace: str, *, status: str, completed: bool = True):
+    """Drop a minimal Engineer implementation markdown the guard parser reads."""
+    eng_dir = Path(workspace) / "issues" / "issue-1" / "engineer"
+    eng_dir.mkdir(parents=True, exist_ok=True)
+    completed_block = (
+        "## Completed Tasks\n- **Add endpoint** (P1): did it\n"
+        if completed
+        else "## Completed Tasks\n- None\n"
+    )
+    (eng_dir / "implementation-task.md").write_text(
+        f"# Implementation Report: X\n\n- Status: {status}\n\n"
+        "## Changed Files\n- None\n\n"
+        f"{completed_block}",
+        encoding="utf-8",
+    )
+
+
+def test_d1_implies_implementation_zero_diff_no_commands_promotes_follow_up(
+    workflow, workspace, valid_qa_payload
+):
+    """D1: Engineer report implies implementation but worktree shows ZERO
+    changes and NO recommended commands → needs_follow_up (the command
+    reconcile alone can't catch this)."""
+    valid_qa_payload["recommended_commands"] = []
+    _write_engineer_report(workspace, status="completed")
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True), \
+         mock.patch(
+             "app.application.engineer_workflow.git_changed_files", return_value=[]
+         ):
+        doc = workflow.persist_result(task)
+    assert doc.status == "needs_follow_up"
+    assert any("Independent git cross-check" in g for g in doc.test_gaps)
+
+
+def test_d1_real_changes_do_not_trigger(workflow, workspace, valid_qa_payload):
+    """D1: Engineer implemented AND the worktree shows real changes → no bump."""
+    valid_qa_payload["recommended_commands"] = []
+    _write_engineer_report(workspace, status="completed")
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True), \
+         mock.patch(
+             "app.application.engineer_workflow.git_changed_files", return_value=["a.py"]
+         ):
+        doc = workflow.persist_result(task)
+    assert doc.status == "passed"
+    assert not any("Independent git cross-check" in g for g in doc.test_gaps)
+
+
+def test_d1_blocked_engineer_does_not_trigger(workflow, workspace, valid_qa_payload):
+    """D1: an Engineer report that did NOT implement (status=blocked, no
+    completed_tasks) + zero diff is a legal empty diff → no bump."""
+    valid_qa_payload["recommended_commands"] = []
+    _write_engineer_report(workspace, status="blocked", completed=False)
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True), \
+         mock.patch(
+             "app.application.engineer_workflow.git_changed_files", return_value=[]
+         ):
+        doc = workflow.persist_result(task)
+    assert doc.status == "passed"
+    assert not any("Independent git cross-check" in g for g in doc.test_gaps)
+
+
+def test_d1_does_not_override_command_failure(workflow, workspace, valid_qa_payload):
+    """D1 must NOT weaken a real command FAILURE: non-zero exit stays 'failed'
+    even when the engineer report + zero diff would otherwise suggest
+    needs_follow_up (failed is the stronger fact)."""
+    valid_qa_payload["recommended_commands"] = ["false"]  # exits 1 → failed
+    _write_engineer_report(workspace, status="completed")
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
+    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True), \
+         mock.patch(
+             "app.application.engineer_workflow.git_changed_files", return_value=[]
+         ):
+        doc = workflow.persist_result(task)
+    assert doc.status == "failed"
+    assert getattr(task, "status", None) == "failed"

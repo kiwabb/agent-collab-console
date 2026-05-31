@@ -7,6 +7,68 @@ from pydantic import BaseModel, Field, ValidationError
 from app.application.issue_artifact_documents import IssueArtifactDocuments
 
 
+def _normalize_repo_path(path: str) -> str:
+    """repo-relative, no leading ``./``; normalize separators for comparison."""
+    p = (path or "").strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p.strip("/")
+
+
+def git_changed_files(workspace_path: str | None) -> list[str]:
+    """Return files that differ from the base branch in this worktree.
+
+    Compares against ``git diff --name-only origin/main..HEAD`` first (most
+    common base reference), then ``main``, then ``HEAD~1``, and unions in
+    uncommitted working-tree changes from ``git status --porcelain`` (so a
+    brand-new uncommitted file still counts). Returns an empty list if no git
+    diff machinery is reachable, which makes the post-execution check fail-open
+    rather than fail-closed.
+
+    Module-level so the Architect Review diff guard (``review_guard``), the
+    Engineer post-execution cross-check, and the QA independent check all reuse
+    the exact same base-fallback logic (single source of truth, no duplicated
+    git plumbing). Pure read; never mutates the repo.
+    """
+    if not workspace_path:
+        return []
+    import subprocess
+    for base in ("origin/main", "main", "HEAD~1"):
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", f"{base}..HEAD"],
+                cwd=workspace_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode == 0:
+            committed = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            # Also include uncommitted working-tree changes the model
+            # may not have committed yet.
+            try:
+                wt = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=workspace_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if wt.returncode == 0:
+                    wt_files = [
+                        line[3:].strip()
+                        for line in wt.stdout.splitlines()
+                        if line.strip() and not line[3:].startswith("issues/")
+                    ]
+                    return list({*committed, *wt_files})
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+            return committed
+    return []
+
+
 def _scope_hint_for_role(role: str) -> str:
     """Hard scope guard injected on top of the prompt when a specialist
     engineer (engineer_frontend / engineer_backend) is dispatched, so the
@@ -257,22 +319,13 @@ class EngineerWorkflow:
         except ValidationError as exc:
             raise EngineerWorkflowError(f"Engineer output does not match schema: {exc}") from exc
 
-        # Post-execution cross-check: an Engineer claiming `completed` MUST
-        # have produced an actual git diff. If not, downgrade to `partial`
-        # and prepend a qa_note flagging the discrepancy. This stops models
-        # from declaring victory while only writing a markdown report.
-        if report.status == "completed":
-            actually_changed = self._git_changed_files(task.workspace_path)
-            if not actually_changed:
-                report.status = "partial"
-                claim_note = (
-                    "[framework] Engineer claimed status=completed but git diff against the base "
-                    "branch shows no file changes. Downgraded to partial pending real implementation. "
-                    f"Claimed changed_files: {report.changed_files!r}"
-                )
-                # Pydantic models are frozen-ish in v2; mutate via __setattr__.
-                report.qa_notes = [claim_note, *list(report.qa_notes or [])]
-                report.changed_files = []
+        # Post-execution cross-check against the real git diff (ground truth).
+        # See `.trellis/spec/.../quality-guidelines.md` "Engineer/QA Real-Codegen
+        # Reconciliation": C1 (claim-vs-reality HARD downgrade) + C2 (reconcile
+        # the claimed list to the actual diff). The git diff is the source of
+        # truth — a markdown report alone is not an implementation.
+        actually_changed = self._git_changed_files(task.workspace_path)
+        self._apply_diff_cross_check(report, actually_changed)
 
         self._docs.ensure_issue_root(task.workspace_path, canonical_issue_id)
 
@@ -297,51 +350,67 @@ class EngineerWorkflow:
         return report
 
     def _git_changed_files(self, workspace_path: str | None) -> list[str]:
-        """Return files that differ from the base branch in this worktree.
+        """Instance shim delegating to the module-level ``git_changed_files``
+        (single source of truth, shared with the review guard / QA check)."""
+        return git_changed_files(workspace_path)
 
-        Compares against `git merge-base origin/main HEAD` first (most
-        common base reference), then `main`, then `HEAD~1`. Returns an
-        empty list if no git diff machinery is reachable, which makes the
-        post-execution check fail-open rather than fail-closed.
+    @staticmethod
+    def _claims_implementation(report) -> bool:
+        """Does the report assert it LANDED CODE?
+
+        The only unambiguous code-landing signal is a non-empty ``changed_files``
+        list (the Engineer named files it claims it modified). This matches the
+        review guard's definition (``bool(claimed_set)``) so the legal
+        already-implemented path — status=completed/partial with
+        ``changed_files=[]`` — is treated identically on both sides.
+        ``completed_tasks`` is deliberately NOT a landing signal.
         """
-        if not workspace_path:
-            return []
-        import subprocess
-        # Try a few bases in order of preference.
-        for base in ("origin/main", "main", "HEAD~1"):
-            try:
-                result = subprocess.run(
-                    ["git", "diff", "--name-only", f"{base}..HEAD"],
-                    cwd=workspace_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
+        if report.status not in {"completed", "partial"}:
+            return False
+        return bool(report.changed_files)
+
+    def _apply_diff_cross_check(self, report, actually_changed: list[str]) -> None:
+        """Reconcile the Engineer report against the real git diff in place.
+
+        C1 (HARD downgrade): a report that claims it landed code
+        (``_claims_implementation``) but produced a ZERO real git diff is a
+        claim-vs-reality contradiction -> downgrade to ``partial``, clear
+        ``changed_files``, prepend a ``[framework]`` qa_note. Covers BOTH
+        ``completed`` and ``partial``. An honest ``changed_files=[]`` (already
+        implemented / nothing to change / blocked) is a LEGAL empty diff and is
+        left untouched.
+
+        C2 (reconcile): when real changes DO exist, overwrite ``changed_files``
+        with the actual git-diff set whenever it diverges (after ``./``-stripping
+        path normalization), plus a ``[framework]`` qa_note recording
+        claimed-vs-actual. No divergence -> list left verbatim, no note.
+        """
+        claims = self._claims_implementation(report)
+
+        # --- C1: claim-vs-reality contradiction (HARD) ---
+        if claims and not actually_changed:
+            claim_note = (
+                f"[framework] Engineer claimed status={report.status} with changed_files="
+                f"{report.changed_files!r} but git diff against the base branch shows no file "
+                "changes. Downgraded to partial pending real implementation."
+            )
+            report.qa_notes = [claim_note, *list(report.qa_notes or [])]
+            report.status = "partial"
+            report.changed_files = []
+            return
+
+        # --- C2: reconcile claimed list to ground truth ---
+        if actually_changed:
+            actual_norm = {_normalize_repo_path(f) for f in actually_changed if _normalize_repo_path(f)}
+            claimed_norm = {_normalize_repo_path(f) for f in (report.changed_files or []) if _normalize_repo_path(f)}
+            if actual_norm != claimed_norm:
+                reconcile_note = (
+                    f"[framework] Engineer-claimed changed_files {report.changed_files!r} did not "
+                    f"match the actual git diff; rewritten to the real changed set "
+                    f"{sorted(actual_norm)!r}."
                 )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                return []
-            if result.returncode == 0:
-                committed = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-                # Also include uncommitted working-tree changes the model
-                # may not have committed yet.
-                try:
-                    wt = subprocess.run(
-                        ["git", "status", "--porcelain"],
-                        cwd=workspace_path,
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-                    if wt.returncode == 0:
-                        wt_files = [
-                            line[3:].strip()
-                            for line in wt.stdout.splitlines()
-                            if line.strip() and not line[3:].startswith("issues/")
-                        ]
-                        return list({*committed, *wt_files})
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
-                return committed
-        return []
+                report.qa_notes = [reconcile_note, *list(report.qa_notes or [])]
+                report.changed_files = sorted(actual_norm)
 
     def _read_pm_artifacts(self, workspace_path: str, issue_id: str) -> dict[str, str]:
         artifacts: dict[str, str] = {}

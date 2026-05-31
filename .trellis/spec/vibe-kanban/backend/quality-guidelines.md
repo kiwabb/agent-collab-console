@@ -516,6 +516,159 @@ spent = aggregate_issue_spend_usd(store, issue_id)     # completed runs only
 
 ---
 
+### Scenario: Engineer/QA Real-Codegen Reconciliation (Claim vs Git Ground Truth)
+
+#### 1. Scope / Trigger
+
+- Trigger: changing how the Engineer persists its report (`EngineerWorkflow.persist_result`) or how QA reconciles its verdict (`QAWorkflow.persist_result`) against the real worktree git diff.
+- Why code-spec depth: an Engineer (LLM) can declare victory while only writing a markdown report, or misname the files it touched. The framework treats the git diff as ground truth and reconciles deterministically. The hard/soft split must follow the repo philosophy: claim-vs-reality contradiction is a HARD fact; everything else is a SOFT signal that never hard-kills.
+
+#### 2. Signatures
+
+```python
+# engineer_workflow.py
+def git_changed_files(workspace_path: str | None) -> list[str]   # module-level, single source of truth
+class EngineerWorkflow:
+    def _apply_diff_cross_check(self, report, actually_changed: list[str]) -> None  # in-place C1 + C2
+    @staticmethod
+    def _claims_implementation(report) -> bool
+
+# qa_workflow.py
+class QAWorkflow:
+    @staticmethod
+    def _git_cross_check(current_status, workspace_path, issue_id) -> tuple[str, str | None]  # D1
+```
+
+#### 3. Contracts
+
+- **C1 (downgrade, HARD):** a report that *claims it landed code* — status ∈ {completed, partial} AND a non-empty `changed_files` (it named files it claims to have modified) — but produces a ZERO real git diff is downgraded to `partial`, `changed_files` cleared, and a `[framework]` qa_note prepended. Covers BOTH `completed` and `partial`.
+- **`completed_tasks` is NOT a C1 hard trigger:** the only unambiguous code-landing signal is a non-empty `changed_files`. An honest `changed_files=[]` already-implemented report legitimately lists the task it addressed in `completed_tasks` (the task WAS handled, just without new code), so treating `completed_tasks` as a landing claim would downgrade an honest "already implemented" report (AC4 violation). This is the identical definition of a code-landing claim used by the Architect-Review guard (`review_guard.compute_review_guard` uses `bool(claimed_set)` only) — one consistent notion across the chain.
+- **Legal empty diff is NOT a claim:** status=blocked, or `changed_files=[]` (already-implemented / nothing-to-change, with or without `completed_tasks`), is honest and left untouched by C1. The hard trigger is the claim-vs-reality contradiction (named changed files vs zero diff), never "diff is empty". The already-implemented empty-diff case is surfaced only by the SOFT D1 / LLM layers, never by a C1 status downgrade.
+- **C2 (reconcile, ground truth):** when real changes DO exist, the report's `changed_files` is overwritten with the actual git-diff set whenever it diverges (after `./`-stripping path normalization), plus a `[framework]` qa_note recording claimed-vs-actual. No divergence → list left verbatim, no note (no noise).
+- **D1 (QA soft signal):** layered ON TOP of the command reconcile. If the Engineer report implies implementation (status != blocked, or has completed_tasks) but the worktree shows zero diff, QA bumps to `needs_follow_up` — even when the Engineer recommended no commands. NEVER weakens a `failed` (real non-zero command exit is the stronger fact) and never hard-kills.
+- `git_changed_files` is the one base-fallback implementation (origin/main → main → HEAD~1); Engineer cross-check, review guard, and QA D1 all reuse it.
+
+#### 4. Validation & Error Matrix
+
+- claims implementation + zero diff → C1 downgrade to partial + note.
+- partial + real (matching) diff → untouched.
+- completed/partial + honest `changed_files=[]` + zero diff → NOT flagged by C1 (legal already-implemented / blocked), whether or not `completed_tasks` is listed.
+- claimed files ≠ actual files (real changes exist) → C2 rewrite to actual + note; claimed == actual → no note.
+- QA: engineer implies impl + zero diff + no commands → `needs_follow_up`. Engineer blocked / real changes → no bump. Command non-zero exit → stays `failed` regardless of D1.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: Engineer claims `[a.py]`, git shows `[b.py]` → report rewritten to `[b.py]` with a reconcile note; review/QA see the truth.
+- Base: honest "already implemented, nothing to change" (status=completed, `changed_files=[]`) survives untouched by C1 — even when it lists the addressed task in `completed_tasks`.
+- Bad: hard-rejecting / downgrading the legal empty-diff already-implemented case, or letting D1 override a real command failure.
+
+#### 6. Tests Required
+
+- C1: completed+zero-diff downgrade; partial+zero-diff(claiming files) downgrade; legal empty `changed_files` (completed & partial, incl. with completed_tasks) NOT flagged; partial+real-diff untouched.
+- C2: claimed≠actual rewrite + note; claimed==actual no note.
+- D1: implies-impl + zero diff + no commands → needs_follow_up; real changes → no bump; blocked engineer → no bump; non-zero command exit stays failed (reconcile not regressed).
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+if report.status == "completed" and not git_changed_files(ws):  # misses partial; ignores claimed files
+    report.status = "partial"
+```
+
+Correct:
+
+```python
+actually_changed = git_changed_files(ws)
+self._apply_diff_cross_check(report, actually_changed)  # C1 (completed+partial) + C2 reconcile
+```
+
+---
+
+### Scenario: Architect-Review Deterministic Tiered Guard (diff-vs-plan)
+
+> The Architect-Review-side counterpart of *Engineer/QA Real-Codegen Reconciliation* above.
+> Same one notion of a code-landing claim (`bool(claimed_changed_files)`), same single
+> `git_changed_files` base-fallback. This scenario covers the **review decision**, not the report.
+
+#### 1. Scope / Trigger
+
+- Trigger: an engineer→architect review task (`task_kind="review"`, has `parent_task_id`) is about to be dispatched, OR an architect review prompt is being built. Before this guard the review LLM saw only requirement / system_design / implementation_report markdown — **zero git ground truth** — so "report claims work, code is empty" survived on luck. This guard makes the claim-vs-reality check deterministic and feeds the real diff to the LLM.
+- Cross-layer: reads git (worktree), `implementation_plan.json` (architect artifact), the engineer report, and short-circuits an API dispatch path → code-spec depth mandatory.
+
+#### 2. Signatures
+
+```python
+# review_guard.py  (pure, synchronous, read-only — safe to call inside sync prompt-build)
+def compute_review_guard(workspace_path: str | None, issue_id: str,
+                         *, include_diff_summary: bool = True) -> ReviewGuardResult
+#   ReviewGuardResult: {verdict: "hard_mismatch"|"plan_drift"|"ok",
+#                       claimed_files, actual_files, expected_files,
+#                       missing, extra, diff_summary}
+
+# architect_workflow.py
+class ReviewReportDocument(BaseModel):
+    ...
+    framework_guard: dict | None = None   # B5; default None = backward compatible
+
+# api.py
+async def submit_codex_task_for_review(task_id): ...   # B2 short-circuit lives here, BEFORE run_codex_task
+def _apply_automated_review_to_parent(parent_task, artifact) -> None   # shared by LLM + synthetic-reject paths
+```
+
+#### 3. Contracts
+
+- **Ground truth (deterministic):** actual changed files come from the single `git_changed_files` (origin/main → main → HEAD~1 fallback, includes untracked via `git status --porcelain`). `diff_summary` is a truncated real-diff text. `expected_files` is the union of `ImplementationTask.expected_files` from `implementation_plan.json` (tolerant of legacy artifacts → `[]`). All paths normalized repo-relative, leading `./` stripped, before comparison.
+- **HARD (`hard_mismatch`) — claim-vs-reality contradiction:** report claims it landed code (non-empty `claimed_changed_files`, same `bool(claimed_set)` definition as Engineer C1 — `completed_tasks` is NOT a signal) but actual git diff is empty. → In `submit_codex_task_for_review`, **before** `run_codex_task`, write a synthetic `ReviewReportDocument(decision="reject", reason="[FRAMEWORK] report-claim mismatch…", framework_guard=…)`, apply it to parent (`status="rework"` + `[FRAMEWORK]` `review_comment`) via `_apply_automated_review_to_parent`, mark the review task done, and `return`. **The LLM is never invoked.**
+- **Legal empty diff (AC4):** honest `changed_files=[]` (already-implemented / blocked) with zero diff is NOT `hard_mismatch` — the LLM review IS dispatched (it still sees the empty diff via injected context). The hard trigger is the contradiction, never "diff is empty".
+- **SOFT (`plan_drift`):** real changes exist but diverge from `expected_files` (missing and/or extra). → NOT a short-circuit. `{expected, actual, missing, extra}` + `diff_summary` are injected into `_build_review_prompt` as an explicitly-labelled SOFT signal; the LLM weighs it (architect's pre-code file prediction is best-effort, not a contract). Empty `expected_files` → soft layer skipped, only the hard layer applies.
+- **Artifact (B5):** the guard verdict/missing/extra is recorded on `ReviewReportDocument.framework_guard` (default `None` keeps old artifacts valid).
+
+#### 4. Validation & Error Matrix
+
+- claimed non-empty + zero diff → `hard_mismatch` → deterministic reject, `run_codex_task` NOT called, parent `rework`.
+- honest `changed_files=[]` + zero diff (already-implemented/blocked) → NOT hard; LLM dispatched, parent stays `awaiting_review`.
+- real changes + `expected_files` has missing/extra → `plan_drift` → soft inject, no short-circuit.
+- real changes == expected (or expected empty) → `ok` → normal LLM review with real diff in context.
+- legacy `implementation_plan.json` without `expected_files` → treated as `[]`, soft layer skipped, no error.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: engineer report claims `[api.py]`, worktree diff empty → review auto-rejected with `[FRAMEWORK]` reason, no model tokens spent, engineer goes back to `rework`.
+- Base: honest "already implemented" review (claimed `[]`, empty diff) → dispatched to the LLM with the empty diff visible; the model, not the framework, decides.
+- Bad: short-circuiting the legal empty-diff case (AC4 regression), or building the review prompt without the real diff so the LLM judges blind again.
+
+#### 6. Tests Required
+
+- `hard_mismatch`: end-to-end `submit_codex_task_for_review` with `run_codex_task` monkeypatched → assert `call_count == 0`, `verdict == "hard_mismatch"`, parent `rework` + `[FRAMEWORK]` comment.
+- legal-empty (AC4 lock): honest `changed_files=[]` + completed_tasks + zero diff → assert `run_codex_task` `call_count == 1`, `verdict != "hard_mismatch"`.
+- `plan_drift`: real change vs `expected_files` missing → `verdict == "plan_drift"`, prompt context contains the missing entry + real diff, no short-circuit.
+- untracked new file counted (no false `hard_mismatch`); path normalization `./a.py == a.py`; swarm per-agent worktree base-fallback computes the real change without touching `main`.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+# guard only in prompt text → LLM already invoked; cannot save the tokens, and a blind
+# reject depends on the model noticing "changed files: None" in prose.
+prompt = _build_review_prompt(task)          # LLM runs regardless
+```
+
+Correct:
+
+```python
+guard = compute_review_guard(task.workspace_path, issue_id)
+if guard.verdict == "hard_mismatch":         # BEFORE run_codex_task
+    artifact = ReviewReportDocument(decision="reject", reason="[FRAMEWORK] …", framework_guard=guard.as_dict())
+    _apply_automated_review_to_parent(parent_task, artifact)
+    return                                   # LLM never invoked (AC3)
+await run_codex_task(review_task_id)         # ok / plan_drift → LLM sees real diff via injected context
+```
+
+---
+
 ## Testing Requirements
 
 <!-- What level of testing is expected -->

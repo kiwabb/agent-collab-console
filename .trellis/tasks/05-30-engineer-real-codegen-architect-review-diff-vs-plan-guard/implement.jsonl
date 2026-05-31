@@ -1,0 +1,3 @@
+{"file": "research/architect-review-guard.md", "reason": "PR1/PR2 落点：ImplementationTask 加 expected_files 的确切位置(架构 schema/render/prompt)、review prompt 缺 diff 的核心缺口、决策写回链路(api.py:319-351)、guard 分级设计与 git_service 可复用方法。已亲验真代码。"}
+{"file": "research/engineer-codegen-chain.md", "reason": "PR3 落点：Engineer 现有空-diff 兜底只覆盖 completed(:264)的洞、claimed-vs-actual 对账、_git_changed_files 复用、QA reconcile 软语义。含关键边界 :186 合法空 diff 必须放行。已亲验真代码。"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "PR4 swarm 集成测试涉及 worktree git 操作时必读：Worktree-Scoped Branch Merge 安全契约(squash_merge 会污染 main，swarm 须用 squash_merge_into_branch)。注:该 spec 挂参考仓库命名空间下，但内容是本项目真契约。"}

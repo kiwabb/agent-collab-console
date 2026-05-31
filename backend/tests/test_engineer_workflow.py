@@ -110,12 +110,99 @@ def test_completed_with_empty_diff_gets_downgraded(workflow, workspace):
     assert any("Engineer claimed status=completed" in n for n in doc.qa_notes)
 
 
-def test_partial_with_empty_diff_stays_partial(workflow, workspace):
+def test_partial_with_empty_diff_claiming_files_gets_flagged(workflow, workspace):
+    """C1: partial ALSO claims it landed some code (non-empty changed_files).
+    A zero real diff is a claim-vs-reality contradiction → flag + clear files,
+    even though the status was already 'partial'."""
     task = _FakeTask(workspace_path=workspace, result=json.dumps(_payload(status="partial")))
     with mock.patch.object(workflow, "_git_changed_files", return_value=[]):
         doc = workflow.persist_result(task)
     assert doc.status == "partial"
+    assert doc.changed_files == []
+    assert any("Engineer claimed status=partial" in n for n in doc.qa_notes)
+
+
+def test_partial_with_real_diff_left_untouched(workflow, workspace):
+    """C1: partial + a real (matching) git diff → no downgrade note, files kept."""
+    payload = _payload(status="partial", changed_files=["x.py"])
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(payload))
+    with mock.patch.object(workflow, "_git_changed_files", return_value=["x.py"]):
+        doc = workflow.persist_result(task)
+    assert doc.status == "partial"
+    assert doc.changed_files == ["x.py"]
     assert not any("Engineer claimed" in n for n in doc.qa_notes)
+
+
+def test_partial_legal_empty_changed_files_not_flagged(workflow, workspace):
+    """C1 boundary: an honest partial with changed_files=[] (no completed_tasks)
+    is NOT a landing claim → must not be flagged even with a zero diff."""
+    payload = _payload(status="partial", changed_files=[], completed_tasks=[])
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(payload))
+    with mock.patch.object(workflow, "_git_changed_files", return_value=[]):
+        doc = workflow.persist_result(task)
+    assert doc.status == "partial"
+    assert doc.changed_files == []
+    assert not any("Engineer claimed" in n for n in doc.qa_notes)
+
+
+def test_completed_legal_already_implemented_not_flagged(workflow, workspace):
+    """C1 boundary (AC4-style): completed + honest changed_files=[] + no
+    completed_tasks (already implemented / nothing to change) + zero diff →
+    NOT flagged. The 'already implemented' path must survive."""
+    payload = _payload(status="completed", changed_files=[], completed_tasks=[])
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(payload))
+    with mock.patch.object(workflow, "_git_changed_files", return_value=[]):
+        doc = workflow.persist_result(task)
+    assert doc.status == "completed"
+    assert doc.changed_files == []
+    assert not any("Engineer claimed" in n for n in doc.qa_notes)
+
+
+def test_completed_already_implemented_with_completed_tasks_not_flagged(workflow, workspace):
+    """C1 boundary (AC4, regression): an honest 'already implemented' report
+    (status=completed, changed_files=[], zero diff) that legitimately lists the
+    task it addressed in completed_tasks must NOT be downgraded. completed_tasks
+    is NOT a code-landing signal — only a non-empty changed_files is. This keeps
+    the Engineer C1 trigger aligned with review_guard (which uses bool(claimed)
+    only) so the legal already-implemented path survives on BOTH sides."""
+    payload = _payload(
+        status="completed",
+        changed_files=[],
+        completed_tasks=[
+            {"title": "Verify /api/ping already exists", "description": "it does", "priority": "P1"}
+        ],
+    )
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(payload))
+    with mock.patch.object(workflow, "_git_changed_files", return_value=[]):
+        doc = workflow.persist_result(task)
+    assert doc.status == "completed"
+    assert doc.changed_files == []
+    assert not any("Engineer claimed" in n for n in doc.qa_notes)
+
+
+def test_c2_rewrites_changed_files_to_ground_truth(workflow, workspace):
+    """C2: Engineer claims changed_files=[X] but actually changed [Y] →
+    changed_files rewritten to the actual set + a reconcile note recording the
+    divergence."""
+    payload = _payload(status="completed", changed_files=["claimed_a.py"])
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(payload))
+    with mock.patch.object(workflow, "_git_changed_files", return_value=["actual_b.py"]):
+        doc = workflow.persist_result(task)
+    assert doc.status == "completed"
+    assert doc.changed_files == ["actual_b.py"]
+    assert any("did not match the actual git diff" in n for n in doc.qa_notes)
+
+
+def test_c2_no_note_when_claim_matches_actual(workflow, workspace):
+    """C2: claimed == actual (modulo path normalization) → no reconcile note,
+    and the model's original changed_files list is left untouched (no noise)."""
+    payload = _payload(status="completed", changed_files=["./pkg/a.py", "pkg/b.py"])
+    task = _FakeTask(workspace_path=workspace, result=json.dumps(payload))
+    with mock.patch.object(workflow, "_git_changed_files", return_value=["pkg/b.py", "pkg/a.py"]):
+        doc = workflow.persist_result(task)
+    # No divergence (after normalization) → list preserved verbatim, no note.
+    assert doc.changed_files == ["./pkg/a.py", "pkg/b.py"]
+    assert not any("did not match" in n for n in doc.qa_notes)
 
 
 def test_blocked_status_skips_diff_check(workflow, workspace):

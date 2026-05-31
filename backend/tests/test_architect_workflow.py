@@ -3,7 +3,11 @@ import json
 import pytest
 from pathlib import Path
 
-from app.application.architect_workflow import ArchitectWorkflow, ArchitectWorkflowError
+from app.application.architect_workflow import (
+    ArchitectWorkflow,
+    ArchitectWorkflowError,
+    ImplementationTask,
+)
 from app.domain.models import CodexTask
 
 
@@ -216,6 +220,122 @@ def test_architect_rejects_empty_development_task_list(architect_workflow, tmp_p
     )
     with pytest.raises(ArchitectWorkflowError, match="空|empty"):
         architect_workflow.persist_result(task, workspace_title="电商系统")
+
+
+def test_architect_persists_expected_files_in_implementation_plan(architect_workflow, tmp_path):
+    """Verify Architect serializes expected_files into implementation_plan.json."""
+    task = CodexTask(
+        id="task-1",
+        session_id="ws-1",
+        issue_id="issue-1",
+        phase="architecture",
+        title="架构 - 购物车功能",
+        prompt="请设计购物车功能架构",
+        role="architect",
+        executor="codex",
+        status="done",
+        workspace_path=str(tmp_path),
+        result=json.dumps({
+            "language": "zh-CN",
+            "project_name": "电商系统",
+            "issue_id": "issue-1",
+            "issue_title": "架构 - 购物车功能",
+            "architecture_summary": "购物车模块设计",
+            "components": ["购物车服务"],
+            "data_models": ["Cart"],
+            "interfaces": ["POST /cart/add"],
+            "data_flow": "用户添加商品",
+            "implementation_tasks": [
+                {
+                    "title": "实现购物车API",
+                    "description": "实现购物车增删改查接口",
+                    "priority": "P1",
+                    "expected_files": ["backend/app/cart_api.py", "backend/app/cart_service.py"],
+                },
+                {
+                    "title": "实现库存检查",
+                    "description": "实现库存校验逻辑",
+                    "priority": "P1",
+                    "expected_files": ["backend/app/inventory.py"],
+                },
+            ],
+            "development_task_list": ["实现购物车API", "实现库存检查"],
+            "risks": [],
+            "open_questions": [],
+        }),
+    )
+
+    design = architect_workflow.persist_result(task, workspace_title="电商系统")
+
+    assert design.implementation_tasks[0].expected_files == [
+        "backend/app/cart_api.py",
+        "backend/app/cart_service.py",
+    ]
+
+    issue_root = Path(task.workspace_path) / "issues" / task.issue_id
+    impl_plan_path = issue_root / "architect" / "implementation_plan.json"
+    assert impl_plan_path.exists()
+
+    plan = json.loads(impl_plan_path.read_text(encoding="utf-8"))
+    assert plan[0]["expected_files"] == [
+        "backend/app/cart_api.py",
+        "backend/app/cart_service.py",
+    ]
+    assert plan[1]["expected_files"] == ["backend/app/inventory.py"]
+    # Existing fields preserved.
+    assert plan[0]["title"] == "实现购物车API"
+    assert plan[0]["priority"] == "P1"
+
+
+def test_architect_implementation_plan_defaults_expected_files_to_empty(architect_workflow, tmp_path):
+    """Verify old payloads (implementation_tasks without expected_files) degrade to []."""
+    task = CodexTask(
+        id="task-1",
+        session_id="ws-1",
+        issue_id="issue-1",
+        phase="architecture",
+        title="架构 - 购物车功能",
+        prompt="请设计购物车功能架构",
+        role="architect",
+        executor="codex",
+        status="done",
+        workspace_path=str(tmp_path),
+        result=json.dumps({
+            "language": "zh-CN",
+            "project_name": "电商系统",
+            "issue_id": "issue-1",
+            "issue_title": "架构 - 购物车功能",
+            "architecture_summary": "购物车模块设计",
+            "components": ["购物车服务"],
+            "data_models": ["Cart"],
+            "interfaces": ["POST /cart/add"],
+            "data_flow": "用户添加商品",
+            "implementation_tasks": [
+                # No expected_files field (legacy payload).
+                {"title": "实现购物车API", "description": "实现购物车增删改查接口", "priority": "P1"},
+            ],
+            "development_task_list": ["实现购物车API"],
+            "risks": [],
+            "open_questions": [],
+        }),
+    )
+
+    design = architect_workflow.persist_result(task, workspace_title="电商系统")
+
+    assert design.implementation_tasks[0].expected_files == []
+
+    issue_root = Path(task.workspace_path) / "issues" / task.issue_id
+    impl_plan_path = issue_root / "architect" / "implementation_plan.json"
+    plan = json.loads(impl_plan_path.read_text(encoding="utf-8"))
+    assert plan[0]["expected_files"] == []
+
+
+def test_implementation_task_model_validate_missing_expected_files():
+    """Legacy ImplementationTask payload validates with expected_files defaulting to []."""
+    task = ImplementationTask.model_validate(
+        {"title": "t", "description": "d", "priority": "P1"}
+    )
+    assert task.expected_files == []
 
 
 def test_architect_rejects_duplicate_titles_in_implementation_tasks(architect_workflow, tmp_path):

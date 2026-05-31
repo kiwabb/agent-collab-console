@@ -207,6 +207,18 @@ class QAWorkflow:
             existing_notes = list(report.test_gaps or [])
             report.test_gaps = framework_notes + existing_notes
 
+        # D1 — independent git cross-check (soft, additive). Even when the
+        # Engineer recommended no commands (so the reconcile above is a no-op),
+        # an implementation that claims it landed code but shows a ZERO real git
+        # diff is suspicious. Bump to `needs_follow_up` (soft, sticky over a
+        # `passed` claim) so a human looks — never harder than the command
+        # reconcile (a real command FAILURE keeps `failed`).
+        git_status, git_note = self._git_cross_check(report.status, task.workspace_path, canonical_issue_id)
+        if git_note:
+            if git_status != report.status:
+                report.status = git_status
+            report.test_gaps = [git_note, *list(report.test_gaps or [])]
+
         self._docs.ensure_issue_root(task.workspace_path, canonical_issue_id)
 
         qa_plan_path = self._docs.qa_plan_json_path(task.workspace_path, canonical_issue_id)
@@ -390,6 +402,58 @@ class QAWorkflow:
         # Anything else (LLM said failed/blocked/needs_follow_up) — trust it,
         # since the model knows context the executed commands don't.
         return claimed_status, notes
+
+    @staticmethod
+    def _git_cross_check(
+        current_status: str, workspace_path: str, issue_id: str
+    ) -> tuple[str, str | None]:
+        """Independent worktree git diff vs the Engineer report (D1).
+
+        Soft signal layered ON TOP of the command reconcile: if the Engineer
+        report implies it implemented something (status is not `blocked` and/or
+        it lists completed_tasks) but the worktree shows ZERO changes against the
+        base branch, the QA verdict is bumped to `needs_follow_up` so the empty
+        implementation is surfaced — even when the Engineer recommended no
+        verification commands (the path the command reconcile can't see).
+
+        Returns (status, note). ``note`` is None when nothing fired. This NEVER
+        downgrades a `failed` verdict (a real command failure is a stronger fact)
+        and NEVER hard-kills — it follows the repo's soft-signal philosophy.
+        """
+        # A real command failure is the stronger, more certain fact: don't
+        # weaken it. Also nothing to add to an already-needs_follow_up verdict.
+        if current_status in ("failed", "needs_follow_up"):
+            return current_status, None
+        try:
+            from app.application.engineer_workflow import git_changed_files
+            from app.application.review_guard import _read_engineer_report
+        except Exception:  # noqa: BLE001
+            return current_status, None
+
+        try:
+            eng_status, _claimed, has_completed_tasks = _read_engineer_report(
+                workspace_path, issue_id
+            )
+        except Exception:  # noqa: BLE001
+            return current_status, None
+
+        # Engineer report implies it did implementation work.
+        implies_implementation = (
+            (eng_status is not None and eng_status != "blocked") or has_completed_tasks
+        )
+        if not implies_implementation:
+            return current_status, None
+
+        actual_changed = git_changed_files(workspace_path)
+        if actual_changed:
+            return current_status, None
+
+        note = (
+            "[framework] Independent git cross-check: the Engineer report implies "
+            f"implementation (status={eng_status!r}) but the worktree shows ZERO file "
+            "changes against the base branch. Marking 'needs_follow_up' for human review."
+        )
+        return "needs_follow_up", note
 
     def _read_pm_artifacts(self, workspace_path: str, issue_id: str) -> dict[str, str]:
         artifacts: dict[str, str] = {}
