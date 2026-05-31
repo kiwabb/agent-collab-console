@@ -424,3 +424,37 @@ Validated the parallel-swarm + cost-aware work end-to-end across 3 tiers. Tier 1
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Reliability hardening: swarm worktree terminal cleanup + regression pins
+
+**Date**: 2026-05-31
+**Task**: Reliability hardening: swarm worktree terminal cleanup + regression pins
+**Package**: vibe-kanban
+**Branch**: `main`
+
+### Summary
+
+Verified 8 candidate reliability gaps against real code: 7 were pseudo-gaps already covered by existing infra (DAG-retry-by-conductor, lease liveness guard, signal register-before-launch, GAP-C terminal guard, startup orphan recovery). One genuine gap: dispatch_batch retained swarm worktrees/branches had no cleanup owner at conductor terminal state -> cross-issue disk/ref leak. PR1 added idempotent best-effort cleanup_issue_swarm_worktrees (real-git enumeration, prefix byte-aligned to creation, zero main pollution) wired into _seal_graph_and_issue_status + git_service.list_branch_names/delete_branch. PR2 pinned previously-uncovered invariants (redispatch budget cap, pulse<ttl). PR3 archived two stalled-but-done tasks (recover-orphan-conductor-state, backfill-conductor-mesh). Fast 540 passed, slow 30 passed. Committed 8ad2f60. Third confirmation this session that the codebase is mature (gap surveys over-claim).
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8ad2f60` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
