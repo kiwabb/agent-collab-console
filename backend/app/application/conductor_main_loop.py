@@ -474,6 +474,70 @@ async def _record_turn(
     )
 
 
+# Map conductor turn kinds -> unified audit categories. `llm_request` is the
+# call (prompt going out), `llm_response` is the return (content + usage), tool
+# use/result mirror 1:1, and every finalize flavour (done/max_turns/max_wall/
+# finalize_task) is an `agent_finalize`. A loop-crash `error` turn (recorded in
+# _record_failure, which writes save_conductor_turn directly and does NOT go
+# through persist_turn) is also audited as an `agent_finalize` (it is a terminal
+# outcome of the loop). Kinds not in this map are simply not audited.
+_CONDUCTOR_TURN_AUDIT_CATEGORY = {
+    "llm_request": "llm_call",
+    "llm_response": "llm_return",
+    "tool_use": "tool_use",
+    "tool_result": "tool_result",
+    "finalize": "agent_finalize",
+    "error": "agent_finalize",
+}
+
+
+def _audit_conductor_turn(
+    *,
+    issue_id: str,
+    conductor_task_id: str,
+    kind: str,
+    payload: dict[str, Any],
+) -> None:
+    """Co-locate a unified audit row alongside the conductor_turns write.
+
+    Best-effort fire-and-forget: import + record are wrapped so an audit failure
+    can never perturb the conductor loop. The audit row reuses the conductor's
+    own payload (audit_logger truncates on serialize), so there is no second
+    computation and no divergence from conductor_turns. tool_result is marked
+    error when the tool errored, mirroring the conductor_turns is_error flag.
+    """
+    category = _CONDUCTOR_TURN_AUDIT_CATEGORY.get(kind)
+    if category is None:
+        return
+    try:
+        from app.application.audit_logger import audit_logger
+
+        status = None
+        if kind == "tool_result" and isinstance(payload, dict):
+            status = "error" if payload.get("is_error") else "ok"
+        elif kind == "error":
+            status = "error"
+        actor = None
+        if kind in ("tool_use", "tool_result") and isinstance(payload, dict):
+            actor = str(payload.get("name") or "") or None
+        else:
+            actor = "conductor"
+        error = None
+        if kind == "error" and isinstance(payload, dict):
+            error = str(payload.get("message") or payload.get("error_class") or "") or None
+        audit_logger.record(
+            category,
+            actor=actor,
+            issue_id=issue_id,
+            conductor_task_id=conductor_task_id,
+            status=status,
+            payload=payload,
+            error=error,
+        )
+    except Exception:  # noqa: BLE001 — audit must never break the loop
+        pass
+
+
 async def run_issue_conductor_loop(
     issue,
     project_id: str,
@@ -590,6 +654,15 @@ async def run_issue_conductor_loop(
         save_turn = getattr(store, "save_conductor_turn", None)
         if callable(save_turn):
             await _maybe_await(save_turn(turn))
+        # Co-locate a unified audit row (PR2). Reuses the exact same (already
+        # truncated-on-store) payload — no second computation. Fire-and-forget,
+        # best-effort: never blocks or raises into the loop.
+        _audit_conductor_turn(
+            issue_id=issue.id,
+            conductor_task_id=conductor_task.id,
+            kind=kind,
+            payload=payload,
+        )
         await _append_event(
             event_bus,
             {
@@ -933,6 +1006,11 @@ async def _record_failure(*, store, issue, conductor_task: ConductorTask, event_
     error_message = str(exc) or exc.__class__.__name__
     tb_text = _truncate_text("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), _TRACEBACK_LIMIT)
     estimator = get_phase_duration_estimator(store)
+    error_payload = {
+        "error_class": exc.__class__.__name__,
+        "message": error_message,
+        "traceback": tb_text,
+    }
     save_turn = getattr(store, "save_conductor_turn", None)
     if callable(save_turn):
         turn = ConductorTurn(
@@ -942,18 +1020,20 @@ async def _record_failure(*, store, issue, conductor_task: ConductorTask, event_
             turn_index=0,
             sub_index=0,
             kind="error",
-            payload_json=json.dumps(
-                {
-                    "error_class": exc.__class__.__name__,
-                    "message": error_message,
-                    "traceback": tb_text,
-                },
-                ensure_ascii=False,
-            ),
+            payload_json=json.dumps(error_payload, ensure_ascii=False),
             created_at=datetime.now(),
             consumed_at=None,
         )
         await _maybe_await(save_turn(turn))
+    # Co-locate a unified audit row for the loop-crash error (PR2). This path
+    # writes save_conductor_turn directly (not via persist_turn), so the audit
+    # call lives here too. Best-effort + fire-and-forget.
+    _audit_conductor_turn(
+        issue_id=issue.id,
+        conductor_task_id=conductor_task.id,
+        kind="error",
+        payload=error_payload,
+    )
     await transition_conductor_phase(
         store=store,
         event_bus=event_bus,

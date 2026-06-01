@@ -56,6 +56,13 @@ elif store is not None:
 
 # Use async_store for all services if available
 effective_store = async_store if async_store is not None else store
+
+# Wire the unified audit logger to the effective store (PR1). The background
+# drain worker starts once both the store and the running loop are set; the loop
+# is set in main.py's lifespan startup, mirroring event_bus.set_loop.
+from app.application.audit_logger import audit_logger  # noqa: E402
+if effective_store is not None:
+    audit_logger.set_store(effective_store)
 session_service = SessionService(store=effective_store)
 
 # Configure adapter: REAL_CLI=true makes the system actually invoke a CLI to

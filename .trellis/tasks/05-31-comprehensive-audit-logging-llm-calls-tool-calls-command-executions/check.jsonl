@@ -1,0 +1,2 @@
+{"file": "research/existing-logging-inventory.md", "reason": "校验:audit_logger 是唯一写入口(无散写漂移)、写入异步非阻塞 best-effort、逐行 stdout/stderr 未重抄(经 execution_process_id 关联 log_events)、各 category 落库正确、大 payload 截断、两份 store 同构。"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "校验新表/迁移/读取 API 符合后端规范;热路径零回归;不破坏现有 conductor_turns/log_events/QA。"}

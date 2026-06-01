@@ -31,6 +31,42 @@ LLM_RUNNER_TYPE = Callable[[str], Awaitable[str | None]]
 DeltaCallback = Callable[[int, str, str], Awaitable[None] | None]
 
 
+def _audit_autoplan(
+    category: str,
+    *,
+    executor_id: str | None,
+    model: str | None,
+    payload: dict[str, Any] | None = None,
+    status: str | None = None,
+    started: float | None = None,
+    error: str | None = None,
+) -> None:
+    """Record an auto-plan LLM call/return into the unified audit_log (PR2).
+
+    Best-effort + fire-and-forget. The auto-plan path has no issue/task context
+    (it runs for the workflow orchestrator before any issue task exists), so it
+    audits actor + executor/model + a small payload only. Never raises into the
+    runner, which already swallows its own errors and falls back to heuristics.
+    """
+    try:
+        from app.application.audit_logger import audit_logger
+
+        body = {"executor_id": executor_id, "model": model}
+        if payload:
+            body.update(payload)
+        duration_ms = int((time.monotonic() - started) * 1000) if started is not None else None
+        audit_logger.record(
+            category,
+            actor="auto_plan",
+            status=status,
+            duration_ms=duration_ms,
+            payload=body,
+            error=error,
+        )
+    except Exception:  # noqa: BLE001 — audit must never break auto-plan
+        pass
+
+
 def _sanitize_http_error(status_code: int, body: str) -> str:
     """Return a clean error string — strips HTML bodies to avoid leaking page markup."""
     stripped = body.strip()
@@ -156,6 +192,15 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                     {"role": "assistant", "content": "{"},
                 ],
             }
+            # Audit the auto-plan LLM call (PR2): previously this path only
+            # emitted WARNING-level stderr and never entered conductor_turns.
+            _audit_autoplan(
+                "llm_call",
+                executor_id=executor.id,
+                model=model,
+                payload={"prompt_chars": len(prompt), "max_tokens": max_tokens},
+            )
+            _call_started = time.monotonic()
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 response = await client.post(
                     url,
@@ -172,8 +217,29 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                     response.status_code,
                     response.text[:300],
                 )
+                _audit_autoplan(
+                    "llm_return",
+                    executor_id=executor.id,
+                    model=model,
+                    status="error",
+                    started=_call_started,
+                    payload={"http_status": response.status_code},
+                    error=f"HTTP {response.status_code}",
+                )
                 return None
             data = response.json()
+            _audit_autoplan(
+                "llm_return",
+                executor_id=executor.id,
+                model=model,
+                status="ok",
+                started=_call_started,
+                payload={
+                    "http_status": response.status_code,
+                    "usage": data.get("usage") if isinstance(data.get("usage"), dict) else {},
+                    "stop_reason": data.get("stop_reason"),
+                },
+            )
             # Anthropic shape: { "content": [ { "type": "text", "text": "..." }, ... ], ... }
             parts = data.get("content") or []
             text = "".join(

@@ -1,0 +1,2 @@
+{"file": "research/existing-logging-inventory.md", "reason": "埋点精确定位:6 类写入点的 file:line(conductor_main_loop/llm_runner/git_service/claude_process_runtime/qa_workflow/event_bus) + 可复用的异步写队列模式(event_bus._db_worker)、payload 截断(_prepare_payload)、两份 store 同构要求。区分已记录 vs 真缺口,防重复造。"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "后端工程契约通用约束;新增 DB 表/迁移、异步写不阻热路径、事件 envelope 一致性等需符合既有 Scenario 风格。"}

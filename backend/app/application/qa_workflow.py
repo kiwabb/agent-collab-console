@@ -192,6 +192,10 @@ class QAWorkflow:
         execution_results = self._execute_verification_commands(
             report.recommended_commands, task.workspace_path
         )
+        # Mirror each executed verification command into the unified audit_log
+        # (PR2). Source of truth stays in task.result + on-disk qa artifacts;
+        # this is an additive calls-level audit row per command.
+        self._audit_command_execs(execution_results, canonical_issue_id, task.id)
         if execution_results is not None:
             real_status, framework_notes = self._reconcile_status_with_execution(
                 report.status, execution_results
@@ -255,6 +259,49 @@ class QAWorkflow:
         # about whether to dispatch an Engineer rework.
         object.__setattr__(report, "execution_results", execution_results or [])
         return report
+
+    @staticmethod
+    def _audit_command_execs(
+        execution_results: list[dict] | None,
+        issue_id: str | None,
+        task_id: str | None,
+    ) -> None:
+        """Mirror each QA command execution into the unified audit_log (PR2).
+
+        Best-effort + fire-and-forget. None (execution disabled / mock) records
+        nothing. stdout/stderr are already tail-trimmed by the executor; refused
+        commands record their refusal reason in `status`/`error`.
+        """
+        if not execution_results:
+            return
+        try:
+            from app.application.audit_logger import audit_logger
+
+            for r in execution_results:
+                refused = r.get("refused")
+                exit_code = r.get("exit_code")
+                status = "error" if (refused or (exit_code or 0) != 0) else "ok"
+                duration_s = r.get("duration_s")
+                duration_ms = int(duration_s * 1000) if isinstance(duration_s, (int, float)) else None
+                audit_logger.record(
+                    "command_exec",
+                    actor="qa",
+                    issue_id=issue_id,
+                    task_id=task_id,
+                    status=status,
+                    duration_ms=duration_ms,
+                    payload={
+                        "command": r.get("command"),
+                        "exit_code": exit_code,
+                        "stdout": (r.get("stdout") or "")[-2000:],
+                        "stderr": (r.get("stderr") or "")[-2000:],
+                        "duration_s": duration_s,
+                        "refused": refused,
+                    },
+                    error=str(refused) if refused else None,
+                )
+        except Exception:  # noqa: BLE001 — audit must never break QA
+            pass
 
     def _execute_verification_commands(
         self, commands: list[str], workspace_path: str

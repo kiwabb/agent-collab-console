@@ -199,6 +199,22 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             limit=4 * 1024 * 1024,
         )
 
+        # Audit the CLI spawn (PR2): the full launched command line + cwd +
+        # model/provider + resume id. Best-effort fire-and-forget. The trailing
+        # prompt arg is redacted (it can be large and carry sensitive context;
+        # the prompt is already persisted as the task/role artifact elsewhere) —
+        # the audit row captures HOW the process was launched, not the prompt.
+        self._audit_cli_spawn(
+            cmd=cmd,
+            cwd=effective_cwd,
+            task_id=task_id,
+            workspace_id=workspace_id,
+            provider=provider,
+            model=model,
+            resume_session_id=effective_resume_id,
+            pid=getattr(proc, "pid", None),
+        )
+
         entry = AsyncProcessEntry(
             proc=proc,
             output_task=None,
@@ -215,6 +231,51 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         entry.output_task = asyncio.create_task(self._reader_loop(workspace_id, entry, task_id))
         self._processes[task_id or workspace_id] = entry
         return entry
+
+    @staticmethod
+    def _audit_cli_spawn(
+        *,
+        cmd: list[str],
+        cwd: str | None,
+        task_id: str | None,
+        workspace_id: str | None,
+        provider: str | None,
+        model: str | None,
+        resume_session_id: str | None,
+        pid: int | None,
+    ) -> None:
+        """Record a CLI subprocess launch into the unified audit_log (PR2).
+
+        Best-effort + fire-and-forget. Captures the full argv with the trailing
+        prompt argument redacted (the prompt can be large/sensitive and is
+        already persisted as the role artifact). cwd/model/provider/resume id and
+        pid round out HOW the agent process was launched.
+        """
+        try:
+            from app.application.audit_logger import audit_logger
+
+            # Redact a trailing non-flag arg (the prompt text appended by
+            # _build_claude_command). Everything else is structural flags.
+            argv = [str(a) for a in cmd]
+            if argv and not argv[-1].startswith("-"):
+                argv = [*argv[:-1], "<prompt redacted>"]
+            audit_logger.record(
+                "cli_spawn",
+                actor="claude",
+                task_id=task_id,
+                payload={
+                    "argv": argv,
+                    "cwd": cwd,
+                    "workspace_id": workspace_id,
+                    "executor": "claude",
+                    "provider": provider,
+                    "model": model,
+                    "resume_session_id": resume_session_id,
+                    "pid": pid,
+                },
+            )
+        except Exception:  # noqa: BLE001 — audit must never break process spawn
+            pass
 
     def _build_claude_command(
         self,

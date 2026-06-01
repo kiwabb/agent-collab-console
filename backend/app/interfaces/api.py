@@ -1957,6 +1957,129 @@ def _extract_message_id(obj):
     return None
 
 
+def _encode_audit_cursor(created_at_iso: str | None, row_id: str) -> str:
+    """Opaque base64 cursor over the composite keyset `created_at|id`.
+
+    The two values are joined with a `|`. `id` is `audit-<uuid4 hex>` so it never
+    contains `|`; `created_at` is ISO-8601 which also never contains `|`. We
+    therefore split on the FIRST `|` when decoding, which is unambiguous.
+    """
+    import base64 as _b64
+
+    raw = f"{created_at_iso or ''}|{row_id}"
+    return _b64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def _decode_audit_cursor(cursor: str | None) -> tuple[str | None, str | None]:
+    """Decode an opaque cursor back into `(created_at, id)`.
+
+    Returns `(None, None)` for any malformed/garbage cursor so the read API
+    degrades gracefully to page 1 instead of erroring (matches the store-side
+    contract that a partial cursor is ignored).
+    """
+    if not cursor:
+        return None, None
+    import base64 as _b64
+
+    try:
+        raw = _b64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+    except Exception:  # noqa: BLE001 — any decode failure -> treat as no cursor
+        return None, None
+    created_at, sep, row_id = raw.partition("|")
+    if not sep or not row_id:
+        return None, None
+    return (created_at or None), row_id
+
+
+@router.get("/codex/audit-log")
+async def get_codex_audit_log(
+    category: list[str] | None = Query(default=None),
+    issue_id: str | None = None,
+    task_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    q: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+):
+    """Unified audit trail read API (PR3) — powers the global Audit Log page.
+
+    Returns the newest rows first (`created_at DESC, id DESC`) across all issues
+    and projects, with cursor-based (keyset) pagination so concurrent inserts
+    never cause offset drift.
+
+    Query params:
+      - `category`: repeatable and/or comma-separated; `IN (...)` match. e.g.
+        `?category=git_command&category=llm_call` or `?category=git_command,llm_call`.
+      - `issue_id` / `task_id`: exact-match scope.
+      - `since` / `until`: inclusive ISO-8601 `created_at` range bounds.
+      - `q`: case-insensitive keyword, LIKE-matched (parameterized) across
+        payload_json / actor / category / error.
+      - `cursor`: opaque token from a prior response's `next_cursor`.
+      - `limit`: page size, default 50, clamped to [1, 200].
+
+    Returns: `{items: AuditLog[], next_cursor: str | null}`. `payload_json` is
+    returned as the raw (already-truncated) JSON string; the frontend parses it,
+    avoiding a double-encode round-trip.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+
+    # Accept both repeated `?category=a&category=b` and comma-separated
+    # `?category=a,b` forms; flatten + drop blanks.
+    categories: list[str] = []
+    for raw in category or []:
+        for part in str(raw).split(","):
+            part = part.strip()
+            if part:
+                categories.append(part)
+
+    page_size = max(1, min(int(limit), 200))
+    cursor_created_at, cursor_id = _decode_audit_cursor(cursor)
+
+    # Fetch one extra row to detect whether a further page exists.
+    rows = await codex_store.list_audit_logs(
+        categories=categories or None,
+        issue_id=issue_id,
+        task_id=task_id,
+        since=since,
+        until=until,
+        q=q,
+        cursor_created_at=cursor_created_at,
+        cursor_id=cursor_id,
+        limit=page_size + 1,
+        descending=True,
+    )
+
+    has_more = len(rows) > page_size
+    page = rows[:page_size]
+
+    next_cursor = None
+    if has_more and page:
+        last = page[-1]
+        last_created_at = last.created_at.isoformat() if last.created_at else None
+        next_cursor = _encode_audit_cursor(last_created_at, last.id)
+
+    def _serialize(entry) -> dict:
+        return {
+            "id": entry.id,
+            "created_at": entry.created_at.isoformat() if entry.created_at else None,
+            "category": entry.category,
+            "actor": entry.actor,
+            "issue_id": entry.issue_id,
+            "task_id": entry.task_id,
+            "conductor_task_id": entry.conductor_task_id,
+            "execution_process_id": entry.execution_process_id,
+            "correlation_id": entry.correlation_id,
+            "status": entry.status,
+            "duration_ms": entry.duration_ms,
+            "payload_json": entry.payload_json,
+            "error": entry.error,
+        }
+
+    return {"items": [_serialize(r) for r in page], "next_cursor": next_cursor}
+
+
 @router.get("/projects/{project_id}/audit")
 async def get_project_audit(project_id: str, limit: int = 50, since: str | None = None):
     """Recent project events (most recent first).

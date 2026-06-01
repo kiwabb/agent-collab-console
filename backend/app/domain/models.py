@@ -645,6 +645,33 @@ class ConductorStateLog:
 
 
 @dataclass
+class AuditLog:
+    """A single unified audit-trail row.
+
+    One row per call/command/event: LLM request/response, tool use/result,
+    QA command exec, git command, CLI spawn, generic EventBus event, or agent
+    finalize. PR1 only defines the row + write infrastructure; the choke-point
+    instrumentation (PR2) and read API (PR3) come later. `payload_json` is the
+    truncated JSON blob; high-frequency line-level stdout/stderr is NOT mirrored
+    here — it stays in `log_events`, joined via `execution_process_id`.
+    """
+
+    id: str
+    category: str
+    created_at: datetime | None = None
+    actor: str | None = None
+    issue_id: str | None = None
+    task_id: str | None = None
+    conductor_task_id: str | None = None
+    execution_process_id: str | None = None
+    correlation_id: str | None = None
+    status: str | None = None  # "ok" | "error" | None
+    duration_ms: int | None = None
+    payload_json: str = "{}"
+    error: str | None = None
+
+
+@dataclass
 class ProjectMemoryEmbedding:
     """Cold-memory placeholder row; vector storage can be upgraded later."""
 

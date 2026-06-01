@@ -676,6 +676,62 @@ await run_codex_task(review_task_id)         # ok / plan_drift → LLM sees real
 
 ---
 
+### Scenario: Unified Audit Log (single-writer, additive, best-effort)
+
+#### 1. Scope / Trigger
+- Trigger: recording any LLM call / agent return / tool call / command execution / git op / CLI spawn / generic event for after-the-fact auditing. New DB table + cross-cutting choke-point instrumentation + read API → code-spec depth mandatory.
+- Additive: existing rich records (`conductor_turns`, `log_events`, QA `commands_run`) are NOT removed; `audit_log` is one uniform, queryable view layered on top. It deliberately accepts duplication with those tables (a product decision) in exchange for one place to query.
+
+#### 2. Signatures
+```python
+# audit_logger.py  (singleton, single write entry-point — NEVER write audit_log directly elsewhere)
+audit_logger.record(category, *, actor=None, issue_id=None, task_id=None,
+    conductor_task_id=None, execution_process_id=None, correlation_id=None,
+    status=None, duration_ms=None, payload=None, error=None) -> None  # fire-and-forget, never raises
+# categories: llm_call|llm_return|tool_use|tool_result|command_exec|git_command|cli_spawn|event|agent_finalize
+
+# adapters/audit_log_query.py  (shared by both stores — keeps SQL byte-identical)
+build_audit_log_query(*, categories, issue_id, task_id, since, until, q, cursor_*, limit) -> (sql, params)
+# api.py
+GET /api/codex/audit-log?category=&issue_id=&task_id=&since=&until=&q=&cursor=&limit=  -> {items, next_cursor}
+```
+
+#### 3. Contracts
+- **Single writer**: every choke point routes through `audit_logger.record`. No scattered `save_audit_log` calls (prevents the double-write drift the unified-table choice risks).
+- **Async, non-blocking, best-effort**: `record` is pure enqueue onto a bounded `asyncio.Queue` drained by a background worker (mirrors `EventBus._db_worker`). Enqueue is loop-aware — `call_soon_threadsafe` when called off the worker's loop thread (asyncio.Queue is NOT thread-safe; a plain cross-thread `put_nowait` silently stalls the row). Failures log a warning and are swallowed — NEVER raised into the audited hot path. Shutdown flushes (sentinel) BEFORE the store closes.
+- **Bounded + drop**: queue has `maxsize` (drop-newest on saturation) + a `dropped` counter; audit is best-effort, so dropping under load beats OOM. Required because `event_bus.append` is high-frequency.
+- **Call-level granularity (NOT line-level)**: one row per call/command/event. Per-line stdout/stderr stays in `log_events`, linked via `execution_process_id`; git/QA stdout/stderr stored only as truncated tail. Large payloads truncated (`{__truncated__, preview, original_length}`).
+- **No double-write storm**: `event_bus` instrumentation skips event types already captured richer elsewhere or purely streaming (`conductor_turn`, `conductor_turn_delta`, `log`, `message_delta`, `heartbeat`).
+- **Secret hygiene**: `cli_spawn` redacts the trailing prompt arg (`<prompt redacted>`); never log raw prompts/secrets into argv payloads.
+- **Read API**: all filters fully parameterized (`?` binds, incl. `q` LIKE term — never string-interpolate); keyset cursor `(created_at, id) < (?, ?)` DESC (offset-drift-immune); `limit` clamped; `limit+1` probe for `next_cursor`; garbage cursor → graceful page-1.
+
+#### 4. Validation & Error Matrix
+- store/worker not ready, store raises, non-serializable payload → `record` swallows, no propagation.
+- queue full → drop-newest, `dropped++`, no raise.
+- off-loop-thread enqueue → routed via `call_soon_threadsafe` (row not lost).
+- malformed cursor → `(None, None)` → page 1.
+- injection in `q`/filters → bound as values, table intact.
+
+#### 5. Good/Base/Bad Cases
+- Good: a git merge, a conductor LLM turn, and a QA command each leave one queryable `audit_log` row, filterable by issue + category, without slowing the operation.
+- Base: under an event burst, newest rows drop with a counted warning — the operation never blocks.
+- Bad: writing `audit_log` directly from a choke point (drift); awaiting the DB on the hot path; re-copying per-line stdout into `audit_log`; string-interpolating a filter into SQL.
+
+#### 6. Tests Required
+- each category lands via its real instrumented function (mutation-verify non-vacuous); best-effort no-raise on store failure; bounded-queue drop counts without raising; cross-thread enqueue drains; event skip-set blocks double-write; cursor paging over tied timestamps has no dupes/gaps; `q` injection (tautology / DROP) returns literal/empty + table intact.
+
+#### 7. Wrong vs Correct
+Wrong:
+```python
+await store.save_audit_log(...)        # direct write at a choke point → drift; await blocks hot path
+```
+Correct:
+```python
+audit_logger.record("git_command", issue_id=..., payload={...}, status="ok")  # enqueue, best-effort, non-blocking
+```
+
+---
+
 ## Testing Requirements
 
 <!-- What level of testing is expected -->

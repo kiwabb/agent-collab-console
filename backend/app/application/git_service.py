@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -71,6 +72,7 @@ class GitService:
     ) -> _CommandResult:
         # Force English output and disable interactive prompts so behaviour is deterministic.
         env = {"LANG": "C.UTF-8", "GIT_TERMINAL_PROMPT": "0"}
+        started = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
             self._git,
             *args,
@@ -84,17 +86,62 @@ class GitService:
         except asyncio.TimeoutError as exc:
             proc.kill()
             await proc.wait()
+            # Audit the timeout (best-effort) before raising.
+            self._audit_git(args, cwd, None, "", "timeout", started, error=f"timed out after {timeout}s")
             raise GitError(f"git {' '.join(args)} timed out after {timeout}s") from exc
         result = _CommandResult(
             returncode=proc.returncode or 0,
             stdout=stdout.decode("utf-8", errors="replace"),
             stderr=stderr.decode("utf-8", errors="replace"),
         )
+        self._audit_git(args, cwd, result.returncode, result.stdout, result.stderr, started)
         if check and result.returncode != 0:
             raise GitError(
                 f"git {' '.join(args)} failed (rc={result.returncode}): {result.stderr.strip() or result.stdout.strip()}"
             )
         return result
+
+    @staticmethod
+    def _audit_git(
+        args: list[str],
+        cwd: str | Path | None,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        started: float,
+        *,
+        error: str | None = None,
+    ) -> None:
+        """Record one git command into the unified audit_log (PR2).
+
+        `_run` is hot (every git op funnels through it), so the payload is kept
+        small: full argv + cwd + exit_code + duration, but stdout/stderr are
+        truncated to a short tail (the per-line output is NOT a log_events
+        concern here — git does not stream into log_events — but a calls-level
+        audit only needs a summary, not full blobs). Best-effort + fire-and-
+        forget: never blocks or raises into the git path.
+        """
+        try:
+            from app.application.audit_logger import audit_logger
+
+            duration_ms = int((time.monotonic() - started) * 1000)
+            status = "error" if (error is not None or (exit_code or 0) != 0) else "ok"
+            audit_logger.record(
+                "git_command",
+                actor="git",
+                status=status,
+                duration_ms=duration_ms,
+                payload={
+                    "argv": ["git", *[str(a) for a in args]],
+                    "cwd": str(cwd) if cwd else None,
+                    "exit_code": exit_code,
+                    "stdout": (stdout or "")[-2000:],
+                    "stderr": (stderr or "")[-2000:],
+                },
+                error=error,
+            )
+        except Exception:  # noqa: BLE001 — audit must never break git
+            pass
 
     # --- Repo validation ---
 

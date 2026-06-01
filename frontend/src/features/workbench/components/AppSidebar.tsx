@@ -17,6 +17,7 @@ import {
   Library,
   Sparkles,
   Activity,
+  ScrollText,
 } from "lucide-react";
 import { getCodexIssues, getWorkspaces, listProjects } from "@/lib/api";
 import type { CodexIssue, Project, Workspace } from "@/lib/types";
@@ -272,6 +273,12 @@ export function AppSidebar() {
           label={t("sidebar.conductor")}
           active={pathname.startsWith("/conductor")}
           onClick={() => router.push("/conductor")}
+        />
+        <NavRow
+          icon={<ScrollText size={13} />}
+          label={t("sidebar.auditLog")}
+          active={pathname.startsWith("/audit")}
+          onClick={() => router.push("/audit")}
         />
         <NavRow
           icon={<FileBox size={13} />}

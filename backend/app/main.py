@@ -26,6 +26,11 @@ async def lifespan(app: FastAPI):
     from app.application.event_bus import event_bus
     event_bus.set_loop(asyncio.get_running_loop())
 
+    # Start the unified audit-log drain worker (PR1). The store is wired in
+    # bootstrap; setting the loop here spins up the background writer.
+    from app.application.audit_logger import audit_logger
+    audit_logger.set_loop(asyncio.get_running_loop())
+
     # Validate the timeout ladder (single source of truth in app.application.timeouts).
     # Logs every invariant violation at ERROR level so a bad env combo (e.g. a
     # lease TTL longer than the subagent idle budget, which would cause orphan
@@ -169,6 +174,13 @@ async def lifespan(app: FastAPI):
             result = codex_process_manager.terminate_all()
             if inspect.isawaitable(result):
                 await result
+    except Exception:
+        pass
+    # Flush + stop the audit-log drain worker before closing the store so any
+    # queued audit rows land instead of being dropped on shutdown.
+    try:
+        from app.application.audit_logger import audit_logger
+        await audit_logger.shutdown()
     except Exception:
         pass
     # Close async store connection to avoid "threads can only be started once" on restart

@@ -717,6 +717,27 @@ class SQLiteStore:
                     created_at TEXT
                 )
             """)
+            # Unified audit trail (PR1). One row per LLM call/return, tool use/result,
+            # command exec, git command, CLI spawn, generic event, or agent finalize.
+            # Line-level stdout/stderr stays in log_events (joined via
+            # execution_process_id), not mirrored here.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    actor TEXT,
+                    issue_id TEXT,
+                    task_id TEXT,
+                    conductor_task_id TEXT,
+                    execution_process_id TEXT,
+                    correlation_id TEXT,
+                    status TEXT,
+                    duration_ms INTEGER,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT
+                )
+            """)
             # Create indexes for frequently queried columns
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)")
@@ -789,6 +810,11 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_state_log_issue_transition ON conductor_state_log(issue_id, transition_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
+            # Audit log filter/pagination indexes (PR3 read API will lean on these).
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_category_created ON audit_log(category, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)")
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database initialization error: %s", e)
@@ -2029,6 +2055,90 @@ class SQLiteStore:
                 transition_at=self._parse_datetime(row["transition_at"]),
                 duration_ms=int(row["duration_ms"]) if row["duration_ms"] is not None else None,
                 is_legal=bool(row["is_legal"]),
+            )
+            for row in rows
+        ]
+
+    def save_audit_log(self, entry: "AuditLog") -> None:
+        from app.domain.models import AuditLog  # noqa: F401
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO audit_log
+               (id, created_at, category, actor, issue_id, task_id, conductor_task_id,
+                execution_process_id, correlation_id, status, duration_ms, payload_json, error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                entry.id,
+                self._format_datetime(entry.created_at or datetime.now()),
+                entry.category,
+                entry.actor,
+                entry.issue_id,
+                entry.task_id,
+                entry.conductor_task_id,
+                entry.execution_process_id,
+                entry.correlation_id,
+                entry.status,
+                entry.duration_ms,
+                entry.payload_json,
+                entry.error,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_audit_logs(
+        self,
+        *,
+        category: str | None = None,
+        categories: list[str] | None = None,
+        issue_id: str | None = None,
+        task_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        q: str | None = None,
+        cursor_created_at: str | None = None,
+        cursor_id: str | None = None,
+        limit: int = 200,
+        descending: bool = True,
+    ) -> list["AuditLog"]:
+        from app.adapters.audit_log_query import build_audit_log_query
+        from app.domain.models import AuditLog
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        sql, params = build_audit_log_query(
+            category=category,
+            categories=categories,
+            issue_id=issue_id,
+            task_id=task_id,
+            since=since,
+            until=until,
+            q=q,
+            cursor_created_at=cursor_created_at,
+            cursor_id=cursor_id,
+            limit=limit,
+            descending=descending,
+        )
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        conn.close()
+        return [
+            AuditLog(
+                id=row["id"],
+                created_at=self._parse_datetime(row["created_at"]),
+                category=row["category"],
+                actor=row["actor"],
+                issue_id=row["issue_id"],
+                task_id=row["task_id"],
+                conductor_task_id=row["conductor_task_id"],
+                execution_process_id=row["execution_process_id"],
+                correlation_id=row["correlation_id"],
+                status=row["status"],
+                duration_ms=int(row["duration_ms"]) if row["duration_ms"] is not None else None,
+                payload_json=row["payload_json"],
+                error=row["error"],
             )
             for row in rows
         ]
