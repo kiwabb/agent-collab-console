@@ -458,3 +458,37 @@ Verified 8 candidate reliability gaps against real code: 7 were pseudo-gaps alre
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Unified audit logging: audit_log table + 6 choke-point instrumentation + read API + global viewer
+
+**Date**: 2026-06-01
+**Task**: Unified audit logging: audit_log table + 6 choke-point instrumentation + read API + global viewer
+**Package**: vibe-kanban
+**Branch**: `main`
+
+### Summary
+
+User wanted every call/return/tool/command logged. Verified existing coverage first (conductor_turns, log_events, QA all already complete) — added a unified audit_log table as an additive queryable view per user's choice. PR1: table (both stores) + audit_logger singleton (async bounded queue, drop-newest, loop-aware cross-thread enqueue, best-effort). PR2: 6 choke points (conductor LLM/tool/finalize/error, auto-plan, git, CLI spawn w/ prompt redaction, QA cmds, event_bus w/ double-write skip-set). PR3: GET /codex/audit-log with parameterized filters + keyset cursor pagination. PR4: frontend global Audit Log page (filter/search/paginate/expand) + i18n zh+en + sidebar nav. Each PR implement->check; checks caught cross-thread row-loss + missing conductor error audit. Backend 574 passed, tsc+lint clean. Committed 2522c22 to main.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2522c22` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 13
-- **Last Active**: 2026-05-31
+- **Total Sessions**: 14
+- **Last Active**: 2026-06-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~460 | Active |
+| `journal-1.md` | ~494 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 14 | 2026-06-01 | Unified audit logging: audit_log table + 6 choke-point instrumentation + read API + global viewer | `2522c22` | `main` |
 | 13 | 2026-05-31 | Reliability hardening: swarm worktree terminal cleanup + regression pins | `8ad2f60` | `main` |
 | 12 | 2026-05-31 | Engineer real-codegen reconciliation + Architect-Review diff-vs-plan guard | `2cc5b96` | `main` |
 | 11 | 2026-05-29 | E2E validation of parallel swarm + cost-aware: integration test, 2 latent bugs fixed, real-executor run | `cef3034`, `3815f3e`, `31e6c40` | `main` |
