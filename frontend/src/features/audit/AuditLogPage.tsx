@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
 import { useI18n } from "@/providers/I18nProvider";
+import { normalizeSince, normalizeUntil } from "./timeBoundary";
 
 const CATEGORIES: AuditLogCategory[] = [
   "llm_call",
@@ -113,8 +114,8 @@ export function AuditLogPage() {
       category: selectedCategories.size > 0 ? Array.from(selectedCategories) : null,
       issueId: issueId.trim() || null,
       taskId: taskId.trim() || null,
-      since: since.trim() || null,
-      until: until.trim() || null,
+      since: normalizeSince(since),
+      until: normalizeUntil(until),
       q: query.trim() || null,
     }),
     [selectedCategories, issueId, taskId, since, until, query],
