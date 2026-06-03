@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/vibe-kanban/backend/directory-structure.md", "reason": "PR1 adds GET /codex/issues/{id}/budget in api.py — where routes live and the web/service/dao layering the endpoint must follow"}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Endpoint must 404 on missing issue and handle the unlimited (budget_usd<=0) branch in the project's error style"}
+{"file": ".trellis/spec/vibe-kanban/frontend/component-guidelines.md", "reason": "PR2 BudgetMeter component — co-located issues component conventions, status color tokens, i18n usage"}
+{"file": ".trellis/spec/vibe-kanban/frontend/hook-guidelines.md", "reason": "PR3 live-update hook: mount fetch + global WS subscription + running-state-only polling, cleanup discipline"}
+{"file": ".trellis/spec/vibe-kanban/frontend/state-management.md", "reason": "Consuming the global WS /api/ws/events stream and filtering budget_warning/budget_exceeded by issue_id"}
+{"file": ".trellis/spec/vibe-kanban/frontend/type-safety.md", "reason": "Add IssueBudgetStatus type in lib/types.ts + typed getIssueBudget() in lib/api.ts"}

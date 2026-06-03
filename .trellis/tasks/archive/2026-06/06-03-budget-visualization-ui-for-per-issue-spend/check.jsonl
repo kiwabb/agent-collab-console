@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Verify the new endpoint meets the backend quality/test bar (ceiling/unlimited/missing cases)"}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Verify 404-on-missing-issue and unlimited-branch handling match the project's error conventions"}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "Verify BudgetMeter component quality: i18n zh/en, unit test for state derivation, no dead code"}
+{"file": ".trellis/spec/vibe-kanban/frontend/type-safety.md", "reason": "Verify IssueBudgetStatus type + api typing are sound and not loosely typed (no any)"}
