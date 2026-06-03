@@ -1,0 +1,22 @@
+{
+  "id": "add-backend-echo-endpoint",
+  "title": "Add GET /api/codex/echo endpoint",
+  "description": "Add a new health-style endpoint `GET /api/codex/echo` to the FastAPI backend that returns the JSON body `{\"echo\": true}`. The endpoint must require no query parameters, no request body, and must return HTTP 200 with Content-Type `application/json`. Register the route next to the other `/api/codex/...` routes in `backend/app/interfaces/api.py`.",
+  "acceptance_criteria": [
+    "GET /api/codex/echo returns HTTP 200 with Content-Type application/json",
+    "Response body is exactly {\"echo\": true}",
+    "Endpoint is registered in backend/app/interfaces/api.py with the other codex routes"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "cd backend && .venv/bin/python -c \"import urllib.request, json; r = urllib.request.urlopen('http://localhost:9000/api/codex/echo'); assert r.status == 200; assert r.headers['content-type'].startswith('application/json'); assert json.loads(r.read()) == {'echo': True}\"",
+      "description": "Fetch /api/codex/echo and assert the shape",
+      "timeout_s": 30
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["backend", "api", "trivial"],
+  "difficulty": "trivial",
+  "source_issue_id": "05-27-add-codex-echo-endpoint",
+  "notes": "Echo endpoint pattern reused for many similar health-style endpoints (ping, version). Validation is strict on the body shape."
+}

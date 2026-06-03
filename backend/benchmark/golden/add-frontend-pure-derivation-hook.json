@@ -1,0 +1,27 @@
+{
+  "id": "add-frontend-pure-derivation-hook",
+  "title": "Extract meter state derivation into a pure tested function",
+  "description": "In the component `frontend/src/features/issues/components/BudgetMeter.tsx`, the rendering logic for the four meter states (empty / unlimited / healthy / soft_warn / over) is currently inlined in the component body. Extract the state-derivation rule into an exported pure function `deriveBudgetMeterState(status: IssueBudgetStatus | null): { state, fillRatio, percent, toneClass }` co-located with the component, and add a `frontend/tests/budgetMeter.test.ts` unit test file using `node:test` (NOT Jest/Vitest) that pins the threshold behavior: (a) null status → empty, (b) unlimited (has_ceiling=false) → unlimited with no bar, (c) spent under soft_warn_ratio → healthy, (d) spent at/over soft_warn_ratio → soft_warn, (e) spent at/over ceiling → over. Cover below/at/above the threshold for each branch. Verify the function is called from the component (not duplicated inline).",
+  "acceptance_criteria": [
+    "deriveBudgetMeterState is exported from BudgetMeter.tsx and used by the component",
+    "tests/budgetMeter.test.ts covers all 5 states plus the soft_warn / over threshold boundaries",
+    "Tests use node:test (not Jest / Vitest)"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "cd frontend && npm test 2>&1 | tail -10",
+      "description": "Frontend tests must pass and include the new budgetMeter test",
+      "timeout_s": 120
+    },
+    {
+      "command": "cd frontend && grep -q 'export function deriveBudgetMeterState' src/features/issues/components/BudgetMeter.tsx",
+      "description": "The derivation function is exported",
+      "timeout_s": 5
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["frontend", "test", "refactor", "small"],
+  "difficulty": "small",
+  "source_issue_id": "06-03-budget-visualization-ui-for-per-issue-spend",
+  "notes": "Coverage scorer will pick up the title tokens 'budget', 'meter', 'state' which all appear in the implementation file."
+}

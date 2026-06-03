@@ -1,0 +1,21 @@
+{
+  "id": "add-backend-ready-checks-field",
+  "title": "Add checks field to GET /api/codex/ready",
+  "description": "Extend the existing `GET /api/codex/ready` endpoint to include a `checks` field. The field must be an object mapping each subsystem name (e.g. `store`, `event_bus`, `process_manager`) to a JSON object with `ok` (boolean) and `detail` (string or null) describing the subsystem's state. Subsystems that are unavailable must have `ok: false` and a `detail` string explaining why; subsystems that are healthy must have `ok: true` and `detail: null`.",
+  "acceptance_criteria": [
+    "GET /api/codex/ready response includes a top-level `checks` field",
+    "checks is a dict keyed by subsystem name",
+    "Each subsystem entry has `ok` (boolean) and `detail` (string or null) fields"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "cd backend && .venv/bin/python -c \"import urllib.request, json; r = urllib.request.urlopen('http://localhost:9000/api/codex/ready'); body = json.loads(r.read()); assert r.status in (200, 503); assert isinstance(body.get('checks'), dict); assert all('ok' in v and 'detail' in v for v in body['checks'].values())\"",
+      "description": "Fetch /api/codex/ready and assert the checks field shape",
+      "timeout_s": 30
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["backend", "api", "small"],
+  "difficulty": "small",
+  "source_issue_id": "05-28-add-ready-checks"
+}

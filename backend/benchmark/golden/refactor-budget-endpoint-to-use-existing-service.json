@@ -1,0 +1,26 @@
+{
+  "id": "refactor-budget-endpoint-to-use-existing-service",
+  "title": "Refactor endpoint to reuse the existing budget service",
+  "description": "The new `GET /api/codex/issues/{id}/budget` endpoint in `backend/app/interfaces/api.py` currently duplicates the spent-aggregation and budget-resolution logic instead of calling `compute_issue_budget_status` from `app.application.budget_service`. Refactor the endpoint to delegate to `compute_issue_budget_status(codex_store, issue)` and return `status.to_dict()`. The endpoint must keep the 404-on-missing-issue behavior. The behaviour must be byte-identical (same fields, same field types) — this is a refactor, not a feature change. Existing tests for the endpoint must continue to pass unchanged.",
+  "acceptance_criteria": [
+    "Endpoint calls compute_issue_budget_status instead of inlining aggregation",
+    "Response shape is identical to the pre-refactor version",
+    "Existing tests pass without modification"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "cd backend && .venv/bin/python -m pytest tests/test_issue_budget_endpoint.py -v 2>&1 | tail -15",
+      "description": "Existing budget endpoint tests must still pass",
+      "timeout_s": 60
+    },
+    {
+      "command": "cd backend && grep -n 'from app.application.budget_service' app/interfaces/api.py",
+      "description": "Endpoint imports and uses the shared budget service",
+      "timeout_s": 5
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["backend", "refactor", "small"],
+  "difficulty": "small",
+  "notes": "Refactor should not change the wire shape. If any test fails because the shape drifted, the refactor is incomplete."
+}

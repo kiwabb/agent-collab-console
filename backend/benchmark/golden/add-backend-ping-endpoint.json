@@ -1,0 +1,22 @@
+{
+  "id": "add-backend-ping-endpoint",
+  "title": "Add GET /api/codex/ping endpoint with response time field",
+  "description": "Add `GET /api/codex/ping` to the FastAPI backend. The response must be a JSON object with three fields: `pong` (boolean, always true), `ts` (Unix epoch seconds as a float, captured server-side at handler entry), and `latency_ms` (the wall-clock millisecond duration between handler entry and response serialization). The endpoint must require no request body and no query parameters.",
+  "acceptance_criteria": [
+    "GET /api/codex/ping returns HTTP 200 with application/json",
+    "Response includes pong=true, ts (float), and latency_ms (number) fields",
+    "latency_ms is non-negative and reflects handler duration"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "cd backend && .venv/bin/python -c \"import urllib.request, json, time; t0 = time.time(); r = urllib.request.urlopen('http://localhost:9000/api/codex/ping'); body = json.loads(r.read()); assert r.status == 200; assert body['pong'] is True; assert isinstance(body['ts'], (int, float)); assert abs(body['ts'] - t0) < 5.0; assert isinstance(body['latency_ms'], (int, float)) and body['latency_ms'] >= 0\"",
+      "description": "Fetch /api/codex/ping and assert pong, ts, latency_ms",
+      "timeout_s": 30
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["backend", "api", "trivial", "latency"],
+  "difficulty": "small",
+  "source_issue_id": "05-28-add-codex-ping-endpoint",
+  "notes": "latency_ms must be computed inside the handler so the field is meaningful."
+}

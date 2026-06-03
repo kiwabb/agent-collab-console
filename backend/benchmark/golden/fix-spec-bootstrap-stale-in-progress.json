@@ -1,0 +1,31 @@
+{
+  "id": "fix-spec-bootstrap-stale-in-progress",
+  "title": "Stale in-progress task should be archived or properly re-opened",
+  "description": "The trellis task `00-bootstrap-guidelines` is in the active task list as `in_progress` but the underlying work (filling `.trellis/spec/`) has actually shipped. Either (a) mark the task as `completed`, set `completedAt` to today, and run `python3 .trellis/scripts/task.py archive 00-bootstrap-guidelines` so the task moves to `archive/2026-06/`, OR (b) if the work is NOT actually done, restart the task and re-do the spec fill. Verify after: `python3 .trellis/scripts/task.py list` should not include `00-bootstrap-guidelines` as active, and `python3 .trellis/scripts/task.py list-archive 2026-06` should include it.",
+  "acceptance_criteria": [
+    "Active task list no longer contains 00-bootstrap-guidelines as in_progress",
+    "The task appears in archive/2026-06/",
+    "Spec content under .trellis/spec/ has zero (To be filled by the team) placeholders"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "! python3 .trellis/scripts/task.py list 2>&1 | grep -q '00-bootstrap-guidelines'",
+      "description": "Active task list does not contain the bootstrap task",
+      "timeout_s": 5
+    },
+    {
+      "command": "python3 .trellis/scripts/task.py list-archive 2026-06 2>&1 | grep -q '00-bootstrap-guidelines'",
+      "description": "Archive list contains the bootstrap task",
+      "timeout_s": 5
+    },
+    {
+      "command": "! grep -rn 'To be filled' .trellis/spec/ 2>&1 | grep -v ':0' | grep -q .",
+      "description": "No 'To be filled' placeholders remain in any spec file",
+      "timeout_s": 5
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["docs", "spec", "trivial"],
+  "difficulty": "trivial",
+  "source_issue_id": "00-bootstrap-guidelines"
+}

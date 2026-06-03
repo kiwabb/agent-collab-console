@@ -1,0 +1,27 @@
+{
+  "id": "fix-frontend-i18n-hardcoded-zh",
+  "title": "Replace hard-coded zh-CN string in BudgetMeter with i18n key",
+  "description": "The component `frontend/src/features/issues/components/BudgetMeter.tsx` contains a hard-coded Chinese string in a JSX text node (a Chinese character literal embedded directly in a `<span>`, `<div>`, or template). Replace the literal with a `useI18n().t(\"<namespace>.<key>\")` lookup, add the corresponding entries to both the `zh-CN` and `en-US` dictionaries in `frontend/src/lib/i18n.ts`, and import `useI18n` from `@/providers/I18nProvider` if it is not already imported. Run `cd frontend && npm test` to confirm the i18n coverage test still passes (it enforces key parity between locales).",
+  "acceptance_criteria": [
+    "No new hard-coded user-visible zh-CN string in the touched component",
+    "Replaced key registered in both zh-CN and en-US dictionaries",
+    "npm test passes (i18n parity enforced)"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "cd frontend && npm test 2>&1 | tail -8",
+      "description": "Frontend tests must pass after the i18n conversion",
+      "timeout_s": 120
+    },
+    {
+      "command": "python3 -c \"import re, os; total=0\nfor root, dirs, files in os.walk('frontend/src'):\n    for f in files:\n        if not f.endswith(('.tsx','.ts')): continue\n        p=os.path.join(root,f)\n        if 'i18n' in p or 'I18nProvider' in p: continue\n        try: content=open(p).read()\n        except: continue\n        for l in content.split('\\n'):\n            if re.search(r'[\\u4e00-\\u9fff]', l) and not l.strip().startswith(('//','*','/*','<!--')):\n                total+=1\n                print(f'{p}: {l.strip()[:80]}')\nassert total == 0, f'expected 0 hard-coded zh-CN literals, found {total}'\"",
+      "description": "Re-scan the frontend src tree for any remaining hard-coded zh-CN literals outside i18n.ts; must be 0",
+      "timeout_s": 30
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["frontend", "i18n", "small"],
+  "difficulty": "small",
+  "source_issue_id": "05-24-complete-frontend-i18n",
+  "notes": "The shell pattern looks scary; the runner enforces a strict allowlist so the python -c invocation is treated as a single check (no network, no destructive ops)."
+}

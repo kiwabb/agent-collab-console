@@ -1,0 +1,26 @@
+{
+  "id": "add-test-coverage-budget-endpoint",
+  "title": "Add unit tests covering the ceiling / unlimited / 404 branches",
+  "description": "Add focused unit tests in `backend/tests/` for the new budget endpoint. The test file must follow the project's pytest + asyncio conventions and must cover at least these three branches on a real (in-tmp-path) `AsyncSQLiteStore`: (1) an issue with an explicit `budget_usd` ceiling — assert the response includes `spent_usd`, `budget_usd`, `remaining_usd`, `used_ratio`, `soft_warn`, `over_budget`, `soft_warn_ratio`, `has_ceiling`, `budget_source`, and that the spent is the sum of completed-run costs only; (2) an issue with `budget_usd <= 0` — assert `has_ceiling` is False, `remaining_usd` and `used_ratio` are None, `over_budget` is False; (3) a missing issue id — assert the endpoint raises `HTTPException` with status 404. Tests must run under the default `pytest` invocation (i.e. NOT marked `@pytest.mark.slow`).",
+  "acceptance_criteria": [
+    "Tests cover the ceiling, unlimited, and missing-issue branches",
+    "Tests use the real AsyncSQLiteStore pattern (in tmp_path), not heavy mocks",
+    "Tests are NOT marked @pytest.mark.slow and pass under the default pytest lane"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "cd backend && .venv/bin/python -m pytest tests/test_issue_budget_endpoint.py -v 2>&1 | tail -20",
+      "description": "Run the budget endpoint tests; expect all 3+ branches to pass",
+      "timeout_s": 60
+    },
+    {
+      "command": "cd backend && .venv/bin/python -m pytest tests/test_issue_budget_endpoint.py -v --co 2>&1 | grep -v '::' | grep -c 'slow' || echo 0",
+      "description": "Confirm none of the new tests are collected under @pytest.mark.slow",
+      "timeout_s": 30
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["backend", "test", "small"],
+  "difficulty": "small",
+  "notes": "Test file naming follows the existing convention (test_<feature>_endpoint.py)."
+}

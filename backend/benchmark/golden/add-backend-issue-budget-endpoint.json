@@ -1,0 +1,27 @@
+{
+  "id": "add-backend-issue-budget-endpoint",
+  "title": "Add GET /api/codex/issues/{id}/budget endpoint",
+  "description": "Add a new read endpoint `GET /api/codex/issues/{id}/budget` to the FastAPI backend. The endpoint must reuse `compute_issue_budget_status` from `app.application.budget_service` so the value matches the conductor's gating number (not the `/cost-stats` log-scan number). Response is the JSON serialization of `IssueBudgetStatus` with the fields: `issue_id`, `spent_usd`, `budget_usd`, `remaining_usd` (number or null), `used_ratio` (number or null), `soft_warn` (bool), `over_budget` (bool), `soft_warn_ratio` (number), `has_ceiling` (bool), `budget_source` ('issue' | 'default'). Returns 404 when the issue does not exist and 503 when the store is not available.",
+  "acceptance_criteria": [
+    "GET /api/codex/issues/{id}/budget returns IssueBudgetStatus JSON for an existing issue",
+    "Endpoint returns 404 when the issue does not exist",
+    "remaining_usd and used_ratio are null when has_ceiling is false"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "cd backend && .venv/bin/python -c \"import urllib.request, json, urllib.error; r = urllib.request.urlopen('http://localhost:9000/api/codex/issues/does-not-exist/budget'); r.read()\" 2>&1 | grep -q '404' || (cd backend && .venv/bin/python -c \"import urllib.request, urllib.error; try: urllib.request.urlopen('http://localhost:9000/api/codex/issues/does-not-exist/budget').read(); except urllib.error.HTTPError as e: assert e.code == 404\")",
+      "description": "404 path check via HTTPError",
+      "timeout_s": 30
+    },
+    {
+      "command": "cd backend && .venv/bin/python -c \"from app.application.budget_service import IssueBudgetStatus; s = IssueBudgetStatus(issue_id='i', spent_usd=1.0, budget_usd=2.0, budget_source='issue', soft_warn_ratio=0.8); d = s.to_dict(); assert set(d.keys()) == {'issue_id','spent_usd','budget_usd','remaining_usd','used_ratio','soft_warn','over_budget','soft_warn_ratio','has_ceiling','budget_source'}; assert d['has_ceiling'] is True; assert d['remaining_usd'] == 1.0; assert d['used_ratio'] == 0.5\"",
+      "description": "Sanity-check the to_dict() shape (does not require a live server)",
+      "timeout_s": 30
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["backend", "api", "budget", "medium"],
+  "difficulty": "medium",
+  "source_issue_id": "06-03-budget-visualization-ui-for-per-issue-spend",
+  "notes": "Field shape is pinned by the IssueBudgetStatus.to_dict() contract; coverage scorer is sensitive to the exact field names."
+}

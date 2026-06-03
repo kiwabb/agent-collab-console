@@ -1,0 +1,21 @@
+{
+  "id": "add-backend-version-endpoint",
+  "title": "Add GET /api/codex/version endpoint",
+  "description": "Add a new `GET /api/codex/version` endpoint to the FastAPI backend. The response must be a JSON object with at minimum a `version` field whose value is the value of the `__version__` dunder exported by `app` (i.e. `getattr(app, \"__version__\", None)`). If the attribute is missing the endpoint must still return 200 with `version: null` rather than 500.",
+  "acceptance_criteria": [
+    "GET /api/codex/version returns HTTP 200",
+    "Response has a top-level `version` field",
+    "Endpoint reads from app.__version__ via getattr with a None default"
+  ],
+  "pinned_qa_commands": [
+    {
+      "command": "cd backend && .venv/bin/python -c \"import urllib.request, json; r = urllib.request.urlopen('http://localhost:9000/api/codex/version'); body = json.loads(r.read()); assert r.status == 200; assert 'version' in body; assert body['version'] is None or isinstance(body['version'], str)\"",
+      "description": "Fetch /api/codex/version and assert the field is present and string-or-null",
+      "timeout_s": 30
+    }
+  ],
+  "expected_outcome": "pass",
+  "tags": ["backend", "api", "trivial"],
+  "difficulty": "trivial",
+  "source_issue_id": "05-28-add-codex-version-endpoint"
+}
