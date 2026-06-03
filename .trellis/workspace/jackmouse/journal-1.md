@@ -492,3 +492,37 @@ User wanted every call/return/tool/command logged. Verified existing coverage fi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: Fix audit log time-filter boundary minute exclusion
+
+**Date**: 2026-06-03
+**Task**: Fix audit log time-filter boundary minute exclusion
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+datetime-local since/until are minute-precision but created_at is microsecond ISO compared lexicographically, so an until of HH:MM dropped boundary-minute events. Added pure helpers (timeBoundary.ts) normalizing since->:00 and until->:59.999999 (inclusive, idempotent for second-precision values), wired into AuditLogPage filters, with node:test unit coverage. trellis-implement + trellis-check passed; tsc/tests/lint green. Archived unrelated stub task 05-24-complete-frontend-i18n per user request.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6376dc9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
