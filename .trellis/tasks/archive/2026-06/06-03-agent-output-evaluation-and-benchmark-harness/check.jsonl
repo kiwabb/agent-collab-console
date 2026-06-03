@@ -1,0 +1,5 @@
+{"file": "research/eval-methodology.md", "reason": "Verify scorer semantics + regression definition (pass@k/stderr, never byte-equality) actually match the methodology contract"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Verify scorer/runner/API meet the backend quality/test bar; scorers deterministic on fixed artifacts"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Verify benchmark_run table schema/migration follows conventions"}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "Verify Benchmarks page quality: i18n zh/en, tests, no dead code"}
+{"file": ".trellis/spec/vibe-kanban/frontend/type-safety.md", "reason": "Verify benchmark types + API client are soundly typed (no any)"}

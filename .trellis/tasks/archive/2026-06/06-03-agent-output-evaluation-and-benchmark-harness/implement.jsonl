@@ -1,0 +1,7 @@
+{"file": "research/eval-methodology.md", "reason": "The design contract: execution-based scoring (SWE-bench FAIL_TO_PASS), pass@k over N epochs + stderr, scorer taxonomy, baseline-vs-candidate + score×cost frontier. All PRs must conform to this."}
+{"file": ".trellis/spec/vibe-kanban/backend/directory-structure.md", "reason": "Where the benchmark module (runner/scorers) + new API routes live, and the web/service/dao layering they must follow"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "PR2 adds a benchmark_run persistence table — schema/migration conventions"}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "PR3 async job + API endpoints: failure handling for long/expensive real-CLI batch runs"}
+{"file": ".trellis/spec/vibe-kanban/frontend/component-guidelines.md", "reason": "PR4 Benchmarks page components (leaderboard, score×cost frontier, baseline diff)"}
+{"file": ".trellis/spec/vibe-kanban/frontend/state-management.md", "reason": "PR4 consumes async job progress via the global WS event stream"}
+{"file": ".trellis/spec/vibe-kanban/frontend/type-safety.md", "reason": "Typed benchmark run/score models in lib/types.ts + typed API client"}

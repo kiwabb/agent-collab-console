@@ -1,0 +1,56 @@
+{
+  "id": "agent-output-evaluation-and-benchmark-harness",
+  "name": "agent-output-evaluation-and-benchmark-harness",
+  "title": "agent output evaluation and benchmark harness",
+  "description": "Build an offline benchmark harness that runs a fixed set of golden tasks, scores the agent output, and tracks score/cost regressions across model & prompt changes. PR1: pure-logic foundation (golden fixtures + scorer registry); PR2: runner + persistence; PR3: API + async job; PR4: frontend Benchmarks page.",
+  "status": "completed",
+  "dev_type": "feature",
+  "scope": null,
+  "package": "ccgui",
+  "priority": "P2",
+  "creator": "jackmouse",
+  "assignee": "jackmouse",
+  "createdAt": "2026-06-03",
+  "completedAt": "2026-06-03",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "4c423b6",
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "benchmark-pr2-runner-persistence",
+      "title": "PR2: runner + pass@k/stderr + benchmark_run persistence + baseline pin",
+      "status": "pending",
+      "notes": "Driver for real Conductor over golden set, N=3 epochs; pass@k + stderr; benchmark_run table; one row pinnable as baseline."
+    },
+    {
+      "id": "benchmark-pr3-api-judge",
+      "title": "PR3: API endpoints + async job + LLM-as-judge + calibration set",
+      "status": "pending",
+      "notes": "POST /api/benchmark/runs trigger; GET fetch + baseline diff; LLM-as-judge scorer with human-labeled calibration set + correlation check."
+    },
+    {
+      "id": "benchmark-pr4-frontend",
+      "title": "PR4: frontend Benchmarks page (trigger / leaderboard / score×cost / baseline diff) + i18n",
+      "status": "pending",
+      "notes": "Leaderboard grouped by difficulty/tag; score×cost frontier chart; baseline-vs-candidate diff; zh/en copy."
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "backend/benchmark/__init__.py",
+    "backend/benchmark/README.md",
+    "backend/benchmark/types.py",
+    "backend/benchmark/scorers.py",
+    "backend/benchmark/scorers_impl.py",
+    "backend/benchmark/golden_schema.py",
+    "backend/benchmark/golden_loader.py",
+    "backend/benchmark/golden/*.json",
+    "backend/tests/test_benchmark_fixtures.py",
+    "backend/tests/test_benchmark_scorers.py"
+  ],
+  "notes": "PR1 done (commit 4c423b6). Pure-logic foundation: 11 hand-validated golden fixtures, scorer registry, ExecutionScorer (PRIMARY, FAIL_TO_PASS analog), AcceptanceCoverageScorer (secondary rubric), aggregate_weighted. 54 new unit tests, all pass; 636/636 full backend suite, 0 regressions (1 pre-existing test_tolerant_json failure unrelated). PR2-4 follow-up as subtasks above. PR2 needs real CLI (Mock is no-op); PR3 needs a human-labeled calibration set; PR4 needs frontend wiring + i18n keys.",
+  "meta": {}
+}
