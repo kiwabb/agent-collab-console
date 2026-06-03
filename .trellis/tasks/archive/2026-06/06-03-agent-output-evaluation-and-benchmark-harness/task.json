@@ -21,8 +21,8 @@
     {
       "id": "benchmark-pr2-runner-persistence",
       "title": "PR2: runner + pass@k/stderr + benchmark_run persistence + baseline pin",
-      "status": "pending",
-      "notes": "Driver for real Conductor over golden set, N=3 epochs; pass@k + stderr; benchmark_run table; one row pinnable as baseline."
+      "status": "completed",
+      "notes": "Done (commit d353579). 4 new modules: aggregations.py (pass@k HumanEval unbiased estimator + stderr + per_fixture + aggregate + diff), store.py (BenchmarkStore protocol + InMemoryStore + SqliteStore w/ PRAGMA foreign_keys=ON + partial unique index for single baseline), runner.py (IssueExecutor protocol + FakeExecutor + RealConductorExecutor thin adapter + BenchmarkRunner orchestration), cli.py (python -m benchmark.cli entry, --dry-run for smoke test). 66 new unit tests; 702/702 full backend suite, 0 regressions. RealConductorExecutor is a thin adapter that calls create_codex_issue + auto_start_issue_graph + run_issue_conductor_loop + reads back ExecutionProcess for cost/tokens + qa_workflow for CommandResults — not exercised end-to-end in this env because Mock is no-op; operator runs the CLI against real CLI to exercise the prod path."
     },
     {
       "id": "benchmark-pr3-api-judge",
@@ -48,9 +48,16 @@
     "backend/benchmark/golden_schema.py",
     "backend/benchmark/golden_loader.py",
     "backend/benchmark/golden/*.json",
+    "backend/benchmark/aggregations.py",
+    "backend/benchmark/store.py",
+    "backend/benchmark/runner.py",
+    "backend/benchmark/cli.py",
     "backend/tests/test_benchmark_fixtures.py",
-    "backend/tests/test_benchmark_scorers.py"
+    "backend/tests/test_benchmark_scorers.py",
+    "backend/tests/test_benchmark_aggregations.py",
+    "backend/tests/test_benchmark_store.py",
+    "backend/tests/test_benchmark_runner.py"
   ],
-  "notes": "PR1 done (commit 4c423b6). Pure-logic foundation: 11 hand-validated golden fixtures, scorer registry, ExecutionScorer (PRIMARY, FAIL_TO_PASS analog), AcceptanceCoverageScorer (secondary rubric), aggregate_weighted. 54 new unit tests, all pass; 636/636 full backend suite, 0 regressions (1 pre-existing test_tolerant_json failure unrelated). PR2-4 follow-up as subtasks above. PR2 needs real CLI (Mock is no-op); PR3 needs a human-labeled calibration set; PR4 needs frontend wiring + i18n keys.",
+  "notes": "PR1 done (commit 4c423b6, +1671 lines, 11 fixtures + scorers + 54 tests). PR2 done (commit d353579, +2516 lines, runner + aggregations + store + CLI + 66 tests; 702/702 backend suite, 0 regressions). PR3 + PR4 still pending. PR3 needs a human-labeled calibration set for the LLM-as-judge + correlation check; PR4 needs the frontend Benchmarks page (leaderboard + score×cost frontier + baseline diff) + i18n keys.",
   "meta": {}
 }
