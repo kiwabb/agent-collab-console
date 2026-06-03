@@ -27,8 +27,8 @@
     {
       "id": "benchmark-pr3-api-judge",
       "title": "PR3: API endpoints + async job + LLM-as-judge + calibration set",
-      "status": "pending",
-      "notes": "POST /api/benchmark/runs trigger; GET fetch + baseline diff; LLM-as-judge scorer with human-labeled calibration set + correlation check."
+      "status": "completed",
+      "notes": "Done (commit c39e0d2). 4 new modules: judge.py (LLMJudgeScorer + FixedResponseBackend + JudgeBackend Protocol, strict first-line parser, uncalibrated never passes), correlation.py (Pearson + Spearman + CalibrationSet round-trip, total-set n in the report), calibration/ (8 hand-labeled PM-artifact items covering gold/ambiguous/underspecified/over-specific/refactor/excellent/misleading/specific extremes), job.py (in-memory JobRegistry + start_job helper, async on_complete correctly awaited), api.py (handler bodies + module singletons; TriggerRunRequest validates epochs >= 1 at the parse layer). 8 new routes wired into app/interfaces/api.py (POST runs 202, GET runs/{id}, GET runs, GET runs/{id}/diff, GET/POST baseline, GET jobs/{id}, GET calibration). Wired into app/main.py lifespan (init_for_app at startup, non-fatal if benchmark init fails). 45 new unit tests (24 judge + correlation, 21 API). 747/747 full backend suite, 0 regressions."
     },
     {
       "id": "benchmark-pr4-frontend",
@@ -58,6 +58,6 @@
     "backend/tests/test_benchmark_store.py",
     "backend/tests/test_benchmark_runner.py"
   ],
-  "notes": "PR1 done (commit 4c423b6, +1671 lines, 11 fixtures + scorers + 54 tests). PR2 done (commit d353579, +2516 lines, runner + aggregations + store + CLI + 66 tests; 702/702 backend suite, 0 regressions). PR3 + PR4 still pending. PR3 needs a human-labeled calibration set for the LLM-as-judge + correlation check; PR4 needs the frontend Benchmarks page (leaderboard + score×cost frontier + baseline diff) + i18n keys.",
+  "notes": "PR1 done (commit 4c423b6, +1671 lines). PR2 done (commit d353579, +2516 lines). PR3 done (commit c39e0d2, +1979 lines). PR4 still pending. PR4 needs the frontend Benchmarks page (leaderboard + score×cost frontier + baseline diff) + i18n keys.",
   "meta": {}
 }
