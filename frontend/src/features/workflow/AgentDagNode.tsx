@@ -15,6 +15,7 @@ import {
 import { useRoleStatus } from "@/features/agents/dock/AgentStatusProvider";
 import type { RoleId } from "@/features/agents/dock/personas";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/providers/I18nProvider";
 
 export interface AgentDagNodeStats {
   tokens: { input: number; output: number; total: number } | null;
@@ -66,14 +67,14 @@ const ROLE_LABEL: Record<string, string> = {
   qa: "QA",
 };
 
-const ROLE_ROLE: Record<string, string> = {
-  conductor: "编排器",
-  product_manager: "需求分解",
-  architect: "系统设计",
-  engineer: "代码实现",
-  engineer_frontend: "前端实现",
-  engineer_backend: "后端实现",
-  qa: "验证",
+const ROLE_TAGLINE_KEY: Record<string, string> = {
+  conductor: "role.conductor",
+  product_manager: "issue.stage.summary.pm",
+  architect: "issue.stage.summary.architect",
+  engineer: "issue.stage.summary.engineer",
+  engineer_frontend: "role.engineer_frontend",
+  engineer_backend: "role.engineer_backend",
+  qa: "issue.stage.summary.qa",
 };
 
 /**
@@ -90,11 +91,13 @@ const ROLE_ROLE: Record<string, string> = {
  * status when the role is currently active.
  */
 function AgentDagNodeImpl({ data }: NodeProps<AgentDagNodeData>) {
+  const { t } = useI18n();
   const live = useRoleStatus(data.role);
   const tone = resolveTone(data, live.isActive);
   const Icon = ROLE_ICON[data.role] ?? Code2;
   const roleLabel = ROLE_LABEL[data.role] ?? data.label;
-  const roleTagline = ROLE_ROLE[data.role] ?? "";
+  const roleTaglineKey = ROLE_TAGLINE_KEY[data.role];
+  const roleTagline = roleTaglineKey ? t(roleTaglineKey) : "";
   const statusText = humanStatus(data.status, live.status.text);
 
   return (

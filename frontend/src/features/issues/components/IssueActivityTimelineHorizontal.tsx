@@ -10,6 +10,7 @@ import {
   type PipelineStagesResponse,
 } from "@/lib/api";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface Props {
   issueId: string;
@@ -34,6 +35,7 @@ type Bucket = "agent" | "tool" | "system" | "done";
  * cards don't collide.
  */
 export function IssueActivityTimelineHorizontal({ issueId, reloadKey }: Props) {
+  const { t } = useI18n();
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [pipeline, setPipeline] = useState<PipelineStagesResponse | null>(null);
   const [filter, setFilter] = useState<"all" | Bucket>("all");
@@ -103,9 +105,9 @@ export function IssueActivityTimelineHorizontal({ issueId, reloadKey }: Props) {
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border-subtle font-mono text-[12px] text-text-muted flex-wrap">
         <div className="flex items-center gap-2.5">
           <Clock size={14} className="text-text-muted" />
-          <span className="text-foreground font-semibold text-[13px]">活动</span>
+          <span className="text-foreground font-semibold text-[13px]">{t("issue.activity.timelineTitle")}</span>
           <span className="text-text-faint">·</span>
-          <span>{activity.length} 个事件</span>
+          <span>{t("issue.activity.timelineEventCount", { n: String(activity.length) })}</span>
           {startMs > 0 && endMs > 0 && (
             <>
               <span className="text-text-faint">·</span>

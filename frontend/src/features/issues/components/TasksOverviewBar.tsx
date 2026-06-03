@@ -225,12 +225,12 @@ const ROLE_ICON: Record<string, LucideIcon> = {
   qa: ShieldCheck,
 };
 
-const ROLE_DESC: Record<string, string> = {
-  conductor: "auto-plan",
-  product_manager: "需求分解",
-  architect: "系统设计",
-  engineer: "代码实现",
-  qa: "验证",
+const ROLE_DESC_KEY: Record<string, string> = {
+  conductor: "role.conductor",
+  product_manager: "issue.stage.summary.pm",
+  architect: "issue.stage.summary.architect",
+  engineer: "issue.stage.summary.engineer",
+  qa: "issue.stage.summary.qa",
 };
 
 function RunsListRow({
@@ -250,8 +250,10 @@ function RunsListRow({
   durationSeconds: number | null;
   stat: GraphNodeStat | null;
 }) {
+  const { t } = useI18n();
   const Icon = ROLE_ICON[role] ?? BarChart3;
-  const desc = ROLE_DESC[role] ?? role;
+  const descKey = ROLE_DESC_KEY[role];
+  const desc = descKey ? t(descKey) : role;
   const dur =
     (stat?.duration_seconds ?? durationSeconds);
 
