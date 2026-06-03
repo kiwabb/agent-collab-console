@@ -6,25 +6,68 @@
 
 ## Overview
 
-<!--
-Document your project's quality standards here.
+The bar is **"a senior engineer can read the diff in one pass and
+trust it."** A change that touches a service is reviewable in
+under 15 minutes; a change that touches the conductor or the
+store is reviewable in under 30. The toolchain enforces most of
+the mechanical rules (lint, typecheck, tests), so the reviewer's
+job is mostly about shape, naming, race conditions, and the
+things the tools cannot see.
 
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
+Every change must pass, locally, in this order:
 
-(To be filled by the team)
+```bash
+cd backend
+.venv/bin/python -m pytest -v   # default fast lane; @pytest.mark.slow is skipped
+.venv/bin/python -m pytest tests/test_foo.py -v   # pointed test, never skipped
+.venv/bin/python -m ruff check .                  # if ruff is wired in
+.venv/bin/python -c "from app.main import app"    # import smoke
+```
+
+A PR that hasn't run the relevant tests is not ready for
+review. A change that touches a public Pydantic model gets a
+serializer round-trip test; a change that touches the
+conductor gets a state-machine test; a change that touches the
+store gets a real-async-store migration test.
 
 ---
 
 ## Forbidden Patterns
 
-<!-- Patterns that should never be used and why -->
-
-(To be filled by the team)
+- **`any` in production types.** The `no-any` rule is enforced
+  at review time. Use `object` + a type guard, or define a
+  narrow union. The exception is bridging a third-party type
+  we cannot change — narrow as soon as you cross the bridge.
+- **`os.getenv` from feature code.** All env reads go through
+  `application/timeouts.py` accessors. The boot-time setup
+  in `timeouts.validate()` is the only place that reads
+  env vars.
+- **Catching `Exception` to "always return a value".** Let
+  unexpected exceptions propagate to the loop boundary or the
+  transport layer, where they can be logged with a traceback.
+  Catch the typed errors the use case actually anticipates.
+- **Polling a value the WS already streams.** A background
+  task that polls a value the conductor already emits is a
+  duplicate of the event stream. The conductor emits at
+  semantic boundaries; polling is for silent growth below a
+  threshold.
+- **Service code that imports from `interfaces/`.** The
+  transport layer imports the application layer; never the
+  other way. A service that knows the HTTP shape leaks.
+- **`raise HTTPException(...)` from a service.** Same leak in
+  the other direction. The service raises a typed error; the
+  transport maps it to a status.
+- **Long-running coroutines that hold a transaction across an
+  `await`.** A conductor iteration that opens a write
+  transaction and then awaits a dispatch holds the SQLite
+  write lock for the duration. Release before the await,
+  re-acquire on the next call.
+- **Re-using the same conductor issue worktree across parallel
+  dispatches.** The `dispatch_batch` path forks an
+  isolation worktree per agent (`worktree_manager.prepare_agent_worktree`).
+  Running two agents on the same worktree is a race; the
+  `in-flow join` cannot merge two agents that wrote to the
+  same files at the same time.
 
 ---
 
@@ -734,14 +777,69 @@ audit_logger.record("git_command", issue_id=..., payload={...}, status="ok")  # 
 
 ## Testing Requirements
 
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
+- **All new code is covered by tests.** Service logic,
+  endpoint logic, and pure helper functions all get tests.
+  The `pytest` mark `slow` opts into long integration tests;
+  the default lane skips them, so a focused run
+  (`pytest tests/test_foo.py -v`) is the right shape.
+- **Pure functions are unit-tested in isolation.** A function
+  in `application/` that takes a `CodexIssue` and returns
+  an `IssueBudgetStatus` should be tested with a tiny
+  stub store — no need for the real async store in most
+  cases.
+- **Endpoints are tested with the real async store where
+  practical**, and with a focused store stub for the
+  endpoint's own logic. The pattern is in
+  `test_pipeline_stages.py` and `test_issue_budget_endpoint.py`.
+- **Migration tests cover legacy rows.** A new column needs a
+  test that exercises a row written before the migration,
+  not just a fresh row. See
+  `test_issue_budget.py::test_sync_store_migrates_legacy_issue_without_budget_column`
+  for the canonical pattern.
+- **State-machine tests for the conductor.** The conductor's
+  legal/illegal phase transitions are enforced by
+  `LEGAL_TRANSITIONS`; a change to the table needs a test
+  in `test_conductor_state_machine.py`.
+- **Cost / budget behavior is tested with the real
+  `timeouts.X()` accessors.** A test that monkey-patches
+  `os.getenv` skips the boot-time validation, which is the
+  whole point of the accessor pattern.
+- **No snapshot tests.** They drift; the per-feature
+  derivation tests and the unit tests of the budget
+  computation do the work snapshots would.
 
 ---
 
 ## Code Review Checklist
 
-<!-- What reviewers should check -->
+A reviewer should be able to answer YES to **all** of the
+following before approving:
 
-(To be filled by the team)
+- [ ] The change is **scope-limited**: no incidental refactors,
+      no drive-by reformatting, no opportunistic dependency
+      bump.
+- [ ] Every new service / endpoint is **typed end-to-end**
+      (no `any`, no bare `dict` for shape-bearing data).
+- [ ] Every new env-driven knob goes through
+      `application/timeouts.py`, not a `os.getenv` call from
+      feature code.
+- [ ] Every new endpoint has a **focused test** (ceiling /
+      unlimited / missing branches where applicable).
+- [ ] Every new state-derivation rule has a **unit test**
+      that covers below / at / above the threshold.
+- [ ] Every new long-running coroutine **catches at the
+      boundary** and persists a `failed` row with the
+      traceback in `result_json` — the loop survives.
+- [ ] Every new background poll has an **active-state guard**
+      and stops once the issue is done / idle. No polling
+      after the user's gone.
+- [ ] Every new migration is **idempotent** and bumps
+      `schema_version` in the same block.
+- [ ] The diff is **readable in one pass** (no nested
+      ternaries, no 9-prop god functions, no copy-paste
+      boilerplate that should be a helper).
+- [ ] `pytest -v` and any pointed test commands are green
+      locally, with the actual output attached to the PR
+      or task handoff.
+- [ ] The change does not introduce a new external dependency
+      without a sentence explaining why.

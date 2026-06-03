@@ -6,17 +6,15 @@
 
 ## Overview
 
-<!--
-Document your project's hook conventions here.
-
-Questions to answer:
-- What custom hooks do you have?
-- How do you handle data fetching?
-- What are the naming conventions?
-- How do you share stateful logic?
--->
-
-(To be filled by the team)
+The ccgui frontend has a small set of cross-feature hooks in
+`frontend/src/hooks/` (notably `useBusEventEffect` for WS event
+subscription and `useExecutionProcessesContext` for live process
+state), plus a growing number of feature-local hooks next to the
+component that owns them. Naming follows the standard
+`useXxx` prefix; data fetching is a small `async` helper in the
+hook body, with the response stored in `useState`; stateful logic
+is shared through refs (for imperative handles) or named-tuple
+returns (for declarative state).
 
 ---
 
@@ -66,9 +64,25 @@ useEffect(() => {
 
 ## Naming Conventions
 
-<!-- Hook naming rules (use*, etc.) -->
-
-(To be filled by the team)
+- **Cross-feature hook**: `useXxx.ts` in `frontend/src/hooks/`,
+  exported and consumed via `@/hooks/useXxx`. The hook is the
+  only public surface; the underlying provider (if any) is
+  detail.
+- **Feature-local hook**: `useXxx.ts` next to the component
+  that owns it (`frontend/src/features/<area>/components/`).
+  Promoted to `frontend/src/hooks/` only when a second feature
+  imports it.
+- **Test file**: `<hook-stem>.test.ts` in `frontend/tests/`,
+  using `node:test` (not Jest, not Vitest). Coverage focuses on
+  the hook's contract — return shape, ref-isolation of
+  imperative handles, cleanup behavior.
+- **Return shape**: named tuple `{ data, loading, refresh }` for
+  data hooks; `{ ref, value }` for imperative handles; bare
+  value for trivial hooks.
+- **Verb naming**: prefer the effect over the noun —
+  `useIssueBudget` (the value) over `useBudgetState` (the bag).
+  This keeps the consumer's call site readable:
+  `const { budget, loading, refresh } = useIssueBudget(id, active)`.
 
 ---
 

@@ -1,12 +1,21 @@
 # Frontend Development Guidelines
 
-> Best practices for frontend development in this project.
+> cc-switch package — placeholder index. This package is not in
+> active use; see each file's "Status: Not in active use" header.
 
 ---
 
 ## Overview
 
-This directory contains guidelines for frontend development. Fill in each file with your project's specific conventions.
+The cc-switch spec was scaffolded by `trellis init` as one of the
+four default packages (ccgui / MetaGPT / cc-switch / vibe-kanban).
+In this repository the **only** packages that appear in real tasks
+are `ccgui` (frontend) and `vibe-kanban` (backend). The cc-switch
+package is reserved for a future code area that has not yet been
+opened.
+
+This index is preserved so the spec tree is complete. It is not a
+contract.
 
 ---
 
@@ -14,26 +23,28 @@ This directory contains guidelines for frontend development. Fill in each file w
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
-| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
-| [State Management](./state-management.md) | Local state, global state, server state | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
+| [Directory Structure](./directory-structure.md) | Module organization and file layout | Placeholder |
+| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | Placeholder |
+| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | Placeholder |
+| [State Management](./state-management.md) | Local state, global state, server state | Placeholder |
+| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Placeholder |
+| [Type Safety](./type-safety.md) | Type patterns, validation | Placeholder |
 
 ---
 
-## How to Fill These Guidelines
+## Where the real conventions live
 
-For each guideline file:
+- Frontend conventions for the **actual** frontend in this repo:
+  `.trellis/spec/ccgui/frontend/`.
+- Backend conventions: `.trellis/spec/vibe-kanban/backend/`.
 
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
+## When to fill this package
 
-The goal is to help AI assistants and new team members understand how YOUR project works.
+Replace this file with real content the first time a task is
+created with `"package": "cc-switch"`. Until then, leave it as a
+marker.
 
 ---
 
-**Language**: All documentation should be written in **English**.
+**Language**: All documentation in this directory should be
+written in **English** (matches the rest of the spec tree).

@@ -3,53 +3,127 @@
 > Database patterns and conventions for this project.
 
 ---
-
 ## Overview
 
-<!--
-Document your project's database conventions here.
+The persistence layer is **plain `aiosqlite`** with hand-written
+SQL in `adapters/async_sqlite_store.py`. There is no ORM, no
+migration framework, no schema-diff tool. The store owns the SQL
+and the migrations; everything else reaches the database through
+the typed methods (`load_codex_issue`, `list_codex_tasks`,
+`save_execution_process`, `list_audit_log`, ...). The sync
+counterpart in `adapters/sqlite_store.py` is for tests and
+one-off scripts.
 
-Questions to answer:
-- What ORM/query library do you use?
-- How are migrations managed?
-- What are the naming conventions for tables/columns?
-- How do you handle transactions?
--->
+Migrations are an **idempotent boot-time step**: when the async
+store opens a connection it inspects the schema, applies any
+missing `ALTER TABLE ... ADD COLUMN` statements, and runs the
+required `CREATE TABLE IF NOT EXISTS` blocks. Adding a new
+column means: declare it in the domain model, add an idempotent
+`ALTER TABLE` to the migration, and update any load method that
+returns a row lacking the new column (default it). The
+`schema_version` table tracks the current version; bump it
+inside the migration block.
 
-(To be filled by the team)
+Transactions: each store method opens an implicit transaction
+via `async with`; the long-running coroutines (conductor loop,
+audit sink) do not hold a transaction across an `await` — they
+release it before the await and re-acquire on the next call.
 
 ---
 
 ## Query Patterns
 
-<!-- How should queries be written? Batch operations? -->
-
-(To be filled by the team)
+- **One method, one query.** A store method is the unit of
+  work — it owns the SQL, the bind parameters, the row → model
+  conversion. Callers compose methods; they do not compose SQL.
+- **Batch by row, not by statement.** When listing tasks for an
+  issue, the store iterates `task_id`s and reuses the existing
+  per-task method. The alternative — a single `IN (?, ?, ...)`
+  — is left for hot paths only and gets its own dedicated
+  method with a focused test.
+- **Read-only by default.** A read method never opens a write
+  transaction. A write method opens the smallest possible
+  transaction: single-row updates do not need `BEGIN`, but
+  multi-row updates (`save_workflow_graph` + its `WorkflowNode`
+  rows) do.
+- **No N+1 in the loop body.** A conductor iteration that reads
+  N issues' tasks collects the task ids first, then issues a
+  single batched read. The conductor is the only place the
+  pressure shows up.
+- **No `SELECT *`.** Every query names its columns. Renames
+  are safe; the cost is one extra line of SQL per query.
 
 ---
 
 ## Migrations
 
-<!-- How to create and run migrations -->
-
-(To be filled by the team)
+- **Migrations are idempotent.** `ALTER TABLE ... ADD COLUMN X`
+  is wrapped in a `try/except` for the "duplicate column" case
+  so re-opening the same DB does not raise.
+- **No down-migrations.** The schema is append-only; rolling
+  back a release is a separate problem.
+- **Schema changes ship in the same commit as the code that
+  reads them.** A new column is meaningless until the load
+  method knows what to do with the value.
+- **Bump `schema_version`** in the same migration block. The
+  `validate()` boot check fails fast if the version is out of
+  range.
 
 ---
 
 ## Naming Conventions
 
-<!-- Table names, column names, index names -->
-
-(To be filled by the team)
+- **Tables**: snake_case, plural (`codex_issues`, `codex_tasks`,
+  `execution_processes`, `audit_log`, `conductor_tasks`,
+  `workflow_nodes`).
+- **Columns**: snake_case, singular. Foreign keys are
+  `<other_table_singular>_id` (`session_id`, `issue_id`,
+  `task_id`, `project_id`).
+- **Indexes**: `idx_<table>_<column>[_<column>...]` for
+  single- and multi-column indexes.
+- **Booleans**: `is_` / `has_` prefix (`is_pinned`,
+  `git_merge_status`, `has_ceiling`).
+- **Timestamps**: `*_at` suffix, ISO-8601 strings
+  (`created_at`, `updated_at`, `heartbeat_at`,
+  `lease_expires_at`).
+- **Status enums**: capitalized, present-tense
+  (`Completed`, `Failed`, `Running`, `Killed` — the set is
+  stable and `budget_service.COMPLETED_PROCESS_STATES` is one
+  of the few places that names the set explicitly).
+- **JSON blobs**: stored as TEXT, parsed in the load method,
+  shaped by a Pydantic model in the application layer.
 
 ---
 
 ## Common Mistakes
 
-<!-- Database-related mistakes your team has made -->
-
-(To be filled by the team)
-
+- **Holding a transaction across an `await`.** A long-running
+  coroutine that opens a write transaction and then awaits
+  another store call holds the SQLite write lock for the
+  duration — every other writer queues behind it. The fix is
+  to release the transaction before the await, re-acquire on
+  the next call.
+- **Adding a column without a default in the migration.** The
+  first read after a deploy will see `None` for the new column
+  on rows written before the migration. The load method must
+  default it explicitly, and the test must cover the legacy
+  row case.
+- **Forgetting to bump `schema_version`**. The boot check will
+  silently accept the new schema but the version assertion
+  elsewhere will trip on the first new test. Bump it in the
+  same migration.
+- **Building a "JOIN" via N+1 application code.** If a feature
+  needs a list view that joins two tables, the store method
+  owns the join — the application layer never iterates rows
+  in a loop and re-queries.
+- **`is` comparisons on string status values.** A row's
+  `status` is a `str`; `row.status is "Completed"` is
+  always False. Use `==` and the project's enum-style status
+  set, or use a typed `Literal` on the dataclass.
+- **Logging a row's content at `INFO` in a recovery path.** A
+  recovered conductor row can carry the full task prompt; log
+  the row id, not the body. The audit log captures the body
+  under the gated prompt-logging flag.
 ---
 
 ## Scenario: Durable Conductor Runner Leases

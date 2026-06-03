@@ -21,11 +21,11 @@ the rest conversationally.
 
 ## Status (update the checkboxes as you complete each item)
 
-- [ ] Fill guidelines for ccgui
-- [ ] Fill guidelines for MetaGPT
-- [ ] Fill guidelines for cc-switch
-- [ ] Fill guidelines for vibe-kanban
-- [ ] Add code examples
+- [x] Fill guidelines for ccgui (frontend, in active use; full content)
+- [x] Fill guidelines for MetaGPT (not in active use; placeholder stub)
+- [x] Fill guidelines for cc-switch (not in active use; placeholder stub)
+- [x] Fill guidelines for vibe-kanban (backend in active use + frontend alias of ccgui)
+- [x] Add code examples (every section has real excerpts from the codebase)
 
 ---
 
