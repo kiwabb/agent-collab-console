@@ -19,10 +19,10 @@
   "pr_url": null,
   "subtasks": [
     {
-      "id": "benchmark-pr2-runner-persistence",
-      "title": "PR2: runner + pass@k/stderr + benchmark_run persistence + baseline pin",
+      "id": "benchmark-pr4-frontend",
+      "title": "PR4: frontend Benchmarks page (trigger / leaderboard / score×cost / baseline diff) + i18n",
       "status": "completed",
-      "notes": "Done (commit d353579). 4 new modules: aggregations.py (pass@k HumanEval unbiased estimator + stderr + per_fixture + aggregate + diff), store.py (BenchmarkStore protocol + InMemoryStore + SqliteStore w/ PRAGMA foreign_keys=ON + partial unique index for single baseline), runner.py (IssueExecutor protocol + FakeExecutor + RealConductorExecutor thin adapter + BenchmarkRunner orchestration), cli.py (python -m benchmark.cli entry, --dry-run for smoke test). 66 new unit tests; 702/702 full backend suite, 0 regressions. RealConductorExecutor is a thin adapter that calls create_codex_issue + auto_start_issue_graph + run_issue_conductor_loop + reads back ExecutionProcess for cost/tokens + qa_workflow for CommandResults — not exercised end-to-end in this env because Mock is no-op; operator runs the CLI against real CLI to exercise the prod path."
+      "notes": "Done (commit 36a8a8c). frontend/src/lib/types.ts + api.ts (8 typed fetchers); frontend/src/features/benchmarks/helpers.ts (pure: fmtUsd / fmtPassAt1 / classifyDelta / summarizeDiff / projectPoints / pickLogTicks / roundTick); BenchmarksPage.tsx (TriggerForm / Leaderboard / ScoreCostFrontier hand-rolled SVG / RunDiffPanel / CalibrationPanel + useBenchmarkJob polling hook); app/benchmarks/page.tsx (tabbed: leaderboard / frontier / diff / calibration; auto-refresh on job complete); 70 new i18n keys × 2 locales. 16 new helper tests, 151/151 frontend suite, lint clean, build green."
     },
     {
       "id": "benchmark-pr3-api-judge",
@@ -58,6 +58,6 @@
     "backend/tests/test_benchmark_store.py",
     "backend/tests/test_benchmark_runner.py"
   ],
-  "notes": "PR1 done (commit 4c423b6, +1671 lines). PR2 done (commit d353579, +2516 lines). PR3 done (commit c39e0d2, +1979 lines). PR4 still pending. PR4 needs the frontend Benchmarks page (leaderboard + score×cost frontier + baseline diff) + i18n keys.",
+  "notes": "All 4 PRs done. PR1 (commit 4c423b6, +1671 lines) — golden fixtures + scorer registry + scorers + 11 fixtures + 54 tests. PR2 (commit d353579, +2516 lines) — runner + aggregations + store + CLI + 66 tests. PR3 (commit c39e0d2, +1979 lines) — 8 API routes + LLM-as-judge + 8 calibration items + correlation + jobs + 45 tests. PR4 (commit 36a8a8c, +1855 lines) — frontend Benchmarks page (leaderboard / score×cost / diff / calibration tabs) + i18n + 16 tests. 8021 lines added across the 4 PRs. Whole benchmark harness is offline-batch, deterministic, and ready for operator CLI runs against the real Conductor.",
   "meta": {}
 }
