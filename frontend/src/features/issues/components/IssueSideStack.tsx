@@ -51,11 +51,16 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
   const tasks: CodexTask[] = [];
 
   // Budget meter — live WS events + mount fetch + active-state poll.
+  // `isActive` drives the 30s poll. Default to **false** when `issue` is
+  // missing: the hook should never poll blindly just because the caller
+  // forgot to pass the issue. The mount fetch + WS path still work, so the
+  // meter is at worst "stale until next event" — a safer degradation than
+  // an unjustified 30s tick stream.
   const isActive = issue
     ? !["done", "completed", "cancelled", "abandoned", "closed"].includes(
         (issue.status ?? "").toLowerCase(),
       )
-    : true;
+    : false;
   const { budget, loading: budgetLoading, refresh: refreshBudget } = useIssueBudget(
     issueId,
     isActive,

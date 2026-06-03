@@ -30,6 +30,21 @@ export function useIssueBudget(
   const issueIdRef = useRef(issueId);
   issueIdRef.current = issueId;
 
+  // Unmount guard. `issueIdRef.current === issueId` already covers the
+  // issueId-change race (in-flight fetch for the previous id never setState
+  // on the new render), but it does NOT cover unmount — after unmount the
+  // ref's `.current` still equals the closure's `issueId`, so the check
+  // would pass and fire setState on a dead component. React 18 tolerates
+  // this silently, but the explicit guard keeps the contract honest and
+  // matches what React Testing Library warns about in stricter configs.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const fetchOnce = useCallback(async () => {
     // getIssueBudget swallows HTTP !ok to null, but a real network error
     // (fetch reject, JSON parse fail) would propagate. Without a catch
@@ -41,16 +56,18 @@ export function useIssueBudget(
     try {
       next = await getIssueBudget(issueIdRef.current);
     } catch (err) {
-      // Guard against late responses after the issue unmounts.
-      if (issueIdRef.current === issueId) {
+      // Guard against late responses after the issue unmounts or the
+      // issueId changes mid-flight.
+      if (mountedRef.current && issueIdRef.current === issueId) {
         console.error(`useIssueBudget(${issueId}) fetch failed:`, err);
         setBudget(null);
         setLoading(false);
       }
       return;
     }
-    // Guard against late responses after the issue unmounts.
-    if (issueIdRef.current === issueId) {
+    // Guard against late responses after the issue unmounts or the
+    // issueId changes mid-flight.
+    if (mountedRef.current && issueIdRef.current === issueId) {
       setBudget(next);
       setLoading(false);
     }
@@ -75,9 +92,12 @@ export function useIssueBudget(
       busEventMatchers.typeIn("budget_warning", "budget_exceeded"),
     ),
     onEvent: (event) => {
+      // Skip WS patches after unmount (defensive — useBusEventEffect
+      // already guards this, but the meter is user-facing enough to
+      // double up).
+      if (!mountedRef.current) return;
       const evt = event as unknown as IssueBudgetStatus & { type: string };
-      // Payload already matches the snapshot shape.
-      setBudget({
+      const next = {
         issue_id: evt.issue_id,
         spent_usd: evt.spent_usd,
         budget_usd: evt.budget_usd,
@@ -88,7 +108,18 @@ export function useIssueBudget(
         soft_warn_ratio: evt.soft_warn_ratio ?? 0.8,
         has_ceiling: evt.has_ceiling ?? true,
         budget_source: evt.budget_source ?? "issue",
-      });
+      };
+      // Race protection against the 30s poll: the WS payload was computed
+      // by the conductor at threshold-crossing time T, but a poll that
+      // landed in the meantime carries a slightly fresher snapshot at
+      // T+epsilon (with higher spent_usd). If we already have a larger
+      // value, the WS event is stale and must not regress the meter.
+      // `spent_usd` is monotonically non-decreasing in this codebase
+      // (no refunds, no budget edits — Q4 in the task PRD is read-only),
+      // so a lower event value can only mean "stale, ignore".
+      setBudget((prev) =>
+        prev && next.spent_usd < prev.spent_usd ? prev : next,
+      );
     },
   });
 
