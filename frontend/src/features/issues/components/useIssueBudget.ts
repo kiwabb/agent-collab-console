@@ -31,7 +31,24 @@ export function useIssueBudget(
   issueIdRef.current = issueId;
 
   const fetchOnce = useCallback(async () => {
-    const next = await getIssueBudget(issueIdRef.current);
+    // getIssueBudget swallows HTTP !ok to null, but a real network error
+    // (fetch reject, JSON parse fail) would propagate. Without a catch
+    // here, that leaves the hook in a perpetual `loading: true` state
+    // and the meter would stay on the "..." placeholder forever.
+    // Treat any thrown error as "no data" so the meter degrades to the
+    // empty state instead.
+    let next: IssueBudgetStatus | null = null;
+    try {
+      next = await getIssueBudget(issueIdRef.current);
+    } catch (err) {
+      // Guard against late responses after the issue unmounts.
+      if (issueIdRef.current === issueId) {
+        console.error(`useIssueBudget(${issueId}) fetch failed:`, err);
+        setBudget(null);
+        setLoading(false);
+      }
+      return;
+    }
     // Guard against late responses after the issue unmounts.
     if (issueIdRef.current === issueId) {
       setBudget(next);
