@@ -1,0 +1,31 @@
+{
+  "id": "05-24-complete-frontend-i18n",
+  "name": "05-24-complete-frontend-i18n",
+  "title": "complete frontend internationalization",
+  "description": "Replace remaining user-facing hard-coded frontend copy with zh-CN/en-US i18n keys and add regression coverage.",
+  "status": "completed",
+  "dev_type": "fix",
+  "scope": null,
+  "package": "vibe-kanban",
+  "priority": "P1",
+  "creator": "jackmouse",
+  "assignee": "jackmouse",
+  "createdAt": "2026-05-24",
+  "completedAt": "2026-06-03",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "3adecbd",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "frontend/src/lib/i18n.ts",
+    "frontend/src/features/workflow/AgentDagNode.tsx",
+    "frontend/src/features/issues/components/TasksOverviewBar.tsx",
+    "frontend/src/features/issues/components/IssueActivityTimelineHorizontal.tsx"
+  ],
+  "notes": "Reopened 2026-06-03: previous archive (a6e6f70) was a false completion — jsonl placeholders, no code changes. Fresh audit found 13 hard-coded zh-CN literals across 3 files. Replaced all with t() lookups via useI18n(). Added 5 missing keys to both zh-CN and en-US dictionaries (role.conductor / role.engineer_frontend / role.engineer_backend / issue.activity.timelineTitle / issue.activity.timelineEventCount). Reused existing issue.stage.summary.* keys for roles that already had coverage. Post-change re-scan: 0 hard-coded zh-CN literals outside i18n.ts. 135/135 frontend tests, lint clean, build green. Delivered via commit 3adecbd.",
+  "meta": {}
+}

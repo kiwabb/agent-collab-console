@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/vibe-kanban/frontend/component-guidelines.md", "reason": "How to use useI18n() in components — replacing hard-coded zh-CN strings with t() lookups, and the no-bare-string rule"}
+{"file": ".trellis/spec/vibe-kanban/frontend/quality-guidelines.md", "reason": "i18n coverage: every user-visible zh-CN literal in JSX should be routed through dictionaries; no inline Chinese in components"}
+{"file": ".trellis/spec/vibe-kanban/frontend/type-safety.md", "reason": "Dictionary key types are inferred from the dictionaries object; no string-typed lookups"}
+{"file": ".trellis/spec/vibe-kanban/frontend/state-management.md", "reason": "Where to register new keys (zh-CN + en-US) and how interpolation params work"}
