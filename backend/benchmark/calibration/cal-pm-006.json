@@ -1,0 +1,8 @@
+{
+  "id": "cal-pm-006",
+  "fixture_id": "add-frontend-pure-derivation-hook",
+  "artifact_excerpt": "PM wrote 3 criteria: 'deriveBudgetMeterState is exported', 'tests cover all 5 states plus threshold boundaries', 'tests use node:test not Jest/Vitest'. All three are directly verifiable by grep + npm test invocation.",
+  "human_score": 0.92,
+  "judge_score": null,
+  "note": "Excellent: criteria are specific, testable, and name the exact threshold language the rubric cares about."
+}

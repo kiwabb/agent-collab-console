@@ -31,6 +31,22 @@ async def lifespan(app: FastAPI):
     from app.application.audit_logger import audit_logger
     audit_logger.set_loop(asyncio.get_running_loop())
 
+    # Wire the benchmark harness singletons (PR3). The benchmark
+    # store is a separate sqlite file (default: backend/benchmark.db)
+    # so the production console.db is untouched. The JobRegistry
+    # is in-process and resets on backend restart (matches the
+    # conductor's lease-based recovery model).
+    try:
+        from benchmark import api as benchmark_api
+        from benchmark.store import SqliteStore as _BenchStore
+        from benchmark.job import JobRegistry as _BenchJobRegistry
+        benchmark_api.init_for_app(
+            store=_BenchStore(benchmark_api.DEFAULT_DB_PATH),
+            registry=_BenchJobRegistry(),
+        )
+    except Exception as exc:  # noqa: BLE001 — benchmark is optional
+        logger.warning("Benchmark harness init failed (routes will 503): %s", exc)
+
     # Validate the timeout ladder (single source of truth in app.application.timeouts).
     # Logs every invariant violation at ERROR level so a bad env combo (e.g. a
     # lease TTL longer than the subagent idle budget, which would cause orphan

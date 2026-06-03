@@ -1,0 +1,8 @@
+{
+  "id": "cal-pm-004",
+  "fixture_id": "add-backend-issue-budget-endpoint",
+  "artifact_excerpt": "PM wrote 4 criteria including 422 error mapping, 404 on missing issue, and exact JSON field names matching the IssueBudgetStatus dataclass. One criterion (the 422 detail string) over-specifies the wire shape and is brittle to harmless refactors.",
+  "human_score": 0.78,
+  "judge_score": null,
+  "note": "Strong PM but with one over-specific criterion. SWE-bench Verified style: 78 / 100."
+}

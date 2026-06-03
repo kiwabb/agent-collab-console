@@ -1,0 +1,8 @@
+{
+  "id": "cal-pm-003",
+  "fixture_id": "fix-frontend-i18n-hardcoded-zh",
+  "artifact_excerpt": "PM wrote a single criterion: 'the component should work correctly'. No specifics on which component, what 'correctly' means, or how to test it. Engineering will guess.",
+  "human_score": 0.15,
+  "judge_score": null,
+  "note": "Classic underspecified PM output. Below the floor — engineer cannot derive tests."
+}

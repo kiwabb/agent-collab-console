@@ -1,0 +1,8 @@
+{
+  "id": "cal-pm-002",
+  "fixture_id": "add-backend-ping-endpoint",
+  "artifact_excerpt": "PM wrote 2 acceptance criteria: 'returns pong' and 'includes latency'. The first is fine. The second is ambiguous — it does not say what 'latency' means (ms? us? since when?), and there is no threshold.",
+  "human_score": 0.55,
+  "judge_score": null,
+  "note": "One criterion is well-scoped, the other is too vague to test. Mid-score."
+}

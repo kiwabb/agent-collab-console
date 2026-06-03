@@ -1,0 +1,8 @@
+{
+  "id": "cal-pm-005",
+  "fixture_id": "refactor-budget-endpoint-to-use-existing-service",
+  "artifact_excerpt": "PM wrote 3 criteria that just restate the issue title ('endpoint calls compute_issue_budget_status instead of inlining', 'response shape is identical', 'existing tests pass'). Useful as a regression net but adds no value beyond the issue text itself.",
+  "human_score": 0.45,
+  "judge_score": null,
+  "note": "Refactor criteria are inherently weak (the test is 'nothing changed'). Mid-low."
+}

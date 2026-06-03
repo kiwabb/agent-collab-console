@@ -1,0 +1,8 @@
+{
+  "id": "cal-pm-007",
+  "fixture_id": "add-backend-ready-checks-field",
+  "artifact_excerpt": "PM wrote 1 criterion: 'the endpoint should be robust'. No definition of 'robust'. No reference to any specific subsystem. No testable claim.",
+  "human_score": 0.10,
+  "judge_score": null,
+  "note": "Worse than underspecified — actively misleading. 'Robust' reads like a spec but isn't."
+}

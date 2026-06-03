@@ -1,0 +1,8 @@
+{
+  "id": "cal-pm-001",
+  "fixture_id": "add-backend-echo-endpoint",
+  "artifact_excerpt": "PM wrote 3 acceptance criteria covering HTTP 200, exact body shape, and route registration location. The criteria are unambiguous, testable, and complete (any reviewer can derive a passing test from each one).",
+  "human_score": 0.95,
+  "judge_score": null,
+  "note": "Gold-standard PM output. All three criteria are concrete + testable."
+}

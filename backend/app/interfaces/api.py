@@ -5,7 +5,7 @@ import logging
 import shutil
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File, Query
+from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File, Query, Body
 from fastapi.responses import JSONResponse, PlainTextResponse
 import json
 import os
@@ -6564,3 +6564,70 @@ async def pin_team_notes_block(project_id: str, block_id: str, body: TeamNotesPi
     from app.application.team_notes_service import team_notes
     await team_notes.set_pinned(codex_store, project_id, block_id, body.pinned)
     return {"ok": True, "block_id": block_id, "pinned": body.pinned}
+
+
+# ---------------------------------------------------------------------------
+# Benchmark harness (PR3)
+# ---------------------------------------------------------------------------
+# Routes for the offline benchmark harness. See
+# ``backend/benchmark/api.py`` for handler bodies and
+# ``backend/benchmark/runner.py`` for the orchestration. The
+# handler module is imported lazily so the benchmark package
+# has zero import cost on the rest of the API surface.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/codex/benchmark/runs", status_code=202)
+async def trigger_benchmark_run(body: dict = Body(...)):
+    # The benchmark package is imported lazily here to keep the
+    # ``app.interfaces.api`` → ``benchmark`` dependency one-way
+    # (the benchmark handlers in turn import the api module via
+    # ``benchmark.api``). Pydantic validation of the body shape
+    # happens inside ``benchmark.api.trigger_run`` (which uses its
+    # own ``TriggerRunRequest`` model with epochs >= 1). FastAPI
+    # only needs to know that ``body`` is a JSON object — we mark
+    # it with ``Body(...)`` to keep it out of the query string.
+    from benchmark import api as benchmark_api
+    return await benchmark_api.trigger_run(body)
+
+
+@router.get("/codex/benchmark/runs")
+async def list_benchmark_runs(limit: int = 50):
+    from benchmark import api as benchmark_api
+    return benchmark_api.list_runs(limit=limit)
+
+
+@router.get("/codex/benchmark/runs/{run_id}")
+async def get_benchmark_run(run_id: str):
+    from benchmark import api as benchmark_api
+    return benchmark_api.get_run(run_id)
+
+
+@router.get("/codex/benchmark/runs/{run_id}/diff")
+async def get_benchmark_run_diff(run_id: str):
+    from benchmark import api as benchmark_api
+    return benchmark_api.get_run_diff(run_id)
+
+
+@router.get("/codex/benchmark/baseline")
+async def get_benchmark_baseline():
+    from benchmark import api as benchmark_api
+    return benchmark_api.get_baseline()
+
+
+@router.post("/codex/benchmark/baseline/{run_id}")
+async def set_benchmark_baseline(run_id: str):
+    from benchmark import api as benchmark_api
+    return benchmark_api.set_baseline(run_id)
+
+
+@router.get("/codex/benchmark/jobs/{job_id}")
+async def get_benchmark_job(job_id: str):
+    from benchmark import api as benchmark_api
+    return benchmark_api.get_job(job_id)
+
+
+@router.get("/codex/benchmark/calibration")
+async def get_benchmark_calibration(floor: float = 0.7):
+    from benchmark import api as benchmark_api
+    return benchmark_api.get_calibration_report(floor=floor)

@@ -1,0 +1,8 @@
+{
+  "id": "cal-pm-008",
+  "fixture_id": "add-test-coverage-budget-endpoint",
+  "artifact_excerpt": "PM wrote 3 criteria: 'tests cover ceiling, unlimited, missing-issue branches', 'tests use real AsyncSQLiteStore', 'tests are NOT marked @pytest.mark.slow and pass under default pytest lane'. The third criterion is unusually specific (it pins a CI contract); the first two are well-shaped.",
+  "human_score": 0.88,
+  "judge_score": null,
+  "note": "Strong with one unusual criterion (the slow-marker exclusion). Judges tend to over-weight the 'specific' criterion; the human label is 88 / 100, not 95, because the slow-marker rule could be brittle to legitimate slow tests."
+}
