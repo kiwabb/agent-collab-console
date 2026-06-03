@@ -20,24 +20,28 @@ import {
   type PipelineStagesResponse,
   type PipelineStage,
 } from "@/lib/api";
-import type { CodexTask } from "@/lib/types";
+import type { CodexIssue, CodexTask } from "@/lib/types";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 import { SimilarIssuesCard } from "./SimilarIssuesCard";
+import { BudgetMeter } from "./BudgetMeter";
+import { useIssueBudget } from "./useIssueBudget";
 
 interface Props {
   issueId: string;
   checklist: IssueChecklist | null;
   reloadKey?: string | number;
+  /** Optional full issue — used to drive budget-meter active-state polling. */
+  issue?: CodexIssue | null;
 }
 
 /**
  * Right-side stack on the Issue Detail page — three stacked cards:
  *   - 验收清单 (acceptance checklist)
  *   - 活动 (activity timeline distilled from tasks/pipeline stages)
- *   - 消耗 (token/cost/duration telemetry)
+ *   - 消耗 (token/cost/duration telemetry + budget meter)
  */
-export function IssueSideStack({ issueId, checklist, reloadKey }: Props) {
+export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) {
   const { t } = useI18n();
   const [cost, setCost] = useState<CodexCostStats | null>(null);
   const [pipeline, setPipeline] = useState<PipelineStagesResponse | null>(null);
@@ -45,6 +49,17 @@ export function IssueSideStack({ issueId, checklist, reloadKey }: Props) {
   // tasks is now derived from pipeline.stages (one task per role) — no
   // separate fetch. Side-stack only needs a stage-level count.
   const tasks: CodexTask[] = [];
+
+  // Budget meter — live WS events + mount fetch + active-state poll.
+  const isActive = issue
+    ? !["done", "completed", "cancelled", "abandoned", "closed"].includes(
+        (issue.status ?? "").toLowerCase(),
+      )
+    : true;
+  const { budget, loading: budgetLoading, refresh: refreshBudget } = useIssueBudget(
+    issueId,
+    isActive,
+  );
 
   const refresh = useCallback(async () => {
     // Skip per-task list fetch — the side-stack only needs a stage-level
@@ -62,7 +77,8 @@ export function IssueSideStack({ issueId, checklist, reloadKey }: Props) {
 
   useEffect(() => {
     void refresh();
-  }, [refresh, reloadKey]);
+    void refreshBudget();
+  }, [refresh, refreshBudget, reloadKey]);
 
   useBusEventEffect({
     match: busEventMatchers.all(
@@ -76,6 +92,7 @@ export function IssueSideStack({ issueId, checklist, reloadKey }: Props) {
     ),
     onEvent: () => {
       void refresh();
+      void refreshBudget();
     },
     throttleMs: 600,
   });
@@ -89,6 +106,8 @@ export function IssueSideStack({ issueId, checklist, reloadKey }: Props) {
         taskCount={
           pipeline?.stages.filter((s) => s.task_id != null).length ?? 0
         }
+        budget={budget}
+        budgetLoading={budgetLoading}
         t={t}
       />
       <SimilarIssuesCard issueId={issueId} />
@@ -303,11 +322,15 @@ function TelemetryCard({
   cost,
   pipeline,
   taskCount,
+  budget,
+  budgetLoading,
   t,
 }: {
   cost: CodexCostStats | null;
   pipeline: PipelineStagesResponse | null;
   taskCount: number;
+  budget: import("@/lib/types").IssueBudgetStatus | null;
+  budgetLoading: boolean;
   t: TFn;
 }) {
   const totalTokens =
@@ -350,6 +373,9 @@ function TelemetryCard({
             "—"
           )}
         </TeleCell>
+      </div>
+      <div className="border-t border-border-subtle/40">
+        <BudgetMeter status={budget} loading={budgetLoading} />
       </div>
     </Card>
   );

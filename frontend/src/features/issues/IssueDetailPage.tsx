@@ -298,7 +298,7 @@ export function IssueDetailPage({ issueId }: Props) {
           {/* Control & Insights Sidebar (Right Column) */}
           <aside className="hidden lg:flex flex-col gap-4 w-[380px] shrink-0 overflow-y-auto pr-1 pb-16 sticky top-0 self-start max-h-[calc(100vh-140px)]">
             {issue && <GitInfoCard issue={issue} onIssueUpdated={setIssue} />}
-            <IssueSideStack issueId={issueId} checklist={checklist} />
+            <IssueSideStack issueId={issueId} checklist={checklist} issue={issue} />
           </aside>
 
         </div>

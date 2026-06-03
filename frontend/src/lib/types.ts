@@ -143,8 +143,35 @@ export interface CodexIssue {
   github_pr_url?: string | null;
   /** Mirror of `gh pr view --json state,reviewDecision` → "STATE:DECISION". */
   github_pr_state?: string | null;
+  /** Per-issue USD budget ceiling. 0 or null means "no ceiling" (unlimited). */
+  budget_usd?: number | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+/**
+ * Per-issue budget snapshot returned by `GET /codex/issues/{id}/budget`.
+ * Mirrors the backend `IssueBudgetStatus.to_dict()` shape.
+ *
+ * - `has_ceiling === false` means the issue has no USD cap (unlimited). In
+ *   that branch `remaining_usd` and `used_ratio` are explicitly `null` so the
+ *   UI can render an "unlimited" state without misleading bar math.
+ * - `over_budget` is a *derived* flag and is always false when has_ceiling is
+ *   false.
+ * - The `budget_source` is "issue" when the per-issue override is set,
+ *   otherwise "default" (the global default from `timeouts`).
+ */
+export interface IssueBudgetStatus {
+  issue_id: string;
+  spent_usd: number;
+  budget_usd: number;
+  remaining_usd: number | null;
+  used_ratio: number | null;
+  soft_warn: boolean;
+  over_budget: boolean;
+  soft_warn_ratio: number;
+  has_ceiling: boolean;
+  budget_source: "issue" | "default";
 }
 
 export interface IssuePhaseTransitionResult {

@@ -2757,6 +2757,25 @@ async def get_codex_issue(issue_id: str):
     return issue
 
 
+@router.get("/codex/issues/{issue_id}/budget")
+async def get_issue_budget(issue_id: str):
+    """Per-issue budget snapshot (spent / budget / remaining + soft-warn flags).
+
+    Reuses ``compute_issue_budget_status`` — the SAME function the Conductor
+    consults when steering — so the UI value matches the gating number on the
+    backend (NOT the log-scan ``/cost-stats`` figure, which is a different cost
+    source). 404 when the issue does not exist.
+    """
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
+    from app.application.budget_service import compute_issue_budget_status
+    status = await compute_issue_budget_status(codex_store, issue)
+    return status.to_dict()
+
+
 @router.post("/codex/issues/{issue_id}/phase")
 async def update_codex_issue_phase(issue_id: str, request: UpdateIssuePhaseRequest):
     """Set the issue's current_phase tag. PR5: no longer validates against a

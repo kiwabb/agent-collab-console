@@ -337,6 +337,23 @@ export async function getCodexCostStats(opts: {
   return handleResponse<CodexCostStats>(response);
 }
 
+/**
+ * Per-issue budget snapshot from `GET /codex/issues/{id}/budget`.
+ *
+ * Returns `null` on any failure (404 / 503 / network) so callers can render a
+ * graceful "no data" branch without exception plumbing.
+ */
+export async function getIssueBudget(
+  issueId: string,
+): Promise<import("./types").IssueBudgetStatus | null> {
+  const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}/budget`);
+  if (!response.ok) {
+    console.error(`getIssueBudget(${issueId}) failed: HTTP ${response.status}`);
+    return null;
+  }
+  return response.json() as Promise<import("./types").IssueBudgetStatus>;
+}
+
 export async function getProjectAudit(
   projectId: string,
   limit = 10,

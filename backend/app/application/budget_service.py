@@ -73,6 +73,35 @@ class IssueBudgetStatus:
         """True once spend meets or exceeds the hard ceiling."""
         return self.has_ceiling and self.spent_usd >= self.budget_usd
 
+    def to_dict(self) -> dict:
+        """A JSON-serializable snapshot for the read endpoint.
+
+        Mirrors the field set on the WS steering payload (``budget_steering_event``)
+        so the UI sees a single shape regardless of source. ``remaining_usd`` and
+        ``used_ratio`` are explicitly ``None`` (not 0) when there is no ceiling,
+        so the frontend can render an "unlimited" branch without misleading bar
+        math. All USD values are rounded to 6 decimals — the same precision the
+        conductor uses for steering events.
+        """
+        return {
+            "issue_id": self.issue_id,
+            "spent_usd": round(self.spent_usd, 6),
+            "budget_usd": round(self.budget_usd, 6),
+            "remaining_usd": (
+                None if self.remaining_usd is None
+                else round(self.remaining_usd, 6)
+            ),
+            "used_ratio": (
+                None if self.used_ratio is None
+                else round(self.used_ratio, 6)
+            ),
+            "soft_warn": self.soft_warn,
+            "over_budget": self.over_budget,
+            "soft_warn_ratio": round(self.soft_warn_ratio, 6),
+            "has_ceiling": self.has_ceiling,
+            "budget_source": self.budget_source,
+        }
+
 
 async def aggregate_issue_spend_usd(store, issue_id: str) -> float:
     """Sum ``total_cost_usd`` across an issue's **completed** execution runs.
