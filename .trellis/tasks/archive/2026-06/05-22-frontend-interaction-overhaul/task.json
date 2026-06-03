@@ -3,7 +3,7 @@
   "name": "frontend-interaction-overhaul",
   "title": "brainstorm: frontend interaction overhaul",
   "description": "",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": "ccgui",
@@ -11,7 +11,7 @@
   "creator": "jackmouse",
   "assignee": "jackmouse",
   "createdAt": "2026-05-22",
-  "completedAt": null,
+  "completedAt": "2026-06-03",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Superseded by 2026-05-23 redesign batch: 05-23-redesign-issue-detail-page, 05-23-redesign-workspace-console, 05-23-redesign-project-workspaces-page (all completed). All Acceptance Criteria in prd.md are ticked. Archived as the brainstorming handoff artifact.",
   "meta": {}
 }
