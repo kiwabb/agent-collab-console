@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/06-06-coordinator-source-informed-upgrade/research/source-informed-coordinator-patterns.md", "reason": "Research findings from Codex and Claude Code source references"}
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend conductor guidelines for implementation"}
