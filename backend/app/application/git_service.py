@@ -242,11 +242,17 @@ class GitService:
         worktree_p.parent.mkdir(parents=True, exist_ok=True)
         # Prune dangling worktree metadata so a stale entry can't block creation.
         await self._run(["worktree", "prune"], cwd=repo_path, check=False)
+        # Use -B (force create/reset the branch to base) rather than -b: a prior
+        # run can leave the issue/agent branch behind (cleanup removes the
+        # worktree but not the ref), and -b would then fail with "branch already
+        # exists", silently aborting worktree creation. -B is idempotent — the
+        # branch is freshly reset to base, which is exactly what a new worktree
+        # wants. Safe here because we only create when no live worktree holds it.
         await self._run(
             [
                 "worktree",
                 "add",
-                "-b",
+                "-B",
                 branch,
                 str(worktree_p),
                 base_branch,

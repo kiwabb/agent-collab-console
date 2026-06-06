@@ -5954,8 +5954,13 @@ async def codex_issue_reset(issue_id: str):
             issue.git_worktree_path = wt_path
             issue.git_base_branch = base
             await codex_store.save_codex_issue(issue)
-        except (GitError, WorktreeError):
-            pass
+        except (GitError, WorktreeError) as exc:
+            # Don't swallow silently: a failed worktree means every dispatched
+            # subagent aborts with "no worktree path" and the run looks stuck.
+            # Surface it loudly so it's diagnosable.
+            logger.error(
+                "Issue reset %s: failed to create fresh worktree: %s", issue_id, exc
+            )
 
     project_id = issue.project_id
     if not project_id:
