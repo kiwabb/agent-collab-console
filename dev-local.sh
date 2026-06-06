@@ -18,6 +18,12 @@ export CODEX_WORKSPACE_ROOT="${CODEX_WORKSPACE_ROOT:-/tmp/agent-collab-console-w
 export REAL_CLI="${REAL_CLI:-true}"
 # Same idea for the Codex process manager. Disable only for fast unit tests.
 export CODEX_LAUNCH_ENABLED="${CODEX_LAUNCH_ENABLED:-true}"
+# Auto-reload restarts the uvicorn worker on every backend code change, which
+# kills in-flight conductor subagent subprocesses (they get marked failed on
+# boot). Keep it on for fast local dev (default), set DEV_RELOAD=false for a
+# stable long-running instance (e.g. under tmux) where you don't want code
+# edits to interrupt running issues.
+DEV_RELOAD="${DEV_RELOAD:-true}"
 
 # macOS 26 + Homebrew python@3.14: pyexpat.so 链接的是 /usr/lib/libexpat.1.dylib，
 # 但 Tahoe dyld cache 里的版本旧于 expat 2.7，缺 _XML_SetAllocTrackerActivationThreshold
@@ -140,7 +146,11 @@ fi
 (
   cd "$BACKEND_DIR"
   : > "$BACKEND_LOG_PATH"
-  "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --port 9000 2>&1 | tee "$BACKEND_LOG_PATH"
+  if [[ "$DEV_RELOAD" == "true" ]]; then
+    "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --port 9000 2>&1 | tee "$BACKEND_LOG_PATH"
+  else
+    "${BACKEND_UVICORN_CMD[@]}" app.main:app --port 9000 2>&1 | tee "$BACKEND_LOG_PATH"
+  fi
 ) &
 BACKEND_PID=$!
 

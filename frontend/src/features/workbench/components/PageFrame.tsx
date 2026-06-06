@@ -8,6 +8,9 @@ interface PageFrameProps {
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
+  leading?: ReactNode;
+  /** Compact single-row header: [leading] title … [actions]. Drops eyebrow/description and shrinks padding. */
+  compact?: boolean;
   children: ReactNode;
   className?: string;
   contentClassName?: string;
@@ -19,11 +22,39 @@ export function PageFrame({
   title,
   description,
   actions,
+  leading,
+  compact = false,
   children,
   className,
   contentClassName,
   maxWidthClassName = "max-w-[1280px]",
 }: PageFrameProps) {
+  if (compact) {
+    return (
+      <div className={cn("min-h-full enterprise-page", className)}>
+        <div className="relative overflow-hidden border-b border-border-subtle">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 opacity-90"
+            style={{
+              background:
+                "radial-gradient(700px 200px at 10% -40%, rgba(230,149,82,0.16), transparent 60%), linear-gradient(120deg, rgba(255,255,255,0.04), transparent 42%)",
+            }}
+          />
+          <div className={cn("relative px-6 py-3.5 mx-auto flex items-center gap-4", maxWidthClassName)}>
+            {leading}
+            <h1 className="truncate text-[19px] font-semibold tracking-[-0.01em] leading-tight">
+              {title}
+            </h1>
+            {actions && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
+          </div>
+        </div>
+        <div className={cn("px-6 py-6 mx-auto", maxWidthClassName, contentClassName)}>
+          {children}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={cn("min-h-full enterprise-page", className)}>
       <div className="relative overflow-hidden border-b border-border-subtle">
@@ -37,6 +68,7 @@ export function PageFrame({
         />
         <div aria-hidden className="agent-mesh-grid pointer-events-none absolute inset-0 opacity-[0.18]" />
         <div className={cn("relative px-6 pt-7 pb-6 mx-auto", maxWidthClassName)}>
+          {leading && <div className="mb-4 flex items-center">{leading}</div>}
           <div className="flex items-end justify-between gap-6">
             <div className="min-w-0">
               {eyebrow && (

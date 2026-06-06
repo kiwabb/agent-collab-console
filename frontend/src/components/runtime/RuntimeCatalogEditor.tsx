@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -92,15 +92,35 @@ export function RuntimeCatalogEditor({
     }
   };
 
+  // Persist is debounced so typing into a field (e.g. API key) doesn't fire a
+  // save on every keystroke. `skipNextSync` ignores the prop update that our
+  // own save echoes back — the backend masks write-only secrets like api_key,
+  // so re-syncing localCatalog from that echo would wipe the field mid-edit.
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipNextSync = useRef(false);
+
   useEffect(() => {
+    if (skipNextSync.current) {
+      skipNextSync.current = false;
+      return;
+    }
     setLocalCatalog(normalizeCatalog(catalog));
   }, [catalog]);
 
-  const handleChange = async (updatedCatalog: RuntimeCatalog) => {
+  useEffect(() => {
+    return () => {
+      if (persistTimer.current) clearTimeout(persistTimer.current);
+    };
+  }, []);
+
+  const handleChange = (updatedCatalog: RuntimeCatalog) => {
     setLocalCatalog(updatedCatalog);
-    if (onChange) {
-      await onChange(stripEmptyApiKeys(updatedCatalog));
-    }
+    if (!onChange) return;
+    if (persistTimer.current) clearTimeout(persistTimer.current);
+    persistTimer.current = setTimeout(() => {
+      skipNextSync.current = true;
+      void onChange(stripEmptyApiKeys(updatedCatalog));
+    }, 500);
   };
 
   const updateExecutor = (index: number, updates: Partial<RuntimeExecutorConfig>) => {
@@ -448,6 +468,7 @@ function ExecutorCard({
               size="sm"
               onClick={handleTest}
               disabled={testing}
+              className="gap-1.5"
             >
               {testing ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -457,9 +478,8 @@ function ExecutorCard({
                 ) : (
                   <XCircle className="h-3 w-3 text-destructive" />
                 )
-              ) : (
-                t("runtime.catalog.test")
-              )}
+              ) : null}
+              {t("runtime.catalog.test")}
             </Button>
             {testResult?.success && (
               <span className="text-xs text-green-500">

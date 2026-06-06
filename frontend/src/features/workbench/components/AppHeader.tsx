@@ -3,10 +3,21 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { HelpCircle, Search } from "lucide-react";
+import { ChevronDown, Folder, HelpCircle, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/features/workbench/components/CommandPalette";
 import { AccountPopover } from "@/features/workbench/components/AccountPopover";
+import { useSelection } from "@/features/workbench/state/SelectionProvider";
+import { listProjects } from "@/lib/api";
+import type { Project } from "@/lib/types";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+} from "@/components/ui/dropdown-menu";
 import { useI18n } from "@/providers/I18nProvider";
 
 export interface BreadcrumbItem {
@@ -32,10 +43,7 @@ interface Props {
  */
 export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
   const { t } = useI18n();
-  // Prepend a "codex" segment if not already part of breadcrumbs, mirroring the
-  // reference (`codex / jackmouse-ai / agent-collab-console`).
-  const rootCrumb: BreadcrumbItem = { label: workspaceLabel ?? "codex", href: "/" };
-  const allCrumbs = [rootCrumb, ...breadcrumbs];
+  const rootLabel = workspaceLabel ?? "codex";
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // ⌘K / Ctrl+K globally opens the palette.
@@ -66,7 +74,29 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
         >
           C
         </Link>
-        <Breadcrumbs items={allCrumbs} />
+        <nav aria-label={t("ui.breadcrumb")} className="flex items-center min-w-0 text-[13px] gap-2">
+          <Link href="/" className="shrink-0">
+            <span className="text-text-muted hover:text-foreground transition-colors">{rootLabel}</span>
+          </Link>
+          <HeaderProjectSwitcher />
+          {breadcrumbs.map((b, i) => {
+            const isLast = i === breadcrumbs.length - 1;
+            return (
+              <span key={i} className="flex items-center gap-2 min-w-0">
+                <span className="text-text-muted/50 select-none">/</span>
+                {b.href && !isLast ? (
+                  <Link href={b.href}>
+                    <span className="truncate text-text-muted hover:text-foreground transition-colors">{b.label}</span>
+                  </Link>
+                ) : (
+                  <span className={cn("truncate", isLast ? "text-foreground font-semibold" : "text-text-muted")}>
+                    {b.label}
+                  </span>
+                )}
+              </span>
+            );
+          })}
+        </nav>
         <div className="ml-auto flex items-center gap-2.5">
           {right}
           <SearchInput onOpen={() => setPaletteOpen(true)} t={t} />
@@ -79,35 +109,57 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
   );
 }
 
-function Breadcrumbs({ items }: { items: BreadcrumbItem[] }) {
+/**
+ * Project name shown right after the "codex" root segment, as a dropdown that
+ * switches the active project (mirrors the sidebar switcher). Renders nothing
+ * until projects load, so the header reads "codex / <project> / <page>".
+ */
+function HeaderProjectSwitcher() {
   const { t } = useI18n();
+  const router = useRouter();
+  const { projectId, setProjectId } = useSelection();
+  const [projects, setProjects] = useState<Project[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    listProjects()
+      .then((list) => {
+        if (!cancelled) setProjects(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (projects.length === 0) return null;
+  const active = projects.find((p) => p.id === projectId);
   return (
-    <nav aria-label={t("ui.breadcrumb")} className="flex items-center min-w-0 text-[13px]">
-      {items.map((b, i) => {
-        const isLast = i === items.length - 1;
-        const content = (
-          <span
-            className={cn(
-              "truncate",
-              isLast ? "text-foreground font-semibold" : "text-text-muted",
-              !isLast && b.href && "hover:text-foreground transition-colors",
-            )}
-          >
-            {b.label}
-          </span>
-        );
-        return (
-          <span key={i} className="flex items-center gap-2 min-w-0">
-            {i > 0 && <span className="text-text-muted/50 select-none">/</span>}
-            {b.href && !isLast ? (
-              <Link href={b.href}>{content}</Link>
-            ) : (
-              content
-            )}
-          </span>
-        );
-      })}
-    </nav>
+    <>
+      <span className="text-text-muted/50 select-none">/</span>
+      <DropdownMenu>
+        <DropdownMenuTrigger className="flex items-center gap-1 min-w-0 max-w-[220px] outline-none text-foreground font-semibold hover:text-brand transition-colors">
+          <span className="truncate">{active?.name ?? t("workbench.projectSwitcher")}</span>
+          <ChevronDown size={13} className="shrink-0 opacity-60" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>{t("workbench.projectSwitcher")}</DropdownMenuLabel>
+            {projects.map((p) => (
+              <DropdownMenuItem
+                key={p.id}
+                onClick={() => {
+                  setProjectId(p.id);
+                  router.push(`/projects/${p.id}`);
+                }}
+                className={p.id === projectId ? "bg-brand/10 font-medium text-brand" : ""}
+              >
+                <Folder size={14} className="mr-2 opacity-50" />
+                <span className="truncate">{p.name}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
   );
 }
 

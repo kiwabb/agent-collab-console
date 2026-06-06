@@ -4928,10 +4928,17 @@ async def test_runtime_executor(request: TestExecutorRequest):
             "error": f"local CLI '{cli_bin}' not found on PATH (or set {env_var_name} to use a remote API)",
         }
 
+    # Pick the request shape by the executor's HTTP protocol, not just its type.
+    # A claude-type executor can point at an OpenAI-compatible endpoint (e.g.
+    # DeepSeek), which serves /chat/completions, not Anthropic's /v1/messages —
+    # testing the wrong path there returns a misleading 404. Mirrors how the
+    # Conductor selects its request adapter from `protocol`.
+    use_openai = (getattr(executor, "protocol", None) == "openai") or executor_type == "codex"
+
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            if executor_type == "codex":
+            if use_openai:
                 response = await client.post(
                     f"{endpoint.rstrip('/')}/chat/completions",
                     headers={
