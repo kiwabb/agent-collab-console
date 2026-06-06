@@ -68,6 +68,17 @@ store gets a real-async-store migration test.
   Running two agents on the same worktree is a race; the
   `in-flow join` cannot merge two agents that wrote to the
   same files at the same time.
+- **Untested inline Conductor prompt rewrites.** The issue
+  Conductor prompt is behavior, not copy. Keep prompt assembly in
+  a pure helper that tests can assert directly, and add an
+  integration-style loop test when the prompt depends on project
+  memory, budget, language, or user steering context.
+- **Calling private or nonexistent memory helpers from the
+  Conductor loop.** The issue loop must load project memory
+  through `ProjectConductor.get_or_create_state()`. A broad
+  background-loop `except Exception` can otherwise hide missing
+  method calls and silently remove team notes / warm summaries
+  from the model prompt.
 
 ---
 
