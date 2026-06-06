@@ -116,7 +116,7 @@ async def _run(issue, store, bus):
     registry.definitions = []
 
     mock_conductor = MagicMock()
-    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \

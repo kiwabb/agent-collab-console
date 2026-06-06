@@ -106,7 +106,7 @@ async def test_loop_injects_budget_summary_into_llm_request():
     registry.definitions = []
 
     mock_conductor = MagicMock()
-    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
@@ -171,7 +171,7 @@ async def test_loop_budget_injection_failure_is_non_fatal():
     registry.definitions = []
 
     mock_conductor = MagicMock()
-    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \

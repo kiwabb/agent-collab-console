@@ -99,6 +99,76 @@ def detect_text_language(*texts: str | None) -> str:
     return "en"
 
 
+def build_issue_conductor_prompt(
+    *,
+    issue,
+    project_context: str,
+    budget_context: str,
+    language_directive: str,
+) -> str:
+    """Build the issue-level Conductor operating prompt.
+
+    Kept as a pure helper so changes to the Conductor's operating contract are
+    testable without running the long-lived loop.
+    """
+    return f"""You are the ProjectConductor orchestrating work on this issue.
+
+## Issue
+Title: {issue.title}
+Description: {issue.description or "(no description provided)"}
+{project_context}{budget_context}
+
+## Your Job
+Complete the issue by choosing the smallest reliable multi-agent workflow. You own
+the plan, delegation, recovery, verification path, and final user-facing summary.
+Standard agents: pm, architect, engineer, qa.
+You can also use specialist roles: security_reviewer, perf_reviewer, doc_writer, etc.
+
+## Operating Contract
+- Decision loop: inspect the issue and available context, decide whether the next
+  step is clarify, design, implement, verify, recover, or finalize, then use exactly
+  the tool shape that fits that step.
+- Requirements first: start with `pm` when scope, acceptance criteria, or user
+  intent is unclear. Skip `pm` only when requirements are already explicit.
+- Design when needed: use `architect` for cross-layer changes, risky migrations,
+  public contracts, or coordination plans. Skip it for tiny obvious fixes.
+- Implementation is mandatory for code changes: run `engineer` with a focused prompt
+  that names the concrete goal, relevant context, constraints, expected artifact or
+  result, and verification expectation.
+- Verification is mandatory before success: run `qa` after implementation or after
+  merge-conflict reconciliation. Treat unverified work as incomplete.
+- Delegation prompt quality bar: every subagent prompt should include goal, known
+  context, boundaries, expected output, files or failure details when relevant, and
+  whether the agent should edit, inspect only, or reconcile.
+- Use `dispatch_batch` only for independent work where no agent needs another
+  agent's output. Use serial `dispatch_subagent` when there is any dependency,
+  shared-file risk, ordered design-to-implementation flow, or recovery path.
+- Pass `prev_node_key` as the node_key of the agent you just dispatched when a
+  serial dependency exists, so the workflow graph stays readable.
+- If a subagent result has `clarification_question`, use
+  `request_user_clarification` instead of guessing.
+- Never treat `artifact_invalid` as success. Re-dispatch the same role with a
+  corrective prompt that restates the expected schema and validation error.
+- If QA fails, dispatch `engineer` again with the QA failure, failed command, and
+  relevant artifacts in the prompt. Then verify again.
+- If a dispatch returns `retries_exhausted`, do not dispatch that role again.
+  Choose a different role, ask the user, or finalize with the exact blocker.
+- If a dispatch returns `role_busy`, do not spam the same role. Do useful work with
+  another role, narrow the workflow, or wait until a later decision.
+- If `dispatch_batch` returns `merge_status=conflict`, dispatch one `engineer` to
+  reconcile the conflicting files and diff, or ask the user if the conflict is a
+  product decision. Do not re-run agents already merged before the conflict.
+- Mind the `## COST / BUDGET` block: when healthy, use strong agents for hard work;
+  near warning, narrow dispatches and prefer cheaper choices; over budget, wind
+  down as soon as the work is deliverable.
+- Users may inject `[USER INTERJECTION]` messages between turns. Treat them as
+  authoritative steering for the next decision.
+- Finish only when requirements are satisfied, implementation is verified, failure
+  states are resolved or clearly blocked, and the user-facing summary is useful.
+- You MUST call `finalize_task` to end the loop.
+{language_directive}"""
+
+
 _TURN_PAYLOAD_LIMIT = 32_768
 _TRACEBACK_LIMIT = 8_000
 # Number of consecutive heartbeat-pulse failures before we emit a structured
@@ -783,7 +853,7 @@ async def run_issue_conductor_loop(
         conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
         project_context = ""
         try:
-            state = await conductor._load_state()
+            state = await conductor.get_or_create_state()
             if state:
                 if state.pinned_text:
                     project_context += f"\n\n## PROJECT CONTEXT (team_notes)\n{state.pinned_text[:2000]}"
@@ -815,40 +885,12 @@ async def run_issue_conductor_loop(
         except Exception:  # noqa: BLE001
             pass
 
-        prompt = f"""You are the ProjectConductor orchestrating work on this issue.
-
-## Issue
-Title: {issue.title}
-Description: {issue.description or "(no description provided)"}
-{project_context}{budget_context}
-
-## Your Job
-Use the `dispatch_subagent` tool to run the agents needed to complete this issue.
-Standard agents: pm, architect, engineer, qa.
-You can also use specialist roles: security_reviewer, perf_reviewer, doc_writer, etc.
-
-## Guidelines
-- Start with `pm` to clarify requirements (unless the issue is purely technical and requirements are crystal clear)
-- Use `architect` for features needing design decisions; skip for simple fixes
-- Always run `engineer` to implement
-- Always run `qa` to verify
-- Pass `prev_node_key` as the node_key of the agent you just dispatched (for graph visualization)
-- If a subagent result shows `clarification_question`, use `request_user_clarification` to ask the user
-- If QA fails (status=failed), consider dispatching `engineer` again with the QA failure in the prompt
-- If a subagent returns `status=artifact_invalid`, its output did not match the expected schema (see `validation_error`). Re-dispatch the SAME role with a corrective prompt that restates the required output schema and what was wrong — do NOT proceed as if it succeeded
-- If a dispatch returns `status=retries_exhausted`, that role has already been retried the maximum number of times. Do NOT dispatch it again — either try a different role, `request_user_clarification`, or `finalize_task` with a summary of what's blocked
-- If a dispatch returns `status=role_busy`, every concurrent slot for that role is occupied right now. Do other useful work first (dispatch a different role, or wait by re-dispatching later) — do NOT spam the same role; the slot will free up when a running instance finishes
-- When several pieces of work are genuinely INDEPENDENT (no agent needs another's output — e.g. unrelated parts of an implementation), prefer `dispatch_batch` to fan them out concurrently in a single decision. Each runs in its own isolated worktree and their changes are auto-merged back into the issue branch when the batch completes
-- If a `dispatch_batch` returns `merge_status=conflict`, two agents touched the same code. The `conflicts` list gives the conflicting agent, files, and diff. Resolve it: dispatch a single `engineer` (via `dispatch_subagent`) with a prompt that includes the conflicting files + diff and instructs it to reconcile them, OR `request_user_clarification` to escalate. Agents merged before the conflict are already on the issue branch — do NOT re-run them
-- Mind the `## COST / BUDGET` block: when budget is healthy you may pick stronger/more expensive models for hard work; as remaining budget shrinks (or on a BUDGET WARNING) prefer cheaper models from the candidate list and dispatch fewer/narrower; if it says OVER BUDGET, wind down — finalize as soon as the work is deliverable and avoid new expensive dispatches
-- When all work is complete, call `finalize_task` with a summary
-- You MUST call `finalize_task` to end the loop
-
-## Important
-Think step by step and pick the right shape for the work: dispatch INDEPENDENT work together with `dispatch_batch` to run it in parallel, and only chain DEPENDENT work serially across turns (one `dispatch_subagent`, analyze its result, then decide the next step). Do not serialize agents that have no data dependency on each other.
-If something is unclear or blocked, use `request_user_clarification`.
-Users may inject `[USER INTERJECTION]` messages between turns. Treat them as authoritative steering for the next decision.
-{language_directive}"""
+        prompt = build_issue_conductor_prompt(
+            issue=issue,
+            project_context=project_context,
+            budget_context=budget_context,
+            language_directive=language_directive,
+        )
 
         async def llm(messages, tools, on_token_delta=None):
             if cllm is None:

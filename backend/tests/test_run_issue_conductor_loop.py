@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 
-from app.domain.models import CodexIssue, WorkflowGraph
+from app.domain.models import CodexIssue, ProjectConductorState, WorkflowGraph
 
 
 def _make_issue() -> CodexIssue:
@@ -35,6 +36,45 @@ def _make_graph(issue_id: str) -> WorkflowGraph:
         nodes=[],
         edges=[],
     )
+
+
+def test_build_issue_conductor_prompt_includes_source_informed_operating_contract():
+    from app.application.conductor_main_loop import build_issue_conductor_prompt
+
+    issue = _make_issue()
+
+    prompt = build_issue_conductor_prompt(
+        issue=issue,
+        project_context="",
+        budget_context="",
+        language_directive="",
+    )
+
+    assert "## Operating Contract" in prompt
+    assert "Decision loop" in prompt
+    assert "Delegation prompt quality bar" in prompt
+    assert "Use `dispatch_batch` only for independent work" in prompt
+    assert "Never treat `artifact_invalid` as success" in prompt
+    assert "Users may inject `[USER INTERJECTION]` messages" in prompt
+
+
+def test_build_issue_conductor_prompt_includes_project_memory_context():
+    from app.application.conductor_main_loop import build_issue_conductor_prompt
+
+    issue = _make_issue()
+
+    prompt = build_issue_conductor_prompt(
+        issue=issue,
+        project_context=(
+            "\n\n## PROJECT CONTEXT (team_notes)\nPinned: preserve API contracts."
+            "\n\n## RECENT PROJECT HISTORY\n{'summary': 'QA caught stale conductor memory.'}"
+        ),
+        budget_context="",
+        language_directive="",
+    )
+
+    assert "Pinned: preserve API contracts." in prompt
+    assert "QA caught stale conductor memory." in prompt
 
 
 def _make_store(issue: CodexIssue, graph: WorkflowGraph) -> MagicMock:
@@ -85,7 +125,7 @@ async def test_loop_calls_finalize():
     registry = _make_noop_conductor_tools_registry()
 
     mock_conductor = MagicMock()
-    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
@@ -128,7 +168,7 @@ async def test_loop_records_durable_conductor_lease():
     registry = _make_noop_conductor_tools_registry()
 
     mock_conductor = MagicMock()
-    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
@@ -220,7 +260,7 @@ async def test_loop_dispatches_pm():
     registry.definitions = []
 
     mock_conductor = MagicMock()
-    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
@@ -245,6 +285,78 @@ async def test_loop_dispatches_pm():
 
 
 @pytest.mark.asyncio
+async def test_loop_injects_project_conductor_memory_into_llm_prompt():
+    from app.application.conductor_main_loop import run_issue_conductor_loop
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    store = _make_store(issue, graph)
+
+    captured = {}
+
+    async def stub_llm(messages=None, tools=None, *args, **kwargs):
+        if messages is None and args:
+            messages = args[0]
+        captured["messages"] = messages
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "memory injected"},
+                }
+            ],
+        }
+
+    async def finalize_tool(inp):
+        return {"status": str(inp.get("status", "done")), "answer": str(inp.get("answer", ""))}
+
+    registry = MagicMock()
+    registry.tools = {"finalize_task": finalize_tool}
+    registry.definitions = []
+
+    mock_conductor = MagicMock()
+    mock_conductor.get_or_create_state = AsyncMock(
+        return_value=ProjectConductorState(
+            project_id=issue.project_id,
+            pinned_text="Pinned: keep conductor decisions source-informed.",
+            warm_summaries_json=json.dumps([
+                {"summary": "Recent run: parallel agents conflicted without clear prompts."}
+            ]),
+        )
+    )
+    mock_conductor.append_hot_event = AsyncMock()
+
+    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
+         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
+         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm), \
+         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
+         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
+         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
+
+        mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
+
+        result = await run_issue_conductor_loop(
+            issue=issue,
+            project_id=issue.project_id,
+            store=store,
+            event_bus=None,
+            task_dispatcher_fn=None,
+        )
+
+    assert result.status == "done"
+    mock_conductor.get_or_create_state.assert_awaited_once()
+    prompt = str(captured["messages"][0]["content"])
+    assert "Pinned: keep conductor decisions source-informed." in prompt
+    assert "parallel agents conflicted without clear prompts" in prompt
+
+
+@pytest.mark.asyncio
 async def test_loop_marks_failed_and_emits_failure_event():
     from app.application.conductor_main_loop import run_issue_conductor_loop
     from app.application.task_completion_registry import TaskCompletionRegistry
@@ -260,7 +372,7 @@ async def test_loop_marks_failed_and_emits_failure_event():
 
     registry = _make_noop_conductor_tools_registry()
     mock_conductor = MagicMock()
-    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
     with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
@@ -301,7 +413,7 @@ async def test_loop_pause_resume_cancels_inflight_llm_and_retries():
 
     registry = _make_noop_conductor_tools_registry()
     mock_conductor = MagicMock()
-    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
     first_call_started = asyncio.Event()
