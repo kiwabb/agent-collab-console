@@ -101,7 +101,7 @@ export function SettingsPage() {
       <div className="flex-1 flex overflow-hidden">
         <Tabs defaultValue="general" className="flex-1 flex overflow-hidden">
           {/* Sidebar */}
-          <aside className="w-72 shrink-0 border-r border-border-subtle bg-surface/30 p-6 flex flex-col gap-8">
+          <aside className="w-settings-sidebar shrink-0 border-r border-border-subtle bg-surface/30 p-6 flex flex-col gap-8">
             <div>
               <h2 className="px-4 text-[10px] font-black uppercase tracking-[0.25em] text-text-muted mb-4">
                 {t("settings.preferences")}
