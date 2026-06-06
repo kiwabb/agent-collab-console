@@ -526,3 +526,39 @@ datetime-local since/until are minute-precision but created_at is microsecond IS
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Coordinator source-informed upgrade
+
+**Date**: 2026-06-06
+**Task**: Coordinator source-informed upgrade
+**Package**: vibe-kanban
+**Branch**: `main`
+
+### Summary
+
+Studied local Claude Code and Codex CLI sources, upgraded ProjectConductor prompt behavior, fixed project memory injection, added regression tests, and captured conductor prompt rules in backend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a677095` | (see git log) |
+| `6c426cb` | (see git log) |
+| `8800780` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
