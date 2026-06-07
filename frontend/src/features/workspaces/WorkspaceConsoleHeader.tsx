@@ -48,10 +48,10 @@ export function WorkspaceConsoleHeader({
   const repoLabel = formatWorkspaceConsoleRepoLabel(project?.repo_path);
 
   return (
-    <section className="rounded-[1.4rem] border border-border-subtle bg-surface/82 p-4 shadow-[0_24px_80px_rgba(2,6,23,0.12)] backdrop-blur md:p-5">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+    <section className="rounded-lg border border-border-subtle bg-surface/90 p-3 md:p-4">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.22em] text-text-muted">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-text-muted">
             <span className="inline-flex items-center gap-2">
               <RadioTower size={13} className="text-brand" />
               {t("workspace.console.titleFallback")}
@@ -60,7 +60,7 @@ export function WorkspaceConsoleHeader({
             <span className="truncate">{repoLabel}</span>
           </div>
           <div className="mt-2 flex flex-wrap items-end gap-3">
-            <h1 className="text-2xl font-black tracking-[-0.04em] text-foreground md:text-3xl">
+            <h1 className="text-xl font-black text-foreground md:text-2xl">
               {workspace?.title ?? t("workspace.console.emptyTitle")}
             </h1>
             <p className="pb-1 text-sm text-text-muted">
@@ -71,13 +71,13 @@ export function WorkspaceConsoleHeader({
         <Button
           size="sm"
           onClick={onNewIssue}
-          className="h-10 gap-2 rounded-full bg-brand px-5 font-bold text-black shadow-[0_12px_30px_rgba(34,211,238,0.22)] hover:bg-brand-strong"
+          className="h-9 gap-2 rounded-md bg-brand px-4 font-bold text-black shadow-none hover:bg-brand-strong"
         >
           <Plus size={15} /> {t("workspace.console.newIssue")}
         </Button>
       </div>
 
-      <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-text-muted">
             <Filter size={12} /> {t("workspace.console.filter")}
@@ -88,7 +88,7 @@ export function WorkspaceConsoleHeader({
               type="button"
               onClick={() => onStatusFilterChange(filter)}
               className={cn(
-                "rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+                "rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors",
                 statusFilter === filter
                   ? "border-brand bg-brand/15 text-foreground"
                   : "border-border-subtle bg-surface-raised/70 text-text-muted hover:text-foreground",
@@ -108,7 +108,7 @@ export function WorkspaceConsoleHeader({
               type="button"
               onClick={() => onSortModeChange(mode)}
               className={cn(
-                "rounded-full border px-3 py-1.5 text-xs font-semibold capitalize transition-colors",
+                "rounded-md border px-2.5 py-1.5 text-xs font-semibold capitalize transition-colors",
                 sortMode === mode
                   ? "border-foreground bg-foreground text-background"
                   : "border-border-subtle bg-surface-raised/70 text-text-muted hover:text-foreground",

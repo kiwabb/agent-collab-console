@@ -82,14 +82,14 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpen(); }}
-      className="group grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_150px_180px_92px] gap-4 rounded-2xl border border-border-subtle bg-surface-input/45 px-4 py-3 text-left transition-all hover:-translate-y-0.5 hover:border-brand/45 hover:bg-surface-hover hover:shadow-[0_18px_48px_rgba(2,6,23,0.16)] max-lg:grid-cols-1"
+      className="group grid min-h-[72px] w-full cursor-pointer grid-cols-[minmax(0,1fr)_128px_156px_84px] gap-3 border-border-subtle bg-surface-input/25 px-4 py-3 text-left transition-colors hover:bg-surface-hover max-lg:grid-cols-1"
       aria-label={`Open issue ${issue.title}`}
     >
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-3">
           <span
             className={cn(
-              "inline-flex size-9 shrink-0 items-center justify-center rounded-2xl border",
+              "inline-flex size-8 shrink-0 items-center justify-center rounded-lg border",
               bucket === "running" && "border-status-running/30 bg-status-running/10 text-status-running",
               bucket === "awaiting" && "border-status-awaiting/30 bg-status-awaiting/10 text-status-awaiting",
               bucket === "queued" && "border-border-subtle bg-surface-raised text-text-muted",
@@ -103,17 +103,17 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
             <div className="flex items-center gap-2">
               <span className="font-mono text-[11px] text-text-muted">#{issue.id.slice(0, 6)}</span>
               {bucket === "awaiting" && (
-                <span className="rounded-full border border-status-awaiting/30 bg-status-awaiting/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-awaiting">
+                <span className="rounded-md border border-status-awaiting/30 bg-status-awaiting/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-awaiting">
                   {t("workspace.console.status.awaitingReview")}
                 </span>
               )}
             </div>
-            <h2 className="mt-1 truncate text-base font-bold tracking-[-0.02em] text-foreground">
+            <h2 className="mt-1 truncate text-sm font-bold text-foreground">
               {issue.title}
             </h2>
           </div>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-text-muted">
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-text-muted">
           <span className="inline-flex items-center gap-1.5 font-mono">
             <GitBranch size={12} />
             {issue.git_branch || project?.default_branch || "main"}
@@ -128,7 +128,7 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
 
       <div className="min-w-0">
         <div className="flex items-center justify-between gap-2 text-xs">
-          <span className="rounded-full border border-border-subtle bg-surface-raised px-2 py-1 font-bold text-foreground">
+          <span className="rounded-md border border-border-subtle bg-surface-raised px-2 py-1 font-bold text-foreground">
             {getWorkspaceConsoleRoleLabel(currentRole)}
           </span>
           <span className="font-mono text-text-muted">

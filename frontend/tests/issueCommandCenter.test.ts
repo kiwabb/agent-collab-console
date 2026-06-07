@@ -58,12 +58,32 @@ test("issue detail page is a command-center over a 4-tab workbench", () => {
   assert.match(source, /<WsConnectionBanner/);
   assert.match(source, /<CommandCenterChatBar/);
   assert.match(source, /<DispatchDrawer/);
-  // Workbench is a 4-tab layout with the decision timeline as the primary tab.
-  assert.match(source, /defaultValue="timeline"/);
+  // Workbench is a 4-tab layout and honors ?tab=... deep links.
+  assert.match(source, /useSearchParams/);
+  assert.match(source, /value=\{activeTab\}/);
+  assert.match(source, /onValueChange=\{handleTabChange\}/);
+  assert.doesNotMatch(source, /defaultValue="timeline"/);
   assert.match(source, /<DecisionTimeline/);
   for (const value of ["timeline", "artifacts", "diff", "mesh"]) {
     assert.match(source, new RegExp(`value="${value}"`));
   }
+});
+
+test("issue detail page uses compact operations command-center chrome", () => {
+  const pageSource = readSource("features/issues/IssueDetailPage.tsx");
+  const statusSource = readSource("features/issues/components/StatusStrip.tsx");
+  const sideStackSource = readSource("features/issues/components/IssueSideStack.tsx");
+  const gitSource = readSource("features/issues/components/GitInfoCard.tsx");
+
+  assert.match(statusSource, /data-density="command-header"/);
+  assert.match(pageSource, /data-density="issue-workbench"/);
+  assert.match(sideStackSource, /data-density="insight-rail"/);
+  assert.match(gitSource, /data-density="git-ops"/);
+
+  assert.doesNotMatch(pageSource, /radial-gradient|rounded-\[24px\]|rounded-2xl/);
+  assert.doesNotMatch(statusSource, /agent-mesh-grid|Decorative ambient background glows|rounded-\[28px\]|blur-\[|animate-ping/);
+  assert.doesNotMatch(sideStackSource, /rounded-\[24px\]|shadow-xl|animate-pulse|backdrop-blur-xl/);
+  assert.doesNotMatch(gitSource, /rounded-\[24px\]|shadow-xl|animate-pulse|backdrop-blur-xl/);
 });
 
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {

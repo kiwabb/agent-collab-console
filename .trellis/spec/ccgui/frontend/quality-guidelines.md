@@ -25,6 +25,13 @@ npm run build            # 0 errors, no new console errors at runtime
 
 A PR that hasn't run all three is not ready for review.
 
+When a `next dev` server is actively serving browser verification from
+`frontend/.next`, do not run `npm run build` against that same live
+directory. Stop the dev server first, or run the build from an isolated
+temporary copy that reuses `node_modules` but has its own `.next`; otherwise
+the production build can replace dev artifacts mid-request and produce
+spurious 500s such as missing `vendor-chunks` files.
+
 ---
 
 ## Forbidden Patterns

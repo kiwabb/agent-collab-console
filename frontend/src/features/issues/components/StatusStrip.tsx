@@ -41,26 +41,18 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
 
   return (
     <section
+      data-density="command-header"
       className={cn(
-        "relative overflow-hidden rounded-[28px] border p-6 transition-all duration-300 shadow-[0_24px_80px_rgba(0,0,0,0.4)]",
+        "relative overflow-hidden rounded-lg border p-4 transition-colors",
         isAbandoned 
           ? "border-border-subtle bg-slate-950/20 grayscale" 
-          : "enterprise-panel border-border-subtle/40 bg-surface/70 backdrop-blur-xl",
+          : "enterprise-panel border-border-subtle/60 bg-surface/90",
       )}
     >
-      {/* Visual Blueprint Grid Overlay */}
-      <div aria-hidden className="agent-mesh-grid pointer-events-none absolute inset-0 opacity-[0.14] z-0" />
-      
-      {/* Decorative ambient background glows */}
-      <div className="absolute -top-12 -right-12 w-48 h-48 bg-brand/10 rounded-full blur-[64px] pointer-events-none z-0" />
-      {isRunning && (
-        <div className="absolute -bottom-16 -left-16 w-56 h-56 bg-cyan-500/5 rounded-full blur-[80px] pointer-events-none z-0" />
-      )}
-
-      <div className="relative z-10 grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)_auto] xl:items-center">
+      <div className="relative z-10 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.72fr)_auto] xl:items-center">
         
         {/* Left Column: Metadata, Title & Branch Info */}
-        <div className="min-w-0 flex flex-col gap-2.5">
+        <div className="min-w-0 flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary/80">
             <StatusBadge kind={inferStatusKind(status)} label={t(STATUS_LABEL_KEY[status] ?? "issue.command.status.queued")} />
             <span className="font-mono bg-surface-input px-2 py-0.5 rounded-md text-text-muted text-[11px] border border-border-subtle/50">
@@ -81,7 +73,7 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
           </div>
           
           <h1
-            className="line-clamp-2 break-words text-2xl md:text-3xl font-black leading-tight tracking-[-0.04em] text-foreground bg-gradient-to-r from-foreground via-foreground to-text-secondary bg-clip-text"
+            className="line-clamp-2 break-words text-xl md:text-2xl font-black leading-tight text-foreground"
             title={issue?.title ?? undefined}
           >
             {issue?.title ?? t("issue.command.loadingIssue")}
@@ -90,11 +82,11 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
           {/* Active Git Branch Telemetry Tag */}
           {issue?.git_branch && (
             <div className="flex flex-wrap items-center gap-2 mt-1">
-              <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-cyan-400 bg-cyan-950/30 border border-cyan-800/40 px-2.5 py-0.5 rounded-full shadow-[0_0_12px_rgba(34,211,238,0.12)]">
-                <GitBranch size={12} className="shrink-0 text-cyan-400 animate-pulse" />
+              <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-brand bg-brand-muted/10 border border-brand/25 px-2.5 py-0.5 rounded-md">
+                <GitBranch size={12} className="shrink-0 text-brand" />
                 <span>{issue.git_branch}</span>
                 {issue.git_merge_status && (
-                  <span className="text-[10px] uppercase font-black bg-cyan-800/40 text-cyan-300 px-1.5 py-0.2 rounded-sm border border-cyan-700/30 ml-1">
+                  <span className="text-[10px] uppercase font-black bg-brand-muted/20 text-brand px-1.5 py-0.2 rounded-sm border border-brand/20 ml-1">
                     {issue.git_merge_status}
                   </span>
                 )}
@@ -103,12 +95,12 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
           )}
 
           {isPaused && (
-            <div className="mt-1 self-start rounded-xl border border-status-awaiting/30 bg-status-awaiting/10 px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-status-awaiting shadow-[0_0_12px_rgba(234,179,8,0.08)]">
+            <div className="mt-1 self-start rounded-md border border-status-awaiting/30 bg-status-awaiting/10 px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-status-awaiting">
               {t("issue.command.pausedResumePhase", { phase: phase.phase ?? "unknown" })}
             </div>
           )}
           {isAbandoned && (
-            <div className="mt-1 self-start rounded-xl border border-border-subtle bg-surface-input px-3 py-1.5 text-xs text-text-muted">
+            <div className="mt-1 self-start rounded-md border border-border-subtle bg-surface-input px-3 py-1.5 text-xs text-text-muted">
               {t("issue.command.abandonedHint")}
             </div>
           )}
@@ -116,19 +108,19 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
 
         {/* Center Column: Conductor Real-time Telemetry Monitor */}
         <div className={cn(
-          "rounded-2xl border px-5 py-4 transition-all duration-300 relative overflow-hidden group shadow-md",
+          "rounded-lg border px-4 py-3 transition-colors relative overflow-hidden group",
           phase.severity === "danger"
-            ? "border-status-failed/40 bg-status-failed/5 shadow-[0_0_20px_rgba(239,68,68,0.06)]"
+            ? "border-status-failed/40 bg-status-failed/5"
             : phase.severity === "warn"
-              ? "border-status-awaiting/40 bg-status-awaiting/5 shadow-[0_0_20px_rgba(234,179,8,0.06)]"
-              : "border-border-subtle bg-slate-900/30 backdrop-blur-md",
+              ? "border-status-awaiting/40 bg-status-awaiting/5"
+              : "border-border-subtle bg-surface-input/35",
         )}>
           {/* Accent lighting for Conductor panel */}
           <div className={cn(
-            "absolute top-0 left-0 w-1.5 h-full",
+            "absolute top-0 left-0 w-1 h-full",
             isDone ? "bg-status-done" :
             isPaused ? "bg-status-awaiting" :
-            isAbandoned ? "bg-text-muted" : "bg-brand animate-pulse"
+            isAbandoned ? "bg-text-muted" : "bg-brand"
           )} />
 
           <div className="flex items-center justify-between gap-4">
@@ -136,18 +128,15 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
               {/* Dynamic Status Breathing Orb */}
               <div className="relative shrink-0 flex items-center justify-center">
                 <div className={cn(
-                  "w-3 h-3 rounded-full transition-all duration-300",
-                  isDone ? "bg-status-done shadow-[0_0_12px_rgba(74,222,128,0.6)]" :
-                  isPaused ? "bg-status-awaiting shadow-[0_0_12px_rgba(234,179,8,0.6)]" :
-                  isAbandoned ? "bg-text-muted" : "bg-brand shadow-[0_0_14px_rgba(230,149,82,0.8)] animate-pulse"
+                  "w-2.5 h-2.5 rounded-full transition-colors",
+                  isDone ? "bg-status-done" :
+                  isPaused ? "bg-status-awaiting" :
+                  isAbandoned ? "bg-text-muted" : "bg-brand"
                 )} />
-                {isRunning && (
-                  <div className="absolute w-5 h-5 rounded-full border border-brand/40 animate-ping opacity-60 pointer-events-none" />
-                )}
               </div>
               
               <div>
-                <div className="text-[10px] uppercase tracking-[0.25em] font-black text-text-muted">{t("issue.command.conductorPhase")}</div>
+                <div className="text-[10px] uppercase tracking-wider font-black text-text-muted">{t("issue.command.conductorPhase")}</div>
                 <div className="mt-1 font-mono text-sm font-bold text-foreground">
                   {isDone ? t("issue.command.complete") : phase.phase ?? t("issue.command.idle")}
                 </div>
@@ -155,11 +144,11 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
             </div>
             
             <div className="text-right font-mono text-sm font-bold text-text-secondary bg-surface-input px-2 py-0.5 rounded-md border border-border-subtle/50">
-              {isDone ? "✓" : phase.phaseDurationMs != null ? formatDuration(phase.phaseDurationMs) : "—"}
+              {isDone ? t("issue.command.complete") : phase.phaseDurationMs != null ? formatDuration(phase.phaseDurationMs) : "—"}
             </div>
           </div>
 
-          <div className="mt-3 text-xs text-text-secondary leading-relaxed bg-surface/30 p-2 rounded-lg border border-border-subtle/30 font-sans italic">
+          <div className="mt-3 text-xs text-text-secondary leading-relaxed bg-surface/50 p-2 rounded-md border border-border-subtle/30 font-sans">
             {phase.detail || t("issue.command.noConductorDetail")}
           </div>
 
@@ -176,13 +165,13 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
 
         {/* Right Column: Integrated Frosted Action Button Group */}
         <div className="flex flex-wrap items-center justify-start gap-2.5 xl:justify-end xl:pl-4">
-          <div className="flex items-center gap-2 bg-slate-900/40 p-1.5 rounded-2xl border border-border-subtle/50 backdrop-blur-md">
+          <div className="flex items-center gap-2 bg-surface-input/35 p-1.5 rounded-lg border border-border-subtle/50">
             <Button 
               variant="outline" 
               size="sm" 
               onClick={isPaused ? onResume : onPause} 
               className={cn(
-                "gap-2 rounded-xl border-none shadow-none cursor-pointer h-9 px-3.5 transition-all font-bold text-xs",
+                "gap-2 rounded-md border-none shadow-none cursor-pointer h-9 px-3.5 transition-colors font-bold text-xs",
                 isPaused 
                   ? "bg-brand text-background hover:bg-brand-strong" 
                   : "bg-surface-raised hover:bg-surface-hover text-text-primary"
@@ -196,7 +185,7 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
               variant="outline" 
               size="sm" 
               onClick={onSteer} 
-              className="gap-2 rounded-xl border-none bg-surface-raised hover:bg-surface-hover text-text-primary cursor-pointer h-9 px-3.5 transition-all font-bold text-xs"
+              className="gap-2 rounded-md border-none bg-surface-raised hover:bg-surface-hover text-text-primary cursor-pointer h-9 px-3.5 transition-colors font-bold text-xs"
             >
               <RotateCcw size={14} />
               {t("issue.command.restartSteer")}
@@ -208,18 +197,18 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
               variant="outline"
               size="sm"
               onClick={onReset}
-              className="gap-2 rounded-xl h-9 border-status-failed/25 text-status-failed/90 bg-status-failed-bg hover:bg-status-failed/12 hover:border-status-failed/50 hover:text-status-failed cursor-pointer transition-all font-bold text-xs"
+              className="gap-2 rounded-md h-9 border-status-failed/25 text-status-failed/90 bg-status-failed-bg hover:bg-status-failed/12 hover:border-status-failed/50 hover:text-status-failed cursor-pointer transition-colors font-bold text-xs"
             >
               <Trash2 size={14} />
               {t("issue.command.reset")}
             </Button>
 
-            <Button variant="outline" size="sm" className="gap-2 rounded-xl h-9 bg-surface-raised/40 hover:bg-surface-hover text-text-secondary hover:text-text-primary cursor-pointer transition-all border-border-subtle/40 text-xs font-bold">
+            <Button variant="outline" size="sm" className="gap-2 rounded-md h-9 bg-surface-raised/40 hover:bg-surface-hover text-text-secondary hover:text-text-primary cursor-pointer transition-colors border-border-subtle/40 text-xs font-bold">
               <FileText size={14} />
               {t("issue.command.backendLog")}
             </Button>
             
-            <Button variant="ghost" size="sm" className="rounded-xl h-9 w-9 p-0 text-text-muted hover:text-foreground cursor-pointer transition-all">
+            <Button variant="ghost" size="sm" className="rounded-md h-9 w-9 p-0 text-text-muted hover:text-foreground cursor-pointer transition-colors">
               <MoreHorizontal size={16} />
             </Button>
           </div>

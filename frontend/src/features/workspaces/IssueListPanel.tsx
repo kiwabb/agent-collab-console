@@ -55,22 +55,22 @@ export function IssueListPanel({
   }
 
   return (
-    <section className="min-h-0 flex-1 overflow-hidden rounded-[1.4rem] border border-border-subtle bg-surface/88 shadow-[0_24px_80px_rgba(2,6,23,0.10)] backdrop-blur">
-      <div className="grid grid-cols-[minmax(0,1fr)_150px_180px_92px] gap-4 border-b border-border-subtle px-5 py-3 text-[10px] uppercase tracking-[0.18em] text-text-muted max-lg:hidden">
+    <section data-density="operations-queue" className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border-subtle bg-surface/90">
+      <div className="grid grid-cols-[minmax(0,1fr)_128px_156px_84px] gap-3 border-b border-border-subtle px-4 py-2.5 text-[10px] uppercase tracking-wider text-text-muted max-lg:hidden">
         <div>{t("workspace.console.table.task")}</div>
         <div>{t("workspace.console.table.status")}</div>
         <div>{t("workspace.console.table.agent")}</div>
         <div className="text-right">{t("workspace.console.table.run")}</div>
       </div>
 
-      <div className="h-full min-h-0 overflow-auto p-3">
+      <div className="h-full min-h-0 overflow-auto">
         {isLoading && (
           <Loader variant="card" label={t("workspace.console.loading")} className="border-0 bg-transparent rounded-none h-48 min-h-0" />
         )}
 
 
         {!isLoading && issues.length === 0 && (
-          <div className="flex h-64 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border-subtle bg-surface-input/40 px-6 text-center">
+          <div className="m-3 flex h-64 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border-subtle bg-surface-input/40 px-6 text-center">
             <Inbox size={28} className="text-text-muted" />
             <div>
               <p className="font-semibold text-foreground">
@@ -89,7 +89,7 @@ export function IssueListPanel({
         )}
 
         {!isLoading && issues.length > 0 && (
-          <div className="space-y-2">
+          <div className="divide-y divide-border-subtle/70">
             {issues.map((issue) => (
               <IssueRow
                 key={issue.id}

@@ -104,8 +104,8 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
   }, [issues, sortMode, statusFilter]);
 
   return (
-    <div className="h-full min-h-0 overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.12),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.04),transparent_22%)]">
-      <main className="mx-auto flex h-full max-w-7xl flex-col gap-4 px-5 py-5 lg:px-8">
+    <div className="h-full min-h-0 overflow-hidden bg-background">
+      <main className="mx-auto flex h-full max-w-7xl flex-col gap-3 px-4 py-4 lg:px-6">
         <WorkspaceConsoleHeader
           workspace={workspace}
           project={project}

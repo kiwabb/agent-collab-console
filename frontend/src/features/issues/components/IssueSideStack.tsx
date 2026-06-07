@@ -103,7 +103,7 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
   });
 
   return (
-    <aside className="flex flex-col gap-4 sticky top-4">
+    <aside data-density="insight-rail" className="flex flex-col gap-3 sticky top-4">
       <AcceptanceCard checklist={checklist} t={t} />
       <TelemetryCard
         cost={cost}
@@ -137,9 +137,9 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden shadow-xl hover:border-border-strong/45 transition-all duration-300">
-      <div className="px-5 py-4 flex items-center gap-2.5 border-b border-border-subtle/50 bg-slate-900/30">
-        <Icon size={15} className={cn("text-brand shrink-0 animate-pulse", iconClass)} />
+    <div className="enterprise-panel border-border-subtle/60 bg-surface/90 rounded-lg overflow-hidden hover:border-border-strong/45 transition-colors">
+      <div className="px-4 py-3 flex items-center gap-2.5 border-b border-border-subtle/60 bg-surface-input/30">
+        <Icon size={15} className={cn("text-brand shrink-0", iconClass)} />
         <span className="text-[13px] font-bold tracking-wide text-foreground">
           {title}
         </span>
@@ -173,7 +173,7 @@ function AcceptanceCard({
       icon={CheckCircle2}
       iconClass="text-status-done"
     >
-      <div className="px-5 py-4 flex items-center gap-3 bg-slate-950/20 m-3.5 rounded-2xl border border-border-subtle/40 backdrop-blur-md shadow-inner">
+      <div className="px-4 py-3 flex items-center gap-3 bg-surface-input/30 m-3 rounded-lg border border-border-subtle/50">
         <span className="font-mono text-[22px] font-black tracking-tight leading-none text-foreground tabular-nums">
           {covered}
           <em className="not-italic text-text-muted font-normal text-sm">
@@ -205,7 +205,7 @@ function AcceptanceCard({
           {criteria.map((c, i) => (
             <li
               key={i}
-              className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl hover:bg-surface-hover/50 cursor-pointer transition-all duration-200"
+              className="flex items-start gap-2.5 px-3 py-2.5 rounded-md hover:bg-surface-hover/50 cursor-pointer transition-colors"
             >
               <span
                 className={cn(
@@ -394,7 +394,7 @@ function TeleCell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="p-3.5 rounded-2xl bg-surface-input/35 border border-border-subtle/50 backdrop-blur-md shadow-inner transition-all hover:bg-surface-input/50">
+    <div className="p-3.5 rounded-lg bg-surface-input/35 border border-border-subtle/50 transition-colors hover:bg-surface-input/50">
       <div className="font-mono text-[9px] uppercase tracking-[0.18em] font-extrabold text-text-muted">
         {label}
       </div>

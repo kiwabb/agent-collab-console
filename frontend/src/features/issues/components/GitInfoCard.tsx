@@ -155,10 +155,10 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   }
 
   return (
-    <Card className="enterprise-card border-border-subtle/40 bg-surface-raised/40 backdrop-blur-xl shadow-xl rounded-[24px] overflow-hidden p-1.5 transition-all duration-300 hover:border-border-strong/40">
+    <Card data-density="git-ops" className="enterprise-card border-border-subtle/60 bg-surface/90 rounded-lg overflow-hidden p-1 transition-colors hover:border-border-strong/40">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4 pt-5 px-5">
         <CardTitle className="flex items-center gap-2 text-sm font-bold flex-wrap tracking-wide text-foreground">
-          <GitBranch size={15} className="text-brand shrink-0 animate-pulse" />
+          <GitBranch size={15} className="text-brand shrink-0" />
           <span>{t("task.git.title")}</span>
           <Badge variant={statusVariant(issue.git_merge_status)} className="rounded-md uppercase text-[10px] tracking-wider font-extrabold">
             {t(MERGE_STATUS_KEY[issue.git_merge_status])}
@@ -212,7 +212,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
         </div>
       </CardHeader>
       
-      <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs bg-slate-950/30 p-4 m-3.5 rounded-2xl border border-border-subtle/40 backdrop-blur-md">
+      <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-surface-input/30 p-4 m-3 rounded-lg border border-border-subtle/50">
         <div className="flex flex-col gap-1.5 min-w-0">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">{t("task.branch")}</div>
           <div className="font-mono text-foreground font-bold truncate bg-surface-input px-2 py-1 rounded border border-border-subtle/50 select-all" title={issue.git_branch ?? undefined}>
@@ -241,7 +241,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
                 aria-label={t("task.copyPath")}
                 title={t("task.copyPath")}
               >
-                {copiedPath ? <Check size={12} className="text-status-done animate-pulse" /> : <Copy size={12} />}
+                {copiedPath ? <Check size={12} className="text-status-done" /> : <Copy size={12} />}
               </button>
             )}
           </div>

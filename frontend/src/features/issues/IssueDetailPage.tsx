@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FolderArchive, GitPullRequest, Network, Clock } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -48,7 +49,17 @@ interface Props {
   issueId: string;
 }
 
+type IssueWorkbenchTab = "timeline" | "artifacts" | "diff" | "mesh";
+
+const ISSUE_WORKBENCH_TABS = new Set<IssueWorkbenchTab>(["timeline", "artifacts", "diff", "mesh"]);
+
+function readIssueWorkbenchTab(value: string | null): IssueWorkbenchTab {
+  return value && ISSUE_WORKBENCH_TABS.has(value as IssueWorkbenchTab) ? (value as IssueWorkbenchTab) : "timeline";
+}
+
 export function IssueDetailPage({ issueId }: Props) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { addToast } = useToast();
   const { t } = useI18n();
   const [issue, setIssue] = useState<CodexIssue | null>(null);
@@ -68,6 +79,7 @@ export function IssueDetailPage({ issueId }: Props) {
   const [steerSending, setSteerSending] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const activeTab = readIssueWorkbenchTab(searchParams.get("tab"));
 
   const phase = useConductorPhase(issueId);
   const { items: timeline, refresh: refreshTimeline, liveThinking } = useDecisionTimeline(issueId, tasks, subAgentResults);
@@ -205,13 +217,25 @@ export function IssueDetailPage({ issueId }: Props) {
     }
   };
 
+  const handleTabChange = (value: string) => {
+    const nextTab = readIssueWorkbenchTab(value);
+    const params = new URLSearchParams(searchParams.toString());
+    if (nextTab === "timeline") {
+      params.delete("tab");
+    } else {
+      params.set("tab", nextTab);
+    }
+    const query = params.toString();
+    router.replace(query ? `/issues/${issueId}?${query}` : `/issues/${issueId}`, { scroll: false });
+  };
+
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.06),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_22%)]">
+    <div className="h-full flex flex-col overflow-hidden bg-background">
       {/* App-shell body: fixed header + status, scrolling tab content, docked chat bar */}
-      <main className="flex-1 min-h-0 overflow-hidden mx-auto w-full max-w-[1640px] flex flex-col gap-4 px-6 pb-4 pt-5">
+      <main data-density="issue-workbench" className="flex-1 min-h-0 overflow-hidden mx-auto w-full max-w-[1640px] flex flex-col gap-3 px-4 pb-3 pt-4 lg:px-6">
         
         {/* Stationary Header Stack (Always visible) */}
-        <div className="shrink-0 flex flex-col gap-4">
+        <div className="shrink-0 flex flex-col gap-3">
           <WsConnectionBanner />
           
           <StatusStrip
@@ -237,33 +261,33 @@ export function IssueDetailPage({ issueId }: Props) {
         </div>
 
         {/* Two-Column Grid Layout */}
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-6 overflow-hidden">
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-4 overflow-hidden">
           
           {/* Main Area (Left Column) */}
-          <div className="flex-1 min-h-0 flex flex-col gap-4">
-            <Tabs defaultValue="timeline" className="w-full flex-1 flex flex-col gap-4 min-h-0 overflow-hidden">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border-subtle/50 pb-2 shrink-0">
-                <TabsList className="bg-surface/50 border border-border-subtle/50 p-1.5 rounded-2xl grid grid-cols-4 h-12 w-full sm:max-w-md backdrop-blur-md">
-                  <TabsTrigger value="timeline" className="gap-2 text-[12px] font-black py-2 rounded-xl transition-all cursor-pointer">
+          <div className="flex-1 min-h-0 flex flex-col gap-3">
+            <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full flex-1 flex flex-col gap-3 min-h-0 overflow-hidden">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border-subtle/70 pb-2 shrink-0">
+                <TabsList className="bg-surface/80 border border-border-subtle p-1 rounded-lg grid grid-cols-4 h-11 w-full sm:max-w-md">
+                  <TabsTrigger value="timeline" className="gap-2 text-[12px] font-bold py-2 rounded-md transition-colors cursor-pointer">
                     <Clock size={14} className="shrink-0" />
                     <span>{t("issue.command.timelineTitle")}</span>
                   </TabsTrigger>
-                  <TabsTrigger value="artifacts" className="gap-2 text-[12px] font-black py-2 rounded-xl transition-all cursor-pointer">
+                  <TabsTrigger value="artifacts" className="gap-2 text-[12px] font-bold py-2 rounded-md transition-colors cursor-pointer">
                     <FolderArchive size={14} className="shrink-0" />
                     <span>{t("issue.command.artifacts")}</span>
-                    <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded-full font-black font-mono">
+                    <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded font-black font-mono">
                       {artifacts.length}
                     </span>
                   </TabsTrigger>
-                  <TabsTrigger value="diff" className="gap-2 text-[12px] font-black py-2 rounded-xl transition-all cursor-pointer">
+                  <TabsTrigger value="diff" className="gap-2 text-[12px] font-bold py-2 rounded-md transition-colors cursor-pointer">
                     <GitPullRequest size={14} className="shrink-0" />
                     <span>{t("issue.command.diff")}</span>
                   </TabsTrigger>
-                  <TabsTrigger value="mesh" className="gap-2 text-[12px] font-black py-2 rounded-xl transition-all cursor-pointer">
+                  <TabsTrigger value="mesh" className="gap-2 text-[12px] font-bold py-2 rounded-md transition-colors cursor-pointer">
                     <Network size={14} className="shrink-0" />
                     <span>{t("issue.command.mesh")}</span>
                     {agentMeshMessages.length > 0 && (
-                      <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded-full font-black font-mono">
+                      <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded font-black font-mono">
                         {agentMeshMessages.length}
                       </span>
                     )}
@@ -276,19 +300,19 @@ export function IssueDetailPage({ issueId }: Props) {
               </TabsContent>
               
               <TabsContent value="artifacts" className="outline-none flex-1 min-h-0 flex flex-col overflow-hidden">
-                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/80 p-1 flex-1 min-h-0 flex flex-col">
+                <div className="enterprise-panel rounded-lg overflow-hidden bg-surface/90 p-1 flex-1 min-h-0 flex flex-col">
                   <ArtifactsPanel issueId={issueId} issue={issue} />
                 </div>
               </TabsContent>
 
               <TabsContent value="diff" className="outline-none flex-1 min-h-0 flex flex-col overflow-hidden">
-                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/80 p-1 flex-1 min-h-0 flex flex-col">
+                <div className="enterprise-panel rounded-lg overflow-hidden bg-surface/90 p-1 flex-1 min-h-0 flex flex-col">
                   <IssueDiffPanel issueId={issueId} issue={issue} />
                 </div>
               </TabsContent>
 
               <TabsContent value="mesh" className="outline-none flex-1 min-h-0 flex flex-col overflow-hidden">
-                <div className="enterprise-panel rounded-[24px] overflow-hidden bg-surface/80 p-1 flex-1 min-h-0 flex flex-col">
+                <div className="enterprise-panel rounded-lg overflow-hidden bg-surface/90 p-1 flex-1 min-h-0 flex flex-col">
                   <MeshPanel issueId={issueId} />
                 </div>
               </TabsContent>
