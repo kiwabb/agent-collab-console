@@ -2250,6 +2250,55 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
+    def load_self_improvement_proposal(self, proposal_id: str) -> "SelfImprovementProposal | None":
+        from app.domain.models import SelfImprovementProposal
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, project_id, issue_id, target_kind, title, recommendation, evidence_json, "
+            "severity, confidence, status, fingerprint, created_at, updated_at "
+            "FROM self_improvement_proposals WHERE id = ?",
+            (proposal_id,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return SelfImprovementProposal(
+            id=row["id"],
+            project_id=row["project_id"],
+            issue_id=row["issue_id"],
+            target_kind=row["target_kind"],
+            title=row["title"],
+            recommendation=row["recommendation"],
+            evidence_json=row["evidence_json"] or "[]",
+            severity=row["severity"] or "info",
+            confidence=float(row["confidence"] or 0),
+            status=row["status"] or "proposed",
+            fingerprint=row["fingerprint"],
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    def update_self_improvement_proposal_status(
+        self,
+        proposal_id: str,
+        status: str,
+    ) -> "SelfImprovementProposal | None":
+        self._ensure_db()
+        conn = self._get_conn()
+        cur = conn.execute(
+            "UPDATE self_improvement_proposals SET status = ?, updated_at = ? WHERE id = ?",
+            (status, self._format_datetime(datetime.now()), proposal_id),
+        )
+        conn.commit()
+        updated = cur.rowcount > 0
+        conn.close()
+        if not updated:
+            return None
+        return self.load_self_improvement_proposal(proposal_id)
+
     def list_self_improvement_proposals(
         self,
         project_id: str | None = None,

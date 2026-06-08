@@ -244,12 +244,19 @@ await store.save_conductor_task(task)
 - Store APIs:
   - `save_self_improvement_proposal(proposal: SelfImprovementProposal) -> None`
   - `list_self_improvement_proposals(project_id: str | None = None, issue_id: str | None = None, status: str | None = None, limit: int | None = None) -> list[SelfImprovementProposal]`
+  - `load_self_improvement_proposal(proposal_id: str) -> SelfImprovementProposal | None`
+  - `update_self_improvement_proposal_status(proposal_id: str, status: str) -> SelfImprovementProposal | None`
 - Service APIs:
   - `extract_self_improvement_proposals(issue: CodexIssue, store) -> list[SelfImprovementProposal]`
   - `record_issue_self_improvement(issue: CodexIssue, store) -> list[SelfImprovementProposal]`
 - Read API:
   - `GET /api/codex/projects/{project_id}/self-improvement-proposals`
   - Optional filters: `issue_id`, `status`, `limit`
+- Review API:
+  - `PATCH /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}`
+  - Request body: `{"status": "proposed" | "accepted" | "rejected" | "applied"}`
+  - Response body: the same proposal object shape used inside the list endpoint's
+    `proposals[]` array.
 
 ### 3. Contracts
 
@@ -263,6 +270,17 @@ await store.save_conductor_task(task)
 - `evidence_json` stores a JSON list of evidence pointers/snippets. The API
   parses it into `evidence`; malformed or non-list evidence returns `[]` rather
   than failing the endpoint.
+- Review status transitions are conservative:
+  - `proposed -> accepted`
+  - `proposed -> rejected`
+  - `accepted -> applied`
+  - repeating the current status is idempotent
+  - reverting `rejected` or `applied`, and `rejected -> accepted`, are invalid.
+- The review API is status-only. It updates only `status` and `updated_at`; it
+  must not mutate team notes, `.trellis/spec/`, prompts, policies, tools,
+  memory rows, or source code.
+- The review API is project-scoped. A proposal whose `project_id` differs from
+  the path `project_id` is treated as not found rather than exposed.
 - The terminal seal order for done graphs is:
   1. persist graph status;
   2. call `record_project_memory(graph.id, store)`;
@@ -276,6 +294,14 @@ await store.save_conductor_task(task)
   `"SQLite store not available"`.
 - Unknown `project_id` on the read API -> HTTP `404`, detail
   `"Project not found"`.
+- `codex_store is None` on the review API -> HTTP `503`, detail
+  `"SQLite store not available"`.
+- Unknown `project_id` on the review API -> HTTP `404`, detail
+  `"Project not found"`.
+- Unknown or cross-project proposal on the review API -> HTTP `404`, detail
+  `"Self-improvement proposal not found"`.
+- Invalid review status transition -> HTTP `409`, detail starts with
+  `"Invalid self-improvement proposal status transition"`.
 - `limit < 1` or `limit > 100` on the read API -> FastAPI validation `422`.
 - Duplicate `fingerprint` on save -> update existing row fields and keep one
   logical proposal.
@@ -291,11 +317,18 @@ await store.save_conductor_task(task)
   conductor-task evidence pointer and stable fingerprint.
 - Good: a runtime traceback or stalled conductor task creates one
   `runtime_tooling` proposal and does not duplicate when extraction runs again.
+- Good: an operator accepts a proposed `code_spec` lesson with the review API;
+  the proposal status becomes `accepted`, and all recommendation/evidence fields
+  remain unchanged.
+- Good: an accepted proposal is marked `applied` after a separate reviewed change
+  lands; the API records the status only.
 - Base: a clean trivial completed issue creates no proposal and no error.
 - Bad: appending a new proposal row on every recovery/seal run for the same
   lesson.
 - Bad: auto-editing `.trellis/spec/` or project memory from the extractor in
   the review-only slice.
+- Bad: allowing `rejected -> accepted` through the status API without an audit
+  model for resurrection.
 - Bad: allowing proposal extraction failure to prevent `issue.status =
   "completed"` after a done graph.
 
@@ -303,6 +336,8 @@ await store.save_conductor_task(task)
 
 - Store parity: async and sync stores save/list/filter proposals and dedupe by
   fingerprint.
+- Store parity: async and sync stores load proposals by id and status-update
+  rows while preserving all non-status fields and advancing `updated_at`.
 - Extraction: QA failure creates a `code_spec` proposal with evidence.
 - Extraction: runtime/conductor failure creates a `runtime_tooling` proposal.
 - Extraction: clean issue creates no proposals.
@@ -311,6 +346,9 @@ await store.save_conductor_task(task)
 - Seal: self-improvement failure does not block graph/issue terminal status.
 - API: project proposals endpoint returns stable JSON, parses `evidence_json`,
   and respects `issue_id`, `status`, and `limit`.
+- API: review endpoint covers `proposed -> accepted`, `proposed -> rejected`,
+  `accepted -> applied`, idempotent repeats, `409` invalid transitions, `404`
+  unknown/cross-project proposals, and `503` store unavailable.
 
 ### 7. Wrong vs Correct
 
@@ -334,4 +372,21 @@ if graph_status == "done":
         logging.getLogger(__name__).warning("self_improvement extraction failed: %s", exc)
 issue.status = "completed"
 await store.save_codex_issue(issue)
+```
+
+Wrong:
+
+```python
+proposal.status = request.status
+await store.save_self_improvement_proposal(proposal)
+await record_project_memory(proposal.issue_id, store)  # review endpoint auto-applies
+```
+
+Correct:
+
+```python
+if not _is_self_improvement_proposal_status_transition_allowed(proposal.status, request.status):
+    raise HTTPException(status_code=409, detail="Invalid self-improvement proposal status transition")
+updated = await store.update_self_improvement_proposal_status(proposal.id, request.status)
+return _self_improvement_proposal_to_dict(updated)
 ```
