@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Check backend layer contracts for conductor/memory/store integration."}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Verify persistence/idempotence/migration-style tests if ledger is added."}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Verify best-effort extraction failures do not fail completed issues."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Verify tests and conductor/project-memory quality rules."}
