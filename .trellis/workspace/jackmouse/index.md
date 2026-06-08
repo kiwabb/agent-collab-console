@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~596 | Active |
+| `journal-1.md` | ~631 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-06-08 | GitHub PR follow-up diagnostics | `f9aa0f9`, `90f613b` | `codex/archive-github-pr-followup-diagnostics` |
 | 17 | 2026-06-08 | Project review scheduler status | `ad2fef8` | `codex/archive-project-review-scheduler-status` |
 | 16 | 2026-06-08 | Project review background loop | `3cc5130` | `codex/archive-project-review-background-loop` |
 | 15 | 2026-06-03 | Fix audit log time-filter boundary minute exclusion | `6376dc9` | `main` |
