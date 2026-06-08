@@ -33,6 +33,12 @@ from app.domain.models import (
 
 logger = logging.getLogger(__name__)
 
+_ENGINEER_ROLES = {"engineer", "engineer_frontend", "engineer_backend"}
+_DIFF_GUARD_CLAIM_MARKER = "Engineer claimed status="
+_DIFF_GUARD_ZERO_DIFF_MARKER = (
+    "git diff against the base branch shows no file changes"
+)
+
 
 class WorkflowSchedulerError(RuntimeError):
     pass
@@ -92,6 +98,29 @@ class WorkflowScheduler:
         except Exception as exc:  # noqa: BLE001
             logger.debug("artifact_validation_failed emit failed: %s", exc)
 
+    async def _emit_diff_guard_failed(
+        self,
+        task: CodexTask,
+        node: WorkflowNode,
+        issue: CodexIssue | None,
+        reason: str,
+    ) -> None:
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.append({
+                "type": "workflow_node_diff_guard_failed",
+                "issue_id": issue.id if issue is not None else task.issue_id,
+                "session_id": issue.session_id if issue is not None else task.session_id,
+                "task_id": task.id,
+                "node_id": node.id,
+                "node_key": node.node_key,
+                "role": task.role,
+                "reason": reason,
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("workflow_node_diff_guard_failed emit failed: %s", exc)
+
     async def on_task_completed(self, task: CodexTask) -> None:
         """Hook called by the task runner once a task ends."""
         if not getattr(task, "workflow_node_id", None):
@@ -109,6 +138,19 @@ class WorkflowScheduler:
                 issue_for_event = await self.store.load_codex_issue(graph.issue_id)
             except Exception:  # noqa: BLE001
                 issue_for_event = None
+            diff_guard_reason = self._engineer_diff_guard_failure_reason(task)
+            if terminal == "done" and diff_guard_reason:
+                task.status = "failed"
+                task.result = f"Diff completion guard failed: {diff_guard_reason}"
+                task.review_comment = (
+                    "Diff completion guard failed: the Engineer report claimed file changes, "
+                    "but the real git diff was empty. Retry with a concrete code change or "
+                    "explicitly explain why no code change is required."
+                )
+                task.updated_at = datetime.now()
+                await self.store.save_codex_task(task)
+                await self._emit_diff_guard_failed(task, node, issue_for_event, diff_guard_reason)
+                terminal = "failed"
             if terminal == "failed" and await self._maybe_auto_retry_failed_node(
                 task,
                 node,
@@ -177,6 +219,21 @@ class WorkflowScheduler:
 
         # Keep the issue's `current_phase` label in step with completed roles.
         await self._maybe_advance_phase(graph)
+
+    @staticmethod
+    def _engineer_diff_guard_failure_reason(task: CodexTask) -> str | None:
+        if getattr(task, "role", None) not in _ENGINEER_ROLES:
+            return None
+        doc = getattr(task, "_subagent_doc", None)
+        qa_notes = getattr(doc, "qa_notes", None)
+        if not isinstance(qa_notes, list):
+            return None
+        for note in qa_notes:
+            if not isinstance(note, str):
+                continue
+            if _DIFF_GUARD_CLAIM_MARKER in note and _DIFF_GUARD_ZERO_DIFF_MARKER in note:
+                return note[:800]
+        return None
 
     async def _maybe_auto_retry_failed_node(
         self,

@@ -51,6 +51,32 @@ def _failed_task(**overrides) -> CodexTask:
     return CodexTask(**base)
 
 
+def _done_task(**overrides) -> CodexTask:
+    base = dict(
+        id="task-done",
+        session_id="sess-1",
+        project_id="project-1",
+        issue_id="issue-1",
+        phase="engineer",
+        title="Fix flaky executor",
+        prompt="Patch the executor startup path.",
+        role="engineer",
+        executor="codex",
+        provider="openai",
+        model="gpt-5-codex",
+        status="done",
+        result="Implementation report generated.",
+        workflow_node_id="node-1",
+        git_branch="issue/fix-flaky-executor",
+        git_base_branch="main",
+        git_worktree_path="/tmp/issue-worktree",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    base.update(overrides)
+    return CodexTask(**base)
+
+
 def _node(*, retries: int = 0, max_retries: int = 1) -> WorkflowNode:
     return WorkflowNode(
         id="node-1",
@@ -199,3 +225,96 @@ async def test_failed_workflow_task_marks_node_failed_when_retry_dispatch_fails(
         and "runner unavailable" in str(event.get("error"))
         for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_done_engineer_with_diff_guard_failure_auto_retries_before_node_done():
+    issue = _issue()
+    node = _node(retries=0, max_retries=1)
+    graph = _graph(node)
+    store = _store(node, graph, issue)
+    events: list[dict] = []
+    dispatched: list[CodexTask] = []
+
+    class EngineerDoc:
+        qa_notes = [
+            "[framework] Engineer claimed status=completed with changed_files=['app.py'] "
+            "but git diff against the base branch shows no file changes. "
+            "Downgraded to partial pending real implementation."
+        ]
+
+    task = _done_task()
+    object.__setattr__(task, "_subagent_doc", EngineerDoc())
+
+    async def dispatcher(task: CodexTask) -> None:
+        dispatched.append(task)
+
+    scheduler = WorkflowScheduler(store, task_dispatcher=dispatcher, event_bus=_event_bus(events))
+    await scheduler.on_task_completed(task)
+
+    assert len(dispatched) == 1
+    retry_task = dispatched[0]
+    assert retry_task.parent_task_id == "task-done"
+    assert retry_task.workflow_node_id == "node-1"
+    assert "diff completion guard" in (retry_task.review_comment or "").lower()
+    assert store.update_workflow_node.await_args.kwargs["status"] == "running"
+    assert any(
+        event.get("type") == "workflow_node_diff_guard_failed"
+        and event.get("task_id") == "task-done"
+        and event.get("node_id") == "node-1"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_done_engineer_without_diff_guard_failure_marks_node_done():
+    issue = _issue()
+    node = _node(retries=0, max_retries=1)
+    graph = _graph(node)
+    store = _store(node, graph, issue)
+    dispatched: list[CodexTask] = []
+
+    class EngineerDoc:
+        qa_notes: list[str] = []
+
+    task = _done_task()
+    object.__setattr__(task, "_subagent_doc", EngineerDoc())
+
+    async def dispatcher(task: CodexTask) -> None:
+        dispatched.append(task)
+
+    scheduler = WorkflowScheduler(store, task_dispatcher=dispatcher, event_bus=_event_bus([]))
+    await scheduler.on_task_completed(task)
+
+    assert dispatched == []
+    store.update_workflow_node.assert_awaited_once()
+    assert store.update_workflow_node.await_args.kwargs["status"] == "done"
+    assert store.update_workflow_node.await_args.kwargs["completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_diff_guard_note_on_non_engineer_task_does_not_trigger_retry():
+    issue = _issue()
+    node = _node(retries=0, max_retries=1)
+    graph = _graph(node)
+    store = _store(node, graph, issue)
+    dispatched: list[CodexTask] = []
+
+    class QADoc:
+        qa_notes = [
+            "[framework] Engineer claimed status=completed with changed_files=['app.py'] "
+            "but git diff against the base branch shows no file changes."
+        ]
+
+    task = _done_task(role="qa", phase="qa")
+    object.__setattr__(task, "_subagent_doc", QADoc())
+
+    async def dispatcher(task: CodexTask) -> None:
+        dispatched.append(task)
+
+    scheduler = WorkflowScheduler(store, task_dispatcher=dispatcher, event_bus=_event_bus([]))
+    await scheduler.on_task_completed(task)
+
+    assert dispatched == []
+    store.update_workflow_node.assert_awaited_once()
+    assert store.update_workflow_node.await_args.kwargs["status"] == "done"
