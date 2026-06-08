@@ -526,3 +526,37 @@ datetime-local since/until are minute-precision but created_at is microsecond IS
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Project review background loop
+
+**Date**: 2026-06-08
+**Task**: Project review background loop
+**Package**: ccgui
+**Branch**: `codex/archive-project-review-background-loop`
+
+### Summary
+
+Added a cancellation-safe background loop for scheduled project reviews, wired it into FastAPI lifespan, centralized cadence/limit knobs, updated backend specs, verified locally and merged PR #7.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3cc5130` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
