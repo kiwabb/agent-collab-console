@@ -375,6 +375,20 @@ def _is_task_running(status: str | None) -> bool:
     return str(status or "").lower() in {"running", "responding"}
 
 
+def _supervisor_status_check(
+    name: str,
+    status: dict[str, object],
+    *,
+    running_detail: str,
+) -> dict[str, object]:
+    last_error = status.get("last_error")
+    if last_error:
+        return {"name": name, "status": "degraded", "detail": last_error}
+    if status.get("running") is True:
+        return {"name": name, "status": "degraded", "detail": running_detail}
+    return {"name": name, "status": "ok", "detail": None}
+
+
 def _delete_issue_artifact_root(workspace_path: str | None, issue_id: str):
     if not workspace_path:
         return
@@ -552,17 +566,17 @@ async def diagnostics():
     from app.application.github_pr_followup import get_github_pr_followup_status
     from app.application.project_review_scheduler import get_project_review_scheduler_status
     github_pr_followup = get_github_pr_followup_status()
-    checks.append({
-        "name": "github_pr_followup",
-        "status": "degraded" if github_pr_followup.get("last_error") else "ok",
-        "detail": github_pr_followup.get("last_error"),
-    })
+    checks.append(_supervisor_status_check(
+        "github_pr_followup",
+        github_pr_followup,
+        running_detail="GitHub PR follow-up sweep is running",
+    ))
     project_review_scheduler = get_project_review_scheduler_status()
-    checks.append({
-        "name": "project_review_scheduler",
-        "status": "degraded" if project_review_scheduler.get("last_error") else "ok",
-        "detail": project_review_scheduler.get("last_error"),
-    })
+    checks.append(_supervisor_status_check(
+        "project_review_scheduler",
+        project_review_scheduler,
+        running_detail="Project review scheduler is running",
+    ))
 
     config = {
         "real_cli_enabled": os.getenv("REAL_CLI", "true").lower() == "true",
