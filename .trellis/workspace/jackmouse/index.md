@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
+- **Total Sessions**: 22
 - **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~733 | Active |
+| `journal-1.md` | ~770 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-06-08 | Archive completed autonomy pipeline tasks | `253d2df`, `2950cbc`, `44a2db7`, `57e5414` | `codex/archive-completed-autonomy-tasks` |
 | 21 | 2026-06-08 | Conductor PR follow-up sweep | `c5293f0` | `codex/conductor-pr-follow-up-sweep-main` |
 | 20 | 2026-06-08 | Project review scheduler stale health | `6d42404` | `codex/archive-project-review-scheduler-stale-health` |
 | 19 | 2026-06-08 | Diagnostics supervisor health | `e6955fb` | `codex/archive-diagnostics-supervisor-health` |

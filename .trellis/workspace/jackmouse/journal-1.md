@@ -731,3 +731,40 @@ Verified the already-merged scheduled review PR follow-up sweep: ProjectConducto
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: Archive completed autonomy pipeline tasks
+
+**Date**: 2026-06-08
+**Task**: Archive completed autonomy pipeline tasks
+**Package**: ccgui
+**Branch**: `codex/archive-completed-autonomy-tasks`
+
+### Summary
+
+Verified and archived four already-merged Moonshot autonomy slices: conductor policy intelligence, GitHub PR follow-up automation, GitHub PR auto-merge gates, and project review scheduler tick. Focused tests for conductor policy/self-improvement, PR follow-up/auto-merge, and project review scheduler passed; full backend suite passed with existing aiosqlite event-loop warnings.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `253d2df` | (see git log) |
+| `2950cbc` | (see git log) |
+| `44a2db7` | (see git log) |
+| `57e5414` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
