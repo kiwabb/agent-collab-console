@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 26
+- **Total Sessions**: 27
 - **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~906 | Active |
+| `journal-1.md` | ~940 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 27 | 2026-06-08 | Reviewed self-improvement memory apply | `42c1716` | `codex/archive-self-improvement-apply-execute` |
 | 26 | 2026-06-08 | Self-improvement apply plan API | `7695be6` | `codex/archive-self-improvement-apply-plan` |
 | 25 | 2026-06-08 | Self-improvement proposal review API | `def982b` | `codex/archive-self-improvement-proposal-review-api` |
 | 24 | 2026-06-08 | Implementation diff completion guard | `ac5c0ca` | `codex/archive-implementation-diff-guard` |
