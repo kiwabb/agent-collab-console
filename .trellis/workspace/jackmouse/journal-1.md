@@ -802,3 +802,37 @@ Merged PR #19 adding bounded automatic retry for failed workflow-backed tasks. F
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: Implementation diff completion guard
+
+**Date**: 2026-06-08
+**Task**: Implementation diff completion guard
+**Package**: ccgui
+**Branch**: `codex/archive-implementation-diff-guard`
+
+### Summary
+
+Added scheduler-level diff completion guard for workflow-backed Engineer nodes. A deterministic Engineer claim-vs-empty-git-diff contradiction is now persisted as a failed task, emits workflow_node_diff_guard_failed, and reuses workflow node auto-retry before review/QA. Verified with focused scheduler/reconciliation tests, full backend pytest, import smoke, py_compile, and diff check.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ac5c0ca` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
