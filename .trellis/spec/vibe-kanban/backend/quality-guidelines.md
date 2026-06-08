@@ -92,8 +92,8 @@ store gets a real-async-store migration test.
 #### 3. Contracts
 
 - Top-level response fields: `service`, `status`, `generated_at`, `database`,
-  `runtime_catalog`, `project_review_scheduler`, `executors`, `websockets`,
-  `config`, `checks`.
+  `runtime_catalog`, `github_pr_followup`, `project_review_scheduler`,
+  `executors`, `websockets`, `config`, `checks`.
 - `status` is `"ok"` only when all checks are ok; use `"degraded"` when any check is degraded or errored but the endpoint can still return a snapshot.
 - Runtime catalog entries may expose booleans such as `api_endpoint_configured` and `api_key_configured`.
 - Runtime catalog entries must not expose raw secret values, raw API keys, bearer tokens, auth headers, or provider credentials.
@@ -795,12 +795,15 @@ audit_logger.record("git_command", issue_id=..., payload={...}, status="ok")  # 
 # github_pr_followup.py
 async def refresh_issue_github_pr(issue_id, *, store, event_bus, run_subprocess) -> GitHubPRFollowupResult
 async def sweep_project_github_prs(project_id, *, store, event_bus, run_subprocess, auto_merge=False) -> GitHubPRFollowupSummary
+def get_github_pr_followup_status() -> dict[str, object]
+def reset_github_pr_followup_status() -> None
 
 # api.py
 POST /api/codex/issues/{issue_id}/pr/refresh -> CodexIssue
 POST /api/codex/projects/{project_id}/pr/follow-up {"auto_merge": false} -> {
     project_id, counts, results: [{issue_id, status, github_pr_state, message, error}]
 }
+GET /api/diagnostics -> {"github_pr_followup": {...}, ...}
 
 # project_conductor.py
 ProjectConductor.handle_task(ConductorTask(task_kind="scheduled_review")) -> {
@@ -845,6 +848,19 @@ ProjectConductor.handle_task(ConductorTask(task_kind="scheduled_review")) -> {
   `github_pr_followup_<status>` and emits an `issue_pr_followup` event.
 - The project sweep skips issues with no `github_pr_url` or already merged
   `git_merge_status`.
+- The project sweep MUST maintain an in-memory operational status snapshot with
+  only safe fields: `configured`, `running`, `sweep_count`, `last_started_at`,
+  `last_completed_at`, `last_error`, `last_summary_counts`, and
+  `auto_merge_enabled`.
+- `GET /api/diagnostics` MUST expose that snapshot as top-level
+  `github_pr_followup`. It must not expose GitHub tokens, project names, repo
+  paths, prompts, issue titles/descriptions, or full tracebacks.
+- A successful project sweep records completion time, increments
+  `sweep_count`, clears `last_error`, and stores summary counts. A sweep-level
+  exception records safe error text, increments `sweep_count`, clears
+  `running`, and re-raises so callers keep their existing supervisor behavior.
+- Manual single-issue PR refresh MUST NOT update the project sweep status
+  snapshot.
 - A `ProjectConductor` scheduled review MUST run the project sweep with
   `auto_merge=True`, then include the sweep summary under
   `github_pr_followup` in the returned result, persisted task `result_json`,
@@ -870,6 +886,9 @@ ProjectConductor.handle_task(ConductorTask(task_kind="scheduled_review")) -> {
   `merge_failed`, issue remains open, sweep continues.
 - One failed issue in a sweep -> included as `failed`; following issues still
   refresh.
+- Sweep-level exception before/after issue iteration -> status snapshot records
+  `last_error` and clears `running`; exception propagates to the conductor or
+  endpoint boundary.
 - Scheduled-review sweep raises unexpectedly -> conductor result includes a
   failed `github_pr_followup` payload and the conductor task status remains
   `done`.
@@ -895,8 +914,12 @@ ProjectConductor.handle_task(ConductorTask(task_kind="scheduled_review")) -> {
   names the failed check.
 - Single refresh: bad JSON / non-zero `gh` returns `failed` with audit/event.
 - Project sweep: skips no-PR / already-merged issues and isolates failures.
+- Project sweep status records success counts, failure error text, running
+  transitions, and the `auto_merge_enabled` flag.
 - Endpoint: project follow-up returns best-effort summary instead of HTTP
   failing for one broken PR.
+- Diagnostics includes top-level `github_pr_followup` and degrades when its
+  `last_error` is present.
 - ProjectConductor scheduled review: calls project sweep with `auto_merge=True`
   and records the summary in return payload, `result_json`, and hot memory.
 - ProjectConductor scheduled review: sweep exception is reported without

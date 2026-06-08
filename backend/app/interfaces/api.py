@@ -549,7 +549,14 @@ async def diagnostics():
         runtime_catalog = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         checks.append({"name": "runtime_catalog", "status": "error", "detail": runtime_catalog["error"]})
 
+    from app.application.github_pr_followup import get_github_pr_followup_status
     from app.application.project_review_scheduler import get_project_review_scheduler_status
+    github_pr_followup = get_github_pr_followup_status()
+    checks.append({
+        "name": "github_pr_followup",
+        "status": "degraded" if github_pr_followup.get("last_error") else "ok",
+        "detail": github_pr_followup.get("last_error"),
+    })
     project_review_scheduler = get_project_review_scheduler_status()
     checks.append({
         "name": "project_review_scheduler",
@@ -602,6 +609,7 @@ async def diagnostics():
         "generated_at": now,
         "database": database,
         "runtime_catalog": runtime_catalog,
+        "github_pr_followup": github_pr_followup,
         "project_review_scheduler": project_review_scheduler,
         "executors": executors,
         "websockets": websockets,

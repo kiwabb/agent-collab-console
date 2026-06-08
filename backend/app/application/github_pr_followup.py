@@ -43,6 +43,62 @@ class EventBusLike(Protocol):
     async def append(self, event: dict[str, object]) -> None: ...
 
 
+@dataclass
+class GitHubPRFollowupStatus:
+    configured: bool = True
+    running: bool = False
+    sweep_count: int = 0
+    last_started_at: datetime | None = None
+    last_completed_at: datetime | None = None
+    last_error: str | None = None
+    last_summary_counts: dict[str, int] = field(default_factory=dict)
+    auto_merge_enabled: bool = False
+
+    def mark_started(self, *, auto_merge: bool) -> None:
+        self.configured = True
+        self.running = True
+        self.last_started_at = datetime.now()
+        self.auto_merge_enabled = auto_merge
+
+    def mark_completed(self, summary: GitHubPRFollowupSummary) -> None:
+        self.running = False
+        self.sweep_count += 1
+        self.last_completed_at = datetime.now()
+        self.last_error = None
+        self.last_summary_counts = summary.counts
+
+    def mark_failed(self, exc: Exception) -> None:
+        self.running = False
+        self.sweep_count += 1
+        self.last_completed_at = datetime.now()
+        self.last_error = f"{type(exc).__name__}: {exc}"
+        self.last_summary_counts = {}
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "configured": self.configured,
+            "running": self.running,
+            "sweep_count": self.sweep_count,
+            "last_started_at": self.last_started_at.isoformat() if self.last_started_at else None,
+            "last_completed_at": self.last_completed_at.isoformat() if self.last_completed_at else None,
+            "last_error": self.last_error,
+            "last_summary_counts": dict(self.last_summary_counts),
+            "auto_merge_enabled": self.auto_merge_enabled,
+        }
+
+
+_followup_status = GitHubPRFollowupStatus()
+
+
+def reset_github_pr_followup_status() -> None:
+    global _followup_status
+    _followup_status = GitHubPRFollowupStatus()
+
+
+def get_github_pr_followup_status() -> dict[str, object]:
+    return _followup_status.to_dict()
+
+
 @dataclass(frozen=True)
 class GitHubPRFollowupResult:
     issue_id: str
@@ -357,34 +413,40 @@ async def sweep_project_github_prs(
     run_subprocess: Callable[..., Awaitable[CompletedProcessLike]],
     auto_merge: bool = False,
 ) -> GitHubPRFollowupSummary:
-    issue_rows = await store.list_codex_issues(project_id=project_id)
-    results: list[GitHubPRFollowupResult] = []
-    for row in issue_rows:
-        issue_id = str(row.get("id") or "")
-        if not issue_id:
-            continue
-        if not row.get("github_pr_url"):
-            continue
-        if str(row.get("git_merge_status") or "open") == "merged":
-            continue
-        try:
-            result = await refresh_issue_github_pr(
-                issue_id,
-                store=store,
-                event_bus=event_bus,
-                run_subprocess=run_subprocess,
-                auto_merge=auto_merge,
-            )
-        except GitHubPRFollowupError as exc:
-            result = GitHubPRFollowupResult(issue_id=issue_id, status=exc.status, error=exc.message)
-        results.append(result)
-    summary = GitHubPRFollowupSummary(project_id=project_id, results=results)
-    await _append_event(
-        event_bus,
-        {
-            "type": "project_pr_followup_sweep",
-            "project_id": project_id,
-            "counts": summary.counts,
-        },
-    )
+    _followup_status.mark_started(auto_merge=auto_merge)
+    try:
+        issue_rows = await store.list_codex_issues(project_id=project_id)
+        results: list[GitHubPRFollowupResult] = []
+        for row in issue_rows:
+            issue_id = str(row.get("id") or "")
+            if not issue_id:
+                continue
+            if not row.get("github_pr_url"):
+                continue
+            if str(row.get("git_merge_status") or "open") == "merged":
+                continue
+            try:
+                result = await refresh_issue_github_pr(
+                    issue_id,
+                    store=store,
+                    event_bus=event_bus,
+                    run_subprocess=run_subprocess,
+                    auto_merge=auto_merge,
+                )
+            except GitHubPRFollowupError as exc:
+                result = GitHubPRFollowupResult(issue_id=issue_id, status=exc.status, error=exc.message)
+            results.append(result)
+        summary = GitHubPRFollowupSummary(project_id=project_id, results=results)
+        await _append_event(
+            event_bus,
+            {
+                "type": "project_pr_followup_sweep",
+                "project_id": project_id,
+                "counts": summary.counts,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - record sweep-boundary status, then preserve caller semantics.
+        _followup_status.mark_failed(exc)
+        raise
+    _followup_status.mark_completed(summary)
     return summary
