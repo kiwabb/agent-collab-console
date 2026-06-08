@@ -799,6 +799,11 @@ POST /api/codex/issues/{issue_id}/pr/refresh -> CodexIssue
 POST /api/codex/projects/{project_id}/pr/follow-up {"auto_merge": false} -> {
     project_id, counts, results: [{issue_id, status, github_pr_state, message, error}]
 }
+
+# project_conductor.py
+ProjectConductor.handle_task(ConductorTask(task_kind="scheduled_review")) -> {
+    status, answer, task_id, github_pr_followup
+}
 ```
 
 #### 3. Contracts
@@ -838,6 +843,13 @@ POST /api/codex/projects/{project_id}/pr/follow-up {"auto_merge": false} -> {
   `github_pr_followup_<status>` and emits an `issue_pr_followup` event.
 - The project sweep skips issues with no `github_pr_url` or already merged
   `git_merge_status`.
+- A `ProjectConductor` scheduled review MUST run the project sweep with
+  `auto_merge=True`, then include the sweep summary under
+  `github_pr_followup` in the returned result, persisted task `result_json`,
+  and project hot-thread answer event.
+- Scheduled-review PR follow-up is best-effort supervisor work. A sweep
+  exception is logged and reported as `{"status": "failed", "error": ...}`,
+  but the conductor task still completes so the project review loop survives.
 
 #### 4. Validation & Error Matrix
 
@@ -856,6 +868,9 @@ POST /api/codex/projects/{project_id}/pr/follow-up {"auto_merge": false} -> {
   `merge_failed`, issue remains open, sweep continues.
 - One failed issue in a sweep -> included as `failed`; following issues still
   refresh.
+- Scheduled-review sweep raises unexpectedly -> conductor result includes a
+  failed `github_pr_followup` payload and the conductor task status remains
+  `done`.
 
 #### 5. Good/Base/Bad Cases
 
@@ -880,6 +895,10 @@ POST /api/codex/projects/{project_id}/pr/follow-up {"auto_merge": false} -> {
 - Project sweep: skips no-PR / already-merged issues and isolates failures.
 - Endpoint: project follow-up returns best-effort summary instead of HTTP
   failing for one broken PR.
+- ProjectConductor scheduled review: calls project sweep with `auto_merge=True`
+  and records the summary in return payload, `result_json`, and hot memory.
+- ProjectConductor scheduled review: sweep exception is reported without
+  raising or failing the conductor task.
 - Auto-merge: approved + all-green + mergeable -> calls `gh pr merge`, marks
   merged/completed, records `github_pr_followup_merged`.
 - Auto-merge: missing checks / pending checks / review required / merge command
