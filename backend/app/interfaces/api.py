@@ -21,6 +21,7 @@ from app.application.product_manager_service import ProductManagerArtifactError,
 from app.application.phase_duration_estimator import get_phase_duration_estimator
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.process_runtime_common import is_agent_message_item_type, is_unusable_result_text
+from app.application.github_pr_followup import GitHubPRFollowupError, refresh_issue_github_pr, sweep_project_github_prs
 from app.application.project_service import ProjectError
 from app.application.skill_service import SkillError
 from app.application.worktree_manager import WorktreeError
@@ -3505,72 +3506,46 @@ async def refresh_github_pr(issue_id: str):
     recent task's `review_comment` so the existing rework loop fires."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    issue = await codex_store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
-    if not issue.github_pr_url:
-        raise HTTPException(status_code=409, detail="Issue has no PR yet")
     import shutil
     if not shutil.which("gh"):
         raise HTTPException(status_code=412, detail="gh CLI is not installed")
-
-    cwd = issue.git_worktree_path or "."
-    view = await _run_subprocess(
-        ["gh", "pr", "view", issue.github_pr_url, "--json",
-         "state,reviewDecision,reviews,mergeStateStatus"],
-        cwd=cwd,
-        timeout_s=30,
-    )
-    if view.returncode != 0:
-        raise HTTPException(
-            status_code=502,
-            detail=f"gh pr view failed: {view.stderr.strip()[:500]}",
-        )
     try:
-        data = json.loads(view.stdout)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=502, detail="gh pr view returned non-JSON")
-
-    state = data.get("state") or "OPEN"
-    decision = data.get("reviewDecision") or ""
-    issue.github_pr_state = f"{state}:{decision}"
-
-    # Flip merge state if PR was merged remotely.
-    if state == "MERGED" and issue.git_merge_status != "merged":
-        issue.git_merge_status = "merged"
-
-    issue.updated_at = datetime.now()
-    await codex_store.save_codex_issue(issue)
-
-    # If reviewers requested changes, surface the most recent review body
-    # back into the engineer's review_comment so the agent re-runs.
-    if decision == "CHANGES_REQUESTED":
-        reviews = data.get("reviews") or []
-        latest_review_body = ""
-        if reviews:
-            latest_review_body = (reviews[-1] or {}).get("body") or ""
-        if latest_review_body:
-            tasks = await codex_store.list_codex_tasks(issue_id=issue.id)
-            engineer_tasks = [t for t in tasks if t.get("role") == "engineer"]
-            if engineer_tasks:
-                eng = await codex_store.load_codex_task(engineer_tasks[-1]["id"])
-                if eng:
-                    eng.status = "pending"
-                    eng.review_comment = (
-                        "GitHub PR review requested changes. Address the feedback below "
-                        "before re-submitting.\n\n" + latest_review_body
-                    )
-                    eng.updated_at = datetime.now()
-                    await codex_store.save_codex_task(eng)
-                    await event_bus.append({
-                        "type": "task_status",
-                        "task_id": eng.id,
-                        "issue_id": eng.issue_id,
-                        "session_id": eng.session_id,
-                        "status": "pending",
-                    })
+        result = await refresh_issue_github_pr(
+            issue_id,
+            store=codex_store,
+            event_bus=event_bus,
+            run_subprocess=_run_subprocess,
+        )
+    except GitHubPRFollowupError as exc:
+        if exc.status == "not_found":
+            raise HTTPException(status_code=404, detail=exc.message) from exc
+        if exc.status == "no_pr":
+            raise HTTPException(status_code=409, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=exc.message) from exc
+    if result.status == "failed":
+        raise HTTPException(status_code=502, detail=result.error)
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
 
     return issue
+
+
+@router.post("/codex/projects/{project_id}/pr/follow-up")
+async def follow_up_project_github_prs(project_id: str):
+    """Refresh all open GitHub PR-backed issues for a project."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    import shutil
+    if not shutil.which("gh"):
+        raise HTTPException(status_code=412, detail="gh CLI is not installed")
+    summary = await sweep_project_github_prs(
+        project_id,
+        store=codex_store,
+        event_bus=event_bus,
+        run_subprocess=_run_subprocess,
+    )
+    return summary.to_dict()
 
 
 def _build_default_pr_body(issue) -> str:
