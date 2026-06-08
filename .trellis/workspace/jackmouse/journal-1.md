@@ -1040,3 +1040,37 @@ Added the reviewed activate-task API for accepted non-memory self-improvement pr
 ### Next Steps
 
 - None - task complete
+
+
+## Session 31: Auto-start self-improvement activations
+
+**Date**: 2026-06-09
+**Task**: Auto-start self-improvement activations
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-auto-start`
+
+### Summary
+
+Added opt-in conductor startup for accepted non-memory self-improvement activation, reused the existing issue graph auto-start registry path, recorded start_conductor audit events, updated backend ledger specs, and merged PR #35 after local and CI verification.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6f0f178` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
