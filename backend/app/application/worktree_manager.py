@@ -109,6 +109,34 @@ class WorktreeManager:
         async with lock:
             await self._cleanup_path(project.repo_path, issue.git_worktree_path)
 
+    async def cleanup_issue_worktree_for_reset(self, project: Project, issue: CodexIssue) -> None:
+        """Remove the issue worktree and its issue branch before a hard reset.
+
+        Soft-abandon cleanup keeps the branch around for audit/undo semantics.
+        Hard reset is different: the next conductor run recreates the same
+        deterministic branch name with ``git worktree add -b``, so any leftover
+        issue branch must be removed after the old worktree is gone.
+        """
+        lock = await self._lock_for(f"issue:{issue.id}")
+        async with lock:
+            if issue.git_worktree_path:
+                await self._cleanup_path(project.repo_path, issue.git_worktree_path)
+            try:
+                await self.git.prune_worktrees(project.repo_path)
+            except GitError:
+                pass
+            candidate_branches = {
+                branch
+                for branch in (issue.git_branch, _issue_branch_name(issue))
+                if branch and branch != project.default_branch
+            }
+            for branch in candidate_branches:
+                await self.git.delete_branch(project.repo_path, branch)
+            try:
+                await self.git.prune_worktrees(project.repo_path)
+            except GitError:
+                pass
+
     async def merge_issue(
         self,
         project: Project,
@@ -281,7 +309,17 @@ class WorktreeManager:
                     # touches the primary repo's checked-out branch.
                     await self._cleanup_path(repo_path, wt_path)
 
-            # 2) Force-delete residual swarm branch refs for this issue. After
+            # 2) Remove filesystem-only stale swarm dirs. These can remain after
+            # git metadata was pruned or a previous cleanup removed the worktree
+            # registration but failed before deleting the directory. If left
+            # behind, the next dispatch_batch cannot recreate the same path.
+            worktree_parent = Path(project.repo_path).parent / f"{project.name}-worktrees"
+            if worktree_parent.exists():
+                for entry in worktree_parent.iterdir():
+                    if entry.name.startswith(swarm_dir_prefix):
+                        await self._cleanup_path(repo_path, str(entry))
+
+            # 3) Force-delete residual swarm branch refs for this issue. After
             # removing the worktrees above the branches are no longer checked
             # out anywhere, so `branch -D` is safe (and idempotent on misses).
             try:
@@ -291,7 +329,7 @@ class WorktreeManager:
             for branch in branches:
                 await self.git.delete_branch(repo_path, branch)
 
-            # 3) Drop any stale worktree metadata left behind.
+            # 4) Drop any stale worktree metadata left behind.
             try:
                 await self.git.prune_worktrees(repo_path)
             except GitError:

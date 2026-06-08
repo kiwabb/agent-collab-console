@@ -529,6 +529,20 @@ async def _serve_subscriber(websocket: WebSocket, subscribe, unsubscribe, sub: W
         unsubscribe()
 
 
+async def _send_workspace_initial_snapshot(websocket: WebSocket, state: dict) -> bool:
+    initial_patch = [{
+        "op": "replace",
+        "path": "/execution_processes",
+        "value": state["execution_processes"],
+    }]
+    try:
+        await websocket.send_json({"JsonPatch": initial_patch})
+        await websocket.send_json({"Ready": True})
+    except WebSocketDisconnect:
+        return False
+    return True
+
+
 @router.websocket("/workspaces/{workspace_id}/execution_processes/ws")
 @router.websocket("/sessions/{workspace_id}/execution_processes/ws")
 async def execution_process_workspace_stream(websocket: WebSocket, workspace_id: str):
@@ -547,13 +561,8 @@ async def execution_process_workspace_stream(websocket: WebSocket, workspace_id:
     await websocket.accept()
 
     state = await workspace_stream_manager.get_state(workspace_id)
-    initial_patch = [{
-        "op": "replace",
-        "path": "/execution_processes",
-        "value": state["execution_processes"],
-    }]
-    await websocket.send_json({"JsonPatch": initial_patch})
-    await websocket.send_json({"Ready": True})
+    if not await _send_workspace_initial_snapshot(websocket, state):
+        return
 
     sub = WsSubscriber(websocket, maxsize=WORKSPACE_QUEUE_MAXSIZE)
     await _serve_subscriber(

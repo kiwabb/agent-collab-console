@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from fastapi import WebSocketDisconnect
 
 from app.interfaces.codex_ws import (
     ExecutionProcessLogStreamManager,
@@ -15,6 +16,7 @@ from app.interfaces.codex_ws import (
     WsSubscriber,
     _PONG,
     _QUEUE_CLOSED,
+    _send_workspace_initial_snapshot,
 )
 
 
@@ -177,3 +179,20 @@ async def test_running_sender_closes_on_overflow_even_when_queue_was_full():
     ws.release.set()  # let the sender drain
     await asyncio.wait_for(sender, timeout=1)
     assert ws.closed_with == (1011, "overflow")
+
+
+@pytest.mark.asyncio
+async def test_workspace_initial_snapshot_disconnect_is_benign():
+    """A browser navigation during initial snapshot sends should end the route
+    quietly before the subscriber is registered."""
+
+    class DisconnectingWebSocket(FakeWebSocket):
+        async def send_json(self, payload):
+            raise WebSocketDisconnect(code=1001)
+
+    sent = await _send_workspace_initial_snapshot(
+        DisconnectingWebSocket(),
+        {"execution_processes": {"process-1": {"id": "process-1"}}},
+    )
+
+    assert sent is False

@@ -207,6 +207,28 @@ async def test_cleanup_issue_swarm_worktrees_removes_residual_agents(project: Pr
 
 
 @pytest.mark.asyncio
+async def test_cleanup_issue_swarm_worktrees_removes_filesystem_only_stale_dirs(
+    project: Project, manager: WorktreeManager
+):
+    """A previous cleanup/restart can leave a plain directory after git has
+    already pruned the worktree metadata. The issue-scoped sweep must remove
+    those filesystem-only `swarm-<issue-id>-*` directories too, otherwise the
+    next dispatch_batch run cannot recreate the same per-agent worktree path."""
+    issue = await _issue_with_worktree(project, manager, "issue-swrm0008")
+    worktree_parent = Path(project.repo_path).parent / f"{project.name}-worktrees"
+    stale = worktree_parent / f"swarm-{issue.id}-engineer"
+    stale.mkdir(parents=True)
+    (stale / "issues").mkdir()
+    (stale / "issues" / "leftover.txt").write_text("stale")
+
+    await manager.cleanup_issue_swarm_worktrees(project, issue)
+
+    assert not stale.exists()
+    assert Path(issue.git_worktree_path).exists()
+    assert await manager.git.branch_exists(project.repo_path, issue.git_branch)
+
+
+@pytest.mark.asyncio
 async def test_cleanup_issue_swarm_worktrees_does_not_touch_sibling_issue(
     project: Project, manager: WorktreeManager
 ):

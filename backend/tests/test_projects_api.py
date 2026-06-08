@@ -520,3 +520,123 @@ def test_get_issue_diff_returns_empty_when_no_changes(client, tmp_path):
     assert body["branch"] == issue["git_branch"]
     assert body["base_branch"] == issue["git_base_branch"]
     assert body["diff"] == ""
+
+
+def test_get_issue_diff_resets_missing_worktree(client, tmp_path):
+    project = _create_project(client, tmp_path, name="diff-missing")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues",
+        json={"session_id": ws["id"], "title": "Missing worktree"},
+    ).json()
+    shutil.rmtree(issue["git_worktree_path"])
+
+    resp = client.get(f"/api/codex/issues/{issue['id']}/diff")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body == {
+        "diff": "",
+        "base_branch": None,
+        "branch": None,
+        "stat": None,
+        "commits_ahead": 0,
+        "worktree_missing": True,
+    }
+    refreshed = client.get(f"/api/codex/issues/{issue['id']}").json()
+    assert refreshed["git_worktree_path"] is None
+    assert refreshed["git_branch"] is None
+
+
+def test_issue_reset_rejects_missing_project_repo_without_mutating_state(client, tmp_path):
+    project = _create_project(client, tmp_path, name="reset-missing-repo")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues",
+        json={"session_id": ws["id"], "title": "Reset should be atomic"},
+    ).json()
+    task = client.post(
+        "/api/codex/tasks",
+        json={
+            "session_id": ws["id"],
+            "issue_id": issue["id"],
+            "title": "Existing task",
+            "prompt": "keep me",
+            "role": "engineer",
+        },
+    ).json()
+
+    shutil.rmtree(project["repo_path"])
+
+    resp = client.post(f"/api/codex/issues/{issue['id']}/reset")
+
+    assert resp.status_code == 409, resp.text
+    assert "repo path is missing" in resp.json()["detail"].lower()
+    refreshed = client.get(f"/api/codex/issues/{issue['id']}").json()
+    assert refreshed["status"] == issue["status"]
+    assert refreshed["current_phase"] == issue["current_phase"]
+    assert refreshed["git_worktree_path"] == issue["git_worktree_path"]
+    assert refreshed["git_branch"] == issue["git_branch"]
+    assert refreshed["git_base_branch"] == issue["git_base_branch"]
+    assert refreshed["git_merge_status"] == issue["git_merge_status"]
+    tasks = client.get(f"/api/codex/tasks?issue_id={issue['id']}").json()
+    assert [t["id"] for t in tasks] == [task["id"]]
+
+
+def test_issue_reset_recreates_existing_issue_branch(client, tmp_path):
+    project = _create_project(client, tmp_path, name="reset-existing-branch")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues",
+        json={"session_id": ws["id"], "title": "Reset existing branch"},
+    ).json()
+    original_branch = issue["git_branch"]
+    original_worktree = Path(issue["git_worktree_path"])
+    (original_worktree / "generated.txt").write_text("old run\n")
+    subprocess.run(["git", "add", "generated.txt"], cwd=original_worktree, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "old run"],
+        cwd=original_worktree,
+        check=True,
+        capture_output=True,
+    )
+
+    resp = client.post(f"/api/codex/issues/{issue['id']}/reset")
+
+    assert resp.status_code == 201, resp.text
+    refreshed = client.get(f"/api/codex/issues/{issue['id']}").json()
+    assert refreshed["git_branch"] == original_branch
+    assert Path(refreshed["git_worktree_path"]).exists()
+    assert Path(refreshed["git_worktree_path"]) != original_worktree or original_worktree.exists()
+    assert not (Path(refreshed["git_worktree_path"]) / "generated.txt").exists()
+    assert refreshed["git_base_branch"] == "main"
+    assert refreshed["git_merge_status"] == "open"
+
+
+def test_conductor_restart_rejects_missing_project_repo_without_creating_graph(client, tmp_path):
+    project = _create_project(client, tmp_path, name="restart-missing-repo")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues",
+        json={"session_id": ws["id"], "title": "Restart should not run without repo"},
+    ).json()
+
+    shutil.rmtree(project["repo_path"])
+
+    resp = client.post(f"/api/codex/issues/{issue['id']}/conductor/restart")
+
+    assert resp.status_code == 409, resp.text
+    assert "repo path is missing" in resp.json()["detail"].lower()
+    refreshed = client.get(f"/api/codex/issues/{issue['id']}").json()
+    assert refreshed["git_worktree_path"] == issue["git_worktree_path"]
+    assert refreshed["git_branch"] == issue["git_branch"]
+    graph = client.get(f"/api/codex/issues/{issue['id']}/graph")
+    assert graph.status_code == 404

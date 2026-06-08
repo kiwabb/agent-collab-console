@@ -8,6 +8,7 @@ grep + targeted Read with offset instead.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -104,3 +105,47 @@ async def inject_worktree_claude_hooks(worktree_path: Path | str) -> None:
         pre_tool.append(_SETTINGS["hooks"]["PreToolUse"][0])
 
     settings_file.write_text(json.dumps(existing, indent=2))
+
+    await _exclude_managed_hook_dir(root)
+
+
+async def _exclude_managed_hook_dir(root: Path) -> None:
+    """Hide our generated `.claude/` hook files from project diffs.
+
+    The hook files are runtime scaffolding, not user deliverables. Use git's
+    local exclude file so we don't modify the project's committed `.gitignore`.
+    In linked worktrees, `git rev-parse --git-path info/exclude` resolves to
+    the common repo `.git/info/exclude`, which applies to every worktree.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "rev-parse",
+            "--git-path",
+            "info/exclude",
+            cwd=str(root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+    except OSError:
+        return
+    if proc.returncode != 0:
+        return
+
+    raw_path = stdout.decode().strip()
+    if not raw_path:
+        return
+    exclude_file = Path(raw_path)
+    if not exclude_file.is_absolute():
+        exclude_file = root / exclude_file
+    try:
+        exclude_file.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude_file.read_text() if exclude_file.exists() else ""
+        lines = {line.strip() for line in existing.splitlines()}
+        if ".claude/" in lines:
+            return
+        suffix = "" if not existing or existing.endswith("\n") else "\n"
+        exclude_file.write_text(f"{existing}{suffix}.claude/\n")
+    except OSError:
+        return

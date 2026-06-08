@@ -50,6 +50,28 @@ async def test_inject_idempotent(tmp_path):
     assert (tmp_path / ".claude" / "settings.json").exists()
 
 
+@pytest.mark.asyncio
+async def test_inject_excludes_managed_hooks_from_git_status(tmp_path):
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    await inject_worktree_claude_hooks(tmp_path)
+
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert not any(path.startswith(".claude/") for path in untracked)
+    assert ".claude/" in (tmp_path / ".git" / "info" / "exclude").read_text()
+
+
 # ---------------------------------------------------------------------------
 # limit_read.py hook behaviour — run via subprocess so we test the real script
 # ---------------------------------------------------------------------------

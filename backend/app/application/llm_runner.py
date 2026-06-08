@@ -75,6 +75,11 @@ def _sanitize_http_error(status_code: int, body: str) -> str:
     return f"HTTP {status_code}: {stripped[:200]}"
 
 
+def _llm_http_client(timeout_s: float) -> httpx.AsyncClient:
+    """Create LLM HTTP clients isolated from local proxy env parsing."""
+    return httpx.AsyncClient(timeout=timeout_s, trust_env=False)
+
+
 def extract_tool_use_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
     """Return valid Anthropic `tool_use` content blocks from a message."""
     blocks = message.get("content") if isinstance(message, dict) else None
@@ -201,7 +206,7 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                 payload={"prompt_chars": len(prompt), "max_tokens": max_tokens},
             )
             _call_started = time.monotonic()
-            async with httpx.AsyncClient(timeout=timeout_s) as client:
+            async with _llm_http_client(timeout_s) as client:
                 response = await client.post(
                     url,
                     headers={
@@ -349,7 +354,7 @@ async def stream_llm(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[st
     # our own would produce "{{". Callers must handle the case where the
     # accumulated stream may or may not start with "{" (see `_extract_first_json_object`
     # in the SSE endpoint — it prepends "{" if missing).
-    async with httpx.AsyncClient(timeout=ctx.timeout_s) as client:
+    async with _llm_http_client(ctx.timeout_s) as client:
         async with client.stream("POST", url, headers=headers, json=payload) as response:
             if response.status_code != 200:
                 body = await response.aread()
@@ -394,7 +399,7 @@ async def call_llm_with_tools(
     }
     if tools:
         payload["tools"] = tools
-    async with httpx.AsyncClient(timeout=ctx.timeout_s) as client:
+    async with _llm_http_client(ctx.timeout_s) as client:
         response = await client.post(
             url,
             headers={
@@ -472,7 +477,7 @@ async def call_llm_with_tools_streaming(
         for (index, kind), chunk in items:
             await emit_delta(index, kind, chunk)
 
-    async with httpx.AsyncClient(timeout=ctx.timeout_s) as client:
+    async with _llm_http_client(ctx.timeout_s) as client:
         async with client.stream("POST", url, headers=headers, json=payload) as response:
             if response.status_code != 200:
                 body = await response.aread()
@@ -708,7 +713,7 @@ async def call_openai_with_tools(
     openai_tools = _anthropic_tools_to_openai(tools)
     if openai_tools:
         payload["tools"] = openai_tools
-    async with httpx.AsyncClient(timeout=ctx.timeout_s) as client:
+    async with _llm_http_client(ctx.timeout_s) as client:
         response = await client.post(
             url,
             headers={
@@ -771,7 +776,7 @@ async def call_openai_with_tools_streaming(
         if hasattr(result, "__await__"):
             await result
 
-    async with httpx.AsyncClient(timeout=ctx.timeout_s) as client:
+    async with _llm_http_client(ctx.timeout_s) as client:
         async with client.stream("POST", url, headers=headers, json=payload) as response:
             if response.status_code != 200:
                 body = await response.aread()

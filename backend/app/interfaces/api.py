@@ -805,6 +805,32 @@ def _require_project_service():
     return project_service
 
 
+async def _ensure_project_repo_ready(project: Project) -> None:
+    repo = Path(project.repo_path)
+    if not repo.exists():
+        raise HTTPException(status_code=409, detail=f"Project repo path is missing: {repo}")
+    if not repo.is_dir():
+        raise HTTPException(status_code=409, detail=f"Project repo path is not a directory: {repo}")
+    if not await git_service.is_git_repo(repo):
+        raise HTTPException(status_code=409, detail=f"Project repo path is not a git repository: {repo}")
+
+
+async def _load_issue_project_for_run(issue: CodexIssue) -> Project:
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project_id = issue.project_id
+    if not project_id:
+        workspace = await codex_store.load_codex_session(issue.session_id)
+        project_id = getattr(workspace, "project_id", None) if workspace else None
+    if not project_id:
+        raise HTTPException(status_code=409, detail="Issue has no associated project")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    await _ensure_project_repo_ready(project)
+    return project
+
+
 @router.get("/projects")
 async def list_projects():
     svc = _require_project_service()
@@ -3369,7 +3395,22 @@ async def get_codex_issue_diff(issue_id: str, stat_only: bool = False):
     if issue is None:
         raise HTTPException(status_code=404, detail="Issue not found")
     if not issue.project_id or not issue.git_worktree_path:
-        return {"diff": "", "base_branch": None, "branch": None, "stat": None}
+        return {"diff": "", "base_branch": None, "branch": None, "stat": None, "commits_ahead": 0}
+    if not Path(issue.git_worktree_path).exists():
+        issue.git_worktree_path = None
+        issue.git_branch = None
+        issue.git_base_branch = None
+        issue.git_merge_status = "open"
+        issue.updated_at = datetime.now()
+        await codex_store.save_codex_issue(issue)
+        return {
+            "diff": "",
+            "base_branch": None,
+            "branch": None,
+            "stat": None,
+            "commits_ahead": 0,
+            "worktree_missing": True,
+        }
     project = await codex_store.load_project(issue.project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -5812,6 +5853,7 @@ async def codex_issue_conductor_restart(issue_id: str):
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail="Issue not found")
+    run_project = await _load_issue_project_for_run(issue)
 
     # Cancel the live in-process session, then kill ALL conductor task rows
     # for this issue (not just the latest). Multiple rows can accumulate.
@@ -5838,24 +5880,18 @@ async def codex_issue_conductor_restart(issue_id: str):
         await codex_store.save_workflow_graph(old_graph, nodes=old_graph.nodes, edges=old_graph.edges)
 
     # Ensure worktree exists
-    if issue.project_id and not issue.git_worktree_path and project_service is not None:
-        project = await project_service.get(issue.project_id)
-        if project is not None:
-            try:
-                branch, wt_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
-                issue.git_branch = branch
-                issue.git_worktree_path = wt_path
-                issue.git_base_branch = base
-                await codex_store.save_codex_issue(issue)
-            except (GitError, WorktreeError):
-                pass
+    if not issue.git_worktree_path:
+        try:
+            branch, wt_path, base = await worktree_manager.prepare_issue_worktree(run_project, issue)
+            issue.project_id = issue.project_id or run_project.id
+            issue.git_branch = branch
+            issue.git_worktree_path = wt_path
+            issue.git_base_branch = base
+            await codex_store.save_codex_issue(issue)
+        except (GitError, WorktreeError) as exc:
+            raise HTTPException(status_code=500, detail=f"failed to prepare issue worktree: {exc}") from exc
 
-    project_id = issue.project_id
-    if not project_id:
-        workspace = await codex_store.load_codex_session(issue.session_id)
-        project_id = getattr(workspace, "project_id", None) if workspace else None
-    if not project_id:
-        raise HTTPException(status_code=409, detail="Issue has no associated project")
+    project_id = issue.project_id or run_project.id
 
     from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
     from app.application.event_bus import _workflow_task_dispatcher
@@ -5908,6 +5944,7 @@ async def codex_issue_reset(issue_id: str):
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail="Issue not found")
+    run_project = await _load_issue_project_for_run(issue)
 
     # 1. Cancel the live in-process session, then kill ALL conductor task rows
     from app.application.conductor_session_registry import ConductorSessionRegistry
@@ -5938,19 +5975,26 @@ async def codex_issue_reset(issue_id: str):
     if callable(_clear_history):
         await _clear_history(issue_id)
 
-    # 4. Remove the git worktree so generated code is fully purged
-    _reset_project: Project | None = None
-    if issue.project_id and project_service is not None:
-        _reset_project = await project_service.get(issue.project_id)
-    if _reset_project is not None and issue.git_worktree_path:
-        try:
-            await worktree_manager.cleanup_issue_worktree(_reset_project, issue)
-        except Exception:
-            pass
+    # 4. Remove residual per-agent swarm worktrees/branches before recreating
+    # the issue worktree. A prior run may have already pruned git metadata while
+    # leaving filesystem-only `swarm-<issue-id>-*` dirs that would block the next
+    # dispatch_batch from creating the same paths.
+    try:
+        await worktree_manager.cleanup_issue_swarm_worktrees(run_project, issue)
+    except Exception:
+        pass
 
-    # 5. Reset the issue: clear phase, status, and all git fields so a fresh worktree is created
+    # 5. Remove the git worktree and issue branch so generated code is fully
+    # purged and the deterministic issue branch can be recreated below.
+    try:
+        await worktree_manager.cleanup_issue_worktree_for_reset(run_project, issue)
+    except Exception:
+        pass
+
+    # 6. Reset the issue: clear phase, status, and all git fields so a fresh worktree is created
     issue.status = "open"
     issue.current_phase = None
+    issue.project_id = issue.project_id or run_project.id
     issue.git_worktree_path = None
     issue.git_branch = None
     issue.git_base_branch = None
@@ -5959,23 +6003,17 @@ async def codex_issue_reset(issue_id: str):
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
 
-    # 6. Create a fresh worktree for the upcoming conductor run
-    if _reset_project is not None:
-        try:
-            branch, wt_path, base = await worktree_manager.prepare_issue_worktree(_reset_project, issue)
-            issue.git_branch = branch
-            issue.git_worktree_path = wt_path
-            issue.git_base_branch = base
-            await codex_store.save_codex_issue(issue)
-        except (GitError, WorktreeError):
-            pass
+    # 7. Create a fresh worktree for the upcoming conductor run
+    try:
+        branch, wt_path, base = await worktree_manager.prepare_issue_worktree(run_project, issue)
+        issue.git_branch = branch
+        issue.git_worktree_path = wt_path
+        issue.git_base_branch = base
+        await codex_store.save_codex_issue(issue)
+    except (GitError, WorktreeError) as exc:
+        raise HTTPException(status_code=500, detail=f"failed to prepare issue worktree: {exc}") from exc
 
-    project_id = issue.project_id
-    if not project_id:
-        workspace = await codex_store.load_codex_session(issue.session_id)
-        project_id = getattr(workspace, "project_id", None) if workspace else None
-    if not project_id:
-        raise HTTPException(status_code=409, detail="Issue has no associated project")
+    project_id = issue.project_id or run_project.id
 
     from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
     from app.application.event_bus import _workflow_task_dispatcher

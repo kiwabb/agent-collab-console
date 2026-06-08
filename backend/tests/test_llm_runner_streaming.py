@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import app.application.llm_runner as llm_runner_module
 from app.application.llm_runner import StreamingPlanContext, call_llm_with_tools_streaming
 
 
@@ -52,8 +53,6 @@ class _FakeAsyncClient:
 
 @pytest.mark.asyncio
 async def test_call_llm_with_tools_streaming_reconstructs_message_and_batches(monkeypatch):
-    import app.application.llm_runner as llm_runner_module
-
     monkeypatch.setattr(llm_runner_module.httpx, "AsyncClient", _FakeAsyncClient)
     deltas: list[tuple[int, str, str]] = []
 
@@ -82,3 +81,12 @@ async def test_call_llm_with_tools_streaming_reconstructs_message_and_batches(mo
         {"type": "text", "text": "Hello"},
         {"type": "tool_use", "id": "toolu_1", "name": "dispatch_subagent", "input": {"role": "engineer"}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_llm_http_client_ignores_invalid_ipv6_no_proxy(monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost,::1,127.0.0.0/8,::1/128")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost,::1,127.0.0.0/8,::1/128")
+
+    async with llm_runner_module._llm_http_client(1.0) as client:
+        assert client.timeout.connect == 1.0
