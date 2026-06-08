@@ -966,6 +966,137 @@ summary = await sweep_project_github_prs(
 
 ---
 
+### Scenario: Workflow Failed Node Auto Retry
+
+#### 1. Scope / Trigger
+
+- Trigger: changing `WorkflowScheduler.on_task_completed`, workflow node
+  terminal status handling, task runner completion events, or automatic recovery
+  for DAG-backed tasks.
+- Why code-spec depth: this hook is the bridge between executor failures and
+  unattended issue progress. A single transient failed task must not strand the
+  workflow, but deterministic failures must still surface as failed once the
+  node retry budget is exhausted.
+
+#### 2. Signatures
+
+```python
+# workflow_scheduler.py
+class WorkflowScheduler:
+    async def on_task_completed(self, task: CodexTask) -> None
+```
+
+Relevant storage calls:
+
+```python
+await store.save_codex_task(retry_task)
+await store.update_workflow_node(
+    node.id,
+    status="running",
+    task_id=retry_task.id,
+    retries=node.retries + 1,
+    started_at=retry_task.created_at,
+    completed_at=None,
+)
+```
+
+Relevant events:
+
+```json
+{"type": "workflow_node_retrying", "previous_task_id": "...", "retry_task_id": "..."}
+{"type": "workflow_node_retry_failed", "retry_task_id": "...", "status": "failed"}
+{"type": "task_status", "task_id": "...", "status": "pending|failed"}
+```
+
+#### 3. Contracts
+
+- Auto-retry applies only to tasks with `workflow_node_id` whose terminal task
+  status maps to workflow node `failed`.
+- A node is eligible only when `node.retries < node.max_retries` and the
+  scheduler has both an issue row and a `task_dispatcher`.
+- The retry creates a fresh `CodexTask` for the same workflow node:
+  `parent_task_id` points to the failed task, `workflow_node_id` is unchanged,
+  project/session/issue/role/prompt/executor/provider/model/git fields are
+  inherited, and status starts as `pending`.
+- The retry task `review_comment` MUST include a short `[AUTO RETRY X/Y]`
+  framework note and may include truncated previous result/review context.
+- The workflow node MUST be moved back to `running`, `completed_at` cleared to
+  `NULL`, `task_id` set to the retry task, and `retries` incremented before the
+  retry dispatcher is started.
+- While a retry is launched, the Conductor completion registry MUST NOT receive
+  the original failed result. It should observe the retry task's eventual
+  terminal result instead.
+- If retry dispatch itself raises, mark the retry task `failed`, emit
+  `workflow_node_retry_failed`, restore normal failed-node handling for the
+  original task, and keep the original failed task id on the final node status.
+- Once retry budget is exhausted, keep existing failed-node behavior: mark the
+  node failed, signal Conductor with the failed result, and do not advance the
+  issue phase as if the node succeeded.
+
+#### 4. Validation & Error Matrix
+
+- Task has no `workflow_node_id` -> no scheduler action.
+- Task status is non-terminal or maps to no node status -> no scheduler action.
+- Failed node with retries remaining and dispatcher available -> create retry
+  task, update node to running, emit retry events, start dispatcher, return.
+- Failed node with retries exhausted -> mark node failed and continue existing
+  Conductor signaling.
+- Failed node with no issue row or no dispatcher -> mark node failed and
+  continue existing Conductor signaling.
+- Retry dispatcher raises -> retry task becomes failed, retry-failed event is
+  emitted, original node becomes failed, and the exception does not escape the
+  scheduler hook.
+- Event emission failure -> log/debug and continue; observability must not
+  break the recovery path.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a transient executor startup failure on `engineer` creates
+  `task-retry`, moves `engineer` back to running with `retries=1`, and the
+  Conductor only sees the retry's eventual result.
+- Base: a deterministic QA command failure with `retries == max_retries` marks
+  the QA node failed and gives Conductor the failed result.
+- Bad: signaling the first failed task to Conductor and also starting a retry,
+  leaving two supervisors racing over the same node.
+
+#### 6. Tests Required
+
+- First failed workflow task creates and dispatches a retry task, increments
+  node retries, clears node completion time, and emits retry/task events.
+- Retry budget exhausted preserves existing failed-node behavior and does not
+  create a retry task.
+- Retry dispatch failure marks the retry task failed, emits
+  `workflow_node_retry_failed`, and falls back to final failed-node handling.
+- Existing artifact-validation signaling tests still pass, proving completion
+  registry behavior stays compatible.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+```python
+await store.update_workflow_node(node.id, status="failed")
+reg.signal(task.id, {"status": "failed"})
+await dispatch_retry_later(task)
+```
+
+Correct:
+```python
+if task.status == "failed" and node.retries < node.max_retries:
+    retry_task = build_retry_task(task, node)
+    await store.save_codex_task(retry_task)
+    await store.update_workflow_node(
+        node.id,
+        status="running",
+        task_id=retry_task.id,
+        retries=node.retries + 1,
+        completed_at=None,
+    )
+    await task_dispatcher(retry_task)
+    return
+```
+
+---
+
 ### Scenario: Project Review Scheduler Tick
 
 #### 1. Scope / Trigger

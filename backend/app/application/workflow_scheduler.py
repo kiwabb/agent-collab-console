@@ -102,22 +102,31 @@ class WorkflowScheduler:
         terminal = self._task_status_to_node_status(task.status)
         if terminal is None:
             return
+        graph = await self.store.load_workflow_graph(node.graph_id)
+        issue_for_event = None
+        if graph is not None:
+            try:
+                issue_for_event = await self.store.load_codex_issue(graph.issue_id)
+            except Exception:  # noqa: BLE001
+                issue_for_event = None
+            if terminal == "failed" and await self._maybe_auto_retry_failed_node(
+                task,
+                node,
+                graph,
+                issue_for_event,
+            ):
+                return
         await self.store.update_workflow_node(
             node.id,
             status=terminal,
+            task_id=node.task_id,
             completed_at=datetime.now(),
         )
         node.status = terminal
-        graph = await self.store.load_workflow_graph(node.graph_id)
         if graph is None:
             return
 
-        issue_for_event = None
-        try:
-            issue_for_event = await self.store.load_codex_issue(graph.issue_id)
-            await self._emit_node_event(node, issue_for_event)
-        except Exception:  # noqa: BLE001
-            pass
+        await self._emit_node_event(node, issue_for_event)
 
         # Signal TaskCompletionRegistry so Conductor's dispatch_subagent
         # tool call can unblock with a SubAgentResult.
@@ -168,6 +177,163 @@ class WorkflowScheduler:
 
         # Keep the issue's `current_phase` label in step with completed roles.
         await self._maybe_advance_phase(graph)
+
+    async def _maybe_auto_retry_failed_node(
+        self,
+        task: CodexTask,
+        node: WorkflowNode,
+        graph: WorkflowGraph,
+        issue: CodexIssue | None,
+    ) -> bool:
+        if self._task_dispatcher is None or issue is None:
+            return False
+        if node.retries >= node.max_retries:
+            return False
+
+        now = datetime.now()
+        retry_number = node.retries + 1
+        retry_task = CodexTask(
+            id=str(uuid4()),
+            session_id=task.session_id,
+            project_id=task.project_id,
+            issue_id=task.issue_id,
+            phase=task.phase,
+            title=task.title,
+            prompt=task.prompt,
+            role=task.role,
+            executor=task.executor,
+            provider=task.provider,
+            model=task.model,
+            status="pending",
+            parent_task_id=task.id,
+            task_kind=task.task_kind,
+            workspace_path=task.workspace_path,
+            git_branch=task.git_branch,
+            git_base_branch=task.git_base_branch,
+            git_worktree_path=task.git_worktree_path,
+            review_comment=self._auto_retry_review_comment(task, retry_number, node.max_retries),
+            workflow_node_id=node.id,
+            created_at=now,
+            updated_at=now,
+        )
+        await self.store.save_codex_task(retry_task)
+        await self.store.update_workflow_node(
+            node.id,
+            status="running",
+            task_id=retry_task.id,
+            retries=retry_number,
+            started_at=now,
+            completed_at=None,
+        )
+        await self._emit_retry_event(
+            task=task,
+            retry_task=retry_task,
+            node=node,
+            issue=issue,
+            retry_number=retry_number,
+            max_retries=node.max_retries,
+        )
+        try:
+            result = self._task_dispatcher(retry_task)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as exc:  # noqa: BLE001 - retry dispatch is best-effort recovery.
+            logger.warning(
+                "workflow node auto-retry dispatch failed issue_id=%s node_id=%s task_id=%s: %s",
+                graph.issue_id,
+                node.id,
+                retry_task.id,
+                exc,
+            )
+            retry_task.status = "failed"
+            retry_task.result = f"Auto retry dispatch failed: {exc}"
+            retry_task.updated_at = datetime.now()
+            await self.store.save_codex_task(retry_task)
+            node.task_id = task.id
+            await self._emit_retry_failed_event(node, issue, retry_task, exc)
+            return False
+        return True
+
+    @staticmethod
+    def _auto_retry_review_comment(task: CodexTask, retry_number: int, max_retries: int) -> str:
+        parts = [
+            f"[AUTO RETRY {retry_number}/{max_retries}] The previous attempt failed. "
+            "Retry the same workflow node and address the failure before continuing.",
+        ]
+        if task.review_comment:
+            parts.append(f"Previous review context:\n{task.review_comment.strip()}")
+        if task.result:
+            result = task.result.strip()
+            if len(result) > 1000:
+                result = result[:1000] + "\n... (truncated)"
+            parts.append(f"Previous failure result:\n{result}")
+        return "\n\n".join(parts)
+
+    async def _emit_retry_event(
+        self,
+        *,
+        task: CodexTask,
+        retry_task: CodexTask,
+        node: WorkflowNode,
+        issue: CodexIssue,
+        retry_number: int,
+        max_retries: int,
+    ) -> None:
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.append({
+                "type": "workflow_node_retrying",
+                "issue_id": issue.id,
+                "session_id": issue.session_id,
+                "node_id": node.id,
+                "node_key": node.node_key,
+                "previous_task_id": task.id,
+                "retry_task_id": retry_task.id,
+                "retry": retry_number,
+                "max_retries": max_retries,
+            })
+            await self._event_bus.append({
+                "type": "task_status",
+                "task_id": retry_task.id,
+                "issue_id": retry_task.issue_id,
+                "session_id": retry_task.session_id,
+                "status": retry_task.status,
+                "review_comment": retry_task.review_comment,
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("workflow_node_retrying emit failed: %s", exc)
+
+    async def _emit_retry_failed_event(
+        self,
+        node: WorkflowNode,
+        issue: CodexIssue,
+        retry_task: CodexTask,
+        exc: Exception,
+    ) -> None:
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.append({
+                "type": "workflow_node_retry_failed",
+                "issue_id": issue.id,
+                "session_id": issue.session_id,
+                "node_id": node.id,
+                "node_key": node.node_key,
+                "retry_task_id": retry_task.id,
+                "status": "failed",
+                "error": str(exc),
+            })
+            await self._event_bus.append({
+                "type": "task_status",
+                "task_id": retry_task.id,
+                "issue_id": retry_task.issue_id,
+                "session_id": retry_task.session_id,
+                "status": retry_task.status,
+                "review_comment": retry_task.review_comment,
+            })
+        except Exception as emit_exc:  # noqa: BLE001
+            logger.debug("workflow_node_retry_failed emit failed: %s", emit_exc)
 
     async def _maybe_resume_from_specialist(
         self, specialist_child_task: CodexTask, graph: WorkflowGraph
