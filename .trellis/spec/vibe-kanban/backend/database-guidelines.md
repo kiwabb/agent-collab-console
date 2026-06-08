@@ -208,3 +208,130 @@ task.heartbeat_at = now
 task.lease_expires_at = now + timedelta(seconds=get_conductor_lease_ttl_s())
 await store.save_conductor_task(task)
 ```
+
+---
+
+## Scenario: Review-Only Self-Improvement Proposal Ledger
+
+### 1. Scope / Trigger
+
+- Trigger: changing issue terminal sealing, self-improvement extraction,
+  proposal review APIs, or the `self_improvement_proposals` schema.
+- The first self-improvement loop is intentionally review-only: it may create
+  durable proposals from issue evidence, but it must not silently mutate
+  `.trellis/spec/`, prompts, policies, project memory, tools, or code.
+- Proposal extraction runs from the Conductor terminal seal and is best-effort;
+  an extraction/store problem must not change a completed issue into a failed
+  issue.
+
+### 2. Signatures
+
+- DB table: `self_improvement_proposals`
+- Required columns:
+  - `id TEXT PRIMARY KEY`
+  - `project_id TEXT NOT NULL`
+  - `issue_id TEXT NOT NULL`
+  - `target_kind TEXT NOT NULL`
+  - `title TEXT NOT NULL`
+  - `recommendation TEXT NOT NULL`
+  - `evidence_json TEXT NOT NULL DEFAULT '[]'`
+  - `severity TEXT NOT NULL DEFAULT 'info'`
+  - `confidence REAL NOT NULL DEFAULT 0`
+  - `status TEXT NOT NULL DEFAULT 'proposed'`
+  - `fingerprint TEXT NOT NULL UNIQUE`
+  - `created_at TEXT`
+  - `updated_at TEXT`
+- Store APIs:
+  - `save_self_improvement_proposal(proposal: SelfImprovementProposal) -> None`
+  - `list_self_improvement_proposals(project_id: str | None = None, issue_id: str | None = None, status: str | None = None, limit: int | None = None) -> list[SelfImprovementProposal]`
+- Service APIs:
+  - `extract_self_improvement_proposals(issue: CodexIssue, store) -> list[SelfImprovementProposal]`
+  - `record_issue_self_improvement(issue: CodexIssue, store) -> list[SelfImprovementProposal]`
+- Read API:
+  - `GET /api/codex/projects/{project_id}/self-improvement-proposals`
+  - Optional filters: `issue_id`, `status`, `limit`
+
+### 3. Contracts
+
+- `fingerprint` is the idempotence key. Saving the same fingerprint again must
+  update the existing row rather than append an unbounded duplicate.
+- Valid `target_kind` values are string-based storage contracts:
+  `project_memory`, `code_spec`, `conductor_policy`, `runtime_tooling`,
+  `benchmark_eval`.
+- Valid `status` values are string-based storage contracts: `proposed`,
+  `accepted`, `rejected`, `applied`.
+- `evidence_json` stores a JSON list of evidence pointers/snippets. The API
+  parses it into `evidence`; malformed or non-list evidence returns `[]` rather
+  than failing the endpoint.
+- The terminal seal order for done graphs is:
+  1. persist graph status;
+  2. call `record_project_memory(graph.id, store)`;
+  3. call `record_issue_self_improvement(issue, store)`;
+  4. persist terminal issue status.
+- Self-improvement extraction is review-only. It writes proposal rows only.
+
+### 4. Validation & Error Matrix
+
+- `codex_store is None` on the read API -> HTTP `503`, detail
+  `"SQLite store not available"`.
+- Unknown `project_id` on the read API -> HTTP `404`, detail
+  `"Project not found"`.
+- `limit < 1` or `limit > 100` on the read API -> FastAPI validation `422`.
+- Duplicate `fingerprint` on save -> update existing row fields and keep one
+  logical proposal.
+- Missing conductor/QA artifacts -> produce fewer or zero proposals, not an
+  exception.
+- Store write failure during terminal seal -> log warning and keep the graph
+  and issue terminal status behavior.
+- Malformed `evidence_json` during API serialization -> return `evidence: []`.
+
+### 5. Good/Base/Bad Cases
+
+- Good: QA evidence with `bugs_found` creates one `code_spec` proposal with a
+  conductor-task evidence pointer and stable fingerprint.
+- Good: a runtime traceback or stalled conductor task creates one
+  `runtime_tooling` proposal and does not duplicate when extraction runs again.
+- Base: a clean trivial completed issue creates no proposal and no error.
+- Bad: appending a new proposal row on every recovery/seal run for the same
+  lesson.
+- Bad: auto-editing `.trellis/spec/` or project memory from the extractor in
+  the review-only slice.
+- Bad: allowing proposal extraction failure to prevent `issue.status =
+  "completed"` after a done graph.
+
+### 6. Tests Required
+
+- Store parity: async and sync stores save/list/filter proposals and dedupe by
+  fingerprint.
+- Extraction: QA failure creates a `code_spec` proposal with evidence.
+- Extraction: runtime/conductor failure creates a `runtime_tooling` proposal.
+- Extraction: clean issue creates no proposals.
+- Extraction: duplicate rule matches save once per issue/rule fingerprint.
+- Seal: done graph calls project memory and then self-improvement extraction.
+- Seal: self-improvement failure does not block graph/issue terminal status.
+- API: project proposals endpoint returns stable JSON, parses `evidence_json`,
+  and respects `issue_id`, `status`, and `limit`.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+if graph_status == "done":
+    await record_issue_self_improvement(issue, store)
+issue.status = "completed"
+await store.save_codex_issue(issue)
+```
+
+Correct:
+
+```python
+if graph_status == "done":
+    await record_project_memory(graph.id, store)
+    try:
+        await record_issue_self_improvement(issue, store)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("self_improvement extraction failed: %s", exc)
+issue.status = "completed"
+await store.save_codex_issue(issue)
+```

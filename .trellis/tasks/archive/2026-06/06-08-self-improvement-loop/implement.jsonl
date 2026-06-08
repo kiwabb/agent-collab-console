@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend owns issue completion, persistence, conductor loop, and project memory contracts."}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Likely durable proposal ledger requires store/schema behavior and migration-style tests."}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Extraction must be best-effort and must not break terminal issue sealing."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Quality contracts for conductor, memory, API, and runtime hardening."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Feature spans completion flow, store/API, and possible future UI review surfaces."}
+{"file": "docs/superpowers/specs/2026-06-08-self-improvement-loop-design.md", "reason": "Approved design input once user confirms safety boundary; contains proposal ledger data/API/testing shape."}
