@@ -792,11 +792,11 @@ audit_logger.record("git_command", issue_id=..., payload={...}, status="ok")  # 
 ```python
 # github_pr_followup.py
 async def refresh_issue_github_pr(issue_id, *, store, event_bus, run_subprocess) -> GitHubPRFollowupResult
-async def sweep_project_github_prs(project_id, *, store, event_bus, run_subprocess) -> GitHubPRFollowupSummary
+async def sweep_project_github_prs(project_id, *, store, event_bus, run_subprocess, auto_merge=False) -> GitHubPRFollowupSummary
 
 # api.py
 POST /api/codex/issues/{issue_id}/pr/refresh -> CodexIssue
-POST /api/codex/projects/{project_id}/pr/follow-up -> {
+POST /api/codex/projects/{project_id}/pr/follow-up {"auto_merge": false} -> {
     project_id, counts, results: [{issue_id, status, github_pr_state, message, error}]
 }
 ```
@@ -814,9 +814,26 @@ POST /api/codex/projects/{project_id}/pr/follow-up -> {
     engineer task is set to `pending` with review feedback.
   - `checks_failed`: at least one completed status check conclusion is not
     success/skipped/neutral; result message names failed checks.
+  - `checks_pending`: at least one status check is not completed; auto-merge
+    MUST NOT run while this is true.
+  - `checks_missing`: auto-merge was requested but GitHub returned no status
+    checks; missing checks are not treated as green.
+  - `review_required`: auto-merge was requested but the PR is not approved.
+  - `merge_blocked`: auto-merge was requested but `mergeStateStatus` is not a
+    known mergeable value.
+  - `merge_failed`: `gh pr merge` returned non-zero; audit/event recorded and
+    the sweep continues.
   - `merged`: `state == "MERGED"`; issue becomes
     `git_merge_status="merged"` and lifecycle `status="completed"`.
   - `failed`: `gh` non-zero, bad JSON, or subprocess exception.
+- Auto-merge is opt-in only (`auto_merge=True`). Default project follow-up MUST
+  never merge.
+- Auto-merge may call
+  `gh pr merge <github_pr_url> --merge --delete-branch` only when:
+  `state == "OPEN"`, `reviewDecision == "APPROVED"`,
+  `mergeStateStatus in {"CLEAN", "HAS_HOOKS", "UNSTABLE"}`, at least one
+  status check exists, every status check is completed, and no completed status
+  check failed.
 - Every result writes `project_audit` event
   `github_pr_followup_<status>` and emits an `issue_pr_followup` event.
 - The project sweep skips issues with no `github_pr_url` or already merged
@@ -829,14 +846,23 @@ POST /api/codex/projects/{project_id}/pr/follow-up -> {
 - `gh` unavailable -> endpoint maps 412 before service call.
 - `gh pr view` non-zero / bad JSON / subprocess exception -> result
   `failed`, audit/event recorded, sweep continues.
+- `auto_merge=False` -> never call `gh pr merge`, even if the PR is approved
+  and green.
+- `auto_merge=True` + pending checks -> `checks_pending`, no merge.
+- `auto_merge=True` + no checks -> `checks_missing`, no merge.
+- `auto_merge=True` + not approved -> `review_required`, no merge.
+- `auto_merge=True` + unmergeable status -> `merge_blocked`, no merge.
+- `auto_merge=True` + merge command non-zero or subprocess exception ->
+  `merge_failed`, issue remains open, sweep continues.
 - One failed issue in a sweep -> included as `failed`; following issues still
   refresh.
 
 #### 5. Good/Base/Bad Cases
 
 - Good: one project sweep refreshes ten open PRs, requeues one engineer for
-  requested changes, marks one remotely merged issue completed, records one
-  failed CI status, and reports two `gh` failures without aborting the sweep.
+  requested changes, auto-merges one approved green PR, marks one remotely
+  merged issue completed, records one failed CI status, and reports two `gh`
+  failures without aborting the sweep.
 - Base: manual refresh of a single issue returns the updated `CodexIssue`, as
   before, but now uses the shared service.
 - Bad: duplicating PR parsing in `api.py`; treating a bad JSON response as an
@@ -854,6 +880,10 @@ POST /api/codex/projects/{project_id}/pr/follow-up -> {
 - Project sweep: skips no-PR / already-merged issues and isolates failures.
 - Endpoint: project follow-up returns best-effort summary instead of HTTP
   failing for one broken PR.
+- Auto-merge: approved + all-green + mergeable -> calls `gh pr merge`, marks
+  merged/completed, records `github_pr_followup_merged`.
+- Auto-merge: missing checks / pending checks / review required / merge command
+  failure -> no unsafe merge; stable status returned.
 
 #### 7. Wrong vs Correct
 

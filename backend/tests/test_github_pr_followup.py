@@ -129,13 +129,14 @@ def _gh_payload(
     decision: str = "",
     reviews: list[dict[str, object]] | None = None,
     checks: list[dict[str, object]] | None = None,
+    merge_status: str = "CLEAN",
 ) -> str:
     return json.dumps(
         {
             "state": state,
             "reviewDecision": decision,
             "reviews": reviews or [],
-            "mergeStateStatus": "CLEAN",
+            "mergeStateStatus": merge_status,
             "statusCheckRollup": checks or [],
         }
     )
@@ -264,6 +265,236 @@ async def test_sweep_project_prs_isolates_issue_failures_and_continues():
 
 
 @pytest.mark.asyncio
+async def test_sweep_auto_merges_approved_green_mergeable_pr():
+    issue = _issue("issue-6", github_pr_url="https://github.com/acme/repo/pull/6")
+    store = _Store(issues=[issue])
+    bus = _EventBus()
+    calls: list[list[str]] = []
+
+    async def run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> _Proc:
+        calls.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return _Proc(
+                0,
+                stdout=_gh_payload(
+                    state="OPEN",
+                    decision="APPROVED",
+                    merge_status="CLEAN",
+                    checks=[
+                        {"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                        {"name": "Frontend quality", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                    ],
+                ),
+            )
+        assert args == ["gh", "pr", "merge", issue.github_pr_url, "--merge", "--delete-branch"]
+        return _Proc(0, stdout="Merged")
+
+    summary = await sweep_project_github_prs(
+        "project-1",
+        store=store,
+        event_bus=bus,
+        run_subprocess=run_subprocess,
+        auto_merge=True,
+    )
+
+    assert [result.status for result in summary.results] == ["merged"]
+    assert calls[-1][:4] == ["gh", "pr", "merge", issue.github_pr_url]
+    assert store.saved_issues[-1].git_merge_status == "merged"
+    assert store.saved_issues[-1].status == "completed"
+    assert store.audit_events[-1]["event"] == "github_pr_followup_merged"
+
+
+@pytest.mark.asyncio
+async def test_sweep_does_not_auto_merge_by_default():
+    issue = _issue("issue-7", github_pr_url="https://github.com/acme/repo/pull/7")
+    store = _Store(issues=[issue])
+    calls: list[list[str]] = []
+
+    async def run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> _Proc:
+        calls.append(args)
+        return _Proc(
+            0,
+            stdout=_gh_payload(
+                state="OPEN",
+                decision="APPROVED",
+                merge_status="CLEAN",
+                checks=[{"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            ),
+        )
+
+    summary = await sweep_project_github_prs(
+        "project-1",
+        store=store,
+        event_bus=None,
+        run_subprocess=run_subprocess,
+    )
+
+    assert [result.status for result in summary.results] == ["updated"]
+    assert all(call[:3] == ["gh", "pr", "view"] for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_sweep_auto_merge_waits_for_pending_checks():
+    issue = _issue("issue-8", github_pr_url="https://github.com/acme/repo/pull/8")
+    store = _Store(issues=[issue])
+    calls: list[list[str]] = []
+
+    async def run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> _Proc:
+        calls.append(args)
+        return _Proc(
+            0,
+            stdout=_gh_payload(
+                state="OPEN",
+                decision="APPROVED",
+                merge_status="CLEAN",
+                checks=[{"name": "Backend tests", "status": "IN_PROGRESS", "conclusion": ""}],
+            ),
+        )
+
+    summary = await sweep_project_github_prs(
+        "project-1",
+        store=store,
+        event_bus=None,
+        run_subprocess=run_subprocess,
+        auto_merge=True,
+    )
+
+    assert [result.status for result in summary.results] == ["checks_pending"]
+    assert "Backend tests" in summary.results[0].message
+    assert all(call[:3] == ["gh", "pr", "view"] for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_sweep_auto_merge_requires_status_checks_to_exist():
+    issue = _issue("issue-10", github_pr_url="https://github.com/acme/repo/pull/10")
+    store = _Store(issues=[issue])
+    calls: list[list[str]] = []
+
+    async def run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> _Proc:
+        calls.append(args)
+        return _Proc(
+            0,
+            stdout=_gh_payload(
+                state="OPEN",
+                decision="APPROVED",
+                merge_status="CLEAN",
+                checks=[],
+            ),
+        )
+
+    summary = await sweep_project_github_prs(
+        "project-1",
+        store=store,
+        event_bus=None,
+        run_subprocess=run_subprocess,
+        auto_merge=True,
+    )
+
+    assert [result.status for result in summary.results] == ["checks_missing"]
+    assert all(call[:3] == ["gh", "pr", "view"] for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_sweep_auto_merge_requires_approved_review():
+    issue = _issue("issue-9", github_pr_url="https://github.com/acme/repo/pull/9")
+    store = _Store(issues=[issue])
+    calls: list[list[str]] = []
+
+    async def run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> _Proc:
+        calls.append(args)
+        return _Proc(
+            0,
+            stdout=_gh_payload(
+                state="OPEN",
+                decision="REVIEW_REQUIRED",
+                merge_status="CLEAN",
+                checks=[{"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            ),
+        )
+
+    summary = await sweep_project_github_prs(
+        "project-1",
+        store=store,
+        event_bus=None,
+        run_subprocess=run_subprocess,
+        auto_merge=True,
+    )
+
+    assert [result.status for result in summary.results] == ["review_required"]
+    assert all(call[:3] == ["gh", "pr", "view"] for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_sweep_auto_merge_failure_is_isolated():
+    broken = _issue("issue-6", github_pr_url="https://github.com/acme/repo/pull/6")
+    healthy = _issue("issue-7", github_pr_url="https://github.com/acme/repo/pull/7")
+    store = _Store(issues=[broken, healthy])
+
+    async def run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> _Proc:
+        if args[:3] == ["gh", "pr", "view"]:
+            return _Proc(
+                0,
+                stdout=_gh_payload(
+                    state="OPEN",
+                    decision="APPROVED",
+                    merge_status="CLEAN",
+                    checks=[{"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                ),
+            )
+        if args[3].endswith("/6"):
+            return _Proc(1, stderr="branch protection blocked merge")
+        return _Proc(0, stdout="Merged")
+
+    summary = await sweep_project_github_prs(
+        "project-1",
+        store=store,
+        event_bus=None,
+        run_subprocess=run_subprocess,
+        auto_merge=True,
+    )
+
+    assert [result.status for result in summary.results] == ["merge_failed", "merged"]
+    assert "branch protection" in summary.results[0].error
+    assert store.issues["issue-6"].git_merge_status == "open"
+    assert store.issues["issue-7"].git_merge_status == "merged"
+
+
+@pytest.mark.asyncio
+async def test_sweep_auto_merge_exception_is_merge_failed_and_isolated():
+    broken = _issue("issue-6", github_pr_url="https://github.com/acme/repo/pull/6")
+    healthy = _issue("issue-7", github_pr_url="https://github.com/acme/repo/pull/7")
+    store = _Store(issues=[broken, healthy])
+
+    async def run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> _Proc:
+        if args[:3] == ["gh", "pr", "view"]:
+            return _Proc(
+                0,
+                stdout=_gh_payload(
+                    state="OPEN",
+                    decision="APPROVED",
+                    merge_status="CLEAN",
+                    checks=[{"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                ),
+            )
+        if args[3].endswith("/6"):
+            raise RuntimeError("merge transport failed")
+        return _Proc(0, stdout="Merged")
+
+    summary = await sweep_project_github_prs(
+        "project-1",
+        store=store,
+        event_bus=None,
+        run_subprocess=run_subprocess,
+        auto_merge=True,
+    )
+
+    assert [result.status for result in summary.results] == ["merge_failed", "merged"]
+    assert "merge transport failed" in summary.results[0].error
+    assert store.issues["issue-6"].git_merge_status == "open"
+    assert store.issues["issue-7"].git_merge_status == "merged"
+
+
+@pytest.mark.asyncio
 async def test_refresh_bad_gh_json_is_audited_failure_not_exception():
     issue = _issue("issue-4")
     store = _Store(issues=[issue])
@@ -306,3 +537,38 @@ async def test_project_followup_endpoint_returns_best_effort_summary(monkeypatch
     assert payload["project_id"] == "project-1"
     assert payload["counts"] == {"failed": 1, "updated": 1}
     assert [result["status"] for result in payload["results"]] == ["failed", "updated"]
+
+
+@pytest.mark.asyncio
+async def test_project_followup_endpoint_auto_merge_opt_in(monkeypatch):
+    issue = _issue("issue-6", github_pr_url="https://github.com/acme/repo/pull/6")
+    store = _Store(issues=[issue])
+    calls: list[list[str]] = []
+
+    async def run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> _Proc:
+        calls.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return _Proc(
+                0,
+                stdout=_gh_payload(
+                    state="OPEN",
+                    decision="APPROVED",
+                    merge_status="CLEAN",
+                    checks=[{"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                ),
+            )
+        return _Proc(0, stdout="Merged")
+
+    monkeypatch.setattr(api_module, "codex_store", store)
+    monkeypatch.setattr(api_module, "event_bus", _EventBus())
+    monkeypatch.setattr(api_module, "_run_subprocess", run_subprocess)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/gh" if name == "gh" else None)
+
+    payload = await api_module.follow_up_project_github_prs(
+        "project-1",
+        api_module.ProjectPRFollowupRequest(auto_merge=True),
+    )
+
+    assert payload["counts"] == {"merged": 1}
+    assert calls[-1][:4] == ["gh", "pr", "merge", issue.github_pr_url]
+    assert store.issues[issue.id].git_merge_status == "merged"
