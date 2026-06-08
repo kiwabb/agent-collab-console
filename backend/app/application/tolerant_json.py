@@ -60,6 +60,18 @@ _MISSING_OPEN_QUOTE_KEY_RE = re.compile(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\":)
 # Matches trailing commas inside arrays/objects: `,]` or `,}` with optional ws.
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 
+# Matches an array element that starts directly with a quoted key instead of an
+# object opener. Example: `[{"ok":true},"priority":"P0"]`.
+_MISSING_OPEN_BRACE_ARRAY_OBJECT_RE = re.compile(
+    r'((?:\[\s*)|(?:}\s*,\s*))("[A-Za-z_][A-Za-z0-9_]*"\s*:)'
+)
+
+# After inserting the missing object opener above, close a flat object before
+# the containing array ends. Example: `{"priority":"P0","title":"x"]`.
+_MISSING_CLOSE_BRACE_BEFORE_ARRAY_END_RE = re.compile(
+    r'(},\s*\{(?:[^{}\[\]"]|"(?:\\.|[^"\\])*")*?)(\s*\])'
+)
+
 
 def _strip_markdown_fence(text: str) -> str:
     # ```json ... ``` or ``` ... ```
@@ -73,7 +85,12 @@ def _repair(text: str) -> str:
     repaired = text
     # 1. Missing opening quote before key:  `{key":` → `{"key":`
     repaired = _MISSING_OPEN_QUOTE_KEY_RE.sub(r'\1"\2\3', repaired)
-    # 2. Trailing commas inside arrays/objects.
+    # 2. Missing opening object brace for an array element:
+    #    `[{"ok":true},"priority":...]` → `[{"ok":true},{"priority":...]`
+    repaired = _MISSING_OPEN_BRACE_ARRAY_OBJECT_RE.sub(r"\1{\2", repaired)
+    # 3. Close the flat object opened by repair 2 before the array closes.
+    repaired = _MISSING_CLOSE_BRACE_BEFORE_ARRAY_END_RE.sub(r"\1}\2", repaired)
+    # 4. Trailing commas inside arrays/objects.
     repaired = _TRAILING_COMMA_RE.sub(r"\1", repaired)
     return repaired
 
