@@ -127,6 +127,12 @@ deterministic extraction rules for obvious cases and leave LLM-assisted proposal
 writing for a later phase. This creates the control plane needed for the system
 to improve itself without making unaudited mutations.
 
+## Design References
+
+* `docs/superpowers/specs/2026-06-08-self-improvement-loop-design.md` — formal
+  review-only proposal ledger design. This is pending user confirmation of the
+  safety boundary before implementation planning begins.
+
 ## Proposed Backend Shape
 
 ### Domain Model
