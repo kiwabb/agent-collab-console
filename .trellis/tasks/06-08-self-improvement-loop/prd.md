@@ -133,6 +133,31 @@ to improve itself without making unaudited mutations.
   review-only proposal ledger design. This is pending user confirmation of the
   safety boundary before implementation planning begins.
 
+## Implementation Readiness Notes
+
+* Current git branch is `main`, ahead of `origin/main`; the working tree was
+  clean before this PRD note was added.
+* Existing terminal completion hook lives at
+  `backend/app/application/conductor_main_loop.py::_seal_graph_and_issue_status`.
+  It already calls `record_project_memory(...)` on `done` graphs and wraps the
+  seal path in a best-effort `except Exception` block.
+* Both stores need parity: the product runtime uses
+  `backend/app/adapters/async_sqlite_store.py`, while tests and one-off scripts
+  also use `backend/app/adapters/sqlite_store.py`.
+* The backend test root is `backend/tests`, not a repository-level `tests`
+  directory. Targeted verification should use commands such as
+  `pytest backend/tests/test_<feature>.py`.
+* Existing nearby test patterns:
+  * `backend/tests/test_project_conductor.py` covers async store save/list
+    parity for project memory rows.
+  * `backend/tests/test_audit_log_api.py` covers sync store query parity and
+    API response shape.
+  * `backend/tests/test_swarm_integration.py` covers the terminal seal path
+    calling best-effort cleanup from `_seal_graph_and_issue_status`.
+  * `backend/tests/test_run_issue_conductor_loop.py` patches
+    `record_project_memory` in Conductor loop tests, so the new hook will need
+    similar patch-safe behavior.
+
 ## Proposed Backend Shape
 
 ### Domain Model
