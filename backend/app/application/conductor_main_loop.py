@@ -24,6 +24,7 @@ from app.application.budget_service import (
     compute_issue_budget_status,
     render_budget_summary,
 )
+from app.application.conductor_policy import render_issue_orchestration_policy_block
 from app.application.conductor_tools import build_conductor_tools
 from app.application.conductor_lease import get_conductor_lease_owner, get_conductor_lease_ttl_s
 from app.application.conductor_pause_registry import ConductorPauseRegistry
@@ -111,12 +112,16 @@ def build_issue_conductor_prompt(
     Kept as a pure helper so changes to the Conductor's operating contract are
     testable without running the long-lived loop.
     """
+    orchestration_policy = render_issue_orchestration_policy_block(
+        issue.title,
+        issue.description,
+    )
     return f"""You are the ProjectConductor orchestrating work on this issue.
 
 ## Issue
 Title: {issue.title}
 Description: {issue.description or "(no description provided)"}
-{project_context}{budget_context}
+{project_context}{budget_context}{orchestration_policy}
 
 ## Your Job
 Complete the issue by choosing the smallest reliable multi-agent workflow. You own
