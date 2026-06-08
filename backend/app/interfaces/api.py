@@ -6235,6 +6235,10 @@ class SelfImprovementProposalStatusUpdateRequest(BaseModel):
     status: Literal["proposed", "accepted", "rejected", "applied"]
 
 
+class SelfImprovementProposalApplyRequest(BaseModel):
+    content_sha256: str = Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")
+
+
 _SELF_IMPROVEMENT_PROPOSAL_STATUS_TRANSITIONS = {
     "proposed": {"accepted", "rejected"},
     "accepted": {"applied"},
@@ -6323,6 +6327,45 @@ async def codex_project_self_improvement_proposal_apply_plan(project_id: str, pr
     return {
         "proposal": _self_improvement_proposal_to_dict(proposal),
         "plan": build_self_improvement_apply_plan(proposal),
+    }
+
+
+@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply")
+async def codex_project_self_improvement_proposal_apply(
+    project_id: str,
+    proposal_id: str,
+    request: SelfImprovementProposalApplyRequest,
+):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+
+    from app.application.self_improvement_apply_service import (
+        SelfImprovementApplyError,
+        apply_project_memory_proposal,
+    )
+
+    try:
+        result = apply_project_memory_proposal(
+            project_repo_path=project.repo_path,
+            proposal=proposal,
+            reviewed_content_sha256=request.content_sha256,
+        )
+    except SelfImprovementApplyError as exc:
+        status_code = 500 if exc.code in {"invalid_plan", "repo_unavailable"} else 409
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
+
+    updated = await codex_store.update_self_improvement_proposal_status(proposal_id, "applied")
+    if updated is None or updated.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    return {
+        "proposal": _self_improvement_proposal_to_dict(updated),
+        "application": result.to_dict(),
     }
 
 
