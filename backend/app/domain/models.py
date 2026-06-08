@@ -684,6 +684,25 @@ class ProjectMemoryEmbedding:
     created_at: datetime | None = None
 
 
+@dataclass
+class SelfImprovementProposal:
+    """Review-only proposal row produced from issue completion evidence."""
+
+    id: str
+    project_id: str
+    issue_id: str
+    target_kind: str
+    title: str
+    recommendation: str
+    evidence_json: str = "[]"
+    severity: str = "info"
+    confidence: float = 0.0
+    status: str = "proposed"
+    fingerprint: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 AgentMessageType = Literal["handoff", "critique", "clarification", "answer", "specialist_call", "specialist_result"]
 
 
