@@ -30,10 +30,11 @@ remember the lesson.
   a UI decision explanation panel, runtime hardening, and code-spec memory. That
   work exposed the exact manual behavior this task should begin automating.
 
-## Assumptions (Temporary)
+## Confirmed Scope
 
-* The MVP should create reviewable improvement proposals, not silently mutate
-  prompts, specs, policies, or code.
+* The MVP creates reviewable improvement proposals, not silently mutating
+  prompts, specs, policies, or code. The user confirmed this review-only safety
+  boundary on 2026-06-08.
 * The backend should own extraction and persistence; the frontend may later show
   proposals, but the first useful slice can be API/test driven.
 * Extraction should be evidence-first: conductor tasks, QA reports, changed
@@ -41,11 +42,6 @@ remember the lesson.
   than a final LLM summary alone.
 * The proposal model should be useful even without an LLM. A deterministic first
   pass can classify obvious lessons; optional LLM distillation can come later.
-
-## Open Questions
-
-* For MVP, should improvement proposals stay review-only, or should low-risk
-  memory/spec updates be applied automatically after QA passes?
 
 ## Requirements (Evolving)
 
@@ -130,8 +126,8 @@ to improve itself without making unaudited mutations.
 ## Design References
 
 * `docs/superpowers/specs/2026-06-08-self-improvement-loop-design.md` — formal
-  review-only proposal ledger design. This is pending user confirmation of the
-  safety boundary before implementation planning begins.
+  review-only proposal ledger design. The user confirmed this safety boundary
+  on 2026-06-08, so implementation planning can proceed.
 
 ## Implementation Readiness Notes
 

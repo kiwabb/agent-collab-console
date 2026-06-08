@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed. This design uses a review-only proposal ledger as the first safe
-slice. It must be approved before implementation planning starts.
+Approved. This design uses a review-only proposal ledger as the first safe
+slice. The user confirmed this safety boundary on 2026-06-08.
 
 ## Objective
 
@@ -233,13 +233,7 @@ This feature can ship dark: backend extraction and read API first, no frontend
 inbox required. Operators can inspect proposals through tests/API while the
 product review workflow is designed in a later slice.
 
-## Open Decision
+## Confirmed Safety Boundary
 
-The recommended safety boundary is review-only. The user still needs to confirm
-whether the MVP should:
-
-1. stay review-only;
-2. auto-apply project memory only;
-3. auto-apply low-risk spec updates.
-
-Implementation planning should not start until this is confirmed.
+The MVP stays review-only. It writes auditable proposals but does not
+auto-apply project memory, code-spec, prompt, policy, tooling, or code changes.
