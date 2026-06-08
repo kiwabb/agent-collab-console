@@ -7,6 +7,7 @@ from app.application.self_improvement_apply_service import (
     apply_project_memory_proposal,
     build_self_improvement_apply_plan,
     hash_apply_candidate_content,
+    rollback_project_memory_proposal,
 )
 from app.domain.models import SelfImprovementProposal
 
@@ -182,5 +183,67 @@ def test_apply_project_memory_proposal_requires_existing_repo_path(tmp_path):
             proposal=proposal,
             reviewed_content_sha256=hash_apply_candidate_content(content),
         )
+
+    assert exc.value.code == "repo_unavailable"
+
+
+def test_rollback_project_memory_proposal_removes_marker_block(tmp_path):
+    proposal = _proposal(status="applied")
+    content = build_self_improvement_apply_plan(proposal)["candidate_changes"][0]["content"]
+    other_block = "<!-- self-improvement-proposal:proposal-2 -->\n## Other lesson\nKeep this.\n"
+    memory_path = tmp_path / ".agent-collab" / "team_notes.md"
+    memory_path.parent.mkdir()
+    memory_path.write_text("Intro note\n\n" + content + "\n" + other_block, encoding="utf-8")
+
+    result = rollback_project_memory_proposal(project_repo_path=str(tmp_path), proposal=proposal)
+
+    memory_content = memory_path.read_text(encoding="utf-8")
+    assert result.path == ".agent-collab/team_notes.md"
+    assert result.content_sha256 == hash_apply_candidate_content(content)
+    assert result.already_absent is False
+    assert result.bytes_written == len(content.encode("utf-8"))
+    assert "self-improvement-proposal:proposal-1" not in memory_content
+    assert "Intro note" in memory_content
+    assert other_block.strip() in memory_content
+
+
+def test_rollback_project_memory_proposal_is_idempotent_when_marker_absent(tmp_path):
+    proposal = _proposal(status="applied")
+    memory_path = tmp_path / ".agent-collab" / "team_notes.md"
+    memory_path.parent.mkdir()
+    memory_path.write_text("Intro note\n", encoding="utf-8")
+
+    result = rollback_project_memory_proposal(project_repo_path=str(tmp_path), proposal=proposal)
+
+    assert result.path == ".agent-collab/team_notes.md"
+    assert result.content_sha256 is None
+    assert result.already_absent is True
+    assert result.bytes_written == 0
+    assert memory_path.read_text(encoding="utf-8") == "Intro note\n"
+
+
+def test_rollback_project_memory_proposal_requires_applied_status(tmp_path):
+    proposal = _proposal(status="accepted")
+
+    with pytest.raises(SelfImprovementApplyError) as exc:
+        rollback_project_memory_proposal(project_repo_path=str(tmp_path), proposal=proposal)
+
+    assert exc.value.code == "invalid_status"
+
+
+def test_rollback_project_memory_proposal_rejects_non_memory_target(tmp_path):
+    proposal = _proposal(target_kind="code_spec", status="applied")
+
+    with pytest.raises(SelfImprovementApplyError) as exc:
+        rollback_project_memory_proposal(project_repo_path=str(tmp_path), proposal=proposal)
+
+    assert exc.value.code == "unsupported_target"
+
+
+def test_rollback_project_memory_proposal_requires_existing_repo_path(tmp_path):
+    proposal = _proposal(status="applied")
+
+    with pytest.raises(SelfImprovementApplyError) as exc:
+        rollback_project_memory_proposal(project_repo_path=str(tmp_path / "missing"), proposal=proposal)
 
     assert exc.value.code == "repo_unavailable"

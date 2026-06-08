@@ -15,7 +15,7 @@ from typing import Literal
 import subprocess
 
 from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service, skill_service
-from app.domain.models import CodexIssue, ConductorTask, Project
+from app.domain.models import CodexIssue, ConductorTask, Project, SelfImprovementApplicationEvent
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
 from app.application.phase_duration_estimator import get_phase_duration_estimator
@@ -6231,6 +6231,57 @@ def _self_improvement_proposal_to_dict(proposal) -> dict:
     }
 
 
+def _self_improvement_application_event_to_dict(event) -> dict:
+    try:
+        result = json.loads(event.result_json or "{}")
+    except json.JSONDecodeError:
+        result = {}
+    if not isinstance(result, dict):
+        result = {}
+    return {
+        "id": event.id,
+        "proposal_id": event.proposal_id,
+        "project_id": event.project_id,
+        "issue_id": event.issue_id,
+        "target_kind": event.target_kind,
+        "action": event.action,
+        "status": event.status,
+        "path": event.path,
+        "content_sha256": event.content_sha256,
+        "result": result,
+        "error": event.error,
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+    }
+
+
+async def _record_self_improvement_application_event(
+    *,
+    proposal,
+    action: str,
+    status: str,
+    path: str | None = None,
+    content_sha256: str | None = None,
+    result: dict | None = None,
+    error: str | None = None,
+) -> SelfImprovementApplicationEvent:
+    event = SelfImprovementApplicationEvent(
+        id=uuid4().hex,
+        proposal_id=proposal.id,
+        project_id=proposal.project_id,
+        issue_id=proposal.issue_id,
+        target_kind=proposal.target_kind,
+        action=action,
+        status=status,
+        path=path,
+        content_sha256=content_sha256,
+        result_json=json.dumps(result or {}, sort_keys=True),
+        error=error,
+        created_at=datetime.now(),
+    )
+    await codex_store.save_self_improvement_application_event(event)
+    return event
+
+
 class SelfImprovementProposalStatusUpdateRequest(BaseModel):
     status: Literal["proposed", "accepted", "rejected", "applied"]
 
@@ -6330,6 +6381,28 @@ async def codex_project_self_improvement_proposal_apply_plan(project_id: str, pr
     }
 
 
+@router.get("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/applications")
+async def codex_project_self_improvement_proposal_applications(
+    project_id: str,
+    proposal_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    events = await codex_store.list_self_improvement_application_events(
+        project_id=project_id,
+        proposal_id=proposal_id,
+        limit=limit,
+    )
+    return {"applications": [_self_improvement_application_event_to_dict(event) for event in events]}
+
+
 @router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply")
 async def codex_project_self_improvement_proposal_apply(
     project_id: str,
@@ -6357,15 +6430,78 @@ async def codex_project_self_improvement_proposal_apply(
             reviewed_content_sha256=request.content_sha256,
         )
     except SelfImprovementApplyError as exc:
+        await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="apply",
+            status="failed",
+            content_sha256=request.content_sha256,
+            error=exc.message,
+        )
         status_code = 500 if exc.code in {"invalid_plan", "repo_unavailable"} else 409
         raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
     updated = await codex_store.update_self_improvement_proposal_status(proposal_id, "applied")
     if updated is None or updated.project_id != project_id:
         raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    await _record_self_improvement_application_event(
+        proposal=updated,
+        action="apply",
+        status="succeeded",
+        path=result.path,
+        content_sha256=result.content_sha256,
+        result=result.to_dict(),
+    )
     return {
         "proposal": _self_improvement_proposal_to_dict(updated),
         "application": result.to_dict(),
+    }
+
+
+@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/rollback")
+async def codex_project_self_improvement_proposal_rollback(project_id: str, proposal_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+
+    from app.application.self_improvement_apply_service import (
+        SelfImprovementApplyError,
+        rollback_project_memory_proposal,
+    )
+
+    try:
+        result = rollback_project_memory_proposal(
+            project_repo_path=project.repo_path,
+            proposal=proposal,
+        )
+    except SelfImprovementApplyError as exc:
+        await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="rollback",
+            status="failed",
+            error=exc.message,
+        )
+        status_code = 500 if exc.code in {"invalid_plan", "repo_unavailable"} else 409
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
+
+    updated = await codex_store.update_self_improvement_proposal_status(proposal_id, "accepted")
+    if updated is None or updated.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    await _record_self_improvement_application_event(
+        proposal=updated,
+        action="rollback",
+        status="succeeded",
+        path=result.path,
+        content_sha256=result.content_sha256,
+        result=result.to_dict(),
+    )
+    return {
+        "proposal": _self_improvement_proposal_to_dict(updated),
+        "rollback": result.to_dict(),
     }
 
 

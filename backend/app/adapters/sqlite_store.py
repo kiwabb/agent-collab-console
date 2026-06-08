@@ -7,7 +7,7 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, SelfImprovementProposal
+from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, SelfImprovementProposal, SelfImprovementApplicationEvent
 
 
 class SQLiteStore:
@@ -734,6 +734,22 @@ class SQLiteStore:
                     updated_at TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS self_improvement_application_events (
+                    id TEXT PRIMARY KEY,
+                    proposal_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    issue_id TEXT NOT NULL,
+                    target_kind TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    path TEXT,
+                    content_sha256 TEXT,
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT,
+                    created_at TEXT
+                )
+            """)
             # Unified audit trail (PR1). One row per LLM call/return, tool use/result,
             # command exec, git command, CLI spawn, generic event, or agent finalize.
             # Line-level stdout/stderr stays in log_events (joined via
@@ -830,6 +846,14 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_project_created ON self_improvement_proposals(project_id, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_issue ON self_improvement_proposals(issue_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_status ON self_improvement_proposals(status)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_self_improvement_application_events_project_created "
+                "ON self_improvement_application_events(project_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_self_improvement_application_events_proposal_created "
+                "ON self_improvement_application_events(proposal_id, created_at)"
+            )
             # Audit log filter/pagination indexes (PR3 read API will lean on these).
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)")
@@ -2348,6 +2372,83 @@ class SQLiteStore:
                 fingerprint=row["fingerprint"],
                 created_at=self._parse_datetime(row["created_at"]),
                 updated_at=self._parse_datetime(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    def save_self_improvement_application_event(self, event: "SelfImprovementApplicationEvent") -> None:
+        from app.domain.models import SelfImprovementApplicationEvent  # noqa: F401
+
+        self._ensure_db()
+        conn = self._get_conn()
+        created_at = event.created_at or datetime.now()
+        conn.execute(
+            """INSERT INTO self_improvement_application_events
+               (id, proposal_id, project_id, issue_id, target_kind, action, status,
+                path, content_sha256, result_json, error, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event.id,
+                event.proposal_id,
+                event.project_id,
+                event.issue_id,
+                event.target_kind,
+                event.action,
+                event.status,
+                event.path,
+                event.content_sha256,
+                event.result_json or "{}",
+                event.error,
+                self._format_datetime(created_at),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_self_improvement_application_events(
+        self,
+        project_id: str | None = None,
+        proposal_id: str | None = None,
+        limit: int | None = None,
+    ) -> list["SelfImprovementApplicationEvent"]:
+        from app.domain.models import SelfImprovementApplicationEvent
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        clauses: list[str] = []
+        args: list[object] = []
+        if project_id is not None:
+            clauses.append("project_id = ?")
+            args.append(project_id)
+        if proposal_id is not None:
+            clauses.append("proposal_id = ?")
+            args.append(proposal_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = (
+            "SELECT id, proposal_id, project_id, issue_id, target_kind, action, status, "
+            "path, content_sha256, result_json, error, created_at "
+            f"FROM self_improvement_application_events{where} ORDER BY created_at DESC, id DESC"
+        )
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(max(1, min(int(limit), 100)))
+        rows = conn.execute(sql, tuple(args)).fetchall()
+        conn.close()
+        return [
+            SelfImprovementApplicationEvent(
+                id=row["id"],
+                proposal_id=row["proposal_id"],
+                project_id=row["project_id"],
+                issue_id=row["issue_id"],
+                target_kind=row["target_kind"],
+                action=row["action"],
+                status=row["status"],
+                path=row["path"],
+                content_sha256=row["content_sha256"],
+                result_json=row["result_json"] or "{}",
+                error=row["error"],
+                created_at=self._parse_datetime(row["created_at"]),
             )
             for row in rows
         ]
