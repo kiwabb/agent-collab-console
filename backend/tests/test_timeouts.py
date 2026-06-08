@@ -27,6 +27,8 @@ def test_default_values_match_shipped_ladder():
     assert timeouts.stall_cooldown_s() == 900
     assert timeouts.project_review_interval_s() == 3600.0
     assert timeouts.project_review_limit() == 25
+    assert timeouts.self_improvement_proposal_interval_s() == 3600.0
+    assert timeouts.self_improvement_proposal_limit() == 25
 
 
 def test_project_review_scheduler_knobs(monkeypatch):
@@ -39,6 +41,18 @@ def test_project_review_scheduler_knobs(monkeypatch):
     monkeypatch.setenv("PROJECT_REVIEW_LIMIT", "0")
     assert timeouts.project_review_interval_s() == timeouts.DEFAULT_PROJECT_REVIEW_INTERVAL_S
     assert timeouts.project_review_limit() == 1
+
+
+def test_self_improvement_proposal_scheduler_knobs(monkeypatch):
+    monkeypatch.setenv("SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S", "222.5")
+    monkeypatch.setenv("SELF_IMPROVEMENT_PROPOSAL_LIMIT", "9")
+    assert timeouts.self_improvement_proposal_interval_s() == 222.5
+    assert timeouts.self_improvement_proposal_limit() == 9
+
+    monkeypatch.setenv("SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S", "0")
+    monkeypatch.setenv("SELF_IMPROVEMENT_PROPOSAL_LIMIT", "0")
+    assert timeouts.self_improvement_proposal_interval_s() == timeouts.DEFAULT_SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S
+    assert timeouts.self_improvement_proposal_limit() == 1
 
 
 def test_lease_pulse_interval_formula(monkeypatch):
@@ -102,6 +116,10 @@ def test_invalid_env_falls_back_to_default(monkeypatch):
     assert timeouts.subagent_idle_s() == 1200.0
     monkeypatch.setenv("PROJECT_REVIEW_INTERVAL_S", "garbage")
     assert timeouts.project_review_interval_s() == timeouts.DEFAULT_PROJECT_REVIEW_INTERVAL_S
+    monkeypatch.setenv("SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S", "garbage")
+    assert timeouts.self_improvement_proposal_interval_s() == (
+        timeouts.DEFAULT_SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S
+    )
 
 
 def test_validate_non_strict_returns_without_raising(monkeypatch):

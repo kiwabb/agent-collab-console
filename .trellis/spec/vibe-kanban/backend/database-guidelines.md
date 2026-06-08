@@ -298,6 +298,20 @@ await store.save_conductor_task(task)
     - `conductor` only when `start_conductor=true`: `{started,
       already_running, graph}` where `graph` is the created or existing
       issue `WorkflowGraph` JSON.
+- Scheduler service:
+  - `run_self_improvement_proposal_tick(store, *, activate_fn, limit=None) -> SelfImprovementProposalSchedulerSummary`
+  - `run_self_improvement_proposal_scheduler_loop(store, *, activate_fn, event_bus=None, interval_s=None, limit=None, tick_fn=..., sleep_fn=...) -> None`
+  - `get_self_improvement_proposal_scheduler_status() -> dict[str, object]`
+  - `reset_self_improvement_proposal_scheduler_status() -> None`
+- Scheduler env keys:
+  - `SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S` default `3600.0`
+  - `SELF_IMPROVEMENT_PROPOSAL_LIMIT` default `25`
+- Lifespan task:
+  - Named asyncio task `self-improvement-proposal-scheduler`.
+- Diagnostics:
+  - `GET /api/diagnostics` includes top-level
+    `self_improvement_proposal_scheduler` plus a `checks[]` entry named
+    `self_improvement_proposal_scheduler`.
 - Reviewed project-memory apply API:
   - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply`
   - Request body: `{"content_sha256": "<64 lowercase hex sha256>"}`
@@ -386,6 +400,38 @@ await store.save_conductor_task(task)
 - Repeated activation with `start_conductor=true` may record another
   `start_conductor` attempt event, but must not create another follow-up issue
   or another live conductor session.
+- The self-improvement proposal scheduler is an unattended handoff for
+  already reviewed proposals only. It scans with
+  `list_self_improvement_proposals(status="accepted", limit=limit)`, skips
+  `target_kind == "project_memory"`, and skips proposals that already have a
+  succeeded `start_conductor` application event.
+- The scheduler must invoke the same activation behavior as the HTTP
+  activation endpoint by calling an injected `activate_fn(project_id,
+  proposal_id, start_conductor=True)`. The application-layer scheduler must not
+  import `interfaces.api`; lifespan wires the transport helper into the loop.
+- The scheduler must not accept proposals, mark proposals `applied`, write
+  project memory/specs/prompts/policies/tools/source code, create duplicate
+  follow-up issues, or launch duplicate live conductors. Those guarantees come
+  from the existing activation helper and `ConductorSessionRegistry`, not from
+  a second implementation path.
+- The scheduler isolates proposal failures. A failed activation for one
+  proposal records a `failed` scheduler result and logs project/proposal ids,
+  but the tick continues with later proposals. Failed activations may be
+  retried on a later tick because transient store/worktree/conductor failures
+  can recover.
+- The scheduler loop records a diagnostics-compatible status snapshot:
+  `configured`, `interval_s`, `limit`, `running`, `tick_count`,
+  `last_started_at`, `last_completed_at`, `last_error`, and
+  `last_summary_counts`. Tick exceptions update `last_error` and the loop
+  continues after sleeping; cancellation clears `running` and propagates.
+- FastAPI lifespan starts the loop as `self-improvement-proposal-scheduler`
+  when the async store is available, passes
+  `activate_self_improvement_proposal_task` with `start_conductor=True` through
+  the scheduler, and cancels/awaits the task during shutdown.
+- Diagnostics supervisor checks treat the scheduler like other supervisor
+  snapshots: `running=true`, `last_error`, or stale `last_completed_at` older
+  than twice `interval_s` degrade the service status while still returning the
+  snapshot.
 - The reviewed apply API is the only self-improvement endpoint in this slice
   allowed to write project memory. It is limited to `status == "accepted"` and
   `target_kind == "project_memory"`.
@@ -497,6 +543,22 @@ await store.save_conductor_task(task)
 - Conductor start failure after successful activation -> HTTP `500`, records a
   failed `start_conductor` event, keeps the `open_pr_task` activation event and
   issue/worktree, and proposal status remains unchanged.
+- Scheduler tick with accepted non-memory proposal and no succeeded
+  `start_conductor` event -> calls activation with `start_conductor=True`.
+- Scheduler tick with `project_memory` proposal -> skip; do not call
+  activation and do not write project memory.
+- Scheduler tick with succeeded `start_conductor` event -> skip; do not call
+  activation again.
+- Scheduler tick activation raises -> record a failed scheduler result for that
+  proposal, log ids, and continue remaining proposals; do not crash the tick.
+- Scheduler loop tick raises before returning a summary -> update scheduler
+  status with `last_error`, increment `tick_count`, sleep, and keep looping.
+- Scheduler loop is cancelled -> clear `running` and re-raise
+  `asyncio.CancelledError` so lifespan shutdown can await it.
+- Diagnostics sees scheduler `running=true`, non-empty `last_error`, or stale
+  `last_completed_at` -> append a degraded
+  `self_improvement_proposal_scheduler` check and set top-level status to
+  `degraded`.
 - `codex_store is None` on the reviewed apply API -> HTTP `503`, detail
   `"SQLite store not available"`.
 - Unknown `project_id` on the reviewed apply API -> HTTP `404`, detail
@@ -598,6 +660,13 @@ await store.save_conductor_task(task)
 - Good: first activating with `start_conductor=false`, then repeating with
   `start_conductor=true`, reuses the existing issue and starts the Conductor
   exactly once.
+- Good: the scheduler finds an accepted `runtime_tooling` proposal, calls the
+  shared activation helper with `start_conductor=true`, and records a scheduler
+  result of `started` or `already_running`.
+- Good: the scheduler ignores accepted `project_memory` proposals because
+  project memory still requires reviewed content-hash application.
+- Good: the scheduler retries a proposal on a later tick when a previous
+  `start_conductor` application event failed.
 - Base: a clean trivial completed issue creates no proposal and no error.
 - Bad: appending a new proposal row on every recovery/seal run for the same
   lesson.
@@ -635,6 +704,15 @@ await store.save_conductor_task(task)
   need to audit both the issue creation and the execution handoff.
 - Bad: a repeated `start_conductor=true` activation launching two live
   conductors for the same follow-up issue.
+- Bad: a scheduler that queries all proposals and accepts/rejects them itself;
+  review remains the authorization boundary.
+- Bad: a scheduler that edits `.trellis/spec/`, prompts, tools, source files,
+  or `.agent-collab/team_notes.md` directly instead of creating an autonomous
+  follow-up issue.
+- Bad: a scheduler that treats a succeeded `open_pr_task` event as fully done
+  and never performs the later `start_conductor=true` handoff.
+- Bad: a scheduler that records `applied` when the follow-up issue starts; the
+  proposal remains `accepted` until a reviewed change lands elsewhere.
 - Bad: allowing proposal extraction failure to prevent `issue.status =
   "completed"` after a done graph.
 
@@ -692,6 +770,20 @@ await store.save_conductor_task(task)
   and unchanged proposal status.
 - Helper: issue graph start helper covers `ConductorSessionRegistry`
   idempotence while a session is alive.
+- Scheduler: tick covers activating eligible accepted non-memory proposals with
+  `start_conductor=True`, skipping project memory, skipping proposals with a
+  succeeded `start_conductor` event, honoring `limit`, and isolating activation
+  failures.
+- Scheduler: loop covers repeated ticks, survived tick exceptions,
+  cancellation propagation, status updates for success/failure/running, and
+  the default timeout accessors.
+- Lifespan: startup creates the named
+  `self-improvement-proposal-scheduler` task and shutdown cancels/awaits it.
+- Diagnostics: response includes `self_improvement_proposal_scheduler`, and
+  checks degrade on running, errored, and stale scheduler states.
+- Timeouts: defaults, env overrides, invalid fallback, and positive-value
+  validation cover `SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S` and
+  `SELF_IMPROVEMENT_PROPOSAL_LIMIT`.
 - Reviewed apply: service tests cover candidate content hashing, successful
   project-memory append, marker idempotence, hash mismatch, unsupported target
   kind, non-accepted status, and unavailable repo path.
@@ -853,6 +945,29 @@ if request.start_conductor:
         },
     )
 return {"proposal": proposal_to_dict(proposal), "activation": activation}
+```
+
+Wrong:
+
+```python
+for proposal in await store.list_self_improvement_proposals(status="accepted"):
+    if proposal.target_kind != "project_memory":
+        await codex_project_self_improvement_proposal_activate_task(
+            proposal.project_id,
+            proposal.id,
+            SelfImprovementProposalActivateTaskRequest(start_conductor=True),
+        )
+        await store.update_self_improvement_proposal_status(proposal.id, "applied")
+```
+
+Correct:
+
+```python
+summary = await run_self_improvement_proposal_tick(
+    store,
+    activate_fn=activate_self_improvement_proposal_task,
+    limit=timeouts.self_improvement_proposal_limit(),
+)
 ```
 
 Wrong:

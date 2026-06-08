@@ -584,6 +584,9 @@ async def diagnostics():
 
     from app.application.github_pr_followup import get_github_pr_followup_status
     from app.application.project_review_scheduler import get_project_review_scheduler_status
+    from app.application.self_improvement_proposal_scheduler import (
+        get_self_improvement_proposal_scheduler_status,
+    )
     github_pr_followup = get_github_pr_followup_status()
     checks.append(_supervisor_status_check(
         "github_pr_followup",
@@ -596,6 +599,13 @@ async def diagnostics():
         project_review_scheduler,
         running_detail="Project review scheduler is running",
         stale_detail="Project review scheduler has not completed recently",
+    ))
+    self_improvement_proposal_scheduler = get_self_improvement_proposal_scheduler_status()
+    checks.append(_supervisor_status_check(
+        "self_improvement_proposal_scheduler",
+        self_improvement_proposal_scheduler,
+        running_detail="Self-improvement proposal scheduler is running",
+        stale_detail="Self-improvement proposal scheduler has not completed recently",
     ))
 
     config = {
@@ -645,6 +655,7 @@ async def diagnostics():
         "runtime_catalog": runtime_catalog,
         "github_pr_followup": github_pr_followup,
         "project_review_scheduler": project_review_scheduler,
+        "self_improvement_proposal_scheduler": self_improvement_proposal_scheduler,
         "executors": executors,
         "websockets": websockets,
         "config": config,
@@ -6548,15 +6559,14 @@ async def codex_project_self_improvement_proposal_apply_plan(project_id: str, pr
     }
 
 
-@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/activate-task")
-async def codex_project_self_improvement_proposal_activate_task(
+async def activate_self_improvement_proposal_task(
     project_id: str,
     proposal_id: str,
-    request: SelfImprovementProposalActivateTaskRequest | None = Body(default=None),
-):
+    *,
+    start_conductor: bool = False,
+) -> dict[str, object]:
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    start_conductor = bool(request.start_conductor) if request is not None else False
     project = await codex_store.load_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -6682,6 +6692,20 @@ async def codex_project_self_improvement_proposal_activate_task(
         "proposal": _self_improvement_proposal_to_dict(proposal),
         "activation": activation,
     }
+
+
+@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/activate-task")
+async def codex_project_self_improvement_proposal_activate_task(
+    project_id: str,
+    proposal_id: str,
+    request: SelfImprovementProposalActivateTaskRequest | None = Body(default=None),
+):
+    start_conductor = bool(request.start_conductor) if request is not None else False
+    return await activate_self_improvement_proposal_task(
+        project_id,
+        proposal_id,
+        start_conductor=start_conductor,
+    )
 
 
 @router.get("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/applications")
