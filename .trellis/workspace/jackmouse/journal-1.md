@@ -904,3 +904,37 @@ Added a non-mutating apply-plan endpoint for accepted self-improvement proposals
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: Reviewed self-improvement memory apply
+
+**Date**: 2026-06-08
+**Task**: Reviewed self-improvement memory apply
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-apply-execute`
+
+### Summary
+
+Added a hash-gated reviewed apply endpoint for accepted project_memory self-improvement proposals, keeping apply-plan dry-run-only while allowing reviewed team-notes application with tests and backend spec coverage.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `42c1716` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
