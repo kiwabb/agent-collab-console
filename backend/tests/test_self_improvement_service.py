@@ -96,6 +96,94 @@ async def test_clean_issue_creates_no_proposals():
 
 
 @pytest.mark.asyncio
+async def test_capability_issue_without_eval_evidence_creates_benchmark_eval_proposal():
+    issue = _issue(
+        title="Improve SWE-bench Verified solve rate",
+        description=(
+            "Capability work improved autonomy, but no reviewed measurement artifact was attached."
+        ),
+    )
+    store = MemoryStore(
+        tasks=[
+            _task(
+                "task-1",
+                status="done",
+                payload={"phase": "implementation", "summary": "autonomy improvement"},
+                result_json={
+                    "summary": (
+                        "implemented capability improvement without measured "
+                        "acceptance evidence"
+                    )
+                },
+            )
+        ]
+    )
+
+    proposals = await extract_self_improvement_proposals(issue, store)
+
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal.target_kind == "benchmark_eval"
+    assert (
+        proposal.fingerprint
+        == "project-1|issue-1|benchmark_eval|missing_capability_eval_contract"
+    )
+    assert proposal.severity == "medium"
+    assert "benchmark" in proposal.recommendation.lower()
+    assert "eval" in proposal.recommendation.lower()
+    assert '"codex_issue"' in proposal.evidence_json
+    assert '"conductor_task"' in proposal.evidence_json
+    assert store.saved == proposals
+
+
+@pytest.mark.asyncio
+async def test_capability_issue_with_eval_evidence_does_not_create_benchmark_eval_proposal():
+    issue = _issue(title="Improve SWE-bench Verified solve rate")
+    store = MemoryStore(
+        tasks=[
+            _task(
+                "task-1",
+                status="done",
+                result_json={
+                    "summary": "validated capability improvement",
+                    "benchmark_run": {"fixture_id": "swebench-verified-smoke", "pass_at_1": 0.42},
+                },
+            )
+        ]
+    )
+
+    proposals = await extract_self_improvement_proposals(issue, store)
+
+    assert proposals == []
+    assert store.saved == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_benchmark_eval_matches_save_once_per_issue_rule():
+    issue = _issue(title="Improve autonomous capability")
+    store = MemoryStore(
+        tasks=[
+            _task(
+                "task-1",
+                status="done",
+                result_json={"summary": "autonomy capability improvement"},
+            ),
+            _task(
+                "task-2",
+                status="done",
+                result_json={"summary": "solve-rate capability work"},
+            ),
+        ]
+    )
+
+    proposals = await extract_self_improvement_proposals(issue, store)
+
+    assert len(proposals) == 1
+    assert proposals[0].target_kind == "benchmark_eval"
+    assert len(store.saved) == 1
+
+
+@pytest.mark.asyncio
 async def test_duplicate_rules_save_once_per_rule():
     store = MemoryStore(
         tasks=[
