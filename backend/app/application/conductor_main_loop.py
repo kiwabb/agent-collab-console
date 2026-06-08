@@ -32,6 +32,7 @@ from app.application.conductor_llm import call_conductor_llm, resolve_conductor_
 from app.application.project_conductor import ProjectConductor
 from app.application.project_memory_service import record_project_memory
 from app.application.runtime_catalog_service import RuntimeCatalogService
+from app.application.self_improvement_service import record_issue_self_improvement
 from app.domain.models import ConductorStateLog, ConductorTask, ConductorTurn
 
 
@@ -1084,6 +1085,10 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
                 await store.save_workflow_graph(graph)
             if graph_status == "done":
                 await record_project_memory(graph.id, store)
+                try:
+                    await record_issue_self_improvement(issue, store)
+                except Exception as exc:  # noqa: BLE001
+                    logging.getLogger(__name__).warning("self_improvement extraction failed: %s", exc)
         if issue.status not in {"awaiting_approval", "awaiting_review", "awaiting_merge"}:
             issue.status = "completed" if graph_status == "done" else "failed"
             issue.updated_at = datetime.now()
