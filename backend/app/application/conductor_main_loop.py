@@ -27,6 +27,11 @@ from app.application.budget_service import (
 from app.application.conductor_tools import build_conductor_tools
 from app.application.conductor_lease import get_conductor_lease_owner, get_conductor_lease_ttl_s
 from app.application.conductor_pause_registry import ConductorPauseRegistry
+from app.application.conductor_policy import (
+    ConductorPolicyDecision,
+    decide_conductor_policy,
+    render_conductor_policy_hint,
+)
 from app.application.phase_duration_estimator import get_phase_duration_estimator
 from app.application.conductor_llm import call_conductor_llm, resolve_conductor_llm_context
 from app.application.project_conductor import ProjectConductor
@@ -803,6 +808,7 @@ async def run_issue_conductor_loop(
         # the loop is never hard-killed here. Best-effort: a failure must never
         # block the loop.
         budget_context = ""
+        budget_status = None
         try:
             budget_status = await compute_issue_budget_status(store, issue)
             candidates = collect_candidate_model_prices(catalog)
@@ -816,12 +822,36 @@ async def run_issue_conductor_loop(
         except Exception:  # noqa: BLE001
             pass
 
+        policy_decision = ConductorPolicyDecision(
+            action="call_llm",
+            reason_code="policy_unavailable",
+            reason="Policy evidence could not be loaded; falling back to the Conductor LLM.",
+        )
+        try:
+            list_turns = getattr(store, "list_conductor_turns", None)
+            recent_turns = []
+            if callable(list_turns):
+                recent_turns = await _maybe_await(list_turns(issue.id, limit=20))
+            graph = None
+            load_graph = getattr(store, "load_workflow_graph_for_issue", None)
+            if callable(load_graph):
+                graph = await _maybe_await(load_graph(issue.id))
+            policy_decision = decide_conductor_policy(
+                issue,
+                conductor_task,
+                recent_turns=recent_turns or [],
+                graph=graph,
+                budget_status=budget_status,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("conductor policy decision failed for issue %s: %s", issue.id, exc)
+
         prompt = f"""You are the ProjectConductor orchestrating work on this issue.
 
 ## Issue
 Title: {issue.title}
 Description: {issue.description or "(no description provided)"}
-{project_context}{budget_context}
+{project_context}{budget_context}{render_conductor_policy_hint(policy_decision)}
 
 ## Your Job
 Use the `dispatch_subagent` tool to run the agents needed to complete this issue.
@@ -852,6 +882,16 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
 {language_directive}"""
 
         async def llm(messages, tools, on_token_delta=None):
+            if policy_decision.action == "skip_llm":
+                return {
+                    "stop_reason": "tool_use",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "toolu_policy_skip",
+                        "name": "finalize_task",
+                        "input": {"status": "done", "answer": policy_decision.reason},
+                    }],
+                }
             if cllm is None:
                 return {
                     "stop_reason": "tool_use",
@@ -894,6 +934,13 @@ Users may inject `[USER INTERJECTION]` messages between turns. Treat them as aut
 
         heartbeat_pulse_task = asyncio.create_task(
             heartbeat_pulse(), name=f"conductor-heartbeat-{issue.id[:8]}"
+        )
+
+        await persist_turn(
+            turn_index=-1,
+            sub_index=0,
+            kind="policy_decision",
+            payload=policy_decision.to_payload(),
         )
 
         result = await run_conductor_loop(
@@ -1157,6 +1204,8 @@ def _summarize_turn(kind: str, payload: dict[str, Any]) -> str:
     if kind == "tool_result":
         status = "error" if payload.get("is_error") else "ok"
         return f"Tool result: {payload.get('name') or 'unknown'} ({status})"
+    if kind == "policy_decision":
+        return f"Policy decision: {payload.get('action') or 'call_llm'} ({payload.get('reason_code') or 'unknown'})"
     if kind == "finalize":
         return f"Finalize: {payload.get('status') or 'done'}"
     if kind == "error":

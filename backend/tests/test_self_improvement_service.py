@@ -117,3 +117,86 @@ async def test_store_save_failure_is_best_effort():
     proposals = await extract_self_improvement_proposals(_issue(), store)
 
     assert proposals == []
+
+
+@pytest.mark.asyncio
+async def test_retries_exhausted_creates_conductor_policy_proposal():
+    store = MemoryStore(
+        tasks=[
+            _task(
+                "task-1",
+                result_json={
+                    "status": "done",
+                    "tool_events": [
+                        {
+                            "name": "dispatch_subagent",
+                            "result": {"status": "retries_exhausted", "role": "engineer"},
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+
+    proposals = await extract_self_improvement_proposals(_issue(), store)
+
+    policy = [proposal for proposal in proposals if proposal.target_kind == "conductor_policy"]
+    assert len(policy) == 1
+    assert policy[0].fingerprint == "project-1|issue-1|conductor_policy|role_retries_exhausted"
+    assert "engineer" in policy[0].evidence_json
+    assert store.saved == proposals
+
+
+@pytest.mark.asyncio
+async def test_role_busy_creates_conductor_policy_proposal():
+    store = MemoryStore(
+        tasks=[
+            _task(
+                "task-1",
+                result_json={
+                    "tool_events": [
+                        {
+                            "name": "dispatch_subagent",
+                            "result": {"status": "role_busy", "role": "qa"},
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+
+    proposals = await extract_self_improvement_proposals(_issue(), store)
+
+    policy = [proposal for proposal in proposals if proposal.target_kind == "conductor_policy"]
+    assert len(policy) == 1
+    assert policy[0].fingerprint == "project-1|issue-1|conductor_policy|role_busy"
+    assert "qa" in policy[0].evidence_json
+
+
+@pytest.mark.asyncio
+async def test_dispatch_batch_conflict_creates_conductor_policy_proposal():
+    store = MemoryStore(
+        tasks=[
+            _task(
+                "task-1",
+                result_json={
+                    "tool_events": [
+                        {
+                            "name": "dispatch_batch",
+                            "result": {
+                                "merge_status": "conflict",
+                                "conflicts": [{"file": "backend/app.py"}],
+                            },
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+
+    proposals = await extract_self_improvement_proposals(_issue(), store)
+
+    policy = [proposal for proposal in proposals if proposal.target_kind == "conductor_policy"]
+    assert len(policy) == 1
+    assert policy[0].fingerprint == "project-1|issue-1|conductor_policy|dispatch_batch_conflict"
+    assert "backend/app.py" in policy[0].evidence_json

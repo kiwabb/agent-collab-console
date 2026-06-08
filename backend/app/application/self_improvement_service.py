@@ -102,9 +102,94 @@ def _task_result_text(task: object) -> str:
     return _json_text(getattr(task, "result_json", None))
 
 
+def _task_result_object(task: object) -> dict[str, object]:
+    raw = getattr(task, "result_json", None)
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _iter_tool_event_results(task: object) -> list[tuple[dict[str, object], dict[str, object]]]:
+    result = _task_result_object(task)
+    raw_events = result.get("tool_events")
+    if not isinstance(raw_events, list):
+        return []
+    events: list[tuple[dict[str, object], dict[str, object]]] = []
+    for raw in raw_events:
+        if not isinstance(raw, dict):
+            continue
+        raw_result = raw.get("result")
+        if not isinstance(raw_result, dict):
+            continue
+        events.append((raw, raw_result))
+    return events
+
+
+def _conductor_policy_candidate(
+    task: object,
+    event: dict[str, object],
+    result: dict[str, object],
+) -> tuple[str, str, str] | None:
+    status = str(result.get("status") or "").lower()
+    merge_status = str(result.get("merge_status") or "").lower()
+    role = str(result.get("role") or "").strip() or "unknown"
+    if status == "retries_exhausted":
+        return (
+            "role_retries_exhausted",
+            "Capture conductor redispatch exhaustion as policy evidence",
+            f"Role {role} exhausted its dispatch budget; review Conductor policy so future loops choose a different role, ask the user, or finalize blocked work.",
+        )
+    if status == "role_busy":
+        return (
+            "role_busy",
+            "Capture conductor role-busy loop as policy evidence",
+            f"Role {role} was saturated; review Conductor policy for useful alternate work, bounded waits, or blocked finalization.",
+        )
+    if status == "artifact_invalid":
+        return (
+            "artifact_invalid",
+            "Capture invalid artifact loop as policy evidence",
+            f"Role {role} returned artifact_invalid; review Conductor policy for corrective redispatch prompts and schema reminders.",
+        )
+    if merge_status == "conflict":
+        return (
+            "dispatch_batch_conflict",
+            "Capture dispatch batch conflict as policy evidence",
+            "A dispatch_batch merge conflict occurred; review Conductor policy for fan-out gating and single-engineer reconciliation.",
+        )
+    return None
+
+
 def _classify_tasks(issue: CodexIssue, tasks: list[object]) -> list[SelfImprovementProposal]:
     proposals: dict[str, SelfImprovementProposal] = {}
     for task in tasks:
+        for event, result in _iter_tool_event_results(task):
+            candidate = _conductor_policy_candidate(task, event, result)
+            if candidate is None:
+                continue
+            rule_id, title, recommendation = candidate
+            proposal = _proposal(
+                issue,
+                target_kind="conductor_policy",
+                rule_id=rule_id,
+                title=title,
+                recommendation=recommendation,
+                evidence=[
+                    {
+                        **_task_evidence(task, rule_id),
+                        "tool_event": event,
+                    }
+                ],
+                severity="medium",
+                confidence=0.78,
+            )
+            proposals[proposal.fingerprint] = proposal
         text = _task_result_text(task)
         status = str(getattr(task, "status", "") or "").lower()
         lowered = text.lower()
