@@ -775,6 +775,107 @@ audit_logger.record("git_command", issue_id=..., payload={...}, status="ok")  # 
 
 ---
 
+### Scenario: GitHub PR Follow-Up Sweep (review / CI / merge state)
+
+#### 1. Scope / Trigger
+
+- Trigger: changing GitHub PR refresh, project-level PR sweeps, or any
+  conductor/scheduled-review path that follows an opened PR through review,
+  status checks, and remote merge.
+- Why code-spec depth: this is the autonomy bridge after "open PR". If it
+  falls back to a manual Refresh PR button, issues stall outside the conductor.
+  If one PR refresh failure aborts the sweep, unattended project operation drops
+  work.
+
+#### 2. Signatures
+
+```python
+# github_pr_followup.py
+async def refresh_issue_github_pr(issue_id, *, store, event_bus, run_subprocess) -> GitHubPRFollowupResult
+async def sweep_project_github_prs(project_id, *, store, event_bus, run_subprocess) -> GitHubPRFollowupSummary
+
+# api.py
+POST /api/codex/issues/{issue_id}/pr/refresh -> CodexIssue
+POST /api/codex/projects/{project_id}/pr/follow-up -> {
+    project_id, counts, results: [{issue_id, status, github_pr_state, message, error}]
+}
+```
+
+#### 3. Contracts
+
+- The single-issue manual endpoint and project sweep MUST share the same
+  application-layer refresh implementation.
+- `gh pr view` MUST request
+  `state,reviewDecision,reviews,mergeStateStatus,statusCheckRollup` so review,
+  CI, and merge state are visible in one call.
+- Stable result statuses are:
+  - `updated`: PR open, no requested changes or failed completed checks.
+  - `changes_requested`: `reviewDecision == "CHANGES_REQUESTED"`; latest
+    engineer task is set to `pending` with review feedback.
+  - `checks_failed`: at least one completed status check conclusion is not
+    success/skipped/neutral; result message names failed checks.
+  - `merged`: `state == "MERGED"`; issue becomes
+    `git_merge_status="merged"` and lifecycle `status="completed"`.
+  - `failed`: `gh` non-zero, bad JSON, or subprocess exception.
+- Every result writes `project_audit` event
+  `github_pr_followup_<status>` and emits an `issue_pr_followup` event.
+- The project sweep skips issues with no `github_pr_url` or already merged
+  `git_merge_status`.
+
+#### 4. Validation & Error Matrix
+
+- Missing issue -> service raises `not_found`; manual endpoint maps 404.
+- Issue without PR -> service raises `no_pr`; manual endpoint maps 409.
+- `gh` unavailable -> endpoint maps 412 before service call.
+- `gh pr view` non-zero / bad JSON / subprocess exception -> result
+  `failed`, audit/event recorded, sweep continues.
+- One failed issue in a sweep -> included as `failed`; following issues still
+  refresh.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: one project sweep refreshes ten open PRs, requeues one engineer for
+  requested changes, marks one remotely merged issue completed, records one
+  failed CI status, and reports two `gh` failures without aborting the sweep.
+- Base: manual refresh of a single issue returns the updated `CodexIssue`, as
+  before, but now uses the shared service.
+- Bad: duplicating PR parsing in `api.py`; treating a bad JSON response as an
+  unhandled exception; only polling review state and ignoring status checks.
+
+#### 6. Tests Required
+
+- Single refresh: remote merged PR updates `git_merge_status`, lifecycle status,
+  audit, and event.
+- Single refresh: changes requested writes review feedback into latest engineer
+  task and emits `task_status`.
+- Single refresh: failed completed status check returns `checks_failed` and
+  names the failed check.
+- Single refresh: bad JSON / non-zero `gh` returns `failed` with audit/event.
+- Project sweep: skips no-PR / already-merged issues and isolates failures.
+- Endpoint: project follow-up returns best-effort summary instead of HTTP
+  failing for one broken PR.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+```python
+# API-only parsing means background/conductor paths cannot reuse the logic.
+data = json.loads(await gh_pr_view(...))
+issue.github_pr_state = f"{data['state']}:{data['reviewDecision']}"
+```
+
+Correct:
+```python
+summary = await sweep_project_github_prs(
+    project_id,
+    store=codex_store,
+    event_bus=event_bus,
+    run_subprocess=_run_subprocess,
+)
+```
+
+---
+
 ## Testing Requirements
 
 - **All new code is covered by tests.** Service logic,
