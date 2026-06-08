@@ -560,3 +560,37 @@ Added a cancellation-safe background loop for scheduled project reviews, wired i
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: Project review scheduler status
+
+**Date**: 2026-06-08
+**Task**: Project review scheduler status
+**Package**: ccgui
+**Branch**: `codex/archive-project-review-scheduler-status`
+
+### Summary
+
+Added safe project review scheduler operational status, exposed it through diagnostics, documented backend contract, verified locally, and merged PR #9.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ad2fef8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
