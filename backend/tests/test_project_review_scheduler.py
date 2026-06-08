@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 
 import pytest
 
-from app.application.project_review_scheduler import run_project_review_tick
+from app.application.project_review_scheduler import (
+    ProjectReviewTickSummary,
+    run_project_review_scheduler_loop,
+    run_project_review_tick,
+)
 from app.domain.models import ConductorTask, Project
 
 
@@ -103,3 +108,78 @@ async def test_project_review_tick_limit_bounds_project_selection():
 
     assert summary.to_dict()["counts"] == {"done": 2}
     assert [task.project_id for task in calls] == ["project-1", "project-2"]
+
+
+@pytest.mark.asyncio
+async def test_project_review_scheduler_loop_repeats_after_each_sleep():
+    ticks = 0
+    sleeps: list[float] = []
+
+    async def tick(store, *, event_bus=None, limit=None):
+        nonlocal ticks
+        ticks += 1
+        return ProjectReviewTickSummary()
+
+    async def sleep(interval: float) -> None:
+        sleeps.append(interval)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_project_review_scheduler_loop(
+            _Store([]),
+            event_bus="events",
+            interval_s=12.5,
+            limit=3,
+            tick_fn=tick,
+            sleep_fn=sleep,
+        )
+
+    assert ticks == 2
+    assert sleeps == [12.5, 12.5]
+
+
+@pytest.mark.asyncio
+async def test_project_review_scheduler_loop_survives_tick_exception():
+    attempts = 0
+    sleeps = 0
+
+    async def tick(store, *, event_bus=None, limit=None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("store temporarily unavailable")
+        return ProjectReviewTickSummary()
+
+    async def sleep(interval: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 2:
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_project_review_scheduler_loop(
+            _Store([]),
+            interval_s=1,
+            tick_fn=tick,
+            sleep_fn=sleep,
+        )
+
+    assert attempts == 2
+    assert sleeps == 2
+
+
+@pytest.mark.asyncio
+async def test_project_review_scheduler_loop_propagates_cancellation_from_tick():
+    async def tick(store, *, event_bus=None, limit=None):
+        raise asyncio.CancelledError
+
+    async def sleep(interval: float) -> None:
+        raise AssertionError("sleep should not run after cancellation")
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_project_review_scheduler_loop(
+            _Store([]),
+            tick_fn=tick,
+            sleep_fn=sleep,
+        )

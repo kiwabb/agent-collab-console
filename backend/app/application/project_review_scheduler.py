@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
 
+from app.application import timeouts
 from app.application.project_conductor import ProjectConductor
 from app.domain.models import ConductorTask, Project
 
@@ -28,6 +30,20 @@ class ProjectReviewConductorFactory(Protocol):
         store: ProjectReviewSchedulerStore,
         event_bus: object | None,
     ) -> ProjectReviewConductor: ...
+
+
+class ProjectReviewTickFn(Protocol):
+    async def __call__(
+        self,
+        store: ProjectReviewSchedulerStore,
+        *,
+        event_bus: object | None = None,
+        limit: int | None = None,
+    ) -> ProjectReviewTickSummary: ...
+
+
+class ProjectReviewSleepFn(Protocol):
+    async def __call__(self, interval: float) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -128,3 +144,28 @@ async def run_project_review_tick(
         )
 
     return ProjectReviewTickSummary(results=results)
+
+
+async def run_project_review_scheduler_loop(
+    store: ProjectReviewSchedulerStore,
+    *,
+    event_bus: object | None = None,
+    interval_s: float | None = None,
+    limit: int | None = None,
+    tick_fn: ProjectReviewTickFn = run_project_review_tick,
+    sleep_fn: ProjectReviewSleepFn = asyncio.sleep,
+) -> None:
+    interval = interval_s if interval_s is not None else timeouts.project_review_interval_s()
+    review_limit = limit if limit is not None else timeouts.project_review_limit()
+
+    try:
+        while True:
+            try:
+                await tick_fn(store, event_bus=event_bus, limit=review_limit)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - supervisor loop survives a failed scan.
+                logger.exception("project review scheduler tick failed")
+            await sleep_fn(interval)
+    except asyncio.CancelledError:
+        raise
