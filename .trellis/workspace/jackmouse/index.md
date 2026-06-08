@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
+- **Total Sessions**: 25
 - **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~838 | Active |
+| `journal-1.md` | ~872 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-06-08 | Self-improvement proposal review API | `def982b` | `codex/archive-self-improvement-proposal-review-api` |
 | 24 | 2026-06-08 | Implementation diff completion guard | `ac5c0ca` | `codex/archive-implementation-diff-guard` |
 | 23 | 2026-06-08 | Workflow failed node auto retry | `530776d` | `codex/archive-workflow-failed-node-auto-retry` |
 | 22 | 2026-06-08 | Archive completed autonomy pipeline tasks | `253d2df`, `2950cbc`, `44a2db7`, `57e5414` | `codex/archive-completed-autonomy-tasks` |
