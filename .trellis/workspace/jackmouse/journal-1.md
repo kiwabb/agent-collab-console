@@ -938,3 +938,37 @@ Added a hash-gated reviewed apply endpoint for accepted project_memory self-impr
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: Self-improvement application audit rollback
+
+**Date**: 2026-06-09
+**Task**: Self-improvement application audit rollback
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-apply-audit`
+
+### Summary
+
+Added durable self-improvement application events, applications listing, reviewed project-memory apply audit recording, rollback endpoint, rollback service tests/API tests, and backend database spec contracts.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6720596` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
