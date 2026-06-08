@@ -315,6 +315,167 @@ async with httpx.AsyncClient(follow_redirects=False) as client:
     return await client.get(target)
 ```
 
+### Scenario: Issue Orchestration Policy Contract
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing deterministic Conductor scheduling policy, the issue policy endpoint, or frontend policy display surfaces.
+- The policy is a cross-layer contract: backend classification steers the Conductor prompt and the browser displays the same policy without reimplementing heuristics.
+
+#### 2. Signatures
+
+- Classifier: `classify_issue_orchestration(title: str | None, description: str | None) -> OrchestrationPolicy`
+- Prompt helper: `render_issue_orchestration_policy_block(title: str | None, description: str | None) -> str`
+- API: `GET /api/codex/issues/{issue_id}/orchestration-policy`
+
+#### 3. Contracts
+
+- Response fields: `issue_id: string`, `recommendation: string`, `batch_allowed: boolean`, `signals: string[]`, `guidance: string[]`.
+- Known recommendation values: `pm_first`, `architect_first`, `batch_allowed`, `single_engineer`.
+- Known signal values: `explicit_parallel`, `independent_slices`, `trivial`, `ambiguous_scope`, `risk_or_cross_layer`, `default_serial`.
+- The backend classifier is the source of truth. Frontend code may derive display tone/copy from the response, but must not duplicate scheduling heuristics.
+- `batch_allowed=true` is only valid when the issue explicitly asks for parallel work and the classifier detects independent slices.
+
+#### 4. Validation & Error Matrix
+
+- `codex_store is None` -> HTTP `503`, detail `"SQLite store not available"`.
+- Issue id does not exist -> HTTP `404`, detail contains the issue id.
+- Empty or underspecified issue text -> `pm_first`, `batch_allowed=false`, includes `ambiguous_scope`.
+- Risky/cross-layer issue text -> `architect_first`, `batch_allowed=false`, includes `risk_or_cross_layer`.
+- Explicit parallel independent issue text -> `batch_allowed`, `batch_allowed=true`, includes `explicit_parallel` and `independent_slices`.
+- Small/trivial issue text -> `single_engineer`, `batch_allowed=false`, includes `trivial`.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: Conductor prompt and UI panel both reflect the same classifier result for the same issue title/description.
+- Base: A normal clear issue returns `single_engineer` and `batch_allowed=false`.
+- Bad: frontend infers `batch_allowed=true` from keywords without calling the backend endpoint.
+
+#### 6. Tests Required
+
+- Unit-test classifier branches for trivial, ambiguous, risky/cross-layer, and explicit independent parallel issues.
+- Test prompt rendering includes recommendation, batch allowance, signals, and guidance.
+- Test the endpoint returns the stable response shape, `404` for missing issues, and `503` when the store is unavailable.
+- Frontend tests must assert the typed client URL-encodes issue ids and display derivation consumes the response shape without adding scheduling heuristics.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```typescript
+const batchAllowed = issue.description.includes("parallel");
+```
+
+Correct:
+
+```typescript
+const policy = await getIssueOrchestrationPolicy(issue.id);
+const batchAllowed = policy?.batch_allowed ?? false;
+```
+
+### Scenario: LLM HTTP Client Environment Isolation
+
+#### 1. Scope / Trigger
+
+- Trigger: creating or changing outbound HTTP clients used for LLM provider calls.
+- LLM calls run from the local desktop environment, where `NO_PROXY` / proxy variables may contain OS- or shell-specific values such as bare IPv6 loopback entries.
+
+#### 2. Signatures
+
+- Helper: `_llm_http_client(timeout_s: float) -> httpx.AsyncClient`
+- Call sites: Anthropic-compatible and OpenAI-compatible requests in `application/llm_runner.py`.
+
+#### 3. Contracts
+
+- LLM provider clients must pass `trust_env=False`.
+- Timeout is still supplied explicitly by the caller.
+- This rule applies to LLM provider traffic only; generic API clients keep their own security and redirect rules.
+
+#### 4. Validation & Error Matrix
+
+- `NO_PROXY` contains bare IPv6 entries such as `::1` -> client construction must not raise.
+- Provider request times out -> existing timeout handling logs and returns the fallback result.
+- Provider returns non-JSON or HTTP error -> existing sanitized error handling applies.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: LLM call succeeds or fails based on provider behavior, not local proxy parsing.
+- Base: unset proxy environment behaves the same as before.
+- Bad: `httpx.AsyncClient(...)` inherits a local `NO_PROXY` value and crashes before the provider request is sent.
+
+#### 6. Tests Required
+
+- Test that constructing the LLM HTTP client ignores invalid local proxy bypass entries.
+- Test streaming/non-streaming call behavior through the shared helper when adding new LLM request paths.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+async with httpx.AsyncClient(timeout=timeout_s) as client:
+    ...
+```
+
+Correct:
+
+```python
+async with _llm_http_client(timeout_s) as client:
+    ...
+```
+
+### Scenario: WebSocket Initial Send Disconnects
+
+#### 1. Scope / Trigger
+
+- Trigger: sending initial WebSocket snapshot/replay frames before the endpoint enters a shared subscriber loop.
+- Browser navigation can close the socket immediately after `accept()`, before subscriber cleanup code has been installed.
+
+#### 2. Signatures
+
+- Endpoint shape: `async def <stream>(websocket: WebSocket, ...)`
+- Guard helper shape: `_send_*_initial_*(websocket, state) -> bool`
+
+#### 3. Contracts
+
+- Initial snapshot/replay sends must catch `WebSocketDisconnect` and return without registering a subscriber.
+- Subscriber loops may still catch `WebSocketDisconnect` at their own boundary.
+- A normal browser disconnect must not become an ASGI application exception.
+
+#### 4. Validation & Error Matrix
+
+- Client disconnects during initial snapshot send -> endpoint returns quietly.
+- Client remains connected -> endpoint registers subscriber and enters the normal sender/receiver loop.
+- Store/resource is missing before accept -> existing close code and reason still apply.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: fast route changes produce normal `connection closed` logs only.
+- Base: initial snapshot and `Ready` frame are sent before subscribing.
+- Bad: `await websocket.send_json(...)` before the subscriber loop lets `WebSocketDisconnect` escape to uvicorn.
+
+#### 6. Tests Required
+
+- Unit-test the initial-send helper with a fake WebSocket that raises `WebSocketDisconnect`.
+- Keep backpressure/subscriber tests covering queue overflow and clean terminal closes.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+await websocket.send_json(snapshot)
+sub = WsSubscriber(websocket, maxsize=WORKSPACE_QUEUE_MAXSIZE)
+```
+
+Correct:
+
+```python
+if not await _send_workspace_initial_snapshot(websocket, state):
+    return
+sub = WsSubscriber(websocket, maxsize=WORKSPACE_QUEUE_MAXSIZE)
+```
+
 ### Scenario: Artifact File Boundary Safety
 
 #### 1. Scope / Trigger
