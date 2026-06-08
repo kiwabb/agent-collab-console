@@ -152,6 +152,29 @@ def _failed_check_names(data: dict[str, object]) -> list[str]:
     return failed
 
 
+def _has_status_checks(data: dict[str, object]) -> bool:
+    rollup = data.get("statusCheckRollup")
+    return isinstance(rollup, list) and bool(rollup)
+
+
+def _pending_check_names(data: dict[str, object]) -> list[str]:
+    rollup = data.get("statusCheckRollup")
+    if not isinstance(rollup, list):
+        return []
+    pending: list[str] = []
+    for raw in rollup:
+        if not isinstance(raw, dict):
+            continue
+        status = str(raw.get("status") or "").upper()
+        if status and status != "COMPLETED":
+            pending.append(str(raw.get("name") or raw.get("workflowName") or "unknown check"))
+    return pending
+
+
+def _is_mergeable_status(value: object) -> bool:
+    return str(value or "").upper() in {"CLEAN", "HAS_HOOKS", "UNSTABLE"}
+
+
 async def _enqueue_engineer_rework(
     issue: CodexIssue,
     *,
@@ -199,6 +222,7 @@ async def refresh_issue_github_pr(
     store: GitHubPRFollowupStore,
     event_bus: EventBusLike | None,
     run_subprocess: Callable[..., Awaitable[CompletedProcessLike]],
+    auto_merge: bool = False,
 ) -> GitHubPRFollowupResult:
     issue = await store.load_codex_issue(issue_id)
     if issue is None:
@@ -245,6 +269,7 @@ async def refresh_issue_github_pr(
         )
     state = str(data.get("state") or "OPEN")
     decision = str(data.get("reviewDecision") or "")
+    merge_state = str(data.get("mergeStateStatus") or "")
     pr_state = f"{state}:{decision}"
     issue.github_pr_state = pr_state
 
@@ -267,6 +292,40 @@ async def refresh_issue_github_pr(
         if failed_checks:
             status = "checks_failed"
             message = "Failed status checks: " + ", ".join(failed_checks)
+        else:
+            pending_checks = _pending_check_names(data)
+            if pending_checks:
+                status = "checks_pending"
+                message = "Pending status checks: " + ", ".join(pending_checks)
+            elif auto_merge and not _has_status_checks(data):
+                status = "checks_missing"
+                message = "No status checks reported; auto-merge requires completed checks."
+            elif auto_merge:
+                if decision != "APPROVED":
+                    status = "review_required"
+                    message = "PR is not approved."
+                elif not _is_mergeable_status(merge_state):
+                    status = "merge_blocked"
+                    message = f"PR merge state is {merge_state or 'unknown'}."
+                else:
+                    try:
+                        merge = await run_subprocess(
+                            ["gh", "pr", "merge", issue.github_pr_url, "--merge", "--delete-branch"],
+                            cwd=issue.git_worktree_path or ".",
+                            timeout_s=60,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - merge attempts are isolated per issue.
+                        status = "merge_failed"
+                        message = f"gh pr merge failed: {exc}"
+                    else:
+                        if merge.returncode != 0:
+                            status = "merge_failed"
+                            message = f"gh pr merge failed: {merge.stderr.strip()[:500]}"
+                        else:
+                            issue.git_merge_status = "merged"
+                            issue.status = "completed"
+                            status = "merged"
+                            message = "PR merged by automated follow-up."
 
     issue.updated_at = datetime.now()
     await store.save_codex_issue(issue)
@@ -286,6 +345,7 @@ async def refresh_issue_github_pr(
         status=status,
         github_pr_state=pr_state,
         message=message,
+        error=message if status in {"merge_failed"} else "",
     )
 
 
@@ -295,6 +355,7 @@ async def sweep_project_github_prs(
     store: GitHubPRFollowupStore,
     event_bus: EventBusLike | None,
     run_subprocess: Callable[..., Awaitable[CompletedProcessLike]],
+    auto_merge: bool = False,
 ) -> GitHubPRFollowupSummary:
     issue_rows = await store.list_codex_issues(project_id=project_id)
     results: list[GitHubPRFollowupResult] = []
@@ -312,6 +373,7 @@ async def sweep_project_github_prs(
                 store=store,
                 event_bus=event_bus,
                 run_subprocess=run_subprocess,
+                auto_merge=auto_merge,
             )
         except GitHubPRFollowupError as exc:
             result = GitHubPRFollowupResult(issue_id=issue_id, status=exc.status, error=exc.message)

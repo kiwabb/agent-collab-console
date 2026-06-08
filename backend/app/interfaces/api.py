@@ -3415,6 +3415,10 @@ class CreatePRRequest(BaseModel):
     draft: bool = False
 
 
+class ProjectPRFollowupRequest(BaseModel):
+    auto_merge: bool = False
+
+
 @router.post("/codex/issues/{issue_id}/pr/create")
 async def create_github_pr(issue_id: str, request: CreatePRRequest):
     """Push the issue's worktree branch to origin and open a GitHub PR via
@@ -3532,7 +3536,7 @@ async def refresh_github_pr(issue_id: str):
 
 
 @router.post("/codex/projects/{project_id}/pr/follow-up")
-async def follow_up_project_github_prs(project_id: str):
+async def follow_up_project_github_prs(project_id: str, request: ProjectPRFollowupRequest | None = None):
     """Refresh all open GitHub PR-backed issues for a project."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
@@ -3544,6 +3548,7 @@ async def follow_up_project_github_prs(project_id: str):
         store=codex_store,
         event_bus=event_bus,
         run_subprocess=_run_subprocess,
+        auto_merge=bool(request.auto_merge) if request is not None else False,
     )
     return summary.to_dict()
 
