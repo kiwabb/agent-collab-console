@@ -217,9 +217,14 @@ await store.save_conductor_task(task)
 
 - Trigger: changing issue terminal sealing, self-improvement extraction,
   proposal review APIs, or the `self_improvement_proposals` schema.
-- The first self-improvement loop is intentionally review-only: it may create
-  durable proposals from issue evidence, but it must not silently mutate
-  `.trellis/spec/`, prompts, policies, project memory, tools, or code.
+- The extraction, review, and apply-plan portions of the first
+  self-improvement loop are intentionally review-only: they may create durable
+  proposals from issue evidence and preview candidate changes, but they must
+  not silently mutate `.trellis/spec/`, prompts, policies, project memory,
+  tools, or code.
+- A separate reviewed apply endpoint may mutate project memory only when the
+  caller presents the hash of the exact dry-run candidate content it reviewed.
+  It must not apply higher-risk target kinds directly.
 - Proposal extraction runs from the Conductor terminal seal and is best-effort;
   an extraction/store problem must not change a completed issue into a failed
   issue.
@@ -261,6 +266,12 @@ await store.save_conductor_task(task)
   - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply-plan`
   - Response body: `{proposal, plan}` where `proposal` is the same proposal
     object shape and `plan` is a dry-run application plan.
+- Reviewed project-memory apply API:
+  - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply`
+  - Request body: `{"content_sha256": "<64 lowercase hex sha256>"}`
+  - Response body: `{proposal, application}` where `proposal` is the same
+    proposal object shape after status update and `application` contains
+    `path`, `content_sha256`, `already_present`, and `bytes_written`.
 
 ### 3. Contracts
 
@@ -292,6 +303,23 @@ await store.save_conductor_task(task)
 - A `project_memory` apply plan may include an `append_markdown` candidate for
   `.agent-collab/team_notes.md`. Other target kinds must use a reviewed PR/task
   candidate such as `open_pr_task`, not a guessed direct file patch.
+- The reviewed apply API is the only self-improvement endpoint in this slice
+  allowed to write project memory. It is limited to `status == "accepted"` and
+  `target_kind == "project_memory"`.
+- The reviewed apply API must rebuild the current dry-run plan, find the single
+  `append_markdown` candidate, compute a SHA-256 hash of that exact content,
+  and compare it with the request's `content_sha256` before writing.
+- Hash mismatch means the caller reviewed stale or different content. Return a
+  conflict and do not write `team_notes.md` or mark the proposal applied.
+- The reviewed apply API writes only the exact reviewed candidate content into
+  `.agent-collab/team_notes.md`, using the candidate's
+  `<!-- self-improvement-proposal:{proposal.id} -->` marker as the idempotence
+  key. If the marker already exists while the proposal is still accepted, do
+  not append a duplicate block; mark the proposal applied and return
+  `already_present: true`.
+- Direct application of `code_spec`, `conductor_policy`, `runtime_tooling`, or
+  `benchmark_eval` proposals is forbidden. These target kinds must remain
+  reviewed PR/task flows until they have their own audited execution model.
 - The review API is project-scoped. A proposal whose `project_id` differs from
   the path `project_id` is treated as not found rather than exposed.
 - The terminal seal order for done graphs is:
@@ -323,6 +351,21 @@ await store.save_conductor_task(task)
   `"Self-improvement proposal not found"`.
 - Apply-plan request for `proposed`, `rejected`, or `applied` proposal -> HTTP
   `409`, detail states that the proposal must be accepted.
+- `codex_store is None` on the reviewed apply API -> HTTP `503`, detail
+  `"SQLite store not available"`.
+- Unknown `project_id` on the reviewed apply API -> HTTP `404`, detail
+  `"Project not found"`.
+- Unknown or cross-project proposal on the reviewed apply API -> HTTP `404`,
+  detail `"Self-improvement proposal not found"`.
+- Reviewed apply request for `proposed`, `rejected`, or `applied` proposal ->
+  HTTP `409`, detail states that the proposal must be accepted.
+- Reviewed apply request for non-`project_memory` target kind -> HTTP `409`,
+  detail states that only project memory can be applied directly.
+- Reviewed apply request with a mismatched `content_sha256` -> HTTP `409`, and
+  the endpoint must not write project memory or update proposal status.
+- Reviewed apply request whose project repo path is missing or cannot write
+  `.agent-collab/team_notes.md` -> HTTP `500`, and the proposal must remain
+  accepted.
 - `limit < 1` or `limit > 100` on the read API -> FastAPI validation `422`.
 - Duplicate `fingerprint` on save -> update existing row fields and keep one
   logical proposal.
@@ -341,10 +384,16 @@ await store.save_conductor_task(task)
 - Good: an operator accepts a proposed `code_spec` lesson with the review API;
   the proposal status becomes `accepted`, and all recommendation/evidence fields
   remain unchanged.
-- Good: an accepted proposal is marked `applied` after a separate reviewed change
-  lands; the API records the status only.
+- Good: when a non-memory proposal is applied through a separate reviewed
+  change, the review API can record `applied` status only.
 - Good: an accepted `project_memory` proposal returns a dry-run
   `.agent-collab/team_notes.md` append candidate, and the file remains unchanged.
+- Good: a reviewed apply request for an accepted `project_memory` proposal with
+  the candidate content hash appends exactly that markdown to
+  `.agent-collab/team_notes.md` and then marks the proposal `applied`.
+- Good: a reviewed apply request for an accepted `project_memory` proposal whose
+  marker is already present marks the proposal `applied` without appending a
+  duplicate block.
 - Good: an accepted `code_spec` proposal returns an `open_pr_task` candidate so a
   later reviewed PR can edit the right spec with tests.
 - Base: a clean trivial completed issue creates no proposal and no error.
@@ -356,6 +405,10 @@ await store.save_conductor_task(task)
   model for resurrection.
 - Bad: an apply-plan endpoint that writes `team_notes.md` or marks the proposal
   `applied` in the same request.
+- Bad: a reviewed apply endpoint that writes project memory without validating
+  the reviewed candidate content hash.
+- Bad: a reviewed apply endpoint that applies `code_spec`, `conductor_policy`,
+  `runtime_tooling`, or `benchmark_eval` by writing files directly.
 - Bad: returning a direct `patch_file` candidate for `code_spec`,
   `conductor_policy`, `runtime_tooling`, or `benchmark_eval` before a reviewed
   implementation task exists.
@@ -384,6 +437,14 @@ await store.save_conductor_task(task)
 - API: apply-plan endpoint covers accepted memory/non-memory proposals, `409`
   non-accepted statuses, `404` unknown/cross-project proposals, `503` store
   unavailable, and no proposal status mutation.
+- Reviewed apply: service tests cover candidate content hashing, successful
+  project-memory append, marker idempotence, hash mismatch, unsupported target
+  kind, non-accepted status, and unavailable repo path.
+- API: reviewed apply endpoint covers accepted project-memory append and
+  `applied` status update, marker idempotence, `409` hash mismatch,
+  non-memory target kinds and non-accepted statuses, `404` unknown/cross-project
+  proposals, `503` store unavailable, `500` unavailable repo path, and no
+  mutation on failed requests.
 
 ### 7. Wrong vs Correct
 
@@ -442,5 +503,31 @@ if proposal.status != "accepted":
 return {
     "proposal": _self_improvement_proposal_to_dict(proposal),
     "plan": build_self_improvement_apply_plan(proposal),  # dry-run metadata only
+}
+```
+
+Wrong:
+
+```python
+if proposal.status == "accepted" and proposal.target_kind == "project_memory":
+    Path(project.repo_path, ".agent-collab/team_notes.md").write_text(
+        proposal.recommendation,
+        encoding="utf-8",
+    )
+    await store.update_self_improvement_proposal_status(proposal.id, "applied")
+```
+
+Correct:
+
+```python
+result = apply_project_memory_proposal(
+    project_repo_path=project.repo_path,
+    proposal=proposal,
+    reviewed_content_sha256=request.content_sha256,
+)
+updated = await store.update_self_improvement_proposal_status(proposal.id, "applied")
+return {
+    "proposal": _self_improvement_proposal_to_dict(updated),
+    "application": result.to_dict(),
 }
 ```

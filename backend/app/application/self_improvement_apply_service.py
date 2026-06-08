@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path
 
-from app.application.project_memory_service import MEMORY_DIR_NAME, MEMORY_FILE_NAME
+from app.application.project_memory_service import MEMORY_DIR_NAME, MEMORY_FILE_NAME, project_memory
 from app.domain.models import SelfImprovementProposal
+
+
+class SelfImprovementApplyError(Exception):
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
+@dataclass(frozen=True)
+class SelfImprovementApplyResult:
+    path: str
+    content_sha256: str
+    already_present: bool
+    bytes_written: int
+
+    def to_dict(self) -> dict[str, str | bool | int]:
+        return {
+            "path": self.path,
+            "content_sha256": self.content_sha256,
+            "already_present": self.already_present,
+            "bytes_written": self.bytes_written,
+        }
 
 
 def _parse_evidence(evidence_json: str | None) -> list[dict]:
@@ -98,3 +124,106 @@ def build_self_improvement_apply_plan(proposal: SelfImprovementProposal) -> dict
         "risk": "medium",
         "next_action": "open_reviewed_pr",
     }
+
+
+def hash_apply_candidate_content(content: str) -> str:
+    return sha256(content.encode("utf-8")).hexdigest()
+
+
+def _project_memory_append_candidate(proposal: SelfImprovementProposal) -> tuple[str, str]:
+    plan = build_self_improvement_apply_plan(proposal)
+    candidate_changes = plan.get("candidate_changes")
+    if not isinstance(candidate_changes, list) or len(candidate_changes) != 1:
+        raise SelfImprovementApplyError(
+            "Self-improvement apply plan must contain exactly one project-memory candidate",
+            code="invalid_plan",
+        )
+    candidate = candidate_changes[0]
+    if not isinstance(candidate, dict) or candidate.get("kind") != "append_markdown":
+        raise SelfImprovementApplyError(
+            "Self-improvement apply plan does not contain a project-memory append candidate",
+            code="invalid_plan",
+        )
+    path = candidate.get("path")
+    content = candidate.get("content")
+    expected_path = f"{MEMORY_DIR_NAME}/{MEMORY_FILE_NAME}"
+    if path != expected_path or not isinstance(content, str):
+        raise SelfImprovementApplyError(
+            "Self-improvement apply plan project-memory candidate is invalid",
+            code="invalid_plan",
+        )
+    return expected_path, content
+
+
+def apply_project_memory_proposal(
+    *,
+    project_repo_path: str | None,
+    proposal: SelfImprovementProposal,
+    reviewed_content_sha256: str,
+) -> SelfImprovementApplyResult:
+    if proposal.status != "accepted":
+        raise SelfImprovementApplyError(
+            "Self-improvement proposal must be accepted before it can be applied",
+            code="invalid_status",
+        )
+    if proposal.target_kind != "project_memory":
+        raise SelfImprovementApplyError(
+            "Only project_memory self-improvement proposals can be applied directly",
+            code="unsupported_target",
+        )
+
+    candidate_path, content = _project_memory_append_candidate(proposal)
+    content_sha256 = hash_apply_candidate_content(content)
+    if reviewed_content_sha256 != content_sha256:
+        raise SelfImprovementApplyError(
+            "Reviewed content hash does not match the current self-improvement apply plan",
+            code="hash_mismatch",
+        )
+
+    if not project_repo_path:
+        raise SelfImprovementApplyError(
+            "Project repository path is unavailable for self-improvement application",
+            code="repo_unavailable",
+        )
+    repo_path = Path(project_repo_path)
+    if not repo_path.exists():
+        raise SelfImprovementApplyError(
+            "Project repository path is unavailable for self-improvement application",
+            code="repo_unavailable",
+        )
+
+    memory_path = repo_path / MEMORY_DIR_NAME / MEMORY_FILE_NAME
+    marker = f"<!-- self-improvement-proposal:{proposal.id} -->"
+    try:
+        memory_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = memory_path.read_text(encoding="utf-8") if memory_path.exists() else ""
+    except OSError as exc:
+        raise SelfImprovementApplyError(
+            "Project memory file is unavailable for self-improvement application",
+            code="repo_unavailable",
+        ) from exc
+
+    if marker in existing:
+        return SelfImprovementApplyResult(
+            path=candidate_path,
+            content_sha256=content_sha256,
+            already_present=True,
+            bytes_written=0,
+        )
+
+    combined = (existing.rstrip() + "\n\n" + content.rstrip()).strip() + "\n"
+    combined = project_memory.trim_to_cap(combined)
+    try:
+        memory_path.write_text(combined, encoding="utf-8")
+    except OSError as exc:
+        raise SelfImprovementApplyError(
+            "Project memory file is unavailable for self-improvement application",
+            code="repo_unavailable",
+        ) from exc
+
+    return SelfImprovementApplyResult(
+        path=candidate_path,
+        content_sha256=content_sha256,
+        already_present=False,
+        bytes_written=len(content.encode("utf-8")),
+    )
