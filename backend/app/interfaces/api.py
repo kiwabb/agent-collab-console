@@ -380,13 +380,32 @@ def _supervisor_status_check(
     status: dict[str, object],
     *,
     running_detail: str,
+    stale_detail: str | None = None,
+    now: datetime | None = None,
 ) -> dict[str, object]:
     last_error = status.get("last_error")
     if last_error:
         return {"name": name, "status": "degraded", "detail": last_error}
     if status.get("running") is True:
         return {"name": name, "status": "degraded", "detail": running_detail}
+    if stale_detail and _is_supervisor_status_stale(status, now=now):
+        return {"name": name, "status": "degraded", "detail": stale_detail}
     return {"name": name, "status": "ok", "detail": None}
+
+
+def _is_supervisor_status_stale(status: dict[str, object], *, now: datetime | None = None) -> bool:
+    completed_raw = status.get("last_completed_at")
+    if not isinstance(completed_raw, str) or not completed_raw:
+        return False
+    interval_raw = status.get("interval_s")
+    if not isinstance(interval_raw, (int, float)) or interval_raw <= 0:
+        return False
+    try:
+        completed_at = datetime.fromisoformat(completed_raw)
+    except ValueError:
+        return False
+    current = now or datetime.now(tz=completed_at.tzinfo)
+    return (current - completed_at).total_seconds() > float(interval_raw) * 2
 
 
 def _delete_issue_artifact_root(workspace_path: str | None, issue_id: str):
@@ -576,6 +595,7 @@ async def diagnostics():
         "project_review_scheduler",
         project_review_scheduler,
         running_detail="Project review scheduler is running",
+        stale_detail="Project review scheduler has not completed recently",
     ))
 
     config = {
