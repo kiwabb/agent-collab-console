@@ -7,7 +7,7 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog
+from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, SelfImprovementProposal
 
 
 class SQLiteStore:
@@ -717,6 +717,23 @@ class SQLiteStore:
                     created_at TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS self_improvement_proposals (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    issue_id TEXT NOT NULL,
+                    target_kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    recommendation TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL DEFAULT '[]',
+                    severity TEXT NOT NULL DEFAULT 'info',
+                    confidence REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'proposed',
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+            """)
             # Unified audit trail (PR1). One row per LLM call/return, tool use/result,
             # command exec, git command, CLI spawn, generic event, or agent finalize.
             # Line-level stdout/stderr stays in log_events (joined via
@@ -810,6 +827,9 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_state_log_issue_transition ON conductor_state_log(issue_id, transition_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_project_created ON self_improvement_proposals(project_id, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_issue ON self_improvement_proposals(issue_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_status ON self_improvement_proposals(status)")
             # Audit log filter/pagination indexes (PR3 read API will lean on these).
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)")
@@ -2185,6 +2205,100 @@ class SQLiteStore:
                 summary_text=row["summary_text"],
                 vector_json=row["vector_json"] or "[]",
                 created_at=self._parse_datetime(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def save_self_improvement_proposal(self, proposal: "SelfImprovementProposal") -> None:
+        from app.domain.models import SelfImprovementProposal  # noqa: F401
+
+        self._ensure_db()
+        conn = self._get_conn()
+        now = datetime.now()
+        created_at = proposal.created_at or now
+        updated_at = proposal.updated_at or now
+        conn.execute(
+            """INSERT INTO self_improvement_proposals
+               (id, project_id, issue_id, target_kind, title, recommendation, evidence_json,
+                severity, confidence, status, fingerprint, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(fingerprint) DO UPDATE SET
+                   id = excluded.id,
+                   title = excluded.title,
+                   recommendation = excluded.recommendation,
+                   evidence_json = excluded.evidence_json,
+                   severity = excluded.severity,
+                   confidence = excluded.confidence,
+                   status = excluded.status,
+                   updated_at = excluded.updated_at""",
+            (
+                proposal.id,
+                proposal.project_id,
+                proposal.issue_id,
+                proposal.target_kind,
+                proposal.title,
+                proposal.recommendation,
+                proposal.evidence_json or "[]",
+                proposal.severity,
+                float(proposal.confidence),
+                proposal.status,
+                proposal.fingerprint,
+                self._format_datetime(created_at),
+                self._format_datetime(updated_at),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_self_improvement_proposals(
+        self,
+        project_id: str | None = None,
+        issue_id: str | None = None,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> list["SelfImprovementProposal"]:
+        from app.domain.models import SelfImprovementProposal
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        clauses: list[str] = []
+        args: list[object] = []
+        if project_id is not None:
+            clauses.append("project_id = ?")
+            args.append(project_id)
+        if issue_id is not None:
+            clauses.append("issue_id = ?")
+            args.append(issue_id)
+        if status is not None:
+            clauses.append("status = ?")
+            args.append(status)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = (
+            "SELECT id, project_id, issue_id, target_kind, title, recommendation, evidence_json, "
+            "severity, confidence, status, fingerprint, created_at, updated_at "
+            f"FROM self_improvement_proposals{where} ORDER BY created_at DESC, id DESC"
+        )
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(max(1, min(int(limit), 100)))
+        rows = conn.execute(sql, tuple(args)).fetchall()
+        conn.close()
+        return [
+            SelfImprovementProposal(
+                id=row["id"],
+                project_id=row["project_id"],
+                issue_id=row["issue_id"],
+                target_kind=row["target_kind"],
+                title=row["title"],
+                recommendation=row["recommendation"],
+                evidence_json=row["evidence_json"] or "[]",
+                severity=row["severity"] or "info",
+                confidence=float(row["confidence"] or 0),
+                status=row["status"] or "proposed",
+                fingerprint=row["fingerprint"],
+                created_at=self._parse_datetime(row["created_at"]),
+                updated_at=self._parse_datetime(row["updated_at"]),
             )
             for row in rows
         ]
