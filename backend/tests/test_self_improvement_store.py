@@ -15,6 +15,8 @@ def _proposal(
     target_kind: str = "runtime_tooling",
     status: str = "proposed",
     fingerprint: str = "project-1|issue-1|runtime_tooling|qa-failure",
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None,
 ) -> SelfImprovementProposal:
     return SelfImprovementProposal(
         id=proposal_id,
@@ -28,9 +30,29 @@ def _proposal(
         confidence=0.8,
         status=status,
         fingerprint=fingerprint,
-        created_at=datetime(2026, 6, 8, 10, 0, 0),
-        updated_at=datetime(2026, 6, 8, 10, 0, 0),
+        created_at=created_at or datetime(2026, 6, 8, 10, 0, 0),
+        updated_at=updated_at or datetime(2026, 6, 8, 10, 0, 0),
     )
+
+
+def _assert_preserved_except_status_and_updated_at(
+    before: SelfImprovementProposal,
+    after: SelfImprovementProposal,
+) -> None:
+    for field in (
+        "id",
+        "project_id",
+        "issue_id",
+        "target_kind",
+        "title",
+        "recommendation",
+        "evidence_json",
+        "severity",
+        "confidence",
+        "fingerprint",
+        "created_at",
+    ):
+        assert getattr(after, field) == getattr(before, field)
 
 
 @pytest.mark.asyncio
@@ -68,6 +90,27 @@ async def test_async_store_saves_lists_filters_and_dedupes(tmp_path):
     assert len(limited_rows) == 1
 
 
+@pytest.mark.asyncio
+async def test_async_store_loads_and_updates_self_improvement_proposal_status(tmp_path):
+    store = AsyncSQLiteStore(tmp_path / "console.db")
+    original_time = datetime(2020, 1, 1, 12, 0, 0)
+    proposal = _proposal(created_at=original_time, updated_at=original_time)
+    await store.save_self_improvement_proposal(proposal)
+
+    loaded = await store.load_self_improvement_proposal("proposal-1")
+    updated = await store.update_self_improvement_proposal_status("proposal-1", "accepted")
+    missing = await store.update_self_improvement_proposal_status("missing", "accepted")
+    await store.close()
+
+    assert loaded == proposal
+    assert missing is None
+    assert updated is not None
+    assert updated.status == "accepted"
+    assert updated.updated_at is not None
+    assert updated.updated_at > original_time
+    _assert_preserved_except_status_and_updated_at(proposal, updated)
+
+
 def test_sync_store_saves_lists_filters_and_dedupes(tmp_path):
     store = SQLiteStore(tmp_path / "console.db")
     store.save_self_improvement_proposal(_proposal())
@@ -93,3 +136,22 @@ def test_sync_store_saves_lists_filters_and_dedupes(tmp_path):
     assert len(issue_rows) == 1
     assert issue_rows[0].id == "proposal-1b"
     assert [row.status for row in store.list_self_improvement_proposals(project_id="project-1", status="accepted")] == ["accepted"]
+
+
+def test_sync_store_loads_and_updates_self_improvement_proposal_status(tmp_path):
+    store = SQLiteStore(tmp_path / "console.db")
+    original_time = datetime(2020, 1, 1, 12, 0, 0)
+    proposal = _proposal(created_at=original_time, updated_at=original_time)
+    store.save_self_improvement_proposal(proposal)
+
+    loaded = store.load_self_improvement_proposal("proposal-1")
+    updated = store.update_self_improvement_proposal_status("proposal-1", "accepted")
+    missing = store.update_self_improvement_proposal_status("missing", "accepted")
+
+    assert loaded == proposal
+    assert missing is None
+    assert updated is not None
+    assert updated.status == "accepted"
+    assert updated.updated_at is not None
+    assert updated.updated_at > original_time
+    _assert_preserved_except_status_and_updated_at(proposal, updated)

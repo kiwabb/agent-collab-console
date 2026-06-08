@@ -6231,6 +6231,24 @@ def _self_improvement_proposal_to_dict(proposal) -> dict:
     }
 
 
+class SelfImprovementProposalStatusUpdateRequest(BaseModel):
+    status: Literal["proposed", "accepted", "rejected", "applied"]
+
+
+_SELF_IMPROVEMENT_PROPOSAL_STATUS_TRANSITIONS = {
+    "proposed": {"accepted", "rejected"},
+    "accepted": {"applied"},
+    "rejected": set(),
+    "applied": set(),
+}
+
+
+def _is_self_improvement_proposal_status_transition_allowed(current: str, requested: str) -> bool:
+    if current == requested:
+        return True
+    return requested in _SELF_IMPROVEMENT_PROPOSAL_STATUS_TRANSITIONS.get(current, set())
+
+
 @router.get("/codex/projects/{project_id}/self-improvement-proposals")
 async def codex_project_self_improvement_proposals(
     project_id: str,
@@ -6250,6 +6268,36 @@ async def codex_project_self_improvement_proposals(
         limit=limit,
     )
     return {"proposals": [_self_improvement_proposal_to_dict(proposal) for proposal in proposals]}
+
+
+@router.patch("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}")
+async def codex_update_project_self_improvement_proposal_status(
+    project_id: str,
+    proposal_id: str,
+    request: SelfImprovementProposalStatusUpdateRequest,
+):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    if not _is_self_improvement_proposal_status_transition_allowed(proposal.status, request.status):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Invalid self-improvement proposal status transition: "
+                f"{proposal.status} -> {request.status}"
+            ),
+        )
+    if proposal.status == request.status:
+        return _self_improvement_proposal_to_dict(proposal)
+    updated = await codex_store.update_self_improvement_proposal_status(proposal_id, request.status)
+    if updated is None or updated.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    return _self_improvement_proposal_to_dict(updated)
 
 
 @router.get("/codex/projects/{project_id}/conductor-state")
