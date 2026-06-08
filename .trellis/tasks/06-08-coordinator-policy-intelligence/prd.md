@@ -65,20 +65,20 @@ observable, and more capable of learning from stalled or wasteful issue loops.
 
 ## Acceptance Criteria
 
-* [ ] A pure function or small service class classifies Conductor policy
+* [x] A pure function or small service class classifies Conductor policy
       decisions from issue/task/turn evidence without requiring an LLM.
-* [ ] Policy decisions include stable reason codes suitable for tests,
+* [x] Policy decisions include stable reason codes suitable for tests,
       proposal fingerprints, and event/audit payloads.
-* [ ] `run_issue_conductor_loop(...)` records policy evidence without changing
+* [x] `run_issue_conductor_loop(...)` records policy evidence without changing
       terminal issue sealing semantics.
-* [ ] Low-risk skip decisions avoid an LLM call while still recording a
+* [x] Low-risk skip decisions avoid an LLM call while still recording a
       `conductor_turn`/event that explains the skip.
-* [ ] Risky evidence produces `call_llm` with prompt guidance, not a skip.
-* [ ] Self-improvement extraction emits idempotent `conductor_policy`
+* [x] Risky evidence produces `call_llm` with prompt guidance, not a skip.
+* [x] Self-improvement extraction emits idempotent `conductor_policy`
       proposals for repeated routing/policy failures.
-* [ ] Existing Conductor behavior remains backward-compatible when no policy
+* [x] Existing Conductor behavior remains backward-compatible when no policy
       evidence exists.
-* [ ] Focused backend tests pass.
+* [x] Focused backend tests pass.
 
 ## Definition of Done
 
