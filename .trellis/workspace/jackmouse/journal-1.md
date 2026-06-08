@@ -697,3 +697,37 @@ Merged PR #15 for read-only project review scheduler stale diagnostics. Schedule
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: Conductor PR follow-up sweep
+
+**Date**: 2026-06-08
+**Task**: Conductor PR follow-up sweep
+**Package**: ccgui
+**Branch**: `codex/conductor-pr-follow-up-sweep-main`
+
+### Summary
+
+Verified the already-merged scheduled review PR follow-up sweep: ProjectConductor scheduled reviews run sweep_project_github_prs with auto_merge=True, include the summary in result_json and hot memory, and report sweep failures best-effort without failing the conductor task. Archived the completed Trellis task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c5293f0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
