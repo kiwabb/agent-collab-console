@@ -870,3 +870,37 @@ Added a status-only review API for self-improvement proposals, including sync/as
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: Self-improvement apply plan API
+
+**Date**: 2026-06-08
+**Task**: Self-improvement apply plan API
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-apply-plan`
+
+### Summary
+
+Added a non-mutating apply-plan endpoint for accepted self-improvement proposals. The API returns dry-run project-memory append candidates or reviewed PR/task candidates for other target kinds, with tests and backend contract updates. PR #25 merged after CI passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7695be6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
