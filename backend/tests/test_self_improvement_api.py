@@ -37,19 +37,26 @@ def _create_project(client, tmp_path: Path, name: str = "self-improvement-api") 
     return resp.json()
 
 
-def _proposal(project_id: str, proposal_id="proposal-1", *, issue_id="issue-1", status="proposed"):
+def _proposal(
+    project_id: str,
+    proposal_id="proposal-1",
+    *,
+    issue_id="issue-1",
+    target_kind="runtime_tooling",
+    status="proposed",
+):
     return SelfImprovementProposal(
         id=proposal_id,
         project_id=project_id,
         issue_id=issue_id,
-        target_kind="runtime_tooling",
+        target_kind=target_kind,
         title="Harden runtime failure handling",
         recommendation="Add a durable runtime guard.",
         evidence_json='[{"kind":"conductor_task","id":"task-1"}]',
         severity="medium",
         confidence=0.75,
         status=status,
-        fingerprint=f"{project_id}|{issue_id}|runtime_tooling|runtime_failure_contract",
+        fingerprint=f"{project_id}|{issue_id}|{target_kind}|runtime_failure_contract",
         created_at=datetime(2026, 6, 8, 10, 0, 0),
         updated_at=datetime(2026, 6, 8, 10, 1, 0),
     )
@@ -200,6 +207,93 @@ def test_project_self_improvement_proposal_patch_returns_503_when_store_unavaila
     resp = client.patch(
         "/api/codex/projects/project-1/self-improvement-proposals/proposal-1",
         json={"status": "accepted"},
+    )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "SQLite store not available"
+
+
+def test_project_self_improvement_proposal_apply_plan_for_accepted_project_memory(client, tmp_path):
+    project = _create_project(client, tmp_path, name="self-improvement-apply-plan-memory")
+    _seed_proposal(_proposal(project["id"], target_kind="project_memory", status="accepted"))
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/apply-plan"
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["proposal"]["id"] == "proposal-1"
+    assert body["proposal"]["status"] == "accepted"
+    assert body["plan"]["mode"] == "dry_run"
+    assert body["plan"]["target_kind"] == "project_memory"
+    assert body["plan"]["candidate_changes"][0]["kind"] == "append_markdown"
+    assert body["plan"]["candidate_changes"][0]["path"] == ".agent-collab/team_notes.md"
+    assert "Harden runtime failure handling" in body["plan"]["candidate_changes"][0]["content"]
+
+    proposals = client.get(f"/api/codex/projects/{project['id']}/self-improvement-proposals").json()["proposals"]
+    assert proposals[0]["status"] == "accepted"
+
+
+def test_project_self_improvement_proposal_apply_plan_for_accepted_non_memory(client, tmp_path):
+    project = _create_project(client, tmp_path, name="self-improvement-apply-plan-spec")
+    _seed_proposal(_proposal(project["id"], target_kind="code_spec", status="accepted"))
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/apply-plan"
+    )
+
+    assert resp.status_code == 200, resp.text
+    plan = resp.json()["plan"]
+    assert plan["target_kind"] == "code_spec"
+    assert plan["candidate_changes"][0]["kind"] == "open_pr_task"
+    assert "Add a durable runtime guard" in plan["candidate_changes"][0]["body"]
+    assert all(change["kind"] != "patch_file" for change in plan["candidate_changes"])
+
+
+@pytest.mark.parametrize("status", ["proposed", "rejected", "applied"])
+def test_project_self_improvement_proposal_apply_plan_requires_accepted_status(client, tmp_path, status):
+    project = _create_project(client, tmp_path, name=f"self-improvement-apply-plan-{status}")
+    _seed_proposal(_proposal(project["id"], status=status))
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/apply-plan"
+    )
+
+    assert resp.status_code == 409
+    assert "accepted" in resp.json()["detail"]
+
+
+def test_project_self_improvement_proposal_apply_plan_returns_404_for_unknown_or_cross_project(client, tmp_path):
+    source_project = _create_project(client, tmp_path, name="self-improvement-apply-plan-source")
+    other_project = _create_project(client, tmp_path, name="self-improvement-apply-plan-other")
+    _seed_proposal(_proposal(source_project["id"], status="accepted"))
+
+    missing_project_resp = client.post(
+        "/api/codex/projects/missing-project/self-improvement-proposals/proposal-1/apply-plan"
+    )
+    missing_proposal_resp = client.post(
+        f"/api/codex/projects/{source_project['id']}/self-improvement-proposals/missing/apply-plan"
+    )
+    cross_project_resp = client.post(
+        f"/api/codex/projects/{other_project['id']}/self-improvement-proposals/proposal-1/apply-plan"
+    )
+
+    assert missing_project_resp.status_code == 404
+    assert missing_project_resp.json()["detail"] == "Project not found"
+    assert missing_proposal_resp.status_code == 404
+    assert missing_proposal_resp.json()["detail"] == "Self-improvement proposal not found"
+    assert cross_project_resp.status_code == 404
+    assert cross_project_resp.json()["detail"] == "Self-improvement proposal not found"
+
+
+def test_project_self_improvement_proposal_apply_plan_returns_503_when_store_unavailable(client, monkeypatch):
+    from app.interfaces import api as api_module
+
+    monkeypatch.setattr(api_module, "codex_store", None)
+
+    resp = client.post(
+        "/api/codex/projects/project-1/self-improvement-proposals/proposal-1/apply-plan"
     )
 
     assert resp.status_code == 503

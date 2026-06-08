@@ -6300,6 +6300,32 @@ async def codex_update_project_self_improvement_proposal_status(
     return _self_improvement_proposal_to_dict(updated)
 
 
+@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply-plan")
+async def codex_project_self_improvement_proposal_apply_plan(project_id: str, proposal_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    if proposal.status != "accepted":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Self-improvement proposal must be accepted before an apply plan "
+                f"can be generated; current status is {proposal.status}"
+            ),
+        )
+    from app.application.self_improvement_apply_service import build_self_improvement_apply_plan
+
+    return {
+        "proposal": _self_improvement_proposal_to_dict(proposal),
+        "plan": build_self_improvement_apply_plan(proposal),
+    }
+
+
 @router.get("/codex/projects/{project_id}/conductor-state")
 async def codex_project_conductor_state(project_id: str):
     """Return ProjectConductor tiered-memory state for a project."""
