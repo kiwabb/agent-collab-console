@@ -629,3 +629,37 @@ Added a safe in-memory GitHub PR follow-up sweep status snapshot, exposed it in 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: Diagnostics supervisor health
+
+**Date**: 2026-06-08
+**Task**: Diagnostics supervisor health
+**Package**: ccgui
+**Branch**: `codex/archive-diagnostics-supervisor-health`
+
+### Summary
+
+Added diagnostics health derivation so GitHub PR follow-up and project review scheduler snapshots degrade global diagnostics when they report last_error or running=true. PR #13 merged with CI green.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e6955fb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
