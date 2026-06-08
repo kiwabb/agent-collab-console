@@ -1074,3 +1074,37 @@ Added opt-in conductor startup for accepted non-memory self-improvement activati
 ### Next Steps
 
 - None - task complete
+
+
+## Session 32: Schedule self-improvement proposal activation
+
+**Date**: 2026-06-09
+**Task**: Schedule self-improvement proposal activation
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-proposal-scheduler`
+
+### Summary
+
+Implemented and merged PR #37: a backend scheduler now scans accepted non-memory self-improvement proposals, reuses the reviewed activation path with start_conductor=true, reports diagnostics/status, and is covered by focused/full backend verification.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a686186` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
