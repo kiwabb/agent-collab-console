@@ -1003,6 +1003,7 @@ await store.update_workflow_node(
 Relevant events:
 
 ```json
+{"type": "workflow_node_diff_guard_failed", "task_id": "...", "reason": "..."}
 {"type": "workflow_node_retrying", "previous_task_id": "...", "retry_task_id": "..."}
 {"type": "workflow_node_retry_failed", "retry_task_id": "...", "status": "failed"}
 {"type": "task_status", "task_id": "...", "status": "pending|failed"}
@@ -1012,6 +1013,19 @@ Relevant events:
 
 - Auto-retry applies only to tasks with `workflow_node_id` whose terminal task
   status maps to workflow node `failed`.
+- Before a workflow-backed Engineer task (`engineer`, `engineer_frontend`, or
+  `engineer_backend`) is allowed to mark its node `done`, the scheduler MUST
+  honor the Engineer diff cross-check's hard failure note. If the persisted
+  Engineer document says the Engineer claimed changed files but git diff
+  against the base branch showed no file changes, the scheduler converts the
+  completion to `failed`, persists that task status, emits
+  `workflow_node_diff_guard_failed`, and then lets the normal auto-retry logic
+  handle the failed node. This keeps deterministic "report-only implementation"
+  failures self-healing before Architect Review / QA.
+- The diff completion guard MUST NOT fire for honest empty-diff Engineer
+  reports (`changed_files=[]`, no hard cross-check note), non-Engineer roles,
+  or arbitrary prose that happens to mention git diff outside the managed
+  Engineer report document.
 - A node is eligible only when `node.retries < node.max_retries` and the
   scheduler has both an issue row and a `task_dispatcher`.
 - The retry creates a fresh `CodexTask` for the same workflow node:
@@ -1039,6 +1053,12 @@ Relevant events:
 - Task status is non-terminal or maps to no node status -> no scheduler action.
 - Failed node with retries remaining and dispatcher available -> create retry
   task, update node to running, emit retry events, start dispatcher, return.
+- Done Engineer node with persisted diff-guard failure note and retries
+  remaining -> persist the original task as failed, emit
+  `workflow_node_diff_guard_failed`, create retry task, update node to running,
+  emit retry events, start dispatcher, return.
+- Done Engineer node with no diff-guard failure note -> mark node done normally.
+- Done non-Engineer node with similar text -> mark node done normally.
 - Failed node with retries exhausted -> mark node failed and continue existing
   Conductor signaling.
 - Failed node with no issue row or no dispatcher -> mark node failed and
@@ -1067,6 +1087,12 @@ Relevant events:
   create a retry task.
 - Retry dispatch failure marks the retry task failed, emits
   `workflow_node_retry_failed`, and falls back to final failed-node handling.
+- Diff completion guard converts a `done` Engineer task with the hard
+  diff-cross-check note into a failed original task, emits
+  `workflow_node_diff_guard_failed`, and then uses the same retry behavior as a
+  regular failed node.
+- Guard boundaries: a `done` Engineer task without that note marks the node
+  done; a `done` non-Engineer task with similar text also marks the node done.
 - Existing artifact-validation signaling tests still pass, proving completion
   registry behavior stays compatible.
 
