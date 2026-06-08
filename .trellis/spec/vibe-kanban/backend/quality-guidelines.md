@@ -925,6 +925,64 @@ summary = await sweep_project_github_prs(
 
 ---
 
+### Scenario: Project Review Scheduler Tick
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing backend automation that periodically runs
+  project-level reviews across projects.
+- The scheduler tick is the bridge between an operator-triggered scheduled
+  review endpoint and unattended project operation.
+
+#### 2. Signatures
+
+```python
+async def run_project_review_tick(
+    store,
+    *,
+    event_bus=None,
+    conductor_factory=_default_conductor_factory,
+    limit=None,
+) -> ProjectReviewTickSummary
+```
+
+#### 3. Contracts
+
+- The scheduler MUST list projects through the typed store API
+  (`list_projects`); it does not query SQL directly.
+- Each selected project gets a `ConductorTask` with
+  `task_kind="scheduled_review"` and the standard scheduled health-review
+  question.
+- The scheduler MUST call `ProjectConductor.handle_task(...)` instead of
+  duplicating GitHub PR follow-up, auto-merge, or memory logic.
+- A per-project failure is isolated and returned as a `failed` result with
+  safe error text. Later projects in the same tick still run.
+- The tick supports a `limit` parameter so future background loops can bound
+  work per scan.
+
+#### 4. Tests Required
+
+- Project list with two projects -> two scheduled-review conductor tasks.
+- First project raises -> first result `failed`, second project still runs.
+- `limit=2` with three projects -> only first two projects are reviewed.
+
+#### 5. Wrong vs Correct
+
+Wrong:
+```python
+# Re-implements scheduled review internals and silently diverges from
+# ProjectConductor / PR follow-up behavior.
+await sweep_project_github_prs(project.id, auto_merge=True, ...)
+```
+
+Correct:
+```python
+conductor = ProjectConductor(project_id=project.id, store=store, event_bus=event_bus)
+await conductor.handle_task(scheduled_review_task)
+```
+
+---
+
 ## Testing Requirements
 
 - **All new code is covered by tests.** Service logic,
