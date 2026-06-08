@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
+- **Total Sessions**: 20
 - **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~665 | Active |
+| `journal-1.md` | ~699 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-06-08 | Project review scheduler stale health | `6d42404` | `codex/archive-project-review-scheduler-stale-health` |
 | 19 | 2026-06-08 | Diagnostics supervisor health | `e6955fb` | `codex/archive-diagnostics-supervisor-health` |
 | 18 | 2026-06-08 | GitHub PR follow-up diagnostics | `f9aa0f9`, `90f613b` | `codex/archive-github-pr-followup-diagnostics` |
 | 17 | 2026-06-08 | Project review scheduler status | `ad2fef8` | `codex/archive-project-review-scheduler-status` |
