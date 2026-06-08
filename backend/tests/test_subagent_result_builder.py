@@ -168,6 +168,19 @@ def test_build_subagent_result_preserves_engineer_files_and_critique():
     }
 
 
+def test_build_subagent_result_uses_engineer_document_status():
+    task = _task("engineer")
+    task.status = "done"
+
+    result = build_subagent_result(
+        task=task,
+        node=_node("engineer"),
+        doc=FakeEngineerDoc(),
+    )
+
+    assert result.status == "partial"
+
+
 def test_build_subagent_result_preserves_qa_commands_and_clarification():
     result = build_subagent_result(
         task=_task("qa"),

@@ -170,6 +170,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         env = os.environ.copy()
         paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin", os.path.expanduser("~/.npm-global/bin")]
         env["PATH"] = ":".join(paths) + ":" + env.get("PATH", "")
+        env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
         # Set provider/model env vars if specified
         if provider:

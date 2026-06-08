@@ -148,6 +148,21 @@ async def test_comfortable_budget_keeps_configured_cap(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_healthy_small_budget_keeps_configured_cap(monkeypatch):
+    monkeypatch.setenv("MAX_PARALLEL_DISPATCH_PER_BATCH", "3")
+    monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
+    # Budget 1, spent 0 -> healthy (below soft-warning), so a tiny independent
+    # three-agent batch should still get the full configured fan-out.
+    store = _Store(_issue(budget_usd=1.0), _project(), spent_cost=0.0)
+    reg = _build(store, _WorktreeManagerStub())
+
+    out, peak = await _measure_peak_concurrency(reg, n_agents=4)
+
+    assert out["status"] == "batch_complete"
+    assert peak == 3
+
+
+@pytest.mark.asyncio
 async def test_tight_budget_downscales_effective_concurrency(monkeypatch):
     monkeypatch.setenv("MAX_PARALLEL_DISPATCH_PER_BATCH", "3")
     monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")

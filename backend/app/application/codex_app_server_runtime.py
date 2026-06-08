@@ -407,6 +407,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", os.path.expanduser("~/.npm-global/bin")]
         existing_path = env.get("PATH", "")
         env["PATH"] = (existing_path + ":" + ":".join(paths)) if existing_path else ":".join(paths)
+        env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
         # Set provider/model env vars if specified
         if provider:

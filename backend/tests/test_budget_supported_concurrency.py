@@ -26,12 +26,19 @@ def test_healthy_budget_keeps_configured_cap(monkeypatch):
     assert timeouts.budget_supported_concurrency(5.0, 3) == 3
 
 
+def test_healthy_small_budget_keeps_configured_cap(monkeypatch):
+    monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
+    # A $1 budget with no spend is healthy. It must not shrink a tiny three-way
+    # fan-out to two lanes before the soft-warning threshold is reached.
+    assert timeouts.budget_supported_concurrency(1.0, 3, soft_warn=False) == 3
+
+
 def test_tight_budget_downscales(monkeypatch):
     monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
     # remaining 1.2 / 0.5 = floor(2.4) = 2 < cap 3 -> downscaled to 2.
-    assert timeouts.budget_supported_concurrency(1.2, 3) == 2
+    assert timeouts.budget_supported_concurrency(1.2, 3, soft_warn=True) == 2
     # remaining 0.9 / 0.5 = floor(1.8) = 1.
-    assert timeouts.budget_supported_concurrency(0.9, 3) == 1
+    assert timeouts.budget_supported_concurrency(0.9, 3, soft_warn=True) == 1
 
 
 def test_near_zero_remaining_floors_at_one(monkeypatch):

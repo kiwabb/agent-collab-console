@@ -21,7 +21,7 @@ def build_subagent_result(
         node_key=node.node_key,
         role=task.role,
         agent_id=node.agent_id,
-        status=task.status,
+        status=_result_status(task, doc),
         summary="" if is_unusable_result_text(task.result) else (task.result or ""),
         artifact_json=_artifact_json(doc),
         artifact_markdown=_artifact_markdown(artifact_paths),
@@ -48,6 +48,18 @@ def _artifact_paths(doc: Any | None) -> list[str]:
         if path:
             paths.append(str(path))
     return paths
+
+
+def _result_status(task: CodexTask, doc: Any | None) -> str:
+    payload = _artifact_json(doc)
+    if isinstance(payload, dict):
+        status = payload.get("status")
+        if isinstance(status, str) and status.strip():
+            return status.strip()
+    status = getattr(doc, "status", None)
+    if isinstance(status, str) and status.strip():
+        return status.strip()
+    return task.status
 
 
 def _artifact_json(doc: Any | None) -> dict | None:

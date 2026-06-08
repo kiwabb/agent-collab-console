@@ -265,6 +265,64 @@ async def test_dispatch_batch_real_fanout_merges_and_keeps_main_clean(
     assert (Path(issue.git_worktree_path) / "b.txt").exists()
 
 
+@pytest.mark.asyncio
+async def test_dispatch_batch_three_same_role_engineers_merge_modules(
+    monkeypatch, store, manager, repo
+):
+    """REAL-run regression: three independent engineer agents writing
+    module_a.py/module_b.py/module_c.py must merge back into the issue worktree.
+
+    This mirrors the browser-observed issue "REAL run: three tiny independent
+    modules in parallel" where agents reported success but the issue ended with
+    no mergeable diff.
+    """
+    project, issue = await _seed_project_and_issue(store, manager, repo)
+    reg = _build_tools(store, manager, project, issue)
+    main_before = _git("rev-parse", "main", cwd=repo).strip()
+
+    def write_plan(wt: str):
+        module_by_suffix = {
+            "engineer": ("module_a.py", "def add(a, b):\n    return a + b\n"),
+            "engineer-2": ("module_b.py", "def mul(a, b):\n    return a * b\n"),
+            "engineer-3": ("module_c.py", "def sub(a, b):\n    return a - b\n"),
+        }
+        agent_key = next(key for key in module_by_suffix if Path(wt).name.endswith(f"-{key}"))
+        name, content = module_by_suffix[agent_key]
+
+        def _do(p: Path):
+            (p / name).write_text(content)
+        return _do
+
+    _patch_subagent_execution(monkeypatch, write_plan=write_plan)
+
+    out = await reg.tools["dispatch_batch"]({"agents": [
+        {"role": "engineer", "prompt": "create module_a.py with add"},
+        {"role": "engineer", "prompt": "create module_b.py with mul"},
+        {"role": "engineer", "prompt": "create module_c.py with sub"},
+    ]})
+
+    assert out["status"] == "batch_complete"
+    assert out["succeeded_count"] == 3
+    assert out["failed_count"] == 0
+    assert out["merge_status"] == "merged"
+    assert len(out["merged"]) == 3
+
+    issue_tree = _git("ls-tree", "-r", "--name-only", issue.git_branch, cwd=repo)
+    assert "module_a.py" in issue_tree
+    assert "module_b.py" in issue_tree
+    assert "module_c.py" in issue_tree
+    issue_wt = Path(issue.git_worktree_path)
+    assert (issue_wt / "module_a.py").read_text() == "def add(a, b):\n    return a + b\n"
+    assert (issue_wt / "module_b.py").read_text() == "def mul(a, b):\n    return a * b\n"
+    assert (issue_wt / "module_c.py").read_text() == "def sub(a, b):\n    return a - b\n"
+
+    assert _git("rev-parse", "main", cwd=repo).strip() == main_before
+    main_tree = _git("ls-tree", "-r", "--name-only", "main", cwd=repo)
+    assert "module_a.py" not in main_tree
+    assert "module_b.py" not in main_tree
+    assert "module_c.py" not in main_tree
+
+
 # --------------------------------------------------------------------------- #
 # Scenario 2: real conflict -> structured surfacing, no rollback.
 # --------------------------------------------------------------------------- #

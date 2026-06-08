@@ -312,6 +312,39 @@ async def test_dispatch_batch_partial_join_on_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_batch_does_not_merge_partial_agent(monkeypatch):
+    """A subagent result with status=partial is not a successful implementation.
+
+    The Engineer workflow can downgrade claimed work to partial when the real
+    git diff is empty; dispatch_batch must not count that as a success or hand
+    it to merge-back.
+    """
+    wm = _WorktreeManagerStub()
+    store = _Store(_issue(), _project())
+    reg = _build(store, wm)
+
+    async def run(task_id, wt):
+        if task_id == "task-2":
+            return {"status": "partial", "task_id": task_id, "files_changed": []}
+        return {"status": "done", "task_id": task_id}
+
+    _patch_dispatch(monkeypatch, run=run)
+
+    out = await reg.tools["dispatch_batch"]({"agents": [
+        {"role": "engineer"},
+        {"role": "engineer"},
+        {"role": "architect"},
+    ]})
+
+    assert out["succeeded_count"] == 2
+    assert out["failed_count"] == 1
+    failed = [r for r in out["results"] if r.get("status") == "partial"]
+    assert len(failed) == 1
+    assert failed[0]["agent_key"] in wm.cleaned
+    assert {c["agent_key"] for c in wm.merged_candidates[0]} == {"engineer", "architect"}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_batch_empty_agents_errors(monkeypatch):
     wm = _WorktreeManagerStub()
     store = _Store(_issue(), _project())

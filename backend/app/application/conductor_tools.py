@@ -320,6 +320,7 @@ def build_conductor_tools(
             cap = timeouts.budget_supported_concurrency(
                 budget_status.remaining_usd,
                 configured_cap,
+                soft_warn=budget_status.soft_warn,
                 over_budget=budget_status.over_budget,
             )
         except Exception:  # noqa: BLE001
@@ -388,7 +389,7 @@ def build_conductor_tools(
                     # the agent's output). Failed/never-dispatched agents have no
                     # mergeable output → clean their worktree now to avoid leaks.
                     status = result.get("status")
-                    if "error" in result or status in {"role_busy", "retries_exhausted"}:
+                    if "error" in result or not _is_successful_subagent_status(status):
                         cleanup_on_exit = True
                     return {
                         "agent_key": agent_key,
@@ -432,7 +433,10 @@ def build_conductor_tools(
             else:
                 results.append(item)
 
-        succeeded = [r for r in results if "error" not in r and r.get("status") not in {"role_busy", "retries_exhausted"}]
+        succeeded = [
+            r for r in results
+            if "error" not in r and _is_successful_subagent_status(r.get("status"))
+        ]
         failed = [r for r in results if r not in succeeded]
 
         await _emit(event_bus, "conductor_tool", {
@@ -580,6 +584,10 @@ def _sanitize_agent_key(role: str) -> str:
     """Turn a role into a filesystem/branch-safe agent key for swarm worktrees."""
     key = re.sub(r"[^a-zA-Z0-9._-]+", "-", role.strip()).strip("-").lower()
     return key or "agent"
+
+
+def _is_successful_subagent_status(status: Any) -> bool:
+    return str(status or "").strip().lower() in {"done", "completed", "success", "passed", "ok"}
 
 
 async def _emit(event_bus, event_type: str, payload: dict[str, Any]) -> None:

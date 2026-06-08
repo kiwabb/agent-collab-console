@@ -211,6 +211,7 @@ def budget_supported_concurrency(
     remaining_usd: float | None,
     configured_cap: int,
     *,
+    soft_warn: bool = True,
     over_budget: bool = False,
 ) -> int:
     """Effective dispatch_batch fan-out the remaining budget can support.
@@ -218,17 +219,25 @@ def budget_supported_concurrency(
     Simple, explainable rule:
       - unlimited budget (``remaining_usd is None``) → no downscale, returns the
         configured cap unchanged.
+      - healthy budget (not in soft warning) → no downscale, returns the
+        configured cap unchanged. The conductor prompt already labels this case
+        "Budget is healthy"; tiny independent fan-outs should still get the full
+        configured parallelism.
       - over budget → squeeze to the floor of 1 (wind-down is steered by prompt /
         events elsewhere; we never make a batch 0-wide here).
-      - otherwise → ``floor(remaining / est_cost_per_agent)`` clamped into
+      - soft warning → ``floor(remaining / est_cost_per_agent)`` clamped into
         ``[1, configured_cap]`` so a tight budget shrinks fan-out but always
         allows at least one agent to make progress.
 
     The result is ``min(configured_cap, budget-supported)`` and never exceeds the
     configured cap, so this can only ever *reduce* parallelism, never raise it.
+    ``soft_warn`` defaults to ``True`` for legacy direct callers that only pass a
+    remaining amount; the conductor passes the real issue warning flag.
     """
     cap = max(1, int(configured_cap))
     if remaining_usd is None:
+        return cap
+    if not soft_warn and not over_budget:
         return cap
     if over_budget:
         return 1
