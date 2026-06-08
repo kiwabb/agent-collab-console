@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 29
+- **Total Sessions**: 30
 - **Last Active**: 2026-06-09
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1008 | Active |
+| `journal-1.md` | ~1042 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 30 | 2026-06-09 | Activate self-improvement proposal tasks | `e39c9dc` | `codex/archive-self-improvement-pr-task-activation` |
 | 29 | 2026-06-09 | Benchmark eval self-improvement proposals | `509aa0e` | `codex/archive-self-improvement-benchmark-eval` |
 | 28 | 2026-06-09 | Self-improvement application audit rollback | `6720596` | `codex/archive-self-improvement-apply-audit` |
 | 27 | 2026-06-08 | Reviewed self-improvement memory apply | `42c1716` | `codex/archive-self-improvement-apply-execute` |
