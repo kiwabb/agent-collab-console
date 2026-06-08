@@ -972,3 +972,37 @@ Added durable self-improvement application events, applications listing, reviewe
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: Benchmark eval self-improvement proposals
+
+**Date**: 2026-06-09
+**Task**: Benchmark eval self-improvement proposals
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-benchmark-eval`
+
+### Summary
+
+Added deterministic benchmark_eval self-improvement proposal extraction for completed capability issues without benchmark/eval evidence, locked non-memory apply-plan behavior to open_pr_task, updated backend/design specs, and merged PR #31 after CI passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `509aa0e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
