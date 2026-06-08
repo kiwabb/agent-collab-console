@@ -32,6 +32,22 @@ class SelfImprovementApplyResult:
         }
 
 
+@dataclass(frozen=True)
+class SelfImprovementRollbackResult:
+    path: str
+    content_sha256: str | None
+    already_absent: bool
+    bytes_written: int
+
+    def to_dict(self) -> dict[str, str | bool | int | None]:
+        return {
+            "path": self.path,
+            "content_sha256": self.content_sha256,
+            "already_absent": self.already_absent,
+            "bytes_written": self.bytes_written,
+        }
+
+
 def _parse_evidence(evidence_json: str | None) -> list[dict]:
     try:
         parsed = json.loads(evidence_json or "[]")
@@ -155,6 +171,30 @@ def _project_memory_append_candidate(proposal: SelfImprovementProposal) -> tuple
     return expected_path, content
 
 
+def _join_memory_sections(*sections: str) -> str:
+    pieces = [section.strip() for section in sections if section.strip()]
+    if not pieces:
+        return ""
+    return "\n\n".join(pieces) + "\n"
+
+
+def _proposal_block_bounds(existing: str, marker: str) -> tuple[int, int] | None:
+    start = existing.find(marker)
+    if start < 0:
+        return None
+    search_start = start + len(marker)
+    next_markers = [
+        index
+        for index in (
+            existing.find("<!-- self-improvement-proposal:", search_start),
+            existing.find("<!-- issue:", search_start),
+        )
+        if index >= 0
+    ]
+    end = min(next_markers) if next_markers else len(existing)
+    return start, end
+
+
 def apply_project_memory_proposal(
     *,
     project_repo_path: str | None,
@@ -226,4 +266,71 @@ def apply_project_memory_proposal(
         content_sha256=content_sha256,
         already_present=False,
         bytes_written=len(content.encode("utf-8")),
+    )
+
+
+def rollback_project_memory_proposal(
+    *,
+    project_repo_path: str | None,
+    proposal: SelfImprovementProposal,
+) -> SelfImprovementRollbackResult:
+    if proposal.status != "applied":
+        raise SelfImprovementApplyError(
+            "Self-improvement proposal must be applied before it can be rolled back",
+            code="invalid_status",
+        )
+    if proposal.target_kind != "project_memory":
+        raise SelfImprovementApplyError(
+            "Only project_memory self-improvement proposals can be rolled back directly",
+            code="unsupported_target",
+        )
+
+    candidate_path = f"{MEMORY_DIR_NAME}/{MEMORY_FILE_NAME}"
+    if not project_repo_path:
+        raise SelfImprovementApplyError(
+            "Project repository path is unavailable for self-improvement rollback",
+            code="repo_unavailable",
+        )
+    repo_path = Path(project_repo_path)
+    if not repo_path.exists():
+        raise SelfImprovementApplyError(
+            "Project repository path is unavailable for self-improvement rollback",
+            code="repo_unavailable",
+        )
+
+    memory_path = repo_path / MEMORY_DIR_NAME / MEMORY_FILE_NAME
+    marker = f"<!-- self-improvement-proposal:{proposal.id} -->"
+    try:
+        existing = memory_path.read_text(encoding="utf-8") if memory_path.exists() else ""
+    except OSError as exc:
+        raise SelfImprovementApplyError(
+            "Project memory file is unavailable for self-improvement rollback",
+            code="repo_unavailable",
+        ) from exc
+
+    bounds = _proposal_block_bounds(existing, marker)
+    if bounds is None:
+        return SelfImprovementRollbackResult(
+            path=candidate_path,
+            content_sha256=None,
+            already_absent=True,
+            bytes_written=0,
+        )
+
+    start, end = bounds
+    removed_content = existing[start:end].strip("\n") + "\n"
+    combined = _join_memory_sections(existing[:start], existing[end:])
+    try:
+        memory_path.write_text(combined, encoding="utf-8")
+    except OSError as exc:
+        raise SelfImprovementApplyError(
+            "Project memory file is unavailable for self-improvement rollback",
+            code="repo_unavailable",
+        ) from exc
+
+    return SelfImprovementRollbackResult(
+        path=candidate_path,
+        content_sha256=hash_apply_candidate_content(removed_content),
+        already_absent=False,
+        bytes_written=len(removed_content.encode("utf-8")),
     )

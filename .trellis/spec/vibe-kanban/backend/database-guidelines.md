@@ -246,17 +246,36 @@ await store.save_conductor_task(task)
   - `fingerprint TEXT NOT NULL UNIQUE`
   - `created_at TEXT`
   - `updated_at TEXT`
+- DB table: `self_improvement_application_events`
+- Required columns:
+  - `id TEXT PRIMARY KEY`
+  - `proposal_id TEXT NOT NULL`
+  - `project_id TEXT NOT NULL`
+  - `issue_id TEXT NOT NULL`
+  - `target_kind TEXT NOT NULL`
+  - `action TEXT NOT NULL`
+  - `status TEXT NOT NULL`
+  - `path TEXT`
+  - `content_sha256 TEXT`
+  - `result_json TEXT NOT NULL DEFAULT '{}'`
+  - `error TEXT`
+  - `created_at TEXT`
 - Store APIs:
   - `save_self_improvement_proposal(proposal: SelfImprovementProposal) -> None`
   - `list_self_improvement_proposals(project_id: str | None = None, issue_id: str | None = None, status: str | None = None, limit: int | None = None) -> list[SelfImprovementProposal]`
   - `load_self_improvement_proposal(proposal_id: str) -> SelfImprovementProposal | None`
   - `update_self_improvement_proposal_status(proposal_id: str, status: str) -> SelfImprovementProposal | None`
+  - `save_self_improvement_application_event(event: SelfImprovementApplicationEvent) -> None`
+  - `list_self_improvement_application_events(project_id: str | None = None, proposal_id: str | None = None, limit: int | None = None) -> list[SelfImprovementApplicationEvent]`
 - Service APIs:
   - `extract_self_improvement_proposals(issue: CodexIssue, store) -> list[SelfImprovementProposal]`
   - `record_issue_self_improvement(issue: CodexIssue, store) -> list[SelfImprovementProposal]`
+  - `rollback_project_memory_proposal(project_repo_path: str | None, proposal: SelfImprovementProposal) -> SelfImprovementRollbackResult`
 - Read API:
   - `GET /api/codex/projects/{project_id}/self-improvement-proposals`
   - Optional filters: `issue_id`, `status`, `limit`
+  - `GET /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/applications`
+  - Optional filter: `limit`
 - Review API:
   - `PATCH /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}`
   - Request body: `{"status": "proposed" | "accepted" | "rejected" | "applied"}`
@@ -272,6 +291,11 @@ await store.save_conductor_task(task)
   - Response body: `{proposal, application}` where `proposal` is the same
     proposal object shape after status update and `application` contains
     `path`, `content_sha256`, `already_present`, and `bytes_written`.
+- Reviewed project-memory rollback API:
+  - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/rollback`
+  - Response body: `{proposal, rollback}` where `proposal` is the same proposal
+    object shape after status update and `rollback` contains `path`,
+    `content_sha256`, `already_absent`, and `bytes_written`.
 
 ### 3. Contracts
 
@@ -317,6 +341,28 @@ await store.save_conductor_task(task)
   key. If the marker already exists while the proposal is still accepted, do
   not append a duplicate block; mark the proposal applied and return
   `already_present: true`.
+- The reviewed apply API must record one `self_improvement_application_events`
+  row after project/proposal resolution:
+  - successful apply -> `action="apply"`, `status="succeeded"`, `path` and
+    `content_sha256` from the service result, and `result_json` containing the
+    application result metadata.
+  - service rejection or repository write failure -> `action="apply"`,
+    `status="failed"`, safe `error` text, and the reviewed request hash when
+    available. Proposal status and file state must remain unchanged on failure.
+- The applications list API is project-scoped. It must validate the project and
+  proposal first, hide cross-project proposals as not found, then return events
+  for that `project_id + proposal_id` in newest-first order.
+- Rollback is limited to `status == "applied"` and `target_kind ==
+  "project_memory"`.
+- Rollback removes the block beginning with
+  `<!-- self-improvement-proposal:{proposal.id} -->` from
+  `.agent-collab/team_notes.md`, stops before the next self-improvement or issue
+  marker, records a rollback event, and marks the proposal back to `accepted`.
+- Rollback is idempotent when the marker block is already absent: return
+  `already_absent: true`, record a succeeded rollback event, mark the proposal
+  `accepted`, and do not fail.
+- Failed rollback requests must record a failed rollback event after
+  project/proposal resolution and must not change proposal status.
 - Direct application of `code_spec`, `conductor_policy`, `runtime_tooling`, or
   `benchmark_eval` proposals is forbidden. These target kinds must remain
   reviewed PR/task flows until they have their own audited execution model.
@@ -366,6 +412,29 @@ await store.save_conductor_task(task)
 - Reviewed apply request whose project repo path is missing or cannot write
   `.agent-collab/team_notes.md` -> HTTP `500`, and the proposal must remain
   accepted.
+- `codex_store is None` on the applications list API -> HTTP `503`, detail
+  `"SQLite store not available"`.
+- Unknown `project_id` on the applications list API -> HTTP `404`, detail
+  `"Project not found"`.
+- Unknown or cross-project proposal on the applications list API -> HTTP `404`,
+  detail `"Self-improvement proposal not found"`.
+- `limit < 1` or `limit > 100` on the applications list API -> FastAPI
+  validation `422`.
+- `codex_store is None` on the rollback API -> HTTP `503`, detail
+  `"SQLite store not available"`.
+- Unknown `project_id` on the rollback API -> HTTP `404`, detail
+  `"Project not found"`.
+- Unknown or cross-project proposal on the rollback API -> HTTP `404`, detail
+  `"Self-improvement proposal not found"`.
+- Rollback request for `proposed`, `accepted`, or `rejected` proposal -> HTTP
+  `409`, detail states that the proposal must be applied; proposal status must
+  remain unchanged.
+- Rollback request for non-`project_memory` target kind -> HTTP `409`, detail
+  states that only project memory can be rolled back directly; proposal status
+  must remain unchanged.
+- Rollback request whose project repo path is missing or cannot write
+  `.agent-collab/team_notes.md` -> HTTP `500`, and the proposal status must
+  remain applied.
 - `limit < 1` or `limit > 100` on the read API -> FastAPI validation `422`.
 - Duplicate `fingerprint` on save -> update existing row fields and keep one
   logical proposal.
@@ -391,9 +460,18 @@ await store.save_conductor_task(task)
 - Good: a reviewed apply request for an accepted `project_memory` proposal with
   the candidate content hash appends exactly that markdown to
   `.agent-collab/team_notes.md` and then marks the proposal `applied`.
+- Good: a reviewed apply request records a succeeded application event with the
+  path, hash, and application result so operators can audit what changed.
+- Good: a reviewed apply request that fails hash validation records a failed
+  application event and leaves the proposal accepted.
 - Good: a reviewed apply request for an accepted `project_memory` proposal whose
   marker is already present marks the proposal `applied` without appending a
   duplicate block.
+- Good: an applied `project_memory` proposal rollback removes only the marked
+  block, records a succeeded rollback event, and moves the proposal back to
+  `accepted`.
+- Good: rollback with an already-absent marker records `already_absent: true`
+  and still moves the proposal back to `accepted`.
 - Good: an accepted `code_spec` proposal returns an `open_pr_task` candidate so a
   later reviewed PR can edit the right spec with tests.
 - Base: a clean trivial completed issue creates no proposal and no error.
@@ -409,6 +487,12 @@ await store.save_conductor_task(task)
   the reviewed candidate content hash.
 - Bad: a reviewed apply endpoint that applies `code_spec`, `conductor_policy`,
   `runtime_tooling`, or `benchmark_eval` by writing files directly.
+- Bad: mutating `team_notes.md` or proposal status without an application event
+  row; this breaks operational auditability.
+- Bad: rollback deleting all of `team_notes.md` or removing adjacent proposal
+  blocks instead of only the addressed marker block.
+- Bad: rollback failure reverting an `applied` proposal to `accepted`; failures
+  must preserve status.
 - Bad: returning a direct `patch_file` candidate for `code_spec`,
   `conductor_policy`, `runtime_tooling`, or `benchmark_eval` before a reviewed
   implementation task exists.
@@ -419,6 +503,9 @@ await store.save_conductor_task(task)
 
 - Store parity: async and sync stores save/list/filter proposals and dedupe by
   fingerprint.
+- Store parity: async and sync stores save/list/filter application events by
+  project and proposal, preserve `result_json`/`error`, and return newest-first
+  order with `limit`.
 - Store parity: async and sync stores load proposals by id and status-update
   rows while preserving all non-status fields and advancing `updated_at`.
 - Extraction: QA failure creates a `code_spec` proposal with evidence.
@@ -445,6 +532,19 @@ await store.save_conductor_task(task)
   non-memory target kinds and non-accepted statuses, `404` unknown/cross-project
   proposals, `503` store unavailable, `500` unavailable repo path, and no
   mutation on failed requests.
+- API: reviewed apply endpoint records succeeded and failed application events
+  after project/proposal resolution.
+- API: applications list endpoint covers newest-first event JSON, `result_json`
+  parsing, `404` unknown/cross-project proposals, `503` store unavailable, and
+  `422` invalid limits.
+- Rollback service: tests cover successful marker-block removal, marker-absent
+  idempotence, unsupported target kind, non-applied status, and unavailable repo
+  path.
+- API: rollback endpoint covers successful project-memory removal and accepted
+  status update, marker-absent idempotence, `409` non-memory target kinds and
+  non-applied statuses, `404` unknown/cross-project proposals, `503` store
+  unavailable, `500` unavailable repo path, failed rollback event recording,
+  and no status mutation on failed requests.
 
 ### 7. Wrong vs Correct
 
@@ -530,4 +630,32 @@ return {
     "proposal": _self_improvement_proposal_to_dict(updated),
     "application": result.to_dict(),
 }
+```
+
+Wrong:
+
+```python
+result = rollback_project_memory_proposal(project_repo_path=project.repo_path, proposal=proposal)
+updated = await store.update_self_improvement_proposal_status(proposal.id, "accepted")
+return {"proposal": proposal_to_dict(updated), "rollback": result.to_dict()}
+```
+
+Correct:
+
+```python
+try:
+    result = rollback_project_memory_proposal(project_repo_path=project.repo_path, proposal=proposal)
+except SelfImprovementApplyError as exc:
+    await record_application_event(proposal, action="rollback", status="failed", error=exc.message)
+    raise
+updated = await store.update_self_improvement_proposal_status(proposal.id, "accepted")
+await record_application_event(
+    updated,
+    action="rollback",
+    status="succeeded",
+    path=result.path,
+    content_sha256=result.content_sha256,
+    result=result.to_dict(),
+)
+return {"proposal": proposal_to_dict(updated), "rollback": result.to_dict()}
 ```
