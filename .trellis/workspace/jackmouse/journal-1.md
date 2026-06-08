@@ -768,3 +768,37 @@ Verified and archived four already-merged Moonshot autonomy slices: conductor po
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: Workflow failed node auto retry
+
+**Date**: 2026-06-08
+**Task**: Workflow failed node auto retry
+**Package**: ccgui
+**Branch**: `codex/archive-workflow-failed-node-auto-retry`
+
+### Summary
+
+Merged PR #19 adding bounded automatic retry for failed workflow-backed tasks. Failed nodes with retry budget create a fresh retry task on the same node, emit retry observability events, and fall back to existing failed-node behavior when exhausted or retry dispatch fails. Focused scheduler tests and the full backend suite passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `530776d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
