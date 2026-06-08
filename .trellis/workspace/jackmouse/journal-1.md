@@ -1006,3 +1006,37 @@ Added deterministic benchmark_eval self-improvement proposal extraction for comp
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: Activate self-improvement proposal tasks
+
+**Date**: 2026-06-09
+**Task**: Activate self-improvement proposal tasks
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-pr-task-activation`
+
+### Summary
+
+Added the reviewed activate-task API for accepted non-memory self-improvement proposals, with idempotent Codex issue/worktree creation, open_pr_task application events, failure audit coverage, backend ledger spec updates, CI-green PR #33, and task archival.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e39c9dc` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
