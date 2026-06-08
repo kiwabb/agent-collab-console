@@ -6254,6 +6254,112 @@ def _self_improvement_application_event_to_dict(event) -> dict:
     }
 
 
+def _codex_issue_to_dict(issue: CodexIssue) -> dict:
+    if hasattr(issue, "model_dump"):
+        return issue.model_dump(mode="json")
+    return issue.dict()
+
+
+def _self_improvement_proposal_evidence_lines(proposal) -> list[str]:
+    try:
+        evidence = json.loads(proposal.evidence_json or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(evidence, list):
+        return []
+    lines: list[str] = []
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "evidence")
+        pointer = item.get("path") or item.get("id") or item.get("summary") or item.get("value")
+        if pointer is None:
+            pointer = json.dumps(item, sort_keys=True)
+        lines.append(f"- {kind}: {pointer}")
+    return lines
+
+
+def _build_self_improvement_activation_issue_description(*, proposal, candidate: dict) -> str:
+    candidate_body = str(candidate.get("body") or "").strip()
+    lines = [
+        candidate_body,
+        "",
+        "---",
+        "",
+        "Self-improvement activation:",
+        f"- Proposal ID: `{proposal.id}`",
+        f"- Target kind: `{proposal.target_kind}`",
+        f"- Source issue ID: `{proposal.issue_id}`",
+        f"- Severity: `{proposal.severity}`",
+        f"- Confidence: `{proposal.confidence:.2f}`",
+    ]
+    evidence_lines = _self_improvement_proposal_evidence_lines(proposal)
+    if evidence_lines:
+        lines.extend(["", "Evidence:", *evidence_lines])
+    return "\n".join(lines).strip()
+
+
+def _open_pr_task_candidate_from_apply_plan(proposal) -> dict:
+    from app.application.self_improvement_apply_service import build_self_improvement_apply_plan
+
+    plan = build_self_improvement_apply_plan(proposal)
+    candidates = plan.get("candidate_changes")
+    if not isinstance(candidates, list):
+        raise ValueError("Self-improvement apply plan does not include candidate changes")
+    open_pr_candidates = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and candidate.get("kind") == "open_pr_task"
+    ]
+    if len(open_pr_candidates) != 1:
+        raise ValueError("Self-improvement apply plan must contain exactly one open_pr_task candidate")
+    title = open_pr_candidates[0].get("title")
+    body = open_pr_candidates[0].get("body")
+    if not isinstance(title, str) or not title.strip() or not isinstance(body, str):
+        raise ValueError("Self-improvement open_pr_task candidate is invalid")
+    return open_pr_candidates[0]
+
+
+async def _load_existing_self_improvement_activation(*, project_id: str, proposal_id: str):
+    events = await codex_store.list_self_improvement_application_events(
+        project_id=project_id,
+        proposal_id=proposal_id,
+        limit=100,
+    )
+    for event in events:
+        if event.action != "open_pr_task" or event.status != "succeeded":
+            continue
+        try:
+            result = json.loads(event.result_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(result, dict):
+            continue
+        issue_id = result.get("issue_id")
+        if not isinstance(issue_id, str) or not issue_id:
+            continue
+        issue = await codex_store.load_codex_issue(issue_id)
+        if issue is not None and issue.project_id == project_id:
+            return issue, event
+    return None
+
+
+async def _record_self_improvement_activation_failure(*, proposal, error: str) -> None:
+    try:
+        await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="open_pr_task",
+            status="failed",
+            error=error,
+        )
+    except Exception:  # noqa: BLE001 - best-effort audit recording after activation failure
+        logger.warning(
+            "failed to record self-improvement activation failure event for proposal %s",
+            proposal.id,
+            exc_info=True,
+        )
+
+
 async def _record_self_improvement_application_event(
     *,
     proposal,
@@ -6378,6 +6484,124 @@ async def codex_project_self_improvement_proposal_apply_plan(project_id: str, pr
     return {
         "proposal": _self_improvement_proposal_to_dict(proposal),
         "plan": build_self_improvement_apply_plan(proposal),
+    }
+
+
+@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/activate-task")
+async def codex_project_self_improvement_proposal_activate_task(project_id: str, proposal_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    if proposal.status != "accepted":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Self-improvement proposal must be accepted before a task can be activated; "
+                f"current status is {proposal.status}"
+            ),
+        )
+    if proposal.target_kind == "project_memory":
+        raise HTTPException(
+            status_code=409,
+            detail="project_memory proposals must use the reviewed project-memory apply endpoint",
+        )
+
+    source_issue = await codex_store.load_codex_issue(proposal.issue_id)
+    if source_issue is None or source_issue.project_id != project_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Self-improvement proposal source issue is unavailable for this project",
+        )
+
+    existing = await _load_existing_self_improvement_activation(project_id=project_id, proposal_id=proposal_id)
+    if existing is not None:
+        existing_issue, existing_event = existing
+        return {
+            "proposal": _self_improvement_proposal_to_dict(proposal),
+            "activation": {
+                "issue": _codex_issue_to_dict(existing_issue),
+                "application": _self_improvement_application_event_to_dict(existing_event),
+                "already_created": True,
+            },
+        }
+
+    try:
+        candidate = _open_pr_task_candidate_from_apply_plan(proposal)
+        now = datetime.now()
+        issue = CodexIssue(
+            id=str(uuid4()),
+            session_id=source_issue.session_id,
+            project_id=project.id,
+            title=str(candidate["title"]).strip(),
+            description=_build_self_improvement_activation_issue_description(
+                proposal=proposal,
+                candidate=candidate,
+            ),
+            current_phase="requirements",
+            status="open",
+            executor=source_issue.executor,
+            provider=source_issue.provider,
+            model=source_issue.model,
+            created_at=now,
+            updated_at=now,
+        )
+        branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+        issue.git_branch = branch
+        issue.git_worktree_path = worktree_path
+        issue.git_base_branch = base
+        await codex_store.save_codex_issue(issue)
+        await codex_store.append_project_audit(
+            project_id=project.id,
+            issue_id=issue.id,
+            event="created",
+            base_branch=base,
+        )
+        await event_bus.append({
+            "type": "issue_created",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "issue": _codex_issue_to_dict(issue),
+        })
+        event = await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="open_pr_task",
+            status="succeeded",
+            path=f"codex_issues/{issue.id}",
+            result={
+                "issue_id": issue.id,
+                "issue_title": issue.title,
+                "git_branch": issue.git_branch,
+                "git_base_branch": issue.git_base_branch,
+                "git_worktree_path": issue.git_worktree_path,
+            },
+        )
+    except (GitError, WorktreeError, ValueError) as exc:
+        error = str(exc)
+        await _record_self_improvement_activation_failure(proposal=proposal, error=error)
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to activate self-improvement proposal task: {error}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - store failures lack typed errors
+        error = str(exc) or exc.__class__.__name__
+        await _record_self_improvement_activation_failure(proposal=proposal, error=error)
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to activate self-improvement proposal task: {error}",
+        ) from exc
+
+    return {
+        "proposal": _self_improvement_proposal_to_dict(proposal),
+        "activation": {
+            "issue": _codex_issue_to_dict(issue),
+            "application": _self_improvement_application_event_to_dict(event),
+            "already_created": False,
+        },
     }
 
 
