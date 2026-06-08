@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
-- **Last Active**: 2026-06-03
+- **Total Sessions**: 16
+- **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~528 | Active |
+| `journal-1.md` | ~562 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-06-08 | Project review background loop | `3cc5130` | `codex/archive-project-review-background-loop` |
 | 15 | 2026-06-03 | Fix audit log time-filter boundary minute exclusion | `6376dc9` | `main` |
 | 14 | 2026-06-01 | Unified audit logging: audit_log table + 6 choke-point instrumentation + read API + global viewer | `2522c22` | `main` |
 | 13 | 2026-05-31 | Reliability hardening: swarm worktree terminal cleanup + regression pins | `8ad2f60` | `main` |
