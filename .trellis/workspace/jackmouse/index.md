@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 16
-- **Last Active**: 2026-06-06
+- **Total Sessions**: 17
+- **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~564 | Active |
+| `journal-1.md` | ~603 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 17 | 2026-06-08 | Conductor policy and decision explanation | `63f787e`, `8b2c2be`, `a198f2c`, `baf18eb`, `a61163d`, `468fc73` | `main` |
 | 16 | 2026-06-06 | Coordinator source-informed upgrade | `a677095`, `6c426cb`, `8800780` | `main` |
 | 15 | 2026-06-03 | Fix audit log time-filter boundary minute exclusion | `6376dc9` | `main` |
 | 14 | 2026-06-01 | Unified audit logging: audit_log table + 6 choke-point instrumentation + read API + global viewer | `2522c22` | `main` |

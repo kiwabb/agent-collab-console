@@ -562,3 +562,42 @@ Studied local Claude Code and Codex CLI sources, upgraded ProjectConductor promp
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: Conductor policy and decision explanation
+
+**Date**: 2026-06-08
+**Task**: Conductor policy and decision explanation
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Added deterministic Conductor orchestration policy, exposed it in the issue detail decision panel, hardened browser-observed runtime failures, tightened parallel dispatch result safety, improved the issue command timeline, and captured runtime contracts in backend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `63f787e` | (see git log) |
+| `8b2c2be` | (see git log) |
+| `a198f2c` | (see git log) |
+| `baf18eb` | (see git log) |
+| `a61163d` | (see git log) |
+| `468fc73` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
