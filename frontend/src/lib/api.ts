@@ -31,6 +31,7 @@ import type {
   CreateAgentRequest,
   UpdateAgentRequest,
   WorkflowGraph,
+  IssueOrchestrationPolicy,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
@@ -352,6 +353,19 @@ export async function getIssueBudget(
     return null;
   }
   return response.json() as Promise<import("./types").IssueBudgetStatus>;
+}
+
+export async function getIssueOrchestrationPolicy(
+  issueId: string,
+): Promise<IssueOrchestrationPolicy | null> {
+  const response = await dedupedFetch(
+    `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/orchestration-policy`,
+  );
+  if (!response.ok) {
+    console.error(`getIssueOrchestrationPolicy(${issueId}) failed: HTTP ${response.status}`);
+    return null;
+  }
+  return response.json() as Promise<IssueOrchestrationPolicy>;
 }
 
 // ---------------------------------------------------------------------------

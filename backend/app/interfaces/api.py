@@ -2776,6 +2776,26 @@ async def get_issue_budget(issue_id: str):
     return status.to_dict()
 
 
+@router.get("/codex/issues/{issue_id}/orchestration-policy")
+async def get_issue_orchestration_policy(issue_id: str):
+    """Return the deterministic Conductor orchestration policy for an issue."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
+    from app.application.conductor_policy import classify_issue_orchestration
+
+    policy = classify_issue_orchestration(issue.title, issue.description)
+    return {
+        "issue_id": issue.id,
+        "recommendation": policy.recommendation,
+        "batch_allowed": policy.batch_allowed,
+        "signals": list(policy.signals),
+        "guidance": list(policy.guidance),
+    }
+
+
 @router.post("/codex/issues/{issue_id}/phase")
 async def update_codex_issue_phase(issue_id: str, request: UpdateIssuePhaseRequest):
     """Set the issue's current_phase tag. PR5: no longer validates against a

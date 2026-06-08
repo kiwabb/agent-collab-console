@@ -11,7 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   getCodexCostStats,
-  getCodexTasks,
+  getIssueOrchestrationPolicy,
   getIssueActivity,
   getIssuePipelineStages,
   type ActivityEvent,
@@ -20,12 +20,13 @@ import {
   type PipelineStagesResponse,
   type PipelineStage,
 } from "@/lib/api";
-import type { CodexIssue, CodexTask } from "@/lib/types";
+import type { CodexIssue, CodexTask, IssueOrchestrationPolicy } from "@/lib/types";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 import { SimilarIssuesCard } from "./SimilarIssuesCard";
 import { BudgetMeter } from "./BudgetMeter";
 import { useIssueBudget } from "./useIssueBudget";
+import { DecisionExplanationCard } from "./DecisionExplanationCard";
 
 interface Props {
   issueId: string;
@@ -46,6 +47,8 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
   const [cost, setCost] = useState<CodexCostStats | null>(null);
   const [pipeline, setPipeline] = useState<PipelineStagesResponse | null>(null);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [policy, setPolicy] = useState<IssueOrchestrationPolicy | null>(null);
+  const [policyLoading, setPolicyLoading] = useState(true);
   // tasks is now derived from pipeline.stages (one task per role) — no
   // separate fetch. Side-stack only needs a stage-level count.
   const tasks: CodexTask[] = [];
@@ -70,14 +73,18 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
     // Skip per-task list fetch — the side-stack only needs a stage-level
     // count and pipeline.stages.length is good enough. Saves one of the
     // ~10 /codex/tasks requests the page used to fire on load.
-    const [c, p, a] = await Promise.all([
+    setPolicyLoading(true);
+    const [nextPolicy, c, p, a] = await Promise.all([
+      getIssueOrchestrationPolicy(issueId).catch(() => null),
       getCodexCostStats({ issueId }).catch(() => null),
       getIssuePipelineStages(issueId).catch(() => null),
       getIssueActivity(issueId).catch(() => null),
     ]);
+    setPolicy(nextPolicy);
     setCost(c);
     setPipeline(p);
     setActivity(a?.events ?? []);
+    setPolicyLoading(false);
   }, [issueId]);
 
   useEffect(() => {
@@ -93,6 +100,7 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
         "task_created",
         "workflow_node_updated",
         "issue_updated",
+        "issue_steered",
       ),
     ),
     onEvent: () => {
@@ -103,7 +111,8 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
   });
 
   return (
-    <aside data-density="insight-rail" className="flex flex-col gap-2.5 sticky top-3">
+    <aside data-density="insight-rail" className="flex flex-col gap-2.5 2xl:sticky 2xl:top-3">
+      <DecisionExplanationCard policy={policy} loading={policyLoading} />
       <AcceptanceCard checklist={checklist} t={t} />
       <TelemetryCard
         cost={cost}
@@ -115,6 +124,7 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
         budgetLoading={budgetLoading}
         t={t}
       />
+      <ActivityCard tasks={tasks} pipeline={pipeline} activity={activity} t={t} />
       <SimilarIssuesCard issueId={issueId} />
     </aside>
   );
@@ -230,7 +240,7 @@ function AcceptanceCard({
                 {c.text}
                 {c.source && (
                   <span className="block font-mono text-[10px] text-text-faint mt-1 uppercase tracking-wider font-extrabold">
-                    verified by {c.source}
+                    {t("issue.side.verifiedBy", { source: c.source })}
                   </span>
                 )}
               </div>

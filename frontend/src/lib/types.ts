@@ -174,6 +174,32 @@ export interface IssueBudgetStatus {
   budget_source: "issue" | "default";
 }
 
+export type OrchestrationRecommendation =
+  | "pm_first"
+  | "architect_first"
+  | "batch_allowed"
+  | "single_engineer";
+
+export type OrchestrationSignal =
+  | "explicit_parallel"
+  | "independent_slices"
+  | "trivial"
+  | "ambiguous_scope"
+  | "risk_or_cross_layer"
+  | "default_serial";
+
+/**
+ * Deterministic Conductor policy returned by
+ * `GET /codex/issues/{id}/orchestration-policy`.
+ */
+export interface IssueOrchestrationPolicy {
+  issue_id: string;
+  recommendation: OrchestrationRecommendation | string;
+  batch_allowed: boolean;
+  signals: string[];
+  guidance: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Benchmark harness (PR4)
 // ---------------------------------------------------------------------------
