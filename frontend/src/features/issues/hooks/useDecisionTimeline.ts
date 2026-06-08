@@ -19,6 +19,8 @@ export interface DecisionTimelineItem {
   titleKey?: string;
   titleParams?: Record<string, string | number>;
   summary: string;
+  summaryKey?: string;
+  summaryParams?: Record<string, string | number>;
   createdAt: string | null;
   durationMs: number | null;
   toolUseId?: string | null;
@@ -61,7 +63,32 @@ function looksLikeControlPayload(text: string): boolean {
 function cleanText(value: unknown): string {
   if (typeof value !== "string") return "";
   const s = value.trim();
-  return s && !looksLikeControlPayload(s) ? s : "";
+  if (!s || looksLikeControlPayload(s)) return "";
+  return extractSummaryFromJsonText(s) || s;
+}
+
+function extractSummaryFromJsonText(text: string): string {
+  if (!(text.startsWith("{") && text.endsWith("}"))) return "";
+  try {
+    const obj = JSON.parse(text) as Record<string, unknown>;
+    const candidates = [
+      obj.summary,
+      obj.message,
+      obj.answer,
+      obj.text,
+      obj.content,
+      obj.error,
+      obj.error_message,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate !== "string") continue;
+      const cleaned = candidate.trim();
+      if (cleaned && !looksLikeControlPayload(cleaned)) return cleaned;
+    }
+  } catch {
+    return "";
+  }
+  return "";
 }
 
 function textFromPayload(payload: Record<string, unknown>): string {
@@ -109,11 +136,22 @@ function taskStatusToTimeline(status: string | null | undefined): DecisionTimeli
 }
 
 function roleFromTool(toolName: string, input: Record<string, unknown>): string {
+  if (toolName === "dispatch_batch") return "conductor";
   const raw = String(input.role || input.role_key || input.target_node_key || input.node_key || "");
   return DISPATCH_TO_ROLE[raw] ?? raw ?? toolName;
 }
 
-function titleForTool(toolName: string, role: string): { title: string; titleKey: string; titleParams?: Record<string, string> } {
+function roleFromBatchAgent(agent: unknown): string {
+  const input = asRecord(agent);
+  const raw = String(input.role || input.role_key || input.target_node_key || input.node_key || "");
+  return DISPATCH_TO_ROLE[raw] ?? raw;
+}
+
+function titleForTool(
+  toolName: string,
+  role: string,
+  input: Record<string, unknown>,
+): { title: string; titleKey: string; titleParams?: Record<string, string | number> } {
   if (toolName === "request_user_clarification") return { title: "Conductor asked for clarification", titleKey: "issue.command.title.clarification" };
   if (toolName === "retrieve_cold_memory") return { title: "Retrieved cold memory", titleKey: "issue.command.title.memory" };
   if (toolName === "finalize_task") return { title: "Finalized the issue", titleKey: "issue.command.title.finalize" };
@@ -125,7 +163,47 @@ function titleForTool(toolName: string, role: string): { title: string; titleKey
     const fallback = role || "sub-agent";
     return { title: `Dispatched ${fallback}`, titleKey: "issue.command.title.dispatch", titleParams: { role: fallback } };
   }
+  if (toolName === "dispatch_batch") {
+    const agents = Array.isArray(input.agents) ? input.agents.length : 0;
+    return {
+      title: agents > 0 ? `Planned ${agents} parallel agents` : "Planned parallel agents",
+      titleKey: agents > 0 ? "issue.command.title.dispatchBatchCount" : "issue.command.title.dispatchBatch",
+      titleParams: agents > 0 ? { count: agents } : undefined,
+    };
+  }
   return { title: toolName || "Tool call", titleKey: "issue.command.title.tool" };
+}
+
+function summaryForTool(
+  toolName: string,
+  input: Record<string, unknown>,
+): { summaryKey?: string; summaryParams?: Record<string, string | number> } {
+  if (toolName !== "dispatch_batch") return {};
+  const agents = Array.isArray(input.agents) ? input.agents.length : 0;
+  return agents > 0
+    ? { summaryKey: "issue.command.summary.dispatchBatchCount", summaryParams: { count: agents } }
+    : { summaryKey: "issue.command.summary.dispatchBatch" };
+}
+
+function titleForBatchTask(role: string, index: number): { title: string; titleKey: string; titleParams: Record<string, string | number> } {
+  if (role === "engineer") {
+    return {
+      title: `Development agent ${index}`,
+      titleKey: "issue.command.title.developmentTask",
+      titleParams: { index },
+    };
+  }
+  return {
+    title: `Batch agent ${role} ${index}`,
+    titleKey: "issue.command.title.batchTask",
+    titleParams: { role, index },
+  };
+}
+
+function durationBetween(startedAt: string | null, endedAt: string | null): number | null {
+  return startedAt && endedAt
+    ? Math.max(0, new Date(endedAt).getTime() - new Date(startedAt).getTime())
+    : null;
 }
 
 export function buildDecisionTimeline(
@@ -136,6 +214,8 @@ export function buildDecisionTimeline(
   const taskById = new Map(tasks.map((task) => [task.id, task]));
   const resultByTask = new Map(results.map((result) => [result.task_id, result]));
   const items: DecisionTimelineItem[] = [];
+  const representedTaskIds = new Set<string>();
+  const batchRoles = new Set<string>();
   const sorted = [...turns].sort((a, b) => {
     const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
     const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
@@ -183,6 +263,12 @@ export function buildDecisionTimeline(
 
     const toolName = String(payload.name || payload.tool || payload.tool_name || "tool");
     const input = asRecord(payload.input || payload.arguments || payload.args);
+    if (toolName === "dispatch_batch" && Array.isArray(input.agents)) {
+      for (const agent of input.agents) {
+        const role = roleFromBatchAgent(agent);
+        if (role) batchRoles.add(role);
+      }
+    }
     const toolUseId = String(payload.tool_use_id || payload.id || turn.id);
     const matchingResult = sorted.find((candidate) => {
       if (candidate.kind !== "tool_result") return false;
@@ -207,14 +293,14 @@ export function buildDecisionTimeline(
       return candidate.kind === "llm_response" || candidate.kind === "llm_request";
     });
     const result = task?.id ? resultByTask.get(task.id) ?? null : null;
+    if (task?.id) representedTaskIds.add(task.id);
     const createdAt = turn.created_at;
     const endedAt = matchingResult?.created_at ?? task?.updated_at ?? null;
-    const durationMs = createdAt && endedAt
-      ? Math.max(0, new Date(endedAt).getTime() - new Date(createdAt).getTime())
-      : null;
+    const durationMs = durationBetween(createdAt, endedAt);
     const summary = textFromPayload(output) || textFromPayload(input) || cleanText(result?.summary) || "";
 
-    const title = titleForTool(toolName, role);
+    const title = titleForTool(toolName, role, input);
+    const toolSummary = summary ? {} : summaryForTool(toolName, input);
     items.push({
       id: `${turn.id}:${toolUseId}`,
       kind: toolName === "request_user_clarification"
@@ -223,7 +309,7 @@ export function buildDecisionTimeline(
           ? "memory"
           : toolName === "finalize_task"
             ? "finalize"
-            : toolName === "dispatch_subagent" || toolName === "spawn_custom_subagent"
+            : toolName === "dispatch_subagent" || toolName === "spawn_custom_subagent" || toolName === "dispatch_batch"
               ? "dispatch"
               : "tool",
       role: role || "conductor",
@@ -232,6 +318,8 @@ export function buildDecisionTimeline(
       titleKey: title.titleKey,
       titleParams: title.titleParams,
       summary,
+      summaryKey: toolSummary.summaryKey,
+      summaryParams: toolSummary.summaryParams,
       createdAt,
       durationMs,
       toolUseId,
@@ -242,6 +330,48 @@ export function buildDecisionTimeline(
       thinkingTurns,
       rationale: rationaleFromThinkingTurns(thinkingTurns) || null,
       why: status === "failed" ? summary || cleanText(task?.result) || cleanText(result?.summary) || "" : null,
+    });
+  }
+
+  const taskIndexesByRole = new Map<string, number>();
+  const batchTasks = tasks
+    .filter((task) => batchRoles.has(task.role) && !representedTaskIds.has(task.id))
+    .sort((a, b) => {
+      const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return aTime - bTime || a.id.localeCompare(b.id);
+    });
+
+  for (const task of batchTasks) {
+    const index = (taskIndexesByRole.get(task.role) ?? 0) + 1;
+    taskIndexesByRole.set(task.role, index);
+    const status = taskStatusToTimeline(task.status);
+    const result = resultByTask.get(task.id) ?? null;
+    const summary = cleanText(result?.summary) || cleanText(task.result) || "";
+    const title = titleForBatchTask(task.role, index);
+
+    items.push({
+      id: `task:${task.id}`,
+      kind: "dispatch",
+      role: task.role,
+      status,
+      title: title.title,
+      titleKey: title.titleKey,
+      titleParams: title.titleParams,
+      summary,
+      summaryKey: summary
+        ? undefined
+        : task.role === "engineer"
+          ? "issue.command.summary.developmentTaskDone"
+          : "issue.command.summary.batchTaskDone",
+      createdAt: task.created_at,
+      durationMs: durationBetween(task.created_at, task.updated_at),
+      taskId: task.id,
+      task,
+      result,
+      rawTurns: [],
+      thinkingTurns: [],
+      why: status === "failed" ? summary || cleanText(task.result) || cleanText(result?.summary) || "" : null,
     });
   }
 

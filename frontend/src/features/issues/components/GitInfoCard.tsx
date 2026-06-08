@@ -155,9 +155,9 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   }
 
   return (
-    <Card data-density="git-ops" className="enterprise-card border-border-subtle/60 bg-surface/90 rounded-lg overflow-hidden p-1 transition-colors hover:border-border-strong/40">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4 pt-5 px-5">
-        <CardTitle className="flex items-center gap-2 text-sm font-bold flex-wrap tracking-wide text-foreground">
+    <Card data-density="git-ops" className="enterprise-card overflow-hidden rounded-lg border-border-subtle/60 bg-surface/90 p-1 transition-colors hover:border-border-strong/40">
+      <CardHeader className="flex flex-col gap-3 space-y-0 px-3 pb-3 pt-3 sm:px-4 lg:flex-row lg:items-start lg:justify-between">
+        <CardTitle className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-bold tracking-wide text-foreground">
           <GitBranch size={15} className="text-brand shrink-0" />
           <span>{t("task.git.title")}</span>
           <Badge variant={statusVariant(issue.git_merge_status)} className="rounded-md uppercase text-[10px] tracking-wider font-extrabold">
@@ -172,47 +172,47 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
           )}
           {commitsAhead > 0 && (
             <Badge variant="outline" className="font-mono border-brand/40 text-brand bg-brand-muted/10 rounded">
-              ↑ {commitsAhead} {commitsAhead === 1 ? "commit" : "commits"}
+              ↑ {t(commitsAhead === 1 ? "task.git.commitCountOne" : "task.git.commitCount", { count: commitsAhead })}
             </Badge>
           )}
         </CardTitle>
-        <div className="flex items-center gap-1.5">
+        <div className="grid w-full grid-cols-3 gap-1.5 lg:w-auto lg:flex lg:items-center">
           <Button
             size="sm"
             variant="outline"
             onClick={handleViewDiff}
             disabled={!issue.git_worktree_path}
-            className="rounded-xl h-8 text-[11px] font-bold cursor-pointer transition-all border-border-subtle hover:bg-surface-hover"
+            className="min-w-0 rounded-md border-border-subtle text-[11px] font-bold transition-colors hover:bg-surface-hover cursor-pointer h-8"
           >
             <FileText size={13} className="mr-1 text-text-muted" />
-            {t("task.viewDiff")}
+            <span className="truncate">{t("task.viewDiff")}</span>
           </Button>
-          
+
           <Button
             size="sm"
             variant="outline"
             onClick={() => setAbandonOpen(true)}
             disabled={!issue.git_branch || issue.git_merge_status !== "open"}
             title={t("task.abandonHelp")}
-            className="rounded-xl h-8 text-[11px] font-bold border-status-failed/25 text-status-failed bg-status-failed-bg hover:bg-status-failed/12 hover:border-status-failed/50 hover:text-status-failed cursor-pointer transition-all"
+            className="min-w-0 rounded-md border-status-failed/25 bg-status-failed-bg text-[11px] font-bold text-status-failed transition-colors hover:border-status-failed/50 hover:bg-status-failed/12 hover:text-status-failed cursor-pointer h-8"
           >
             <Ban size={13} className="mr-1" />
-            {t("task.abandon")}
+            <span className="truncate">{t("task.abandon")}</span>
           </Button>
-          
+
           <Button
             size="sm"
             onClick={handleConfirmMerge}
             disabled={!issue.git_branch || issue.git_merge_status !== "open"}
-            className="rounded-xl h-8 text-[11px] font-bold bg-brand text-background hover:bg-brand-strong cursor-pointer transition-all"
+            className="min-w-0 rounded-md bg-brand text-[11px] font-bold text-background transition-colors hover:bg-brand-strong cursor-pointer h-8"
           >
             <GitMerge size={13} className="mr-1" />
-            {t("task.mergeBack")}
+            <span className="truncate">{t("task.mergeBack")}</span>
           </Button>
         </div>
       </CardHeader>
-      
-      <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-surface-input/30 p-4 m-3 rounded-lg border border-border-subtle/50">
+
+      <CardContent className="m-2 grid grid-cols-1 gap-2 rounded-lg border border-border-subtle/50 bg-surface-input/30 p-2.5 text-xs md:grid-cols-3">
         <div className="flex flex-col gap-1.5 min-w-0">
           <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">{t("task.branch")}</div>
           <div className="font-mono text-foreground font-bold truncate bg-surface-input px-2 py-1 rounded border border-border-subtle/50 select-all" title={issue.git_branch ?? undefined}>

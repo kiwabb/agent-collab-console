@@ -38,13 +38,13 @@ export function CommandCenterChatBar({ issueId, disabled, clarifyQuestion, onSen
   };
 
   return (
-    <div className="sticky bottom-0 z-30 border-t border-border-subtle bg-background/92 px-6 py-3 backdrop-blur">
+    <div className="sticky bottom-0 z-30 border-t border-border-subtle bg-background/95 px-3 py-2 backdrop-blur sm:px-5">
       {clarifyQuestion && !disabled && (
-        <div className="mx-auto mb-2 max-w-[1640px] rounded-2xl border border-status-awaiting/35 bg-status-awaiting/10 px-4 py-2 text-xs text-status-awaiting">
+        <div className="mx-auto mb-2 max-w-[1640px] rounded-lg border border-status-awaiting/35 bg-status-awaiting/10 px-3 py-2 text-xs text-status-awaiting">
           {t("issue.command.clarifyBanner", { question: clarifyQuestion })}
         </div>
       )}
-      <div className="mx-auto flex max-w-[1640px] items-end gap-2 rounded-2xl border border-border-subtle bg-surface-raised p-2">
+      <div className="mx-auto flex max-w-[1640px] items-end gap-2 rounded-lg border border-border-subtle bg-surface-raised p-1.5">
         <textarea
           value={draft}
           disabled={disabled || sending}
@@ -57,9 +57,9 @@ export function CommandCenterChatBar({ issueId, disabled, clarifyQuestion, onSen
           }}
           rows={2}
           placeholder={disabled ? t("issue.command.chatPausedPlaceholder") : clarifyQuestion ? t("issue.command.chatAnswerPlaceholder") : t("issue.command.chatPlaceholder")}
-          className="min-h-10 flex-1 resize-none rounded-xl border border-transparent bg-transparent px-3 py-2 text-sm outline-none placeholder:text-text-muted focus:border-brand/40"
+          className="min-h-9 flex-1 resize-none rounded-md border border-transparent bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-text-muted focus:border-brand/40"
         />
-        <Button onClick={() => void submit()} disabled={disabled || sending || !draft.trim()} className="gap-2 rounded-xl bg-brand text-black hover:bg-brand-strong">
+        <Button onClick={() => void submit()} disabled={disabled || sending || !draft.trim()} className="gap-2 rounded-md bg-brand text-black hover:bg-brand-strong">
           {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
           {t("issue.command.send")}
         </Button>

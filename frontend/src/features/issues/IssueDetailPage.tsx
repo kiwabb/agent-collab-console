@@ -141,7 +141,7 @@ export function IssueDetailPage({ issueId }: Props) {
   });
 
   const activeTask = useMemo(
-    () => tasks.find((task) => ["running", "responding", "pending", "awaiting_review"].includes(String(task.status).toLowerCase())) ?? tasks[0] ?? null,
+    () => tasks.find((task) => ["running", "responding", "pending", "awaiting_review"].includes(String(task.status).toLowerCase())) ?? null,
     [tasks],
   );
   const clarifyQuestion = useMemo(
@@ -230,105 +230,96 @@ export function IssueDetailPage({ issueId }: Props) {
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-background">
-      {/* App-shell body: fixed header + status, scrolling tab content, docked chat bar */}
-      <main data-density="issue-workbench" className="flex-1 min-h-0 overflow-hidden mx-auto w-full max-w-[1640px] flex flex-col gap-2 px-3 pb-3 pt-3 lg:px-5">
-        
-        {/* Stationary Header Stack (Always visible) */}
-        <div className="shrink-0 flex flex-col gap-2">
-          <WsConnectionBanner />
-          
-          <StatusStrip
-            issue={issue}
-            phase={phase}
-            activeTask={activeTask}
-            onPause={() => void handlePause()}
-            onResume={() => void handleResume()}
-            onSteer={() => void handleRestartOrSteer()}
-            onReset={() => setResetConfirmOpen(true)}
-          />
-          
-          <ConductorAlerts alerts={conductorAlerts} onDismiss={dismissAlert} />
-          
-          <LatestFailureAlert
-            failure={latestFailure}
-            onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-            onOpenDetail={() => {
-              const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
-              setDrawerItemId(item?.id ?? null);
-            }}
-          />
-        </div>
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <main data-density="issue-workbench" className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[1640px] px-3 pb-5 pt-3 lg:px-5">
+          <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,360px)] 2xl:items-start">
+            <section className="min-w-0 space-y-3">
+              <WsConnectionBanner />
 
-        {/* Two-Column Grid Layout */}
-        <div className="flex-1 min-h-0 grid grid-cols-1 gap-3 overflow-hidden xl:grid-cols-[minmax(0,1fr)_minmax(310px,350px)]">
-          
-          {/* Main Area (Left Column) */}
-          <div className="flex-1 min-h-0 flex flex-col gap-3">
-            <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full flex-1 flex flex-col gap-3 min-h-0 overflow-hidden">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border-subtle/70 pb-2 shrink-0">
-                <TabsList className="bg-surface/80 border border-border-subtle p-1 rounded-lg grid grid-cols-4 h-10 w-full sm:max-w-md">
-                  <TabsTrigger value="timeline" className="gap-2 text-[12px] font-bold py-2 rounded-md transition-colors cursor-pointer">
-                    <Clock size={14} className="shrink-0" />
-                    <span>{t("issue.command.timelineTitle")}</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="artifacts" className="gap-2 text-[12px] font-bold py-2 rounded-md transition-colors cursor-pointer">
-                    <FolderArchive size={14} className="shrink-0" />
-                    <span>{t("issue.command.artifacts")}</span>
-                    <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded font-black font-mono">
-                      {artifacts.length}
-                    </span>
-                  </TabsTrigger>
-                  <TabsTrigger value="diff" className="gap-2 text-[12px] font-bold py-2 rounded-md transition-colors cursor-pointer">
-                    <GitPullRequest size={14} className="shrink-0" />
-                    <span>{t("issue.command.diff")}</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="mesh" className="gap-2 text-[12px] font-bold py-2 rounded-md transition-colors cursor-pointer">
-                    <Network size={14} className="shrink-0" />
-                    <span>{t("issue.command.mesh")}</span>
-                    {agentMeshMessages.length > 0 && (
-                      <span className="ml-1 text-[10px] bg-brand-muted/30 text-brand px-1.5 py-0.5 rounded font-black font-mono">
-                        {agentMeshMessages.length}
+              <StatusStrip
+                issue={issue}
+                phase={phase}
+                activeTask={activeTask}
+                onPause={() => void handlePause()}
+                onResume={() => void handleResume()}
+                onSteer={() => void handleRestartOrSteer()}
+                onReset={() => setResetConfirmOpen(true)}
+              />
+
+              <ConductorAlerts alerts={conductorAlerts} onDismiss={dismissAlert} />
+
+              <LatestFailureAlert
+                failure={latestFailure}
+                onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                onOpenDetail={() => {
+                  const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
+                  setDrawerItemId(item?.id ?? null);
+                }}
+              />
+
+              <Tabs value={activeTab} onValueChange={handleTabChange} className="flex w-full flex-col gap-3">
+                <div data-density="workbench-tabs" className="sticky top-0 z-20 border-b border-border-subtle/70 bg-background/95 pb-2 pt-1 backdrop-blur">
+                  <TabsList className="grid h-10 w-full grid-cols-4 rounded-lg border border-border-subtle bg-surface/90 p-1 sm:max-w-[520px]">
+                    <TabsTrigger value="timeline" className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer">
+                      <Clock size={14} className="shrink-0" />
+                      <span className="truncate max-sm:sr-only">{t("issue.command.timelineTitle")}</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="artifacts" className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer">
+                      <FolderArchive size={14} className="shrink-0" />
+                      <span className="truncate max-sm:sr-only">{t("issue.command.artifacts")}</span>
+                      <span className="font-mono text-[10px] font-black text-brand">
+                        {artifacts.length}
                       </span>
-                    )}
-                  </TabsTrigger>
-                </TabsList>
-              </div>
-
-              <TabsContent value="timeline" className="outline-none flex-1 min-h-0 flex flex-col overflow-y-auto pr-1">
-                <DecisionTimeline items={timeline} onOpenItem={(it) => setDrawerItemId(it.id)} liveThinking={liveThinking} />
-              </TabsContent>
-              
-              <TabsContent value="artifacts" className="outline-none flex-1 min-h-0 flex flex-col overflow-hidden">
-                <div className="enterprise-panel rounded-lg overflow-hidden bg-surface/90 p-1 flex-1 min-h-0 flex flex-col">
-                  <ArtifactsPanel issueId={issueId} issue={issue} />
+                    </TabsTrigger>
+                    <TabsTrigger value="diff" className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer">
+                      <GitPullRequest size={14} className="shrink-0" />
+                      <span className="truncate max-sm:sr-only">{t("issue.command.diff")}</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="mesh" className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer">
+                      <Network size={14} className="shrink-0" />
+                      <span className="truncate max-sm:sr-only">{t("issue.command.mesh")}</span>
+                      {agentMeshMessages.length > 0 && (
+                        <span className="font-mono text-[10px] font-black text-brand">
+                          {agentMeshMessages.length}
+                        </span>
+                      )}
+                    </TabsTrigger>
+                  </TabsList>
                 </div>
-              </TabsContent>
 
-              <TabsContent value="diff" className="outline-none flex-1 min-h-0 flex flex-col overflow-hidden">
-                <div className="enterprise-panel rounded-lg overflow-hidden bg-surface/90 p-1 flex-1 min-h-0 flex flex-col">
-                  <IssueDiffPanel issueId={issueId} issue={issue} />
-                </div>
-              </TabsContent>
+                <TabsContent value="timeline" className="flex-none outline-none">
+                  <DecisionTimeline items={timeline} onOpenItem={(it) => setDrawerItemId(it.id)} liveThinking={liveThinking} />
+                </TabsContent>
 
-              <TabsContent value="mesh" className="outline-none flex-1 min-h-0 flex flex-col overflow-hidden">
-                <div className="enterprise-panel rounded-lg overflow-hidden bg-surface/90 p-1 flex-1 min-h-0 flex flex-col">
-                  <MeshPanel issueId={issueId} />
-                </div>
-              </TabsContent>
-            </Tabs>
+                <TabsContent value="artifacts" className="flex-none outline-none">
+                  <div className="enterprise-panel min-h-[420px] rounded-lg bg-surface/90 p-1">
+                    <ArtifactsPanel issueId={issueId} issue={issue} />
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="diff" className="flex-none outline-none">
+                  <div className="enterprise-panel min-h-[420px] rounded-lg bg-surface/90 p-1">
+                    <IssueDiffPanel issueId={issueId} issue={issue} />
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="mesh" className="flex-none outline-none">
+                  <div className="enterprise-panel min-h-[420px] rounded-lg bg-surface/90 p-1">
+                    <MeshPanel issueId={issueId} />
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </section>
+
+            <aside className="min-w-0 space-y-3 2xl:sticky 2xl:top-3">
+              {issue && <GitInfoCard issue={issue} onIssueUpdated={setIssue} />}
+              <IssueSideStack issueId={issueId} checklist={checklist} issue={issue} />
+            </aside>
           </div>
-
-          {/* Control & Insights Sidebar (Right Column) */}
-          <aside className="hidden xl:flex flex-col gap-3 min-w-0 overflow-y-auto pr-1 pb-16 sticky top-0 self-start max-h-[calc(100vh-128px)]">
-            {issue && <GitInfoCard issue={issue} onIssueUpdated={setIssue} />}
-            <IssueSideStack issueId={issueId} checklist={checklist} issue={issue} />
-          </aside>
-
         </div>
       </main>
 
-      {/* Permanently Docked Bottom Chat Bar */}
       <div className="shrink-0 pb-[env(safe-area-inset-bottom)] bg-background">
         <CommandCenterChatBar issueId={issueId} disabled={paused} clarifyQuestion={clarifyQuestion} onSent={() => void refreshTimeline()} />
       </div>

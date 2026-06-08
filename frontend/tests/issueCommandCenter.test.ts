@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { buildDecisionTimeline } from "../src/features/issues/hooks/useDecisionTimeline";
 import { deriveLatestFailure } from "../src/features/issues/hooks/useLatestFailure";
+import { deriveTimelineExecutionSummary } from "../src/features/issues/components/deriveTimelineExecutionSummary";
 import type { CodexTask } from "../src/lib/types";
 
 const SRC_ROOT = join(process.cwd(), "src");
@@ -74,19 +75,38 @@ test("issue detail page uses compact operations command-center chrome", () => {
   const statusSource = readSource("features/issues/components/StatusStrip.tsx");
   const sideStackSource = readSource("features/issues/components/IssueSideStack.tsx");
   const gitSource = readSource("features/issues/components/GitInfoCard.tsx");
+  const timelineSource = readSource("features/issues/components/DecisionTimeline.tsx");
+  const rowSource = readSource("features/issues/components/TimelineRow.tsx");
+  const chatSource = readSource("features/issues/components/CommandCenterChatBar.tsx");
 
   assert.match(statusSource, /data-density="command-header"/);
   assert.match(statusSource, /data-density="command-actions"/);
   assert.match(statusSource, /data-density="conductor-strip"/);
+  assert.match(statusSource, /data-density="conductor-detail"/);
+  assert.match(statusSource, /conductorStatus === "success"/);
+  assert.match(statusSource, /phase\.phase === "done"/);
   assert.match(pageSource, /data-density="issue-workbench"/);
+  assert.match(pageSource, /data-density="workbench-tabs"/);
+  assert.doesNotMatch(pageSource, /\?\? tasks\[0\]/);
   assert.match(sideStackSource, /data-density="insight-rail"/);
   assert.match(gitSource, /data-density="git-ops"/);
+  assert.match(pageSource, /overflow-y-auto/);
+  assert.match(pageSource, /2xl:grid-cols-\[minmax\(0,1fr\)_minmax\(320px,360px\)\]/);
+  assert.doesNotMatch(pageSource, /hidden xl:flex/);
+  assert.doesNotMatch(timelineSource, /overflow-y-auto|h-full|min-h-0|rounded-\[28px\]|rounded-2xl|shadow-\[/);
+  assert.match(timelineSource, /data-timeline-execution-summary/);
+  assert.match(timelineSource, /deriveTimelineExecutionSummary/);
+  assert.doesNotMatch(rowSource, /truncate|line-clamp|max-h-36|rounded-2xl/);
 
   assert.doesNotMatch(pageSource, /radial-gradient|rounded-\[24px\]|rounded-2xl/);
   assert.doesNotMatch(statusSource, /xl:grid-cols-\[minmax\(0,1\.2fr\)_minmax\(320px,0\.72fr\)_auto\]/);
-  assert.doesNotMatch(statusSource, /agent-mesh-grid|Decorative ambient background glows|rounded-\[28px\]|blur-\[|animate-ping/);
+  assert.doesNotMatch(statusSource, /line-clamp|agent-mesh-grid|Decorative ambient background glows|rounded-\[28px\]|blur-\[|animate-ping/);
   assert.doesNotMatch(sideStackSource, /rounded-\[24px\]|shadow-xl|animate-pulse|backdrop-blur-xl/);
   assert.doesNotMatch(gitSource, /rounded-\[24px\]|shadow-xl|animate-pulse|backdrop-blur-xl/);
+  assert.doesNotMatch(chatSource, /rounded-2xl|rounded-xl/);
+  assert.match(readSource("features/issues/hooks/useDecisionTimeline.ts"), /dispatch_batch/);
+  assert.match(rowSource, /issue\.command\.timelineStatus\.info/);
+  assert.match(rowSource, /issue\.command\.rationalePlan/);
 });
 
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {
@@ -130,4 +150,168 @@ test("decision timeline builds dispatch rows and latest failure clears after lat
     ),
     null,
   );
+});
+
+test("decision timeline labels dispatch_batch as a parallel execution plan", () => {
+  const timeline = buildDecisionTimeline(
+    [
+      {
+        id: "turn-0",
+        conductor_task_id: "cond-1",
+        issue_id: "issue-1",
+        turn_index: 1,
+        sub_index: 0,
+        kind: "llm_response",
+        payload: {
+          content: [
+            {
+              type: "text",
+              text: "**Analysis:** three files are independent.\n\n**Plan:** dispatch in parallel.",
+            },
+          ],
+        },
+        created_at: "2026-05-23T10:00:00Z",
+      },
+      {
+        id: "turn-1",
+        conductor_task_id: "cond-1",
+        issue_id: "issue-1",
+        turn_index: 1,
+        sub_index: 1,
+        kind: "tool_use",
+        payload: {
+          name: "dispatch_batch",
+          id: "tool-1",
+          input: {
+            agents: [
+              { role: "engineer" },
+              { role: "engineer" },
+              { role: "engineer" },
+            ],
+          },
+        },
+        created_at: "2026-05-23T10:00:01Z",
+      },
+      {
+        id: "turn-2",
+        conductor_task_id: "cond-1",
+        issue_id: "issue-1",
+        turn_index: 1,
+        sub_index: 2,
+        kind: "tool_result",
+        payload: { tool_use_id: "tool-1", output: { status: "success" } },
+        created_at: "2026-05-23T10:00:02Z",
+      },
+    ],
+    [],
+    [],
+  );
+
+  assert.equal(timeline[0]?.kind, "dispatch");
+  assert.equal(timeline[0]?.role, "conductor");
+  assert.equal(timeline[0]?.status, "done");
+  assert.equal(timeline[0]?.titleKey, "issue.command.title.dispatchBatchCount");
+  assert.deepEqual(timeline[0]?.titleParams, { count: 3 });
+  assert.equal(timeline[0]?.summaryKey, "issue.command.summary.dispatchBatchCount");
+  assert.deepEqual(timeline[0]?.summaryParams, { count: 3 });
+  assert.match(timeline[0]?.rationale ?? "", /Analysis/);
+});
+
+test("decision timeline expands dispatch_batch engineer tasks into visible rows", () => {
+  const timeline = buildDecisionTimeline(
+    [
+      {
+        id: "turn-1",
+        conductor_task_id: "cond-1",
+        issue_id: "issue-1",
+        turn_index: 1,
+        sub_index: 1,
+        kind: "tool_use",
+        payload: {
+          name: "dispatch_batch",
+          id: "tool-1",
+          input: {
+            agents: [
+              { role: "engineer" },
+              { role: "engineer" },
+              { role: "engineer" },
+            ],
+          },
+        },
+        created_at: "2026-05-23T10:00:01Z",
+      },
+      {
+        id: "turn-2",
+        conductor_task_id: "cond-1",
+        issue_id: "issue-1",
+        turn_index: 1,
+        sub_index: 2,
+        kind: "tool_result",
+        payload: { tool_use_id: "tool-1", output: { status: "success" } },
+        created_at: "2026-05-23T10:00:02Z",
+      },
+    ],
+    [
+      makeTask({ id: "eng-a", role: "engineer", status: "done", result: "created module_a.py", created_at: "2026-05-23T10:00:03Z" }),
+      makeTask({ id: "eng-b", role: "engineer", status: "done", result: "created module_b.py", created_at: "2026-05-23T10:00:04Z" }),
+      makeTask({ id: "eng-c", role: "engineer", status: "done", result: null, created_at: "2026-05-23T10:00:05Z" }),
+    ],
+    [
+      {
+        task_id: "eng-a",
+        role: "engineer",
+        title: "Engineer A",
+        status: "done",
+        task_kind: "normal",
+        parent_task_id: null,
+        summary: "{\"status\":\"completed\",\"summary\":\"Created module_a.py\"}",
+        artifact_json: null,
+        updated_at: "2026-05-23T10:00:10Z",
+      },
+    ],
+  );
+
+  const engineerRows = timeline.filter((item) => item.role === "engineer");
+
+  assert.equal(engineerRows.length, 3);
+  assert.deepEqual(engineerRows.map((item) => item.taskId), ["eng-a", "eng-b", "eng-c"]);
+  assert.deepEqual(engineerRows.map((item) => item.titleKey), [
+    "issue.command.title.developmentTask",
+    "issue.command.title.developmentTask",
+    "issue.command.title.developmentTask",
+  ]);
+  assert.deepEqual(engineerRows.map((item) => item.titleParams), [{ index: 1 }, { index: 2 }, { index: 3 }]);
+  assert.deepEqual(engineerRows.map((item) => item.status), ["done", "done", "done"]);
+  assert.equal(engineerRows[0]?.summary, "Created module_a.py");
+  assert.equal(engineerRows[2]?.summaryKey, "issue.command.summary.developmentTaskDone");
+});
+
+test("decision timeline execution summary surfaces dispatched development, QA, and finalize", () => {
+  const summary = deriveTimelineExecutionSummary([
+    {
+      kind: "dispatch",
+      role: "conductor",
+      status: "info",
+      titleKey: "issue.command.title.dispatchBatchCount",
+      titleParams: { count: 3 },
+    },
+    {
+      kind: "dispatch",
+      role: "qa",
+      status: "done",
+      titleKey: "issue.command.title.dispatch",
+    },
+    {
+      kind: "finalize",
+      role: "conductor",
+      status: "done",
+      titleKey: "issue.command.title.finalize",
+    },
+  ]);
+
+  assert.deepEqual(summary, {
+    developmentDispatched: 3,
+    qaDone: 1,
+    finalized: true,
+  });
 });
