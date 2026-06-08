@@ -99,6 +99,9 @@ store gets a real-async-store migration test.
   `project_review_scheduler` produce degraded checks when `last_error` is set
   or when `running` is `true`; running-state details must be short generic
   messages, not project/issue/task content.
+- Scheduler-style snapshots with `interval_s` and `last_completed_at` may also
+  produce degraded stale checks when the last completion is older than twice the
+  configured interval. Missing `last_completed_at` alone is not stale.
 - Runtime catalog entries may expose booleans such as `api_endpoint_configured` and `api_key_configured`.
 - Runtime catalog entries must not expose raw secret values, raw API keys, bearer tokens, auth headers, or provider credentials.
 - Config fields should expose booleans for whether sensitive paths or env values are configured, not their raw values.
@@ -115,6 +118,9 @@ store gets a real-async-store migration test.
 - Supervisor snapshot has `running=true` and no error -> keep HTTP `200`,
   append a degraded supervisor check with a generic running-state detail, and
   set top-level `status = "degraded"`.
+- Scheduler snapshot has `last_completed_at` older than `interval_s * 2` and
+  no error/running state -> keep HTTP `200`, append a degraded stale check with
+  a generic detail, and set top-level `status = "degraded"`.
 
 #### 5. Good/Base/Bad Cases
 
@@ -1067,6 +1073,10 @@ def get_project_review_scheduler_status() -> dict[str, object]
   safe error text, increments `tick_count`, and keeps the loop alive.
 - Cancellation sets `running=False` and propagates `asyncio.CancelledError`; it
   must not be counted as a successful completed tick.
+- Diagnostics treats a scheduler status as stale when `last_completed_at` is
+  present and older than `interval_s * 2`. Error and running states take
+  precedence over stale; a scheduler that has never completed a tick is not
+  stale from the missing completion timestamp alone.
 
 #### 4. Tests Required
 
@@ -1077,8 +1087,8 @@ def get_project_review_scheduler_status() -> dict[str, object]
   task.
 - Scheduler status records success, failure, and cancellation transitions.
 - Diagnostics includes `project_review_scheduler` with configured interval and
-  limit, degrades when `last_error` is present or `running` is `true`, and does
-  not leak runtime catalog API keys.
+  limit, degrades when `last_error` is present, `running` is `true`, or the last
+  completion is stale, and does not leak runtime catalog API keys.
 
 #### 5. Wrong vs Correct
 

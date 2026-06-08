@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -197,6 +198,104 @@ def test_diagnostics_degrades_when_project_review_scheduler_is_running(client, m
         check["name"] == "project_review_scheduler"
         and check["status"] == "degraded"
         and check["detail"] == "Project review scheduler is running"
+        for check in body["checks"]
+    )
+
+
+def test_diagnostics_degrades_when_project_review_scheduler_is_stale(client, monkeypatch):
+    from app.application.github_pr_followup import reset_github_pr_followup_status
+    from app.application import project_review_scheduler
+
+    reset_github_pr_followup_status()
+    monkeypatch.setattr(
+        project_review_scheduler,
+        "get_project_review_scheduler_status",
+        lambda: {
+            "configured": True,
+            "interval_s": 60.0,
+            "limit": 25,
+            "running": False,
+            "tick_count": 9,
+            "last_started_at": (datetime.now() - timedelta(minutes=11)).isoformat(),
+            "last_completed_at": (datetime.now() - timedelta(minutes=10)).isoformat(),
+            "last_error": None,
+            "last_summary_counts": {"done": 1},
+        },
+    )
+
+    resp = client.get("/api/diagnostics")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert any(
+        check["name"] == "project_review_scheduler"
+        and check["status"] == "degraded"
+        and check["detail"] == "Project review scheduler has not completed recently"
+        for check in body["checks"]
+    )
+
+
+def test_diagnostics_does_not_degrade_recent_project_review_scheduler(client, monkeypatch):
+    from app.application.github_pr_followup import reset_github_pr_followup_status
+    from app.application import project_review_scheduler
+
+    reset_github_pr_followup_status()
+    monkeypatch.setattr(
+        project_review_scheduler,
+        "get_project_review_scheduler_status",
+        lambda: {
+            "configured": True,
+            "interval_s": 3600.0,
+            "limit": 25,
+            "running": False,
+            "tick_count": 9,
+            "last_started_at": (datetime.now() - timedelta(minutes=15)).isoformat(),
+            "last_completed_at": (datetime.now() - timedelta(minutes=10)).isoformat(),
+            "last_error": None,
+            "last_summary_counts": {"done": 1},
+        },
+    )
+
+    resp = client.get("/api/diagnostics")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert not any(
+        check["name"] == "project_review_scheduler"
+        and check["status"] == "degraded"
+        for check in body["checks"]
+    )
+
+
+def test_diagnostics_does_not_degrade_never_completed_project_review_scheduler(client, monkeypatch):
+    from app.application.github_pr_followup import reset_github_pr_followup_status
+    from app.application import project_review_scheduler
+
+    reset_github_pr_followup_status()
+    monkeypatch.setattr(
+        project_review_scheduler,
+        "get_project_review_scheduler_status",
+        lambda: {
+            "configured": True,
+            "interval_s": 60.0,
+            "limit": 25,
+            "running": False,
+            "tick_count": 0,
+            "last_started_at": None,
+            "last_completed_at": None,
+            "last_error": None,
+            "last_summary_counts": {},
+        },
+    )
+
+    resp = client.get("/api/diagnostics")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert not any(
+        check["name"] == "project_review_scheduler"
+        and check["status"] == "degraded"
         for check in body["checks"]
     )
 
