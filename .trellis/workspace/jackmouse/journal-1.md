@@ -663,3 +663,37 @@ Added diagnostics health derivation so GitHub PR follow-up and project review sc
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: Project review scheduler stale health
+
+**Date**: 2026-06-08
+**Task**: Project review scheduler stale health
+**Package**: ccgui
+**Branch**: `codex/archive-project-review-scheduler-stale-health`
+
+### Summary
+
+Merged PR #15 for read-only project review scheduler stale diagnostics. Scheduler health now degrades when last_completed_at is older than interval_s * 2 while preserving last_error and running precedence; backend diagnostics tests and quality gates passed before merge.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6d42404` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
