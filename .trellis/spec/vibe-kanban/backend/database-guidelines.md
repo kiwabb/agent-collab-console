@@ -257,6 +257,10 @@ await store.save_conductor_task(task)
   - Request body: `{"status": "proposed" | "accepted" | "rejected" | "applied"}`
   - Response body: the same proposal object shape used inside the list endpoint's
     `proposals[]` array.
+- Apply-plan API:
+  - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply-plan`
+  - Response body: `{proposal, plan}` where `proposal` is the same proposal
+    object shape and `plan` is a dry-run application plan.
 
 ### 3. Contracts
 
@@ -279,6 +283,15 @@ await store.save_conductor_task(task)
 - The review API is status-only. It updates only `status` and `updated_at`; it
   must not mutate team notes, `.trellis/spec/`, prompts, policies, tools,
   memory rows, or source code.
+- The apply-plan API is also non-mutating. It may translate an accepted proposal
+  into candidate change metadata, but it must not write files, update proposal
+  status, append team notes, edit specs, change prompts/policies/tools, or
+  create source-code patches directly.
+- Apply plans are allowed only for `status == "accepted"`. The output is a
+  preflight contract for a later reviewed task/PR, not the application itself.
+- A `project_memory` apply plan may include an `append_markdown` candidate for
+  `.agent-collab/team_notes.md`. Other target kinds must use a reviewed PR/task
+  candidate such as `open_pr_task`, not a guessed direct file patch.
 - The review API is project-scoped. A proposal whose `project_id` differs from
   the path `project_id` is treated as not found rather than exposed.
 - The terminal seal order for done graphs is:
@@ -302,6 +315,14 @@ await store.save_conductor_task(task)
   `"Self-improvement proposal not found"`.
 - Invalid review status transition -> HTTP `409`, detail starts with
   `"Invalid self-improvement proposal status transition"`.
+- `codex_store is None` on the apply-plan API -> HTTP `503`, detail
+  `"SQLite store not available"`.
+- Unknown `project_id` on the apply-plan API -> HTTP `404`, detail
+  `"Project not found"`.
+- Unknown or cross-project proposal on the apply-plan API -> HTTP `404`, detail
+  `"Self-improvement proposal not found"`.
+- Apply-plan request for `proposed`, `rejected`, or `applied` proposal -> HTTP
+  `409`, detail states that the proposal must be accepted.
 - `limit < 1` or `limit > 100` on the read API -> FastAPI validation `422`.
 - Duplicate `fingerprint` on save -> update existing row fields and keep one
   logical proposal.
@@ -322,6 +343,10 @@ await store.save_conductor_task(task)
   remain unchanged.
 - Good: an accepted proposal is marked `applied` after a separate reviewed change
   lands; the API records the status only.
+- Good: an accepted `project_memory` proposal returns a dry-run
+  `.agent-collab/team_notes.md` append candidate, and the file remains unchanged.
+- Good: an accepted `code_spec` proposal returns an `open_pr_task` candidate so a
+  later reviewed PR can edit the right spec with tests.
 - Base: a clean trivial completed issue creates no proposal and no error.
 - Bad: appending a new proposal row on every recovery/seal run for the same
   lesson.
@@ -329,6 +354,11 @@ await store.save_conductor_task(task)
   the review-only slice.
 - Bad: allowing `rejected -> accepted` through the status API without an audit
   model for resurrection.
+- Bad: an apply-plan endpoint that writes `team_notes.md` or marks the proposal
+  `applied` in the same request.
+- Bad: returning a direct `patch_file` candidate for `code_spec`,
+  `conductor_policy`, `runtime_tooling`, or `benchmark_eval` before a reviewed
+  implementation task exists.
 - Bad: allowing proposal extraction failure to prevent `issue.status =
   "completed"` after a done graph.
 
@@ -349,6 +379,11 @@ await store.save_conductor_task(task)
 - API: review endpoint covers `proposed -> accepted`, `proposed -> rejected`,
   `accepted -> applied`, idempotent repeats, `409` invalid transitions, `404`
   unknown/cross-project proposals, and `503` store unavailable.
+- Apply-plan: service tests cover `project_memory` append candidates and
+  non-memory `open_pr_task` candidates.
+- API: apply-plan endpoint covers accepted memory/non-memory proposals, `409`
+  non-accepted statuses, `404` unknown/cross-project proposals, `503` store
+  unavailable, and no proposal status mutation.
 
 ### 7. Wrong vs Correct
 
@@ -389,4 +424,23 @@ if not _is_self_improvement_proposal_status_transition_allowed(proposal.status, 
     raise HTTPException(status_code=409, detail="Invalid self-improvement proposal status transition")
 updated = await store.update_self_improvement_proposal_status(proposal.id, request.status)
 return _self_improvement_proposal_to_dict(updated)
+```
+
+Wrong:
+
+```python
+if proposal.status == "accepted":
+    Path(repo_path, ".agent-collab/team_notes.md").write_text(proposal.recommendation)
+    await store.update_self_improvement_proposal_status(proposal.id, "applied")
+```
+
+Correct:
+
+```python
+if proposal.status != "accepted":
+    raise HTTPException(status_code=409, detail="Self-improvement proposal must be accepted")
+return {
+    "proposal": _self_improvement_proposal_to_dict(proposal),
+    "plan": build_self_improvement_apply_plan(proposal),  # dry-run metadata only
+}
 ```
