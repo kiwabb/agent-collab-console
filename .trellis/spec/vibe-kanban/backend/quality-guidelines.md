@@ -95,6 +95,10 @@ store gets a real-async-store migration test.
   `runtime_catalog`, `github_pr_followup`, `project_review_scheduler`,
   `executors`, `websockets`, `config`, `checks`.
 - `status` is `"ok"` only when all checks are ok; use `"degraded"` when any check is degraded or errored but the endpoint can still return a snapshot.
+- Supervisor snapshots such as `github_pr_followup` and
+  `project_review_scheduler` produce degraded checks when `last_error` is set
+  or when `running` is `true`; running-state details must be short generic
+  messages, not project/issue/task content.
 - Runtime catalog entries may expose booleans such as `api_endpoint_configured` and `api_key_configured`.
 - Runtime catalog entries must not expose raw secret values, raw API keys, bearer tokens, auth headers, or provider credentials.
 - Config fields should expose booleans for whether sensitive paths or env values are configured, not their raw values.
@@ -105,6 +109,12 @@ store gets a real-async-store migration test.
 - Database query raises -> keep HTTP `200`, set `database.status = "error"`, append a database error check, and set top-level `status = "degraded"`.
 - Runtime catalog load raises -> keep HTTP `200`, set `runtime_catalog.status = "error"`, append a runtime catalog error check, and set top-level `status = "degraded"`.
 - Runtime catalog has no enabled executor -> keep HTTP `200`, append a degraded runtime catalog check, and set top-level `status = "degraded"`.
+- Supervisor snapshot has `last_error` -> keep HTTP `200`, append a degraded
+  supervisor check using that safe error text, and set top-level `status =
+  "degraded"`.
+- Supervisor snapshot has `running=true` and no error -> keep HTTP `200`,
+  append a degraded supervisor check with a generic running-state detail, and
+  set top-level `status = "degraded"`.
 
 #### 5. Good/Base/Bad Cases
 
@@ -919,7 +929,7 @@ ProjectConductor.handle_task(ConductorTask(task_kind="scheduled_review")) -> {
 - Endpoint: project follow-up returns best-effort summary instead of HTTP
   failing for one broken PR.
 - Diagnostics includes top-level `github_pr_followup` and degrades when its
-  `last_error` is present.
+  `last_error` is present or `running` is `true`.
 - ProjectConductor scheduled review: calls project sweep with `auto_merge=True`
   and records the summary in return payload, `result_json`, and hot memory.
 - ProjectConductor scheduled review: sweep exception is reported without
@@ -1067,7 +1077,8 @@ def get_project_review_scheduler_status() -> dict[str, object]
   task.
 - Scheduler status records success, failure, and cancellation transitions.
 - Diagnostics includes `project_review_scheduler` with configured interval and
-  limit, and does not leak runtime catalog API keys.
+  limit, degrades when `last_error` is present or `running` is `true`, and does
+  not leak runtime catalog API keys.
 
 #### 5. Wrong vs Correct
 

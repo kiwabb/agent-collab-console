@@ -122,6 +122,83 @@ def test_diagnostics_includes_project_review_scheduler_error(client):
     assert scheduler["interval_s"] == 11
     assert scheduler["limit"] == 4
     assert scheduler["last_error"] == "RuntimeError: store temporarily unavailable"
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert any(
+        check["name"] == "project_review_scheduler"
+        and check["status"] == "degraded"
+        and check["detail"] == "RuntimeError: store temporarily unavailable"
+        for check in body["checks"]
+    )
+
+
+def test_diagnostics_degrades_when_github_pr_followup_is_running(client, monkeypatch):
+    from app.application import github_pr_followup
+    from app.application.project_review_scheduler import reset_project_review_scheduler_status
+
+    reset_project_review_scheduler_status()
+    monkeypatch.setattr(
+        github_pr_followup,
+        "get_github_pr_followup_status",
+        lambda: {
+            "configured": True,
+            "running": True,
+            "sweep_count": 3,
+            "last_started_at": "2026-06-08T10:00:00",
+            "last_completed_at": None,
+            "last_error": None,
+            "last_summary_counts": {},
+            "auto_merge_enabled": True,
+        },
+    )
+
+    resp = client.get("/api/diagnostics")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["github_pr_followup"]["running"] is True
+    assert any(
+        check["name"] == "github_pr_followup"
+        and check["status"] == "degraded"
+        and check["detail"] == "GitHub PR follow-up sweep is running"
+        for check in body["checks"]
+    )
+
+
+def test_diagnostics_degrades_when_project_review_scheduler_is_running(client, monkeypatch):
+    from app.application.github_pr_followup import reset_github_pr_followup_status
+    from app.application import project_review_scheduler
+
+    reset_github_pr_followup_status()
+    monkeypatch.setattr(
+        project_review_scheduler,
+        "get_project_review_scheduler_status",
+        lambda: {
+            "configured": True,
+            "interval_s": 3600.0,
+            "limit": 25,
+            "running": True,
+            "tick_count": 5,
+            "last_started_at": "2026-06-08T10:00:00",
+            "last_completed_at": None,
+            "last_error": None,
+            "last_summary_counts": {},
+        },
+    )
+
+    resp = client.get("/api/diagnostics")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["project_review_scheduler"]["running"] is True
+    assert any(
+        check["name"] == "project_review_scheduler"
+        and check["status"] == "degraded"
+        and check["detail"] == "Project review scheduler is running"
+        for check in body["checks"]
+    )
 
 
 def test_diagnostics_returns_503_when_store_unavailable(client, monkeypatch):
