@@ -5,6 +5,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
+import app.application.project_conductor as project_conductor_module
+from app.application.github_pr_followup import GitHubPRFollowupResult, GitHubPRFollowupSummary
 from app.application.project_conductor import ProjectConductor
 from app.domain.models import ConductorTask, Project, ProjectConductorState, ProjectMemoryEmbedding
 
@@ -141,6 +143,104 @@ def test_project_conductor_answer_uses_pinned_warm_and_cold_memory(tmp_path: Pat
         assert state.total_tasks_handled == 1
 
     _run(run())
+
+
+def test_project_conductor_scheduled_review_runs_pr_followup_sweep(monkeypatch, tmp_path: Path):
+    async def run():
+        store = AsyncSQLiteStore(tmp_path / "scheduled-review.db")
+        project = _project(tmp_path)
+        await store.save_project(project)
+        calls: list[dict[str, object]] = []
+
+        async def sweep_project_github_prs(project_id, *, store, event_bus, run_subprocess, auto_merge=False):
+            calls.append(
+                {
+                    "project_id": project_id,
+                    "store": store,
+                    "event_bus": event_bus,
+                    "run_subprocess": run_subprocess,
+                    "auto_merge": auto_merge,
+                }
+            )
+            return GitHubPRFollowupSummary(
+                project_id=project_id,
+                results=[GitHubPRFollowupResult(issue_id="issue-1", status="merged")],
+            )
+
+        monkeypatch.setattr(
+            project_conductor_module,
+            "sweep_project_github_prs",
+            sweep_project_github_prs,
+            raising=False,
+        )
+        monkeypatch.setattr(project_conductor_module, "_run_subprocess", object(), raising=False)
+
+        conductor = ProjectConductor(project_id=project.id, store=store, event_bus="events")
+        task = ConductorTask(
+            id=str(uuid4()),
+            project_id=project.id,
+            task_kind="scheduled_review",
+            payload={},
+        )
+
+        result = await conductor.handle_task(task)
+        loaded_task = await store.load_conductor_task(task.id)
+        state = await store.load_project_conductor_state(project.id)
+        hot = json.loads(state.hot_thread_json)
+        await store.close()
+        return result, loaded_task, hot, calls
+
+    result, loaded_task, hot, calls = _run(run())
+
+    assert len(calls) == 1
+    assert calls[0]["project_id"] == "project-1"
+    assert calls[0]["auto_merge"] is True
+    assert result["status"] == "done"
+    assert result["github_pr_followup"]["counts"] == {"merged": 1}
+    assert loaded_task.status == "done"
+    assert json.loads(loaded_task.result_json)["github_pr_followup"]["counts"] == {"merged": 1}
+    assert hot[-1]["github_pr_followup"]["counts"] == {"merged": 1}
+
+
+def test_project_conductor_scheduled_review_reports_pr_followup_failure(monkeypatch, tmp_path: Path):
+    async def run():
+        store = AsyncSQLiteStore(tmp_path / "scheduled-review-failure.db")
+        project = _project(tmp_path)
+        await store.save_project(project)
+
+        async def sweep_project_github_prs(project_id, *, store, event_bus, run_subprocess, auto_merge=False):
+            raise RuntimeError("gh auth expired")
+
+        monkeypatch.setattr(
+            project_conductor_module,
+            "sweep_project_github_prs",
+            sweep_project_github_prs,
+            raising=False,
+        )
+        monkeypatch.setattr(project_conductor_module, "_run_subprocess", object(), raising=False)
+
+        conductor = ProjectConductor(project_id=project.id, store=store, event_bus=None)
+        task = ConductorTask(
+            id=str(uuid4()),
+            project_id=project.id,
+            task_kind="scheduled_review",
+            payload={},
+        )
+
+        result = await conductor.handle_task(task)
+        loaded_task = await store.load_conductor_task(task.id)
+        await store.close()
+        return result, loaded_task
+
+    result, loaded_task = _run(run())
+
+    assert result["status"] == "done"
+    assert result["github_pr_followup"] == {
+        "status": "failed",
+        "error": "gh auth expired",
+    }
+    assert loaded_task.status == "done"
+    assert json.loads(loaded_task.result_json)["github_pr_followup"]["status"] == "failed"
 
 
 def test_project_conductor_api_exposes_state_and_ask(monkeypatch, tmp_path: Path):
