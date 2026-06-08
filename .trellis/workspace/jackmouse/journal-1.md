@@ -594,3 +594,38 @@ Added safe project review scheduler operational status, exposed it through diagn
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: GitHub PR follow-up diagnostics
+
+**Date**: 2026-06-08
+**Task**: GitHub PR follow-up diagnostics
+**Package**: ccgui
+**Branch**: `codex/archive-github-pr-followup-diagnostics`
+
+### Summary
+
+Added a safe in-memory GitHub PR follow-up sweep status snapshot, exposed it in diagnostics, covered success/failure transitions with backend tests, and updated the backend quality spec. PR #11 merged with CI green.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f9aa0f9` | (see git log) |
+| `90f613b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
