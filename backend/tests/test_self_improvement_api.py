@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.application.self_improvement_apply_service import build_self_improvement_apply_plan, hash_apply_candidate_content
-from app.domain.models import SelfImprovementApplicationEvent, SelfImprovementProposal
+from app.domain.models import CodexIssue, SelfImprovementApplicationEvent, SelfImprovementProposal
 
 
 pytestmark = [
@@ -69,6 +69,35 @@ def _seed_proposal(proposal: SelfImprovementProposal) -> None:
 
     assert bootstrap_module.store is not None
     bootstrap_module.store.save_self_improvement_proposal(proposal)
+
+
+def _source_issue(
+    project_id: str,
+    issue_id: str = "issue-1",
+    *,
+    session_id: str = "workspace-1",
+) -> CodexIssue:
+    return CodexIssue(
+        id=issue_id,
+        session_id=session_id,
+        project_id=project_id,
+        title="Original runtime failure",
+        description="The source issue that produced the proposal.",
+        current_phase="done",
+        status="completed",
+        executor="codex",
+        provider="openai",
+        model="gpt-5",
+        created_at=datetime(2026, 6, 8, 9, 0, 0),
+        updated_at=datetime(2026, 6, 8, 9, 1, 0),
+    )
+
+
+def _seed_issue(issue: CodexIssue) -> None:
+    import app.bootstrap as bootstrap_module
+
+    assert bootstrap_module.store is not None
+    bootstrap_module.store.save_codex_issue(issue)
 
 
 def _application_event(
@@ -341,6 +370,199 @@ def test_project_self_improvement_proposal_apply_plan_returns_503_when_store_una
 
     resp = client.post(
         "/api/codex/projects/project-1/self-improvement-proposals/proposal-1/apply-plan"
+    )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "SQLite store not available"
+
+
+def test_project_self_improvement_proposal_activate_task_creates_issue_worktree_and_event(client, tmp_path):
+    project = _create_project(client, tmp_path, name="self-improvement-activate-task")
+    source_issue = _source_issue(project["id"])
+    proposal = _proposal(project["id"], target_kind="code_spec", status="accepted")
+    _seed_issue(source_issue)
+    _seed_proposal(proposal)
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    activation = body["activation"]
+    issue = activation["issue"]
+    application = activation["application"]
+    assert body["proposal"]["status"] == "accepted"
+    assert activation["already_created"] is False
+    assert issue["id"] != source_issue.id
+    assert issue["project_id"] == project["id"]
+    assert issue["session_id"] == source_issue.session_id
+    assert issue["title"] == "Apply self-improvement proposal: Harden runtime failure handling"
+    assert issue["current_phase"] == "requirements"
+    assert issue["status"] == "open"
+    assert issue["executor"] == source_issue.executor
+    assert issue["provider"] == source_issue.provider
+    assert issue["model"] == source_issue.model
+    assert issue["git_branch"].startswith(f"issue/{issue['id'][:8]}-")
+    assert issue["git_base_branch"] == "main"
+    assert issue["git_worktree_path"]
+    assert Path(issue["git_worktree_path"]).is_dir()
+    assert "Proposal ID: `proposal-1`" in issue["description"]
+    assert "Target kind: `code_spec`" in issue["description"]
+    assert "Source issue ID: `issue-1`" in issue["description"]
+    assert "conductor_task: task-1" in issue["description"]
+    assert application["action"] == "open_pr_task"
+    assert application["status"] == "succeeded"
+    assert application["path"] == f"codex_issues/{issue['id']}"
+    assert application["error"] is None
+    assert application["result"]["issue_id"] == issue["id"]
+    assert application["result"]["issue_title"] == issue["title"]
+    assert application["result"]["git_branch"] == issue["git_branch"]
+    assert application["result"]["git_base_branch"] == "main"
+    assert application["result"]["git_worktree_path"] == issue["git_worktree_path"]
+
+    proposals = client.get(f"/api/codex/projects/{project['id']}/self-improvement-proposals").json()["proposals"]
+    assert proposals[0]["status"] == "accepted"
+    events = client.get(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/applications"
+    ).json()["applications"]
+    assert len(events) == 1
+    assert events[0]["action"] == "open_pr_task"
+
+
+def test_project_self_improvement_proposal_activate_task_is_idempotent(client, tmp_path):
+    project = _create_project(client, tmp_path, name="self-improvement-activate-idempotent")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status="accepted"))
+
+    first = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+    second = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    first_activation = first.json()["activation"]
+    second_activation = second.json()["activation"]
+    assert first_activation["already_created"] is False
+    assert second_activation["already_created"] is True
+    assert second_activation["issue"]["id"] == first_activation["issue"]["id"]
+    events = client.get(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/applications"
+    ).json()["applications"]
+    assert len(events) == 1
+    issues = client.get(f"/api/codex/issues?project_id={project['id']}").json()
+    assert len([issue for issue in issues if issue["title"].startswith("Apply self-improvement proposal:")]) == 1
+
+
+def test_project_self_improvement_proposal_activate_task_rejects_project_memory(client, tmp_path):
+    project = _create_project(client, tmp_path, name="self-improvement-activate-memory")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="project_memory", status="accepted"))
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+
+    assert resp.status_code == 409
+    assert "project_memory" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("status", ["proposed", "rejected", "applied"])
+def test_project_self_improvement_proposal_activate_task_requires_accepted_status(client, tmp_path, status):
+    project = _create_project(client, tmp_path, name=f"self-improvement-activate-{status}")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status=status))
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+
+    assert resp.status_code == 409
+    assert "accepted" in resp.json()["detail"]
+
+
+def test_project_self_improvement_proposal_activate_task_returns_404_for_unknown_or_cross_project(client, tmp_path):
+    source_project = _create_project(client, tmp_path, name="self-improvement-activate-source")
+    other_project = _create_project(client, tmp_path, name="self-improvement-activate-other")
+    _seed_issue(_source_issue(source_project["id"]))
+    _seed_proposal(_proposal(source_project["id"], target_kind="runtime_tooling", status="accepted"))
+
+    missing_project_resp = client.post(
+        "/api/codex/projects/missing-project/self-improvement-proposals/proposal-1/activate-task"
+    )
+    missing_proposal_resp = client.post(
+        f"/api/codex/projects/{source_project['id']}/self-improvement-proposals/missing/activate-task"
+    )
+    cross_project_resp = client.post(
+        f"/api/codex/projects/{other_project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+
+    assert missing_project_resp.status_code == 404
+    assert missing_project_resp.json()["detail"] == "Project not found"
+    assert missing_proposal_resp.status_code == 404
+    assert missing_proposal_resp.json()["detail"] == "Self-improvement proposal not found"
+    assert cross_project_resp.status_code == 404
+    assert cross_project_resp.json()["detail"] == "Self-improvement proposal not found"
+
+
+def test_project_self_improvement_proposal_activate_task_rejects_missing_source_issue(client, tmp_path):
+    project = _create_project(client, tmp_path, name="self-improvement-activate-missing-source")
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status="accepted"))
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+
+    assert resp.status_code == 409
+    assert "source issue" in resp.json()["detail"]
+
+
+def test_project_self_improvement_proposal_activate_task_records_failed_event_on_worktree_error(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    from app.application.worktree_manager import WorktreeError
+    from app.interfaces import api as api_module
+
+    project = _create_project(client, tmp_path, name="self-improvement-activate-worktree-error")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status="accepted"))
+
+    async def fail_prepare_issue_worktree(*_args, **_kwargs):
+        raise WorktreeError("synthetic worktree failure")
+
+    monkeypatch.setattr(api_module.worktree_manager, "prepare_issue_worktree", fail_prepare_issue_worktree)
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+
+    assert resp.status_code == 500
+    assert "synthetic worktree failure" in resp.json()["detail"]
+    proposals = client.get(f"/api/codex/projects/{project['id']}/self-improvement-proposals").json()["proposals"]
+    assert proposals[0]["status"] == "accepted"
+    events = client.get(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/applications"
+    ).json()["applications"]
+    assert len(events) == 1
+    assert events[0]["action"] == "open_pr_task"
+    assert events[0]["status"] == "failed"
+    assert "synthetic worktree failure" in events[0]["error"]
+    issues = client.get(f"/api/codex/issues?project_id={project['id']}").json()
+    assert len([issue for issue in issues if issue["title"].startswith("Apply self-improvement proposal:")]) == 0
+
+
+def test_project_self_improvement_proposal_activate_task_returns_503_when_store_unavailable(client, monkeypatch):
+    from app.interfaces import api as api_module
+
+    monkeypatch.setattr(api_module, "codex_store", None)
+
+    resp = client.post(
+        "/api/codex/projects/project-1/self-improvement-proposals/proposal-1/activate-task"
     )
 
     assert resp.status_code == 503

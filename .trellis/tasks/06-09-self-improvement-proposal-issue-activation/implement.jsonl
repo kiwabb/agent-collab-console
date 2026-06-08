@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "shared thinking guides for backend workflow changes"}
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "backend layer conventions"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "self-improvement proposal ledger and application event contracts"}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "service/API error handling patterns"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "backend testing and quality bar"}

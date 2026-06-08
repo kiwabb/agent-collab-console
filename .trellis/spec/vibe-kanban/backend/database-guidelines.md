@@ -285,6 +285,14 @@ await store.save_conductor_task(task)
   - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply-plan`
   - Response body: `{proposal, plan}` where `proposal` is the same proposal
     object shape and `plan` is a dry-run application plan.
+- Activation API:
+  - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/activate-task`
+  - Response body: `{proposal, activation}` where `proposal` is the same
+    proposal object shape and `activation` contains:
+    - `issue`: the created or existing follow-up `CodexIssue` JSON.
+    - `application`: the `open_pr_task` application event JSON.
+    - `already_created`: `false` for first activation, `true` for idempotent
+      reuse of an existing successful activation.
 - Reviewed project-memory apply API:
   - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply`
   - Request body: `{"content_sha256": "<64 lowercase hex sha256>"}`
@@ -327,6 +335,32 @@ await store.save_conductor_task(task)
 - A `project_memory` apply plan may include an `append_markdown` candidate for
   `.agent-collab/team_notes.md`. Other target kinds must use a reviewed PR/task
   candidate such as `open_pr_task`, not a guessed direct file patch.
+- The activation API is the reviewed bridge from a non-memory `open_pr_task`
+  candidate to the autonomous issue pipeline. It is allowed only for
+  `status == "accepted"` and `target_kind != "project_memory"`.
+- The activation API must require the proposal source `CodexIssue` to exist and
+  belong to the same project. The follow-up issue inherits the source issue's
+  `session_id`, `executor`, `provider`, and `model`; it uses the target project
+  and the project's default issue base branch.
+- A first activation creates one follow-up `CodexIssue`, prepares its issue
+  worktree through `worktree_manager.prepare_issue_worktree`, appends project
+  audit with `event="created"`, emits `issue_created`, and leaves proposal
+  status unchanged.
+- The follow-up issue title comes from the single `open_pr_task` candidate.
+  Its description includes the candidate body plus proposal id, target kind,
+  source issue id, severity, confidence, and evidence lines so the downstream
+  engineering task is self-contained.
+- Activation must record one `self_improvement_application_events` row:
+  successful activation -> `action="open_pr_task"`, `status="succeeded"`,
+  `path="codex_issues/{issue_id}"`, and `result_json` containing `issue_id`,
+  `issue_title`, `git_branch`, `git_base_branch`, and `git_worktree_path`.
+- Activation is idempotent. If a prior successful `open_pr_task` event for the
+  same project/proposal points to an existing same-project issue, return that
+  issue and event with `already_created: true`; do not create another issue,
+  worktree, audit row, or application event.
+- Worktree or store failure after project/proposal/source-issue resolution must
+  record a failed `open_pr_task` application event with safe error text when
+  the store can still write audit rows. Proposal status must remain unchanged.
 - The reviewed apply API is the only self-improvement endpoint in this slice
   allowed to write project memory. It is limited to `status == "accepted"` and
   `target_kind == "project_memory"`.
@@ -409,6 +443,24 @@ await store.save_conductor_task(task)
   `"Self-improvement proposal not found"`.
 - Apply-plan request for `proposed`, `rejected`, or `applied` proposal -> HTTP
   `409`, detail states that the proposal must be accepted.
+- `codex_store is None` on the activation API -> HTTP `503`, detail
+  `"SQLite store not available"`.
+- Unknown `project_id` on the activation API -> HTTP `404`, detail
+  `"Project not found"`.
+- Unknown or cross-project proposal on the activation API -> HTTP `404`, detail
+  `"Self-improvement proposal not found"`.
+- Activation request for `proposed`, `rejected`, or `applied` proposal -> HTTP
+  `409`, detail states that the proposal must be accepted; proposal status
+  remains unchanged.
+- Activation request for `project_memory` target kind -> HTTP `409`, detail
+  states that project-memory proposals use the reviewed project-memory apply
+  endpoint; proposal status remains unchanged.
+- Activation request whose source issue is missing or belongs to another
+  project -> HTTP `409`, detail mentions the source issue; proposal status
+  remains unchanged.
+- Worktree or store failure while creating the follow-up issue -> HTTP `500`,
+  records a failed `open_pr_task` event when possible, and proposal status
+  remains unchanged.
 - `codex_store is None` on the reviewed apply API -> HTTP `503`, detail
   `"SQLite store not available"`.
 - Unknown `project_id` on the reviewed apply API -> HTTP `404`, detail
@@ -497,6 +549,12 @@ await store.save_conductor_task(task)
   and still moves the proposal back to `accepted`.
 - Good: an accepted `code_spec` proposal returns an `open_pr_task` candidate so a
   later reviewed PR can edit the right spec with tests.
+- Good: activating an accepted `runtime_tooling` proposal creates one follow-up
+  Codex issue/worktree, records an `open_pr_task` succeeded event, and leaves
+  the proposal `accepted`.
+- Good: repeating activation for the same proposal returns the existing
+  follow-up issue/event with `already_created: true` and does not duplicate
+  issue worktrees.
 - Base: a clean trivial completed issue creates no proposal and no error.
 - Bad: appending a new proposal row on every recovery/seal run for the same
   lesson.
@@ -521,6 +579,12 @@ await store.save_conductor_task(task)
 - Bad: returning a direct `patch_file` candidate for `code_spec`,
   `conductor_policy`, `runtime_tooling`, or `benchmark_eval` before a reviewed
   implementation task exists.
+- Bad: activating a non-memory proposal without writing an application event,
+  because operators then cannot audit which follow-up issue was created.
+- Bad: repeated activation creating multiple follow-up issues for the same
+  proposal.
+- Bad: marking a proposal `applied` just because a follow-up issue was opened;
+  the proposal remains `accepted` until the reviewed change lands elsewhere.
 - Bad: allowing proposal extraction failure to prevent `issue.status =
   "completed"` after a done graph.
 
@@ -555,6 +619,16 @@ await store.save_conductor_task(task)
 - API: apply-plan endpoint covers accepted memory/non-memory proposals, `409`
   non-accepted statuses, `404` unknown/cross-project proposals, `503` store
   unavailable, and no proposal status mutation.
+- API: activation endpoint covers accepted non-memory proposal creating a
+  follow-up Codex issue/worktree, inherited source issue session/runtime
+  metadata, `issue_created`/project audit/application event metadata, and no
+  proposal status mutation.
+- API: activation endpoint covers idempotent repeated activation returning the
+  existing issue/event without creating another issue or application event.
+- API: activation endpoint covers `409` project-memory target kind,
+  non-accepted statuses, and missing/cross-project source issue; `404`
+  unknown/cross-project project/proposal; `503` store unavailable; and `500`
+  worktree/store failure with failed application event recording.
 - Reviewed apply: service tests cover candidate content hashing, successful
   project-memory append, marker idempotence, hash mismatch, unsupported target
   kind, non-accepted status, and unavailable repo path.
@@ -635,6 +709,58 @@ return {
     "proposal": _self_improvement_proposal_to_dict(proposal),
     "plan": build_self_improvement_apply_plan(proposal),  # dry-run metadata only
 }
+```
+
+Wrong:
+
+```python
+issue = CodexIssue(
+    id=str(uuid4()),
+    session_id=proposal.issue_id,  # proposal issue id is not a workspace/session id
+    project_id=project.id,
+    title=proposal.title,
+    description=proposal.recommendation,
+)
+await store.save_codex_issue(issue)
+await store.update_self_improvement_proposal_status(proposal.id, "applied")
+```
+
+Correct:
+
+```python
+source_issue = await store.load_codex_issue(proposal.issue_id)
+if source_issue is None or source_issue.project_id != project_id:
+    raise HTTPException(status_code=409, detail="Self-improvement proposal source issue is unavailable")
+candidate = open_pr_task_candidate_from_apply_plan(proposal)
+issue = CodexIssue(
+    id=str(uuid4()),
+    session_id=source_issue.session_id,
+    project_id=project.id,
+    title=candidate["title"],
+    description=activation_description(proposal, candidate),
+    executor=source_issue.executor,
+    provider=source_issue.provider,
+    model=source_issue.model,
+)
+branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+issue.git_branch = branch
+issue.git_worktree_path = worktree_path
+issue.git_base_branch = base
+await store.save_codex_issue(issue)
+await record_application_event(
+    proposal,
+    action="open_pr_task",
+    status="succeeded",
+    path=f"codex_issues/{issue.id}",
+    result={
+        "issue_id": issue.id,
+        "issue_title": issue.title,
+        "git_branch": branch,
+        "git_base_branch": base,
+        "git_worktree_path": worktree_path,
+    },
+)
+return {"proposal": proposal_to_dict(proposal), "activation": {"issue": issue_to_dict(issue)}}
 ```
 
 Wrong:
