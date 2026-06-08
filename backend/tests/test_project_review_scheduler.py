@@ -7,7 +7,10 @@ from datetime import datetime
 import pytest
 
 from app.application.project_review_scheduler import (
+    ProjectReviewTickResult,
     ProjectReviewTickSummary,
+    get_project_review_scheduler_status,
+    reset_project_review_scheduler_status,
     run_project_review_scheduler_loop,
     run_project_review_tick,
 )
@@ -112,6 +115,7 @@ async def test_project_review_tick_limit_bounds_project_selection():
 
 @pytest.mark.asyncio
 async def test_project_review_scheduler_loop_repeats_after_each_sleep():
+    reset_project_review_scheduler_status()
     ticks = 0
     sleeps: list[float] = []
 
@@ -141,6 +145,7 @@ async def test_project_review_scheduler_loop_repeats_after_each_sleep():
 
 @pytest.mark.asyncio
 async def test_project_review_scheduler_loop_survives_tick_exception():
+    reset_project_review_scheduler_status()
     attempts = 0
     sleeps = 0
 
@@ -171,6 +176,8 @@ async def test_project_review_scheduler_loop_survives_tick_exception():
 
 @pytest.mark.asyncio
 async def test_project_review_scheduler_loop_propagates_cancellation_from_tick():
+    reset_project_review_scheduler_status()
+
     async def tick(store, *, event_bus=None, limit=None):
         raise asyncio.CancelledError
 
@@ -183,3 +190,94 @@ async def test_project_review_scheduler_loop_propagates_cancellation_from_tick()
             tick_fn=tick,
             sleep_fn=sleep,
         )
+
+
+@pytest.mark.asyncio
+async def test_project_review_scheduler_status_records_successful_tick():
+    reset_project_review_scheduler_status()
+
+    async def tick(store, *, event_bus=None, limit=None):
+        assert limit == 3
+        return ProjectReviewTickSummary(
+            results=[
+                ProjectReviewTickResult(
+                    project_id="project-1",
+                    task_id="task-1",
+                    status="done",
+                )
+            ]
+        )
+
+    async def sleep(interval: float) -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_project_review_scheduler_loop(
+            _Store([]),
+            interval_s=9,
+            limit=3,
+            tick_fn=tick,
+            sleep_fn=sleep,
+        )
+
+    status = get_project_review_scheduler_status()
+    assert status["configured"] is True
+    assert status["interval_s"] == 9
+    assert status["limit"] == 3
+    assert status["running"] is False
+    assert status["tick_count"] == 1
+    assert status["last_started_at"]
+    assert status["last_completed_at"]
+    assert status["last_error"] is None
+    assert status["last_summary_counts"] == {"done": 1}
+
+
+@pytest.mark.asyncio
+async def test_project_review_scheduler_status_records_failed_tick():
+    reset_project_review_scheduler_status()
+
+    async def tick(store, *, event_bus=None, limit=None):
+        raise RuntimeError("store temporarily unavailable")
+
+    async def sleep(interval: float) -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_project_review_scheduler_loop(
+            _Store([]),
+            interval_s=5,
+            limit=2,
+            tick_fn=tick,
+            sleep_fn=sleep,
+        )
+
+    status = get_project_review_scheduler_status()
+    assert status["running"] is False
+    assert status["tick_count"] == 1
+    assert status["last_completed_at"]
+    assert status["last_error"] == "RuntimeError: store temporarily unavailable"
+    assert status["last_summary_counts"] == {}
+
+
+@pytest.mark.asyncio
+async def test_project_review_scheduler_status_clears_running_on_tick_cancellation():
+    reset_project_review_scheduler_status()
+
+    async def tick(store, *, event_bus=None, limit=None):
+        raise asyncio.CancelledError
+
+    async def sleep(interval: float) -> None:
+        raise AssertionError("sleep should not run")
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_project_review_scheduler_loop(
+            _Store([]),
+            interval_s=7,
+            tick_fn=tick,
+            sleep_fn=sleep,
+        )
+
+    status = get_project_review_scheduler_status()
+    assert status["running"] is False
+    assert status["tick_count"] == 0
+    assert status["last_completed_at"] is None

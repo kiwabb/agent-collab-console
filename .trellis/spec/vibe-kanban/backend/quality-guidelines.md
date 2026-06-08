@@ -91,7 +91,9 @@ store gets a real-async-store migration test.
 
 #### 3. Contracts
 
-- Top-level response fields: `service`, `status`, `generated_at`, `database`, `runtime_catalog`, `executors`, `websockets`, `config`, `checks`.
+- Top-level response fields: `service`, `status`, `generated_at`, `database`,
+  `runtime_catalog`, `project_review_scheduler`, `executors`, `websockets`,
+  `config`, `checks`.
 - `status` is `"ok"` only when all checks are ok; use `"degraded"` when any check is degraded or errored but the endpoint can still return a snapshot.
 - Runtime catalog entries may expose booleans such as `api_endpoint_configured` and `api_key_configured`.
 - Runtime catalog entries must not expose raw secret values, raw API keys, bearer tokens, auth headers, or provider credentials.
@@ -1002,6 +1004,8 @@ async def run_project_review_scheduler_loop(
     tick_fn=run_project_review_tick,
     sleep_fn=asyncio.sleep,
 ) -> None
+
+def get_project_review_scheduler_status() -> dict[str, object]
 ```
 
 #### 3. Contracts
@@ -1018,6 +1022,18 @@ async def run_project_review_scheduler_loop(
   survival, and cancellation are deterministic.
 - FastAPI lifespan starts the loop only when `async_store` is available, names
   the task `project-review-scheduler`, and cancels/awaits it during shutdown.
+- The loop MUST maintain an in-memory operational status snapshot with only
+  safe fields: `configured`, `interval_s`, `limit`, `running`, `tick_count`,
+  `last_started_at`, `last_completed_at`, `last_error`, and
+  `last_summary_counts`.
+- `GET /api/diagnostics` MUST expose that snapshot as top-level
+  `project_review_scheduler`. It must not expose project names, repo paths,
+  prompts, task payloads, credentials, or full tracebacks.
+- A successful tick records completion time, increments `tick_count`, clears
+  `last_error`, and stores summary counts. A regular tick exception records
+  safe error text, increments `tick_count`, and keeps the loop alive.
+- Cancellation sets `running=False` and propagates `asyncio.CancelledError`; it
+  must not be counted as a successful completed tick.
 
 #### 4. Tests Required
 
@@ -1026,6 +1042,9 @@ async def run_project_review_scheduler_loop(
 - Tick or sleep raises `CancelledError` -> cancellation propagates.
 - Lifespan creates and later cancels the named `project-review-scheduler`
   task.
+- Scheduler status records success, failure, and cancellation transitions.
+- Diagnostics includes `project_review_scheduler` with configured interval and
+  limit, and does not leak runtime catalog API keys.
 
 #### 5. Wrong vs Correct
 
@@ -1043,6 +1062,14 @@ await run_project_review_scheduler_loop(
     event_bus=event_bus,
     interval_s=timeouts.project_review_interval_s(),
 )
+```
+
+Correct:
+```python
+return {
+    "project_review_scheduler": get_project_review_scheduler_status(),
+    ...
+}
 ```
 
 ---
