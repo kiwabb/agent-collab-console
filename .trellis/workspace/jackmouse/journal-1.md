@@ -836,3 +836,37 @@ Added scheduler-level diff completion guard for workflow-backed Engineer nodes. 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 25: Self-improvement proposal review API
+
+**Date**: 2026-06-08
+**Task**: Self-improvement proposal review API
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-proposal-review-api`
+
+### Summary
+
+Added a status-only review API for self-improvement proposals, including sync/async store load and status update methods, project-scoped PATCH transition handling, backend contract docs, and tests. PR #23 merged after backend and frontend CI passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `def982b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
