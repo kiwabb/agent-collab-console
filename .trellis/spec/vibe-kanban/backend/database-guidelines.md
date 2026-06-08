@@ -368,6 +368,18 @@ await store.save_conductor_task(task)
   reviewed PR/task flows until they have their own audited execution model.
 - The review API is project-scoped. A proposal whose `project_id` differs from
   the path `project_id` is treated as not found rather than exposed.
+- A completed capability issue with no task-level benchmark/evaluation evidence
+  must create one review-only `benchmark_eval` proposal. The stable rule id is
+  `missing_capability_eval_contract`, the severity is at least `medium`, and
+  the evidence list includes a `codex_issue` pointer plus the relevant
+  `conductor_task` pointers.
+- Capability intent may be detected from issue title/description and conductor
+  task payload/result text. Benchmark/evaluation evidence is detected only from
+  task payload/result text; an issue asking for SWE-bench or evaluation work is
+  not itself proof that a benchmark was run.
+- Task evidence such as `benchmark_run`, `fixture_id`, `pass_at_1`, `pass@1`,
+  calibration output, benchmark artifacts, or `backend/benchmark` references
+  suppresses a redundant `benchmark_eval` proposal.
 - The terminal seal order for done graphs is:
   1. persist graph status;
   2. call `record_project_memory(graph.id, store)`;
@@ -438,6 +450,11 @@ await store.save_conductor_task(task)
 - `limit < 1` or `limit > 100` on the read API -> FastAPI validation `422`.
 - Duplicate `fingerprint` on save -> update existing row fields and keep one
   logical proposal.
+- Completed capability issue without benchmark/evaluation task evidence -> save
+  one `benchmark_eval` proposal with fingerprint
+  `project_id|issue_id|benchmark_eval|missing_capability_eval_contract`.
+- Capability issue whose task payload/result includes explicit benchmark or
+  eval-run evidence -> do not save a redundant `benchmark_eval` proposal.
 - Missing conductor/QA artifacts -> produce fewer or zero proposals, not an
   exception.
 - Store write failure during terminal seal -> log warning and keep the graph
@@ -450,6 +467,12 @@ await store.save_conductor_task(task)
   conductor-task evidence pointer and stable fingerprint.
 - Good: a runtime traceback or stalled conductor task creates one
   `runtime_tooling` proposal and does not duplicate when extraction runs again.
+- Good: a capability issue for SWE-bench/autonomy improvement with no benchmark
+  run artifact creates one `benchmark_eval` proposal asking for a reviewed
+  fixture/eval before repeating similar work.
+- Good: a capability issue whose task result includes `benchmark_run` with a
+  `fixture_id` and `pass_at_1` does not create a redundant benchmark-eval
+  proposal.
 - Good: an operator accepts a proposed `code_spec` lesson with the review API;
   the proposal status becomes `accepted`, and all recommendation/evidence fields
   remain unchanged.
@@ -477,6 +500,8 @@ await store.save_conductor_task(task)
 - Base: a clean trivial completed issue creates no proposal and no error.
 - Bad: appending a new proposal row on every recovery/seal run for the same
   lesson.
+- Bad: treating the phrase "SWE-bench" in the issue title as evidence that an
+  evaluation actually ran.
 - Bad: auto-editing `.trellis/spec/` or project memory from the extractor in
   the review-only slice.
 - Bad: allowing `rejected -> accepted` through the status API without an audit
@@ -510,6 +535,10 @@ await store.save_conductor_task(task)
   rows while preserving all non-status fields and advancing `updated_at`.
 - Extraction: QA failure creates a `code_spec` proposal with evidence.
 - Extraction: runtime/conductor failure creates a `runtime_tooling` proposal.
+- Extraction: completed capability issue without benchmark/evaluation task
+  evidence creates one `benchmark_eval` proposal with issue/task evidence.
+- Extraction: capability issue with explicit benchmark/evaluation task evidence
+  does not create a redundant `benchmark_eval` proposal.
 - Extraction: clean issue creates no proposals.
 - Extraction: duplicate rule matches save once per issue/rule fingerprint.
 - Seal: done graph calls project memory and then self-improvement extraction.
@@ -521,6 +550,8 @@ await store.save_conductor_task(task)
   unknown/cross-project proposals, and `503` store unavailable.
 - Apply-plan: service tests cover `project_memory` append candidates and
   non-memory `open_pr_task` candidates.
+- Apply-plan: service tests cover `benchmark_eval` returning an `open_pr_task`
+  candidate and never a direct `patch_file` candidate.
 - API: apply-plan endpoint covers accepted memory/non-memory proposals, `409`
   non-accepted statuses, `404` unknown/cross-project proposals, `503` store
   unavailable, and no proposal status mutation.

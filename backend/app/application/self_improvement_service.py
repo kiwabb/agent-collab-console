@@ -11,6 +11,33 @@ from app.domain.models import CodexIssue, SelfImprovementProposal
 
 logger = logging.getLogger(__name__)
 
+_CAPABILITY_TERMS = (
+    "capability",
+    "autonomy",
+    "autonomous",
+    "solve rate",
+    "solve-rate",
+    "solver",
+    "swe-bench",
+    "swebench",
+    "pass@",
+    "pass_at",
+    "leaderboard",
+)
+
+_BENCHMARK_EVIDENCE_TERMS = (
+    "benchmark_run",
+    "benchmark fixture",
+    "fixture_id",
+    "pass_at_1",
+    "pass@1",
+    "calibration",
+    "eval run",
+    "evaluation run",
+    "benchmark artifact",
+    "backend/benchmark",
+)
+
 
 class _ProposalStore(Protocol):
     async def list_conductor_tasks(self, *, status: str | None = None) -> list[object]:
@@ -98,8 +125,48 @@ def _task_evidence(task: object, reason: str) -> dict[str, object]:
     }
 
 
+def _issue_evidence(issue: CodexIssue, reason: str) -> dict[str, object]:
+    return {
+        "kind": "codex_issue",
+        "id": issue.id,
+        "title": issue.title,
+        "reason": reason,
+    }
+
+
 def _task_result_text(task: object) -> str:
     return _json_text(getattr(task, "result_json", None))
+
+
+def _task_payload_text(task: object) -> str:
+    return _json_text(getattr(task, "payload", None))
+
+
+def _task_search_text(task: object) -> str:
+    return " ".join([_task_payload_text(task), _task_result_text(task)])
+
+
+def _issue_search_text(issue: CodexIssue) -> str:
+    return " ".join([issue.title or "", issue.description or ""])
+
+
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in terms)
+
+
+def _is_capability_issue(issue: CodexIssue, tasks: list[object]) -> bool:
+    search_text = " ".join(
+        [
+            _issue_search_text(issue),
+            *[_task_search_text(task) for task in tasks],
+        ]
+    )
+    return _contains_any(search_text, _CAPABILITY_TERMS)
+
+
+def _has_benchmark_eval_evidence(tasks: list[object]) -> bool:
+    return any(_contains_any(_task_search_text(task), _BENCHMARK_EVIDENCE_TERMS) for task in tasks)
 
 
 def _task_result_object(task: object) -> dict[str, object]:
@@ -223,6 +290,24 @@ def _classify_tasks(issue: CodexIssue, tasks: list[object]) -> list[SelfImprovem
                 confidence=0.75,
             )
             proposals[proposal.fingerprint] = proposal
+    if tasks and _is_capability_issue(issue, tasks) and not _has_benchmark_eval_evidence(tasks):
+        evidence = [_issue_evidence(issue, "missing_benchmark_eval")]
+        evidence.extend(_task_evidence(task, "missing_benchmark_eval") for task in tasks)
+        proposal = _proposal(
+            issue,
+            target_kind="benchmark_eval",
+            rule_id="missing_capability_eval_contract",
+            title="Add benchmark coverage for capability issue",
+            recommendation=(
+                "Create or update a reviewed benchmark fixture/eval for this capability issue, "
+                "attach the run artifact, and use the result as acceptance evidence before "
+                "repeating similar capability work."
+            ),
+            evidence=evidence,
+            severity="medium",
+            confidence=0.76,
+        )
+        proposals[proposal.fingerprint] = proposal
     return list(proposals.values())
 
 

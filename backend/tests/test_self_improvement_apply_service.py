@@ -83,6 +83,24 @@ def test_non_memory_apply_plan_returns_pr_task_candidate_not_direct_patch():
     assert not any(change.get("kind") == "patch_file" for change in plan["candidate_changes"])
 
 
+def test_benchmark_eval_apply_plan_returns_pr_task_candidate_not_direct_patch():
+    proposal = _proposal(
+        target_kind="benchmark_eval",
+        title="Add benchmark coverage for capability issue",
+        recommendation="Create a reviewed benchmark fixture/eval and attach the run artifact.",
+    )
+
+    plan = build_self_improvement_apply_plan(proposal)
+
+    assert plan["mode"] == "dry_run"
+    assert plan["target_kind"] == "benchmark_eval"
+    assert plan["can_auto_apply"] is False
+    assert plan["next_action"] == "open_reviewed_pr"
+    assert plan["candidate_changes"][0]["kind"] == "open_pr_task"
+    assert "benchmark fixture/eval" in plan["candidate_changes"][0]["body"]
+    assert not any(change.get("kind") == "patch_file" for change in plan["candidate_changes"])
+
+
 def test_hash_apply_candidate_content_uses_sha256_hex():
     assert hash_apply_candidate_content("hello\n") == (
         "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286"
