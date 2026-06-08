@@ -287,12 +287,17 @@ await store.save_conductor_task(task)
     object shape and `plan` is a dry-run application plan.
 - Activation API:
   - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/activate-task`
+  - Optional request body: `{"start_conductor": true | false}`. Missing body
+    and `{}` default to `false`.
   - Response body: `{proposal, activation}` where `proposal` is the same
     proposal object shape and `activation` contains:
     - `issue`: the created or existing follow-up `CodexIssue` JSON.
     - `application`: the `open_pr_task` application event JSON.
     - `already_created`: `false` for first activation, `true` for idempotent
       reuse of an existing successful activation.
+    - `conductor` only when `start_conductor=true`: `{started,
+      already_running, graph}` where `graph` is the created or existing
+      issue `WorkflowGraph` JSON.
 - Reviewed project-memory apply API:
   - `POST /api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply`
   - Request body: `{"content_sha256": "<64 lowercase hex sha256>"}`
@@ -361,6 +366,26 @@ await store.save_conductor_task(task)
 - Worktree or store failure after project/proposal/source-issue resolution must
   record a failed `open_pr_task` application event with safe error text when
   the store can still write audit rows. Proposal status must remain unchanged.
+- Activation may optionally start the follow-up issue's existing issue
+  Conductor loop when the request body sets `start_conductor=true`. This is an
+  execution handoff only: it must not mark the proposal applied and must not
+  directly apply the recommendation.
+- `start_conductor=true` must reuse the same issue start semantics as
+  `POST /api/codex/issues/{issue_id}/graph/auto-start`: create or return the
+  issue `WorkflowGraph`, call `run_issue_conductor_loop(...)` through
+  `ConductorSessionRegistry.try_start(...)`, and prevent duplicate live
+  conductor sessions for the same issue.
+- A successful conductor start handoff records a separate application event:
+  `action="start_conductor"`, `status="succeeded"`,
+  `path="codex_issues/{issue_id}"`, and `result_json` containing `issue_id`,
+  `graph_id`, `graph_status`, `started`, and `already_running`.
+- A failed conductor start after issue activation records
+  `action="start_conductor"`, `status="failed"`, `path="codex_issues/{issue_id}"`,
+  and safe `error` text. The activated issue/worktree and `open_pr_task` event
+  remain durable, and proposal status remains unchanged.
+- Repeated activation with `start_conductor=true` may record another
+  `start_conductor` attempt event, but must not create another follow-up issue
+  or another live conductor session.
 - The reviewed apply API is the only self-improvement endpoint in this slice
   allowed to write project memory. It is limited to `status == "accepted"` and
   `target_kind == "project_memory"`.
@@ -461,6 +486,17 @@ await store.save_conductor_task(task)
 - Worktree or store failure while creating the follow-up issue -> HTTP `500`,
   records a failed `open_pr_task` event when possible, and proposal status
   remains unchanged.
+- Activation request with no body or `{}` -> `start_conductor=false`; no
+  workflow graph is created by activation itself.
+- Activation request with `start_conductor=true` -> creates or returns the
+  follow-up issue graph, records a succeeded `start_conductor` event, and
+  proposal status remains unchanged.
+- Repeated activation request with `start_conductor=true` -> returns the
+  existing follow-up issue and graph, does not create a duplicate issue, and
+  `ConductorSessionRegistry` prevents a duplicate live conductor session.
+- Conductor start failure after successful activation -> HTTP `500`, records a
+  failed `start_conductor` event, keeps the `open_pr_task` activation event and
+  issue/worktree, and proposal status remains unchanged.
 - `codex_store is None` on the reviewed apply API -> HTTP `503`, detail
   `"SQLite store not available"`.
 - Unknown `project_id` on the reviewed apply API -> HTTP `404`, detail
@@ -555,6 +591,13 @@ await store.save_conductor_task(task)
 - Good: repeating activation for the same proposal returns the existing
   follow-up issue/event with `already_created: true` and does not duplicate
   issue worktrees.
+- Good: activating an accepted `conductor_policy` proposal with
+  `start_conductor=true` creates the follow-up issue and immediately starts the
+  existing issue Conductor loop, with separate `open_pr_task` and
+  `start_conductor` audit events.
+- Good: first activating with `start_conductor=false`, then repeating with
+  `start_conductor=true`, reuses the existing issue and starts the Conductor
+  exactly once.
 - Base: a clean trivial completed issue creates no proposal and no error.
 - Bad: appending a new proposal row on every recovery/seal run for the same
   lesson.
@@ -585,6 +628,13 @@ await store.save_conductor_task(task)
   proposal.
 - Bad: marking a proposal `applied` just because a follow-up issue was opened;
   the proposal remains `accepted` until the reviewed change lands elsewhere.
+- Bad: starting a Conductor implicitly on every activation without an explicit
+  request body flag, because activation alone should not surprise callers by
+  spending model/tool budget.
+- Bad: recording only `open_pr_task` when `start_conductor=true`; operators
+  need to audit both the issue creation and the execution handoff.
+- Bad: a repeated `start_conductor=true` activation launching two live
+  conductors for the same follow-up issue.
 - Bad: allowing proposal extraction failure to prevent `issue.status =
   "completed"` after a done graph.
 
@@ -629,6 +679,19 @@ await store.save_conductor_task(task)
   non-accepted statuses, and missing/cross-project source issue; `404`
   unknown/cross-project project/proposal; `503` store unavailable; and `500`
   worktree/store failure with failed application event recording.
+- API: activation endpoint covers no-body and `{}` requests preserving
+  `start_conductor=false` behavior and creating no workflow graph.
+- API: activation endpoint covers `start_conductor=true` creating or returning
+  the follow-up issue graph, returning `activation.conductor`, recording a
+  succeeded `start_conductor` event, and preserving proposal status.
+- API: activation endpoint covers repeated `start_conductor=true` on new and
+  already activated proposals without duplicate follow-up issues or duplicate
+  live conductor sessions.
+- API: activation endpoint covers conductor start failure after activation:
+  failed `start_conductor` event, durable `open_pr_task` event, durable issue,
+  and unchanged proposal status.
+- Helper: issue graph start helper covers `ConductorSessionRegistry`
+  idempotence while a session is alive.
 - Reviewed apply: service tests cover candidate content hashing, successful
   project-memory append, marker idempotence, hash mismatch, unsupported target
   kind, non-accepted status, and unavailable repo path.
@@ -761,6 +824,35 @@ await record_application_event(
     },
 )
 return {"proposal": proposal_to_dict(proposal), "activation": {"issue": issue_to_dict(issue)}}
+```
+
+Wrong:
+
+```python
+if request.start_conductor:
+    asyncio.create_task(run_issue_conductor_loop(issue=issue, project_id=project.id, store=store))
+    await store.update_self_improvement_proposal_status(proposal.id, "applied")
+```
+
+Correct:
+
+```python
+if request.start_conductor:
+    start_result = await start_issue_conductor_graph(issue.id, store=store)
+    await record_application_event(
+        proposal,
+        action="start_conductor",
+        status="succeeded",
+        path=f"codex_issues/{issue.id}",
+        result={
+            "issue_id": issue.id,
+            "graph_id": start_result["graph"]["id"],
+            "graph_status": start_result["graph"]["status"],
+            "started": start_result["started"],
+            "already_running": start_result["already_running"],
+        },
+    )
+return {"proposal": proposal_to_dict(proposal), "activation": activation}
 ```
 
 Wrong:

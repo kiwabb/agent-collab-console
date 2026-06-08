@@ -5456,28 +5456,27 @@ def _conductor_stub() -> dict:
     }
 
 
-@router.post("/codex/issues/{issue_id}/graph/auto-start", status_code=201)
-async def auto_start_issue_graph(issue_id: str):
-    """Start Conductor-driven orchestration for an issue.
-
-    Creates a minimal WorkflowGraph and launches run_issue_conductor_loop as a
-    background task. The Conductor decides which agents to run and in what order,
-    dynamically populating the graph with nodes for visualization.
-    """
-    import asyncio
+async def _start_issue_conductor_graph(issue_id: str, *, store) -> dict:
     from app.application.conductor_session_registry import ConductorSessionRegistry
-    store = _require_agent_store()
+
     issue = await store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
 
+    registry = ConductorSessionRegistry.instance()
+    was_alive = registry.is_alive(issue_id)
+
     # Idempotency: if a live conductor session already exists for this issue,
     # do not start a second one — return the existing graph instead. This is
     # the first line of defense against duplicate conductors.
-    if ConductorSessionRegistry.instance().is_alive(issue_id):
+    if was_alive:
         existing_graph = await store.load_workflow_graph_for_issue(issue_id)
         if existing_graph is not None:
-            return _graph_to_dict(existing_graph)
+            return {
+                "graph": _graph_to_dict(existing_graph),
+                "started": False,
+                "already_running": True,
+            }
 
     # Ensure worktree exists
     if issue.project_id and not issue.git_worktree_path and project_service is not None:
@@ -5518,7 +5517,7 @@ async def auto_start_issue_graph(issue_id: str):
     from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
     from app.application.event_bus import _workflow_task_dispatcher
 
-    handle = await ConductorSessionRegistry.instance().try_start(
+    handle = await registry.try_start(
         issue_id,
         lambda: run_issue_conductor_loop(
             issue=issue,
@@ -5538,7 +5537,24 @@ async def auto_start_issue_graph(issue_id: str):
             )
         )
 
-    return _graph_to_dict(graph)
+    return {
+        "graph": _graph_to_dict(graph),
+        "started": handle is not None,
+        "already_running": handle is None,
+    }
+
+
+@router.post("/codex/issues/{issue_id}/graph/auto-start", status_code=201)
+async def auto_start_issue_graph(issue_id: str):
+    """Start Conductor-driven orchestration for an issue.
+
+    Creates a minimal WorkflowGraph and launches run_issue_conductor_loop as a
+    background task. The Conductor decides which agents to run and in what order,
+    dynamically populating the graph with nodes for visualization.
+    """
+    store = _require_agent_store()
+    result = await _start_issue_conductor_graph(issue_id, store=store)
+    return result["graph"]
 
 
 def _handle_conductor_loop_done(task, *, issue_id: str, store, recover_fn) -> None:
@@ -6360,6 +6376,47 @@ async def _record_self_improvement_activation_failure(*, proposal, error: str) -
         )
 
 
+def _self_improvement_conductor_event_result(issue_id: str, start_result: dict) -> dict:
+    graph = start_result.get("graph")
+    graph_id = graph.get("id") if isinstance(graph, dict) else None
+    graph_status = graph.get("status") if isinstance(graph, dict) else None
+    return {
+        "issue_id": issue_id,
+        "graph_id": graph_id,
+        "graph_status": graph_status,
+        "started": bool(start_result.get("started")),
+        "already_running": bool(start_result.get("already_running")),
+    }
+
+
+async def _start_self_improvement_activation_conductor(*, proposal, issue: CodexIssue) -> dict:
+    try:
+        start_result = await _start_issue_conductor_graph(issue.id, store=codex_store)
+    except Exception as exc:  # noqa: BLE001 - transport boundary records safe failed event
+        error = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        error_text = str(error or exc.__class__.__name__)
+        await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="start_conductor",
+            status="failed",
+            path=f"codex_issues/{issue.id}",
+            error=error_text,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to start self-improvement conductor: {error_text}",
+        ) from exc
+
+    await _record_self_improvement_application_event(
+        proposal=proposal,
+        action="start_conductor",
+        status="succeeded",
+        path=f"codex_issues/{issue.id}",
+        result=_self_improvement_conductor_event_result(issue.id, start_result),
+    )
+    return start_result
+
+
 async def _record_self_improvement_application_event(
     *,
     proposal,
@@ -6394,6 +6451,10 @@ class SelfImprovementProposalStatusUpdateRequest(BaseModel):
 
 class SelfImprovementProposalApplyRequest(BaseModel):
     content_sha256: str = Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")
+
+
+class SelfImprovementProposalActivateTaskRequest(BaseModel):
+    start_conductor: bool = False
 
 
 _SELF_IMPROVEMENT_PROPOSAL_STATUS_TRANSITIONS = {
@@ -6488,9 +6549,14 @@ async def codex_project_self_improvement_proposal_apply_plan(project_id: str, pr
 
 
 @router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/activate-task")
-async def codex_project_self_improvement_proposal_activate_task(project_id: str, proposal_id: str):
+async def codex_project_self_improvement_proposal_activate_task(
+    project_id: str,
+    proposal_id: str,
+    request: SelfImprovementProposalActivateTaskRequest | None = Body(default=None),
+):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
+    start_conductor = bool(request.start_conductor) if request is not None else False
     project = await codex_store.load_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -6521,13 +6587,19 @@ async def codex_project_self_improvement_proposal_activate_task(project_id: str,
     existing = await _load_existing_self_improvement_activation(project_id=project_id, proposal_id=proposal_id)
     if existing is not None:
         existing_issue, existing_event = existing
+        activation = {
+            "issue": _codex_issue_to_dict(existing_issue),
+            "application": _self_improvement_application_event_to_dict(existing_event),
+            "already_created": True,
+        }
+        if start_conductor:
+            activation["conductor"] = await _start_self_improvement_activation_conductor(
+                proposal=proposal,
+                issue=existing_issue,
+            )
         return {
             "proposal": _self_improvement_proposal_to_dict(proposal),
-            "activation": {
-                "issue": _codex_issue_to_dict(existing_issue),
-                "application": _self_improvement_application_event_to_dict(existing_event),
-                "already_created": True,
-            },
+            "activation": activation,
         }
 
     try:
@@ -6595,13 +6667,20 @@ async def codex_project_self_improvement_proposal_activate_task(project_id: str,
             detail=f"failed to activate self-improvement proposal task: {error}",
         ) from exc
 
+    activation = {
+        "issue": _codex_issue_to_dict(issue),
+        "application": _self_improvement_application_event_to_dict(event),
+        "already_created": False,
+    }
+    if start_conductor:
+        activation["conductor"] = await _start_self_improvement_activation_conductor(
+            proposal=proposal,
+            issue=issue,
+        )
+
     return {
         "proposal": _self_improvement_proposal_to_dict(proposal),
-        "activation": {
-            "issue": _codex_issue_to_dict(issue),
-            "application": _self_improvement_application_event_to_dict(event),
-            "already_created": False,
-        },
+        "activation": activation,
     }
 
 

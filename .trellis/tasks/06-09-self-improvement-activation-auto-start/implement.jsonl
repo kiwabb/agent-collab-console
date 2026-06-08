@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared thinking guides for cross-layer API behavior"}
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend package conventions"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Self-improvement ledger and application event contract"}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "HTTP error handling and safe failure surfaces"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Backend testing and QA expectations"}
