@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared thinking guide index for cross-layer and code-reuse checks."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Scheduler touches application, timeout config, lifespan, diagnostics, and tests."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Scheduler should reuse existing project-review scheduler and activation patterns."}
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend package conventions and relevant guideline index."}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Self-improvement ledger and scheduler storage/audit contracts."}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Background scheduler error isolation and safe transport boundaries."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Required test, diagnostics, and backend quality patterns."}
+{"file": ".trellis/spec/vibe-kanban/backend/logging-guidelines.md", "reason": "Scheduler log messages must be safe and identifier-focused."}

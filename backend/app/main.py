@@ -142,6 +142,7 @@ async def lifespan(app: FastAPI):
     watchdog_task: asyncio.Task | None = None
     conductor_watchdog_task: asyncio.Task | None = None
     project_review_scheduler_task: asyncio.Task | None = None
+    self_improvement_proposal_scheduler_task: asyncio.Task | None = None
     try:
         from app.bootstrap import async_store, get_codex_process_manager
         from app.application.stall_watchdog import run as _run_watchdog
@@ -181,6 +182,24 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to start project review scheduler: %s", exc)
 
+    try:
+        from app.bootstrap import async_store
+        from app.application.self_improvement_proposal_scheduler import (
+            run_self_improvement_proposal_scheduler_loop,
+        )
+        from app.interfaces.api import activate_self_improvement_proposal_task
+        if async_store is not None:
+            self_improvement_proposal_scheduler_task = asyncio.create_task(
+                run_self_improvement_proposal_scheduler_loop(
+                    async_store,
+                    activate_fn=activate_self_improvement_proposal_task,
+                    event_bus=event_bus,
+                ),
+                name="self-improvement-proposal-scheduler",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to start self-improvement proposal scheduler: %s", exc)
+
     yield
     # Shutdown: terminate all running Codex processes via formal terminate_all() interface
     # This avoids orphan child processes when the backend exits
@@ -200,6 +219,12 @@ async def lifespan(app: FastAPI):
         project_review_scheduler_task.cancel()
         try:
             await project_review_scheduler_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    if self_improvement_proposal_scheduler_task is not None:
+        self_improvement_proposal_scheduler_task.cancel()
+        try:
+            await self_improvement_proposal_scheduler_task
         except (asyncio.CancelledError, Exception):
             pass
     try:

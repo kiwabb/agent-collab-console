@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared thinking guide index for quality verification."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify scheduler data/status flow across app layers."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Verify new scheduler follows existing patterns without duplicated drift."}
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend package quality expectations."}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Verify self-improvement ledger/scheduler contract updates and tests."}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Verify scheduler failures are isolated and safely surfaced."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Run and assess required backend checks."}
+{"file": ".trellis/spec/vibe-kanban/backend/logging-guidelines.md", "reason": "Verify scheduler logging does not expose task bodies or secrets."}
