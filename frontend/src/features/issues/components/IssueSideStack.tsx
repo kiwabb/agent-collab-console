@@ -103,7 +103,7 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
   });
 
   return (
-    <aside data-density="insight-rail" className="flex flex-col gap-3 sticky top-4">
+    <aside data-density="insight-rail" className="flex flex-col gap-2.5 sticky top-3">
       <AcceptanceCard checklist={checklist} t={t} />
       <TelemetryCard
         cost={cost}
@@ -138,7 +138,7 @@ function Card({
 }) {
   return (
     <div className="enterprise-panel border-border-subtle/60 bg-surface/90 rounded-lg overflow-hidden hover:border-border-strong/45 transition-colors">
-      <div className="px-4 py-3 flex items-center gap-2.5 border-b border-border-subtle/60 bg-surface-input/30">
+      <div className="px-3 py-2.5 flex items-center gap-2 border-b border-border-subtle/60 bg-surface-input/30">
         <Icon size={15} className={cn("text-brand shrink-0", iconClass)} />
         <span className="text-[13px] font-bold tracking-wide text-foreground">
           {title}
@@ -173,8 +173,8 @@ function AcceptanceCard({
       icon={CheckCircle2}
       iconClass="text-status-done"
     >
-      <div className="px-4 py-3 flex items-center gap-3 bg-surface-input/30 m-3 rounded-lg border border-border-subtle/50">
-        <span className="font-mono text-[22px] font-black tracking-tight leading-none text-foreground tabular-nums">
+      <div className="px-3 py-2.5 flex items-center gap-3 bg-surface-input/30 m-2.5 rounded-lg border border-border-subtle/50">
+        <span className="font-mono text-[20px] font-black tracking-tight leading-none text-foreground tabular-nums">
           {covered}
           <em className="not-italic text-text-muted font-normal text-sm">
             /{total}
@@ -197,11 +197,11 @@ function AcceptanceCard({
         </span>
       </div>
       {total === 0 ? (
-        <div className="px-5 pb-5 text-[12px] text-text-muted">
+        <div className="px-4 pb-4 text-[12px] text-text-muted">
           {t("issue.side.acceptanceEmpty")}
         </div>
       ) : (
-        <ul className="px-2 pb-3.5 flex flex-col gap-0.5">
+        <ul className="px-1.5 pb-3 flex flex-col gap-0.5">
           {criteria.map((c, i) => (
             <li
               key={i}
@@ -347,7 +347,7 @@ function TelemetryCard({
       sub={t("issue.side.telemetrySub")}
       icon={BarChart3}
     >
-      <div className="grid grid-cols-2 gap-3 p-3.5">
+      <div className="grid grid-cols-2 gap-2.5 p-2.5">
         <TeleCell label={t("issue.side.tokens")}>
           {totalTokens != null ? (
             <>
@@ -394,11 +394,11 @@ function TeleCell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="p-3.5 rounded-lg bg-surface-input/35 border border-border-subtle/50 transition-colors hover:bg-surface-input/50">
+    <div className="p-2.5 rounded-lg bg-surface-input/35 border border-border-subtle/50 transition-colors hover:bg-surface-input/50">
       <div className="font-mono text-[9px] uppercase tracking-[0.18em] font-extrabold text-text-muted">
         {label}
       </div>
-      <div className="text-[18px] font-black text-foreground tracking-tight mt-2 font-mono">
+      <div className="text-[16px] font-black text-foreground tracking-tight mt-1.5 font-mono">
         {children}
       </div>
     </div>

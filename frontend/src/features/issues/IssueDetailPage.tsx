@@ -232,10 +232,10 @@ export function IssueDetailPage({ issueId }: Props) {
   return (
     <div className="h-full flex flex-col overflow-hidden bg-background">
       {/* App-shell body: fixed header + status, scrolling tab content, docked chat bar */}
-      <main data-density="issue-workbench" className="flex-1 min-h-0 overflow-hidden mx-auto w-full max-w-[1640px] flex flex-col gap-3 px-4 pb-3 pt-4 lg:px-6">
+      <main data-density="issue-workbench" className="flex-1 min-h-0 overflow-hidden mx-auto w-full max-w-[1640px] flex flex-col gap-2 px-3 pb-3 pt-3 lg:px-5">
         
         {/* Stationary Header Stack (Always visible) */}
-        <div className="shrink-0 flex flex-col gap-3">
+        <div className="shrink-0 flex flex-col gap-2">
           <WsConnectionBanner />
           
           <StatusStrip
@@ -261,13 +261,13 @@ export function IssueDetailPage({ issueId }: Props) {
         </div>
 
         {/* Two-Column Grid Layout */}
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-4 overflow-hidden">
+        <div className="flex-1 min-h-0 grid grid-cols-1 gap-3 overflow-hidden xl:grid-cols-[minmax(0,1fr)_minmax(310px,350px)]">
           
           {/* Main Area (Left Column) */}
           <div className="flex-1 min-h-0 flex flex-col gap-3">
             <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full flex-1 flex flex-col gap-3 min-h-0 overflow-hidden">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border-subtle/70 pb-2 shrink-0">
-                <TabsList className="bg-surface/80 border border-border-subtle p-1 rounded-lg grid grid-cols-4 h-11 w-full sm:max-w-md">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border-subtle/70 pb-2 shrink-0">
+                <TabsList className="bg-surface/80 border border-border-subtle p-1 rounded-lg grid grid-cols-4 h-10 w-full sm:max-w-md">
                   <TabsTrigger value="timeline" className="gap-2 text-[12px] font-bold py-2 rounded-md transition-colors cursor-pointer">
                     <Clock size={14} className="shrink-0" />
                     <span>{t("issue.command.timelineTitle")}</span>
@@ -320,7 +320,7 @@ export function IssueDetailPage({ issueId }: Props) {
           </div>
 
           {/* Control & Insights Sidebar (Right Column) */}
-          <aside className="hidden lg:flex flex-col gap-4 w-[380px] shrink-0 overflow-y-auto pr-1 pb-16 sticky top-0 self-start max-h-[calc(100vh-140px)]">
+          <aside className="hidden xl:flex flex-col gap-3 min-w-0 overflow-y-auto pr-1 pb-16 sticky top-0 self-start max-h-[calc(100vh-128px)]">
             {issue && <GitInfoCard issue={issue} onIssueUpdated={setIssue} />}
             <IssueSideStack issueId={issueId} checklist={checklist} issue={issue} />
           </aside>

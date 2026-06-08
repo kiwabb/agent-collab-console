@@ -76,11 +76,14 @@ test("issue detail page uses compact operations command-center chrome", () => {
   const gitSource = readSource("features/issues/components/GitInfoCard.tsx");
 
   assert.match(statusSource, /data-density="command-header"/);
+  assert.match(statusSource, /data-density="command-actions"/);
+  assert.match(statusSource, /data-density="conductor-strip"/);
   assert.match(pageSource, /data-density="issue-workbench"/);
   assert.match(sideStackSource, /data-density="insight-rail"/);
   assert.match(gitSource, /data-density="git-ops"/);
 
   assert.doesNotMatch(pageSource, /radial-gradient|rounded-\[24px\]|rounded-2xl/);
+  assert.doesNotMatch(statusSource, /xl:grid-cols-\[minmax\(0,1\.2fr\)_minmax\(320px,0\.72fr\)_auto\]/);
   assert.doesNotMatch(statusSource, /agent-mesh-grid|Decorative ambient background glows|rounded-\[28px\]|blur-\[|animate-ping/);
   assert.doesNotMatch(sideStackSource, /rounded-\[24px\]|shadow-xl|animate-pulse|backdrop-blur-xl/);
   assert.doesNotMatch(gitSource, /rounded-\[24px\]|shadow-xl|animate-pulse|backdrop-blur-xl/);
