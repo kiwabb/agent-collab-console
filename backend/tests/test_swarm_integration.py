@@ -27,6 +27,7 @@ import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -766,9 +767,10 @@ async def test_cleanup_issue_swarm_worktrees_seal_path_main_clean(
     # The seal resolves the worktree manager from the bootstrap singleton.
     monkeypatch.setattr(bootstrap, "worktree_manager", manager)
 
-    await cml._seal_graph_and_issue_status(
-        store=store, issue=issue, event_bus=None, result_status="done"
-    )
+    with patch("app.application.conductor_main_loop.record_issue_self_improvement", new_callable=AsyncMock):
+        await cml._seal_graph_and_issue_status(
+            store=store, issue=issue, event_bus=None, result_status="done"
+        )
 
     # Residual swarm worktree + branch cleaned by the seal.
     assert not Path(wt_a).exists()
