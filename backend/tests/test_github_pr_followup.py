@@ -8,7 +8,9 @@ import pytest
 
 import app.interfaces.api as api_module
 from app.application.github_pr_followup import (
+    get_github_pr_followup_status,
     refresh_issue_github_pr,
+    reset_github_pr_followup_status,
     sweep_project_github_prs,
 )
 from app.domain.models import CodexIssue, CodexTask
@@ -235,6 +237,7 @@ async def test_refresh_failed_status_check_records_checks_failed():
 
 @pytest.mark.asyncio
 async def test_sweep_project_prs_isolates_issue_failures_and_continues():
+    reset_github_pr_followup_status()
     broken = _issue("issue-1", github_pr_url="https://github.com/acme/repo/pull/1")
     healthy = _issue("issue-2", github_pr_url="https://github.com/acme/repo/pull/2")
     ignored = _issue("issue-3", github_pr_url=None)
@@ -262,6 +265,47 @@ async def test_sweep_project_prs_isolates_issue_failures_and_continues():
         "github_pr_followup_failed",
         "github_pr_followup_updated",
     ]
+    status = get_github_pr_followup_status()
+    assert status["configured"] is True
+    assert status["running"] is False
+    assert status["sweep_count"] == 1
+    assert status["auto_merge_enabled"] is False
+    assert status["last_started_at"] is not None
+    assert status["last_completed_at"] is not None
+    assert status["last_error"] is None
+    assert status["last_summary_counts"] == {"failed": 1, "updated": 1}
+
+
+@pytest.mark.asyncio
+async def test_sweep_status_records_failure_and_reraises():
+    reset_github_pr_followup_status()
+
+    class BrokenStore(_Store):
+        async def list_codex_issues(self, project_id: str | None = None, **kwargs) -> list[dict[str, object]]:
+            raise RuntimeError("database temporarily unavailable")
+
+    store = BrokenStore(issues=[])
+
+    async def run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> _Proc:
+        raise AssertionError("subprocess should not run")
+
+    with pytest.raises(RuntimeError, match="database temporarily unavailable"):
+        await sweep_project_github_prs(
+            "project-1",
+            store=store,
+            event_bus=None,
+            run_subprocess=run_subprocess,
+            auto_merge=True,
+        )
+
+    status = get_github_pr_followup_status()
+    assert status["running"] is False
+    assert status["sweep_count"] == 1
+    assert status["auto_merge_enabled"] is True
+    assert status["last_started_at"] is not None
+    assert status["last_completed_at"] is not None
+    assert status["last_error"] == "RuntimeError: database temporarily unavailable"
+    assert status["last_summary_counts"] == {}
 
 
 @pytest.mark.asyncio

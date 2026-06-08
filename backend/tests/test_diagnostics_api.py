@@ -13,8 +13,10 @@ from app.domain.models import (
 
 
 def test_diagnostics_returns_operational_snapshot(client):
+    from app.application.github_pr_followup import reset_github_pr_followup_status
     from app.application.project_review_scheduler import reset_project_review_scheduler_status
 
+    reset_github_pr_followup_status()
     reset_project_review_scheduler_status()
 
     resp = client.get("/api/diagnostics")
@@ -32,11 +34,17 @@ def test_diagnostics_returns_operational_snapshot(client):
     assert body["project_review_scheduler"]["configured"] is True
     assert body["project_review_scheduler"]["interval_s"] == 3600.0
     assert body["project_review_scheduler"]["limit"] == 25
+    assert body["github_pr_followup"]["configured"] is True
+    assert body["github_pr_followup"]["running"] is False
+    assert body["github_pr_followup"]["sweep_count"] == 0
+    assert body["github_pr_followup"]["last_summary_counts"] == {}
 
 
 def test_diagnostics_never_leaks_runtime_api_keys(client):
+    from app.application.github_pr_followup import reset_github_pr_followup_status
     from app.application.project_review_scheduler import reset_project_review_scheduler_status
 
+    reset_github_pr_followup_status()
     reset_project_review_scheduler_status()
     catalog = RuntimeCatalog(
         executors=[
@@ -81,11 +89,13 @@ def test_diagnostics_never_leaks_runtime_api_keys(client):
 
 
 def test_diagnostics_includes_project_review_scheduler_error(client):
+    from app.application.github_pr_followup import reset_github_pr_followup_status
     from app.application.project_review_scheduler import (
         reset_project_review_scheduler_status,
         run_project_review_scheduler_loop,
     )
 
+    reset_github_pr_followup_status()
     reset_project_review_scheduler_status()
 
     async def tick(store, *, event_bus=None, limit=None):
