@@ -77,6 +77,8 @@ DEFAULT_CODEX_HANDSHAKE_TIMEOUT_S = 30
 DEFAULT_STALL_THRESHOLD_S = 900
 DEFAULT_STALL_INTERVAL_S = 30
 DEFAULT_STALL_COOLDOWN_S = 900
+DEFAULT_PROJECT_REVIEW_INTERVAL_S = 3600.0
+DEFAULT_PROJECT_REVIEW_LIMIT = 25
 # Whole-conductor-loop wall-clock ceiling (0 disables). Defends against a loop
 # that never finalizes yet keeps each turn just under the subagent ceiling.
 DEFAULT_CONDUCTOR_LOOP_MAX_S = 7200.0
@@ -275,6 +277,17 @@ def stall_cooldown_s() -> int:
     return _env_int("CODEX_STALL_COOLDOWN_S", DEFAULT_STALL_COOLDOWN_S)
 
 
+# --- Project review scheduler ---------------------------------------------
+def project_review_interval_s() -> float:
+    raw = _env_float("PROJECT_REVIEW_INTERVAL_S", DEFAULT_PROJECT_REVIEW_INTERVAL_S)
+    return raw if raw > 0 else DEFAULT_PROJECT_REVIEW_INTERVAL_S
+
+
+def project_review_limit() -> int:
+    raw = _env_int("PROJECT_REVIEW_LIMIT", DEFAULT_PROJECT_REVIEW_LIMIT)
+    return max(1, raw)
+
+
 def check_invariants() -> list[str]:
     """Return a list of human-readable invariant violations (empty == OK)."""
     violations: list[str] = []
@@ -352,6 +365,8 @@ def check_invariants() -> list[str]:
         ("CODEX_STALL_THRESHOLD_S", stall_threshold_s()),
         ("CODEX_STALL_INTERVAL_S", stall_interval_s()),
         ("CODEX_STALL_COOLDOWN_S", stall_cooldown_s()),
+        ("PROJECT_REVIEW_INTERVAL_S", project_review_interval_s()),
+        ("PROJECT_REVIEW_LIMIT", project_review_limit()),
     ):
         if value <= 0:
             violations.append(f"{name} ({value}) must be > 0.")

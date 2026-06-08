@@ -981,6 +981,70 @@ conductor = ProjectConductor(project_id=project.id, store=store, event_bus=event
 await conductor.handle_task(scheduled_review_task)
 ```
 
+### Scenario: Project Review Scheduler Background Loop
+
+#### 1. Scope / Trigger
+
+- Trigger: wiring project review scheduling into long-running backend
+  process startup, shutdown, or cadence controls.
+- The background loop is the unattended supervisor around
+  `run_project_review_tick`; it does not change scheduled-review semantics.
+
+#### 2. Signatures
+
+```python
+async def run_project_review_scheduler_loop(
+    store,
+    *,
+    event_bus=None,
+    interval_s=None,
+    limit=None,
+    tick_fn=run_project_review_tick,
+    sleep_fn=asyncio.sleep,
+) -> None
+```
+
+#### 3. Contracts
+
+- The loop MUST delegate actual work to `run_project_review_tick(...)`.
+- Cadence and default work bounds MUST be read through
+  `app.application.timeouts` accessors. Feature code must not call
+  `os.getenv` directly.
+- A tick-level unexpected exception is a loop-boundary failure: log it with
+  `logger.exception(...)`, then continue to the next sleep/cycle.
+- `asyncio.CancelledError` MUST propagate so FastAPI lifespan shutdown can
+  stop the task promptly.
+- Tests SHOULD inject `tick_fn` and `sleep_fn` so loop cadence, exception
+  survival, and cancellation are deterministic.
+- FastAPI lifespan starts the loop only when `async_store` is available, names
+  the task `project-review-scheduler`, and cancels/awaits it during shutdown.
+
+#### 4. Tests Required
+
+- Loop calls the tick, sleeps the configured interval, and repeats.
+- Tick raises a regular exception -> loop logs/survives and runs another tick.
+- Tick or sleep raises `CancelledError` -> cancellation propagates.
+- Lifespan creates and later cancels the named `project-review-scheduler`
+  task.
+
+#### 5. Wrong vs Correct
+
+Wrong:
+```python
+while True:
+    await run_project_review_tick(store)
+    await asyncio.sleep(float(os.getenv("PROJECT_REVIEW_INTERVAL_S", "3600")))
+```
+
+Correct:
+```python
+await run_project_review_scheduler_loop(
+    store,
+    event_bus=event_bus,
+    interval_s=timeouts.project_review_interval_s(),
+)
+```
+
 ---
 
 ## Testing Requirements
