@@ -601,3 +601,42 @@ Added deterministic Conductor orchestration policy, exposed it in the issue deta
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: Self-improvement proposal ledger
+
+**Date**: 2026-06-08
+**Task**: Self-improvement proposal ledger
+**Package**: ccgui
+**Branch**: `codex/self-improvement-loop`
+
+### Summary
+
+Implemented a review-only self-improvement proposal ledger: durable proposal store, deterministic extraction service, conductor terminal hook, read API, backend tests, and captured backend contracts. Full backend fast lane passed with 865 passed and 77 skipped; also fixed tolerant_json missing object-brace repair exposed by the suite.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d4823bc` | (see git log) |
+| `3b405d0` | (see git log) |
+| `2a08d2a` | (see git log) |
+| `45d51f4` | (see git log) |
+| `c912021` | (see git log) |
+| `17c4edd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
