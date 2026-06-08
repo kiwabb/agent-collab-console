@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import subprocess
@@ -8,8 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from app.adapters.async_sqlite_store import AsyncSQLiteStore
+from app.application.conductor_session_registry import ConductorSessionRegistry
 from app.application.self_improvement_apply_service import build_self_improvement_apply_plan, hash_apply_candidate_content
-from app.domain.models import CodexIssue, SelfImprovementApplicationEvent, SelfImprovementProposal
+from app.domain.models import CodexIssue, Project, SelfImprovementApplicationEvent, SelfImprovementProposal
 
 
 pytestmark = [
@@ -136,6 +139,12 @@ def _seed_application_event(event: SelfImprovementApplicationEvent) -> None:
 
     assert bootstrap_module.store is not None
     bootstrap_module.store.save_self_improvement_application_event(event)
+
+
+def _applications(client, project_id: str, proposal_id: str = "proposal-1") -> list[dict]:
+    return client.get(
+        f"/api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/applications"
+    ).json()["applications"]
 
 
 def _candidate_content_hash(proposal: SelfImprovementProposal) -> str:
@@ -428,6 +437,245 @@ def test_project_self_improvement_proposal_activate_task_creates_issue_worktree_
     ).json()["applications"]
     assert len(events) == 1
     assert events[0]["action"] == "open_pr_task"
+
+
+def test_project_self_improvement_proposal_activate_task_without_body_does_not_start_conductor(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    from app.interfaces import api as api_module
+
+    project = _create_project(client, tmp_path, name="self-improvement-activate-no-body")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status="accepted"))
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("conductor should not start without explicit opt-in")
+
+    monkeypatch.setattr(api_module, "_start_issue_conductor_graph", fail_if_called)
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+
+    assert resp.status_code == 200, resp.text
+    activation = resp.json()["activation"]
+    assert "conductor" not in activation
+    assert [event["action"] for event in _applications(client, project["id"])] == ["open_pr_task"]
+
+
+def test_project_self_improvement_proposal_activate_task_empty_body_does_not_start_conductor(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    from app.interfaces import api as api_module
+
+    project = _create_project(client, tmp_path, name="self-improvement-activate-empty-body")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status="accepted"))
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("conductor should not start without explicit opt-in")
+
+    monkeypatch.setattr(api_module, "_start_issue_conductor_graph", fail_if_called)
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task",
+        json={},
+    )
+
+    assert resp.status_code == 200, resp.text
+    activation = resp.json()["activation"]
+    assert "conductor" not in activation
+    assert [event["action"] for event in _applications(client, project["id"])] == ["open_pr_task"]
+
+
+def test_project_self_improvement_proposal_activate_task_can_start_conductor(client, tmp_path, monkeypatch):
+    from app.interfaces import api as api_module
+
+    project = _create_project(client, tmp_path, name="self-improvement-activate-start")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status="accepted"))
+    calls: list[str] = []
+
+    async def fake_start(issue_id: str, *, store):
+        calls.append(issue_id)
+        return {
+            "started": True,
+            "already_running": False,
+            "graph": {
+                "id": "graph-1",
+                "issue_id": issue_id,
+                "status": "running",
+                "nodes": [],
+                "edges": [],
+            },
+        }
+
+    monkeypatch.setattr(api_module, "_start_issue_conductor_graph", fake_start)
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task",
+        json={"start_conductor": True},
+    )
+
+    assert resp.status_code == 200, resp.text
+    activation = resp.json()["activation"]
+    assert calls == [activation["issue"]["id"]]
+    assert activation["conductor"]["started"] is True
+    assert activation["conductor"]["already_running"] is False
+    assert activation["conductor"]["graph"]["id"] == "graph-1"
+    events = _applications(client, project["id"])
+    assert [event["action"] for event in events] == ["start_conductor", "open_pr_task"]
+    assert events[0]["status"] == "succeeded"
+    assert events[0]["path"] == f"codex_issues/{activation['issue']['id']}"
+    assert events[0]["result"]["graph_id"] == "graph-1"
+    assert events[0]["result"]["started"] is True
+
+
+def test_project_self_improvement_proposal_activate_task_reuses_issue_when_starting_conductor_twice(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    from app.interfaces import api as api_module
+
+    project = _create_project(client, tmp_path, name="self-improvement-activate-start-repeat")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status="accepted"))
+    starts: list[str] = []
+
+    async def fake_start(issue_id: str, *, store):
+        starts.append(issue_id)
+        return {
+            "started": len(starts) == 1,
+            "already_running": len(starts) > 1,
+            "graph": {"id": "graph-1", "issue_id": issue_id, "status": "running", "nodes": [], "edges": []},
+        }
+
+    monkeypatch.setattr(api_module, "_start_issue_conductor_graph", fake_start)
+
+    first = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task",
+        json={"start_conductor": True},
+    )
+    second = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task",
+        json={"start_conductor": True},
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json()["activation"]["already_created"] is True
+    assert second.json()["activation"]["issue"]["id"] == first.json()["activation"]["issue"]["id"]
+    assert starts == [first.json()["activation"]["issue"]["id"], first.json()["activation"]["issue"]["id"]]
+    issues = client.get(f"/api/codex/issues?project_id={project['id']}").json()
+    assert len([issue for issue in issues if issue["title"].startswith("Apply self-improvement proposal:")]) == 1
+
+
+def test_project_self_improvement_proposal_activate_task_can_start_existing_activation(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    from app.interfaces import api as api_module
+
+    project = _create_project(client, tmp_path, name="self-improvement-activate-late-start")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status="accepted"))
+    first = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task"
+    )
+    issue_id = first.json()["activation"]["issue"]["id"]
+
+    async def fake_start(issue_id_arg: str, *, store):
+        assert issue_id_arg == issue_id
+        return {
+            "started": True,
+            "already_running": False,
+            "graph": {"id": "graph-late", "issue_id": issue_id_arg, "status": "running", "nodes": [], "edges": []},
+        }
+
+    monkeypatch.setattr(api_module, "_start_issue_conductor_graph", fake_start)
+
+    second = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task",
+        json={"start_conductor": True},
+    )
+
+    assert second.status_code == 200, second.text
+    assert second.json()["activation"]["already_created"] is True
+    assert second.json()["activation"]["conductor"]["graph"]["id"] == "graph-late"
+
+
+def test_project_self_improvement_proposal_activate_task_records_failed_start_event(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    from app.interfaces import api as api_module
+
+    project = _create_project(client, tmp_path, name="self-improvement-activate-start-fail")
+    _seed_issue(_source_issue(project["id"]))
+    _seed_proposal(_proposal(project["id"], target_kind="runtime_tooling", status="accepted"))
+
+    async def fail_start(*_args, **_kwargs):
+        raise RuntimeError("synthetic conductor start failure")
+
+    monkeypatch.setattr(api_module, "_start_issue_conductor_graph", fail_start)
+
+    resp = client.post(
+        f"/api/codex/projects/{project['id']}/self-improvement-proposals/proposal-1/activate-task",
+        json={"start_conductor": True},
+    )
+
+    assert resp.status_code == 500
+    assert "synthetic conductor start failure" in resp.json()["detail"]
+    proposals = client.get(f"/api/codex/projects/{project['id']}/self-improvement-proposals").json()["proposals"]
+    assert proposals[0]["status"] == "accepted"
+    events = _applications(client, project["id"])
+    assert [event["action"] for event in events] == ["start_conductor", "open_pr_task"]
+    assert events[0]["status"] == "failed"
+    assert "synthetic conductor start failure" in events[0]["error"]
+
+
+async def test_start_issue_conductor_graph_is_idempotent_while_session_is_alive(monkeypatch, tmp_path):
+    from app.application import conductor_main_loop
+    from app.interfaces import api as api_module
+
+    store = AsyncSQLiteStore(tmp_path / "conductor-start.db")
+    project = Project(
+        id="project-1",
+        name="project",
+        repo_path=str(tmp_path / "repo"),
+        default_branch="main",
+        created_at=datetime(2026, 6, 9, 9, 0, 0),
+        updated_at=datetime(2026, 6, 9, 9, 0, 0),
+    )
+    issue = _source_issue(project.id, issue_id="issue-start-helper")
+    issue.git_worktree_path = str(tmp_path / "repo-worktree")
+    await store.save_project(project)
+    await store.save_codex_issue(issue)
+
+    async def sleep_forever(**_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(conductor_main_loop, "run_issue_conductor_loop", sleep_forever)
+
+    try:
+        first = await api_module._start_issue_conductor_graph(issue.id, store=store)
+        second = await api_module._start_issue_conductor_graph(issue.id, store=store)
+        assert first["started"] is True
+        assert first["already_running"] is False
+        assert second["started"] is False
+        assert second["already_running"] is True
+        assert second["graph"]["id"] == first["graph"]["id"]
+        assert ConductorSessionRegistry.instance().is_alive(issue.id)
+    finally:
+        await ConductorSessionRegistry.instance().stop(issue.id)
+        await store.close()
 
 
 def test_project_self_improvement_proposal_activate_task_is_idempotent(client, tmp_path):
