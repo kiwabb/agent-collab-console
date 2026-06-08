@@ -46,6 +46,68 @@ class ProjectReviewSleepFn(Protocol):
     async def __call__(self, interval: float) -> None: ...
 
 
+@dataclass
+class ProjectReviewSchedulerStatus:
+    configured: bool = True
+    interval_s: float = field(default_factory=timeouts.project_review_interval_s)
+    limit: int = field(default_factory=timeouts.project_review_limit)
+    running: bool = False
+    tick_count: int = 0
+    last_started_at: datetime | None = None
+    last_completed_at: datetime | None = None
+    last_error: str | None = None
+    last_summary_counts: dict[str, int] = field(default_factory=dict)
+
+    def mark_started(self, *, interval_s: float, limit: int) -> None:
+        self.configured = True
+        self.interval_s = interval_s
+        self.limit = limit
+        self.running = True
+        self.last_started_at = datetime.now()
+
+    def mark_completed(self, summary: ProjectReviewTickSummary) -> None:
+        self.running = False
+        self.tick_count += 1
+        self.last_completed_at = datetime.now()
+        self.last_error = None
+        self.last_summary_counts = summary.counts
+
+    def mark_failed(self, exc: Exception) -> None:
+        self.running = False
+        self.tick_count += 1
+        self.last_completed_at = datetime.now()
+        self.last_error = f"{type(exc).__name__}: {exc}"
+        self.last_summary_counts = {}
+
+    def mark_cancelled(self) -> None:
+        self.running = False
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "configured": self.configured,
+            "interval_s": self.interval_s,
+            "limit": self.limit,
+            "running": self.running,
+            "tick_count": self.tick_count,
+            "last_started_at": self.last_started_at.isoformat() if self.last_started_at else None,
+            "last_completed_at": self.last_completed_at.isoformat() if self.last_completed_at else None,
+            "last_error": self.last_error,
+            "last_summary_counts": dict(self.last_summary_counts),
+        }
+
+
+_scheduler_status = ProjectReviewSchedulerStatus()
+
+
+def reset_project_review_scheduler_status() -> None:
+    global _scheduler_status
+    _scheduler_status = ProjectReviewSchedulerStatus()
+
+
+def get_project_review_scheduler_status() -> dict[str, object]:
+    return _scheduler_status.to_dict()
+
+
 @dataclass(frozen=True)
 class ProjectReviewTickResult:
     project_id: str
@@ -160,12 +222,17 @@ async def run_project_review_scheduler_loop(
 
     try:
         while True:
+            _scheduler_status.mark_started(interval_s=interval, limit=review_limit)
             try:
-                await tick_fn(store, event_bus=event_bus, limit=review_limit)
+                summary = await tick_fn(store, event_bus=event_bus, limit=review_limit)
             except asyncio.CancelledError:
+                _scheduler_status.mark_cancelled()
                 raise
-            except Exception:  # noqa: BLE001 - supervisor loop survives a failed scan.
+            except Exception as exc:  # noqa: BLE001 - supervisor loop survives a failed scan.
+                _scheduler_status.mark_failed(exc)
                 logger.exception("project review scheduler tick failed")
+            else:
+                _scheduler_status.mark_completed(summary)
             await sleep_fn(interval)
     except asyncio.CancelledError:
         raise

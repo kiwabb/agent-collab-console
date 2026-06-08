@@ -549,6 +549,14 @@ async def diagnostics():
         runtime_catalog = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         checks.append({"name": "runtime_catalog", "status": "error", "detail": runtime_catalog["error"]})
 
+    from app.application.project_review_scheduler import get_project_review_scheduler_status
+    project_review_scheduler = get_project_review_scheduler_status()
+    checks.append({
+        "name": "project_review_scheduler",
+        "status": "degraded" if project_review_scheduler.get("last_error") else "ok",
+        "detail": project_review_scheduler.get("last_error"),
+    })
+
     config = {
         "real_cli_enabled": os.getenv("REAL_CLI", "true").lower() == "true",
         "codex_launch_enabled": os.getenv("CODEX_LAUNCH_ENABLED", "true").lower() != "false",
@@ -594,6 +602,7 @@ async def diagnostics():
         "generated_at": now,
         "database": database,
         "runtime_catalog": runtime_catalog,
+        "project_review_scheduler": project_review_scheduler,
         "executors": executors,
         "websockets": websockets,
         "config": config,
