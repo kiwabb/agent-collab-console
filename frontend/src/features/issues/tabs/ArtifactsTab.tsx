@@ -7,6 +7,7 @@ import type { Artifact, CodexIssue } from "@/lib/types";
 import { ArtifactsSplitView } from "@/features/issues/components/ArtifactsSplitView";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
@@ -148,12 +149,10 @@ export function ArtifactsTab({ issueId, active, issue }: Props) {
             variant="outline"
             disabled={isRefreshing || isLoading}
             onClick={() => void fetchArtifacts("refresh")}
-            className="h-7 px-2.5 text-[12px]"
+            data-density={isRefreshing ? "artifacts-tab-refresh-tool" : "artifacts-tab-refresh"}
+            className={cn("h-7 px-2.5 text-[12px]", isRefreshing && "motion-essential")}
           >
-            <RefreshCw
-              size={11}
-              className={cn("mr-1.5", isRefreshing && "animate-spin")}
-            />
+            {isRefreshing ? <AgentThinkingIndicator phase="tool" size={11} /> : <RefreshCw size={11} />}
             Refresh
           </Button>
           <a
