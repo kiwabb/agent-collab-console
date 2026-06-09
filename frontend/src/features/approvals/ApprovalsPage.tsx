@@ -608,9 +608,14 @@ function AnswerInline({
         type="submit"
         size="sm"
         disabled={disabled || !draft.trim()}
-        className="bg-brand hover:bg-brand-strong text-black font-semibold"
+        data-density={disabled ? "approvals-answer-thinking" : "approvals-answer"}
+        className={cn("bg-brand hover:bg-brand-strong text-black font-semibold", disabled && "motion-essential")}
       >
-        {disabled ? <Loader2 size={12} className="animate-spin" /> : t("approvals.sendAnswer")}
+        {disabled ? (
+          <AgentThinkingIndicator phase="thinking" size={12} />
+        ) : (
+          t("approvals.sendAnswer")
+        )}
       </Button>
     </form>
   );

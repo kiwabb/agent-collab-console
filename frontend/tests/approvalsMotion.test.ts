@@ -29,3 +29,13 @@ test("approvals row approve action uses tool motion while resolving gates", () =
   assert.match(source, /<CheckCircle2 size=\{12\} \/>/);
   assert.doesNotMatch(source, /\{busy \? <Loader2 size=\{12\} className="animate-spin" \/> : <CheckCircle2 size=\{12\} \/>}/);
 });
+
+test("approvals clarification answer cta uses thinking motion while handing off", () => {
+  const source = readSource("features/approvals/ApprovalsPage.tsx");
+
+  assert.match(source, /data-density=\{disabled \? "approvals-answer-thinking" : "approvals-answer"\}/);
+  assert.match(source, /disabled && "motion-essential"/);
+  assert.match(source, /disabled \? \(\s*<AgentThinkingIndicator phase="thinking" size=\{12\} \/>/);
+  assert.match(source, /\) : \(\s*t\("approvals\.sendAnswer"\)\s*\)/);
+  assert.doesNotMatch(source, /\{disabled \? <Loader2 size=\{12\} className="animate-spin" \/> : t\("approvals\.sendAnswer"\)\}/);
+});
