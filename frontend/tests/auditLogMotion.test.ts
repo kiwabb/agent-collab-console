@@ -20,3 +20,13 @@ test("audit log initial loading uses tool motion while syncing trace records", (
   assert.match(source, /\{t\("auditLog\.loading"\)\}/);
   assert.doesNotMatch(source, /<Loader2 size=\{15\} className="animate-spin" \/> \{t\("auditLog\.loading"\)\}/);
 });
+
+test("audit log load-more cta uses tool motion while paging trace records", () => {
+  const source = readSource("features/audit/AuditLogPage.tsx");
+
+  assert.match(source, /data-density=\{loadingMore \? "audit-log-load-more-tool" : "audit-log-load-more"\}/);
+  assert.match(source, /className=\{cn\("gap-2", loadingMore && "motion-essential"\)\}/);
+  assert.match(source, /loadingMore && <AgentThinkingIndicator phase="tool" size=\{14\} \/>/);
+  assert.match(source, /\{t\("auditLog\.loadMore"\)\}/);
+  assert.doesNotMatch(source, /\{loadingMore && <Loader2 size=\{14\} className="animate-spin" \/>}/);
+});

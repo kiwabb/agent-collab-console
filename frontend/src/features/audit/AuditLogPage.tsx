@@ -5,7 +5,6 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronRight,
-  Loader2,
   RefreshCw,
   Search,
   X,
@@ -347,9 +346,10 @@ export function AuditLogPage() {
                 variant="outline"
                 onClick={() => void loadMore()}
                 disabled={loadingMore}
-                className="gap-2"
+                data-density={loadingMore ? "audit-log-load-more-tool" : "audit-log-load-more"}
+                className={cn("gap-2", loadingMore && "motion-essential")}
               >
-                {loadingMore && <Loader2 size={14} className="animate-spin" />}
+                {loadingMore && <AgentThinkingIndicator phase="tool" size={14} />}
                 {t("auditLog.loadMore")}
               </Button>
             </div>
