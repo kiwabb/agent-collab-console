@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Loader2, XCircle, Clock, Pause, ChevronRight } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, Pause, ChevronRight } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { getCodexTasks } from "@/lib/api";
 import type { CodexTask } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -89,44 +90,54 @@ export function IssueNarrativeTimeline({ issueId, reloadKey }: Props) {
 
   return (
     <div className="flex items-center gap-1 mt-3 px-8 max-w-6xl mx-auto w-full overflow-x-auto pb-1 scrollbar-none shrink-0">
-      {entries.map((e, i) => (
-        <div key={e.role} className="flex items-center shrink-0">
-          <div
-            className={cn(
-              "min-w-[180px] max-w-[220px] flex flex-col gap-0.5 px-3.5 py-1.5 rounded-xl border transition-all duration-300",
-              e.status === "done"
-                ? "border-success/30 bg-success/5 shadow-sm"
-                : e.status === "failed"
-                  ? "border-error/30 bg-error/5 shadow-sm"
-                  : e.status === "running" || e.status === "responding"
-                    ? "border-brand/40 bg-brand/5 shadow-sm shadow-brand/10"
-                    : "border-border-subtle bg-surface hover:bg-surface-hover"
-            )}
-          >
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider">
-              <StatusIcon status={e.status} />
-              <span className={cn(
-                "font-bold",
-                e.status === "done" ? "text-success/90" : e.status === "failed" ? "text-error/90" : e.status === "running" || e.status === "responding" ? "text-brand" : "text-text-muted"
-              )}>{e.label}</span>
-              {e.timestamp && (
-                <span className="ml-auto tabular-nums text-text-muted/60 font-mono text-[10px]">{shortTime(e.timestamp)}</span>
-              )}
-            </div>
+      {entries.map((e, i) => {
+        const isActiveRole = e.status === "running" || e.status === "responding";
+        return (
+          <div key={e.role} className="flex items-center shrink-0">
             <div
-              className="text-[12px] font-medium text-foreground/80 line-clamp-2 leading-snug"
-              title={e.summary}
+              data-density={isActiveRole ? "issue-narrative-active-role" : "issue-narrative-role"}
+              className={cn(
+                "relative min-w-[180px] max-w-[220px] flex flex-col gap-0.5 overflow-hidden px-3.5 py-1.5 rounded-xl border transition-all duration-300",
+                e.status === "done"
+                  ? "border-success/30 bg-success/5 shadow-sm"
+                  : e.status === "failed"
+                    ? "border-error/30 bg-error/5 shadow-sm"
+                    : isActiveRole
+                      ? "motion-essential border-brand/40 bg-brand/5 shadow-sm shadow-brand/10"
+                      : "border-border-subtle bg-surface hover:bg-surface-hover"
+              )}
             >
-              {e.summary}
+              {isActiveRole ? (
+                <span
+                  aria-hidden
+                  className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                />
+              ) : null}
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider">
+                <StatusIcon status={e.status} />
+                <span className={cn(
+                  "font-bold",
+                  e.status === "done" ? "text-success/90" : e.status === "failed" ? "text-error/90" : isActiveRole ? "text-brand" : "text-text-muted"
+                )}>{e.label}</span>
+                {e.timestamp && (
+                  <span className="ml-auto tabular-nums text-text-muted/60 font-mono text-[10px]">{shortTime(e.timestamp)}</span>
+                )}
+              </div>
+              <div
+                className="text-[12px] font-medium text-foreground/80 line-clamp-2 leading-snug"
+                title={e.summary}
+              >
+                {e.summary}
+              </div>
             </div>
+            {i < entries.length - 1 && (
+              <div className="mx-2 flex items-center justify-center">
+                <ChevronRight size={16} strokeWidth={2.5} className={e.status === "done" ? "text-success/40" : "text-border-subtle"} />
+              </div>
+            )}
           </div>
-          {i < entries.length - 1 && (
-            <div className="mx-2 flex items-center justify-center">
-              <ChevronRight size={16} strokeWidth={2.5} className={e.status === "done" ? "text-success/40" : "text-border-subtle"} />
-            </div>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -135,7 +146,7 @@ function StatusIcon({ status }: { status: string }) {
   if (status === "done") return <CheckCircle2 size={12} className="text-success" />;
   if (status === "failed") return <XCircle size={12} className="text-error" />;
   if (status === "running" || status === "responding")
-    return <Loader2 size={12} className="text-brand animate-spin" />;
+    return <AgentThinkingIndicator phase="dispatching" size={12} />;
   if (status === "awaiting_review")
     return <Pause size={12} className="text-warning" />;
   return <Clock size={12} className="text-text-muted" />;
