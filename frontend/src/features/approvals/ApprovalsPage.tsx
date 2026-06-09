@@ -26,6 +26,7 @@ import {
   EmptyStateAction,
   InteractionEmptyState,
 } from "@/components/ui/interaction-empty-state";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useToast } from "@/components/ui/toast";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
@@ -248,9 +249,15 @@ export function ApprovalsPage() {
           size="sm"
           variant="outline"
           disabled={refreshing}
+          data-density={refreshing ? "approvals-refresh-tool" : "approvals-refresh"}
+          className={cn(refreshing && "motion-essential")}
           onClick={() => void load("refresh")}
         >
-          <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
+          {refreshing ? (
+            <AgentThinkingIndicator phase="tool" size={12} />
+          ) : (
+            <RefreshCw size={12} />
+          )}
           {t("approvals.refresh")}
         </Button>
       )}
