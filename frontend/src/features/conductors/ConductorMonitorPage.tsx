@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, AlertTriangle, CheckCircle2, Loader2, Pause, RefreshCw } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Pause, RefreshCw } from "lucide-react";
 
 import { getConductors, type ConductorSession } from "@/lib/api";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
@@ -67,8 +67,15 @@ export function ConductorMonitorPage() {
       )}
 
       {loading ? (
-        <div className="flex items-center gap-2 rounded-2xl border border-border-subtle bg-surface-input/40 px-6 py-12 text-sm text-text-muted">
-          <Loader2 size={15} className="animate-spin" /> {t("conductorMonitor.loading")}
+        <div
+          data-density="conductor-monitor-loading"
+          className="motion-essential relative flex items-center gap-2 overflow-hidden rounded-2xl border border-brand/25 bg-brand-muted/10 px-6 py-12 text-sm text-text-muted"
+        >
+          <span
+            aria-hidden
+            className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+          />
+          <AgentThinkingIndicator phase="thinking" size={15} /> {t("conductorMonitor.loading")}
         </div>
       ) : sessions.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border-subtle bg-surface-input/40 px-6 py-12 text-center text-sm text-text-muted">

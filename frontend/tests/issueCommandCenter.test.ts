@@ -145,6 +145,16 @@ test("conductor monitor marks live conductor rows with scheduling motion", () =>
   assert.doesNotMatch(monitorSource, /animate-pulse/);
 });
 
+test("conductor monitor loading state uses thinking motion", () => {
+  const monitorSource = readSource("features/conductors/ConductorMonitorPage.tsx");
+
+  assert.match(monitorSource, /data-density="conductor-monitor-loading"/);
+  assert.match(monitorSource, /<AgentThinkingIndicator phase="thinking" size=\{15\}/);
+  assert.match(monitorSource, /animate-shimmer-sweep/);
+  assert.match(monitorSource, /motion-essential/);
+  assert.doesNotMatch(monitorSource, /<Loader2 size=\{15\} className="animate-spin"/);
+});
+
 test("issue side activity marks running pipeline stages with scheduling motion", () => {
   const sideStackSource = readSource("features/issues/components/IssueSideStack.tsx");
 
