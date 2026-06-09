@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import {
   Sheet,
   SheetContent,
@@ -92,8 +92,15 @@ export function AgentDecisionDrawer({ taskId, open, onClose }: Props) {
         </SheetHeader>
         <div className="flex-1 overflow-auto px-5 pb-5 space-y-4">
           {loading && (
-            <div className="flex items-center gap-2 text-sm text-text-muted py-6">
-              <Loader2 size={14} className="animate-spin" />
+            <div
+              data-density="agent-decision-loading"
+              className="motion-essential relative flex items-center gap-2 overflow-hidden rounded-md border border-brand/25 bg-brand-muted/10 px-3 py-3 text-sm text-text-muted"
+            >
+              <span
+                aria-hidden
+                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+              />
+              <AgentThinkingIndicator phase="thinking" size={14} />
               Loading agent output…
             </div>
           )}

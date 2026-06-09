@@ -192,6 +192,16 @@ test("steer issue dialog send cta uses thinking motion while sending", () => {
   assert.doesNotMatch(dialogSource, /<Loader2 size=\{12\} className="animate-spin"/);
 });
 
+test("agent decision drawer loading state uses thinking motion", () => {
+  const drawerSource = readSource("features/issues/components/AgentDecisionDrawer.tsx");
+
+  assert.match(drawerSource, /data-density="agent-decision-loading"/);
+  assert.match(drawerSource, /<AgentThinkingIndicator phase="thinking" size=\{14\}/);
+  assert.match(drawerSource, /animate-shimmer-sweep/);
+  assert.match(drawerSource, /motion-essential/);
+  assert.doesNotMatch(drawerSource, /<Loader2 size=\{14\} className="animate-spin"/);
+});
+
 test("issue workbench tabs surface active conductor scheduling motion", () => {
   const pageSource = readSource("features/issues/IssueDetailPage.tsx");
 
