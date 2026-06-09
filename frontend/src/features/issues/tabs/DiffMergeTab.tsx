@@ -487,10 +487,12 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
                   ? t("task.diffMerge.nothingToMerge")
                   : t("task.diffMerge.mergeHint")
             }
+            data-density={busy === "merge" ? "diff-merge-back-dispatch" : "diff-merge-back"}
+            className={cn(busy === "merge" && "motion-essential")}
           >
             {busy === "merge" ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> {t("task.diffMerge.merging")}
+                <AgentThinkingIndicator phase="dispatching" size={12} /> {t("task.diffMerge.merging")}
               </span>
             ) : (
               t("task.mergeBack")

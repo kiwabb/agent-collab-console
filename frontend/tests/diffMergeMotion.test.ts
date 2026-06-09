@@ -19,3 +19,12 @@ test("diff merge create PR cta uses dispatch motion while opening GitHub PR", ()
   assert.match(source, /<GitPullRequest size=\{12\}/);
   assert.doesNotMatch(source, /busy === "pr-create" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
 });
+
+test("diff merge merge-back cta uses dispatch motion while merging", () => {
+  const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
+
+  assert.match(source, /data-density=\{busy === "merge" \? "diff-merge-back-dispatch" : "diff-merge-back"\}/);
+  assert.match(source, /busy === "merge" && "motion-essential/);
+  assert.match(source, /busy === "merge" \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
+  assert.doesNotMatch(source, /busy === "merge" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
+});
