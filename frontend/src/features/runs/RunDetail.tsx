@@ -1,7 +1,7 @@
 "use client";
 
 import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCatalog, RunMode } from "@/lib/types";
-import { RotateCcw, Trash2, Send, Terminal, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
+import { RotateCcw, Trash2, Send, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
@@ -583,8 +583,11 @@ export function RunDetail({
 
             <TabsContent ref={logsContainerRef} value="logs" className="absolute inset-0 m-0 p-6 bg-background/40">
               {isLoadingLogs && normalizedLogs.length === 0 ? (
-                <div className="py-20 flex flex-col items-center justify-center gap-4 text-[10px] uppercase font-black tracking-widest text-text-muted opacity-40">
-                  <Terminal size={24} className="animate-pulse text-brand" />
+                <div
+                  data-density="run-detail-logs-loading"
+                  className="motion-essential py-20 flex flex-col items-center justify-center gap-4 text-[10px] uppercase font-black tracking-widest text-text-muted opacity-40"
+                >
+                  <AgentThinkingIndicator phase="tool" size={24} />
                   <span>{t("run.loadingLogs")}</span>
                 </div>
               ) : (
