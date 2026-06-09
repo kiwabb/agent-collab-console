@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/ccgui/frontend/index.md", "reason": "Frontend stack, i18n parity, and pure derivation rules to verify against the issue UI task."}
+{"file": ".trellis/spec/ccgui/frontend/component-guidelines.md", "reason": "Component, styling, accessibility, and reduced-motion rules for reviewing dense UI and animation changes."}
+{"file": ".trellis/spec/ccgui/frontend/quality-guidelines.md", "reason": "Quality gates, source-contract test conventions, and reviewer checklist for frontend changes."}
+{"file": ".trellis/spec/ccgui/frontend/type-safety.md", "reason": "Strict TypeScript and typed domain model rules to catch unsafe props or state derivation."}

@@ -131,6 +131,7 @@ function taskStatusToTimeline(status: string | null | undefined): DecisionTimeli
   if (s === "failed" || s.includes("error")) return "failed";
   if (s === "done" || s === "completed" || s === "success") return "done";
   if (s === "running" || s === "responding" || s === "in_progress") return "running";
+  if (s === "pending" || s === "queued" || s === "created") return "waiting";
   if (s.includes("await") || s === "paused") return "waiting";
   return "info";
 }
@@ -198,6 +199,15 @@ function titleForBatchTask(role: string, index: number): { title: string; titleK
     titleKey: "issue.command.title.batchTask",
     titleParams: { role, index },
   };
+}
+
+function summaryKeyForBatchTask(role: string, status: DecisionTimelineItem["status"]): string | undefined {
+  const keyPrefix = role === "engineer" ? "developmentTask" : "batchTask";
+  if (status === "done") return `issue.command.summary.${keyPrefix}Done`;
+  if (status === "running") return `issue.command.summary.${keyPrefix}Running`;
+  if (status === "waiting") return `issue.command.summary.${keyPrefix}Waiting`;
+  if (status === "failed") return `issue.command.summary.${keyPrefix}Failed`;
+  return undefined;
 }
 
 function durationBetween(startedAt: string | null, endedAt: string | null): number | null {
@@ -361,9 +371,7 @@ export function buildDecisionTimeline(
       summary,
       summaryKey: summary
         ? undefined
-        : task.role === "engineer"
-          ? "issue.command.summary.developmentTaskDone"
-          : "issue.command.summary.batchTaskDone",
+        : summaryKeyForBatchTask(task.role, status),
       createdAt: task.created_at,
       durationMs: durationBetween(task.created_at, task.updated_at),
       taskId: task.id,

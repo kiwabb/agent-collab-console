@@ -258,8 +258,8 @@ test("decision timeline expands dispatch_batch engineer tasks into visible rows"
     ],
     [
       makeTask({ id: "eng-a", role: "engineer", status: "done", result: "created module_a.py", created_at: "2026-05-23T10:00:03Z" }),
-      makeTask({ id: "eng-b", role: "engineer", status: "done", result: "created module_b.py", created_at: "2026-05-23T10:00:04Z" }),
-      makeTask({ id: "eng-c", role: "engineer", status: "done", result: null, created_at: "2026-05-23T10:00:05Z" }),
+      makeTask({ id: "eng-b", role: "engineer", status: "pending", result: null, created_at: "2026-05-23T10:00:04Z" }),
+      makeTask({ id: "eng-c", role: "engineer", status: "running", result: null, created_at: "2026-05-23T10:00:05Z" }),
     ],
     [
       {
@@ -286,9 +286,59 @@ test("decision timeline expands dispatch_batch engineer tasks into visible rows"
     "issue.command.title.developmentTask",
   ]);
   assert.deepEqual(engineerRows.map((item) => item.titleParams), [{ index: 1 }, { index: 2 }, { index: 3 }]);
-  assert.deepEqual(engineerRows.map((item) => item.status), ["done", "done", "done"]);
+  assert.deepEqual(engineerRows.map((item) => item.status), ["done", "waiting", "running"]);
   assert.equal(engineerRows[0]?.summary, "Created module_a.py");
-  assert.equal(engineerRows[2]?.summaryKey, "issue.command.summary.developmentTaskDone");
+  assert.equal(engineerRows[1]?.summaryKey, "issue.command.summary.developmentTaskWaiting");
+  assert.equal(engineerRows[2]?.summaryKey, "issue.command.summary.developmentTaskRunning");
+});
+
+test("decision timeline treats queued batch tasks as waiting work", () => {
+  const timeline = buildDecisionTimeline(
+    [
+      {
+        id: "turn-1",
+        conductor_task_id: "cond-1",
+        issue_id: "issue-1",
+        turn_index: 1,
+        sub_index: 1,
+        kind: "tool_use",
+        payload: {
+          name: "dispatch_batch",
+          id: "tool-1",
+          input: {
+            agents: [
+              { role: "engineer" },
+              { role: "qa" },
+            ],
+          },
+        },
+        created_at: "2026-05-23T10:00:01Z",
+      },
+      {
+        id: "turn-2",
+        conductor_task_id: "cond-1",
+        issue_id: "issue-1",
+        turn_index: 1,
+        sub_index: 2,
+        kind: "tool_result",
+        payload: { tool_use_id: "tool-1", output: { status: "success" } },
+        created_at: "2026-05-23T10:00:02Z",
+      },
+    ],
+    [
+      makeTask({ id: "eng-queued", role: "engineer", status: "queued", result: null, created_at: "2026-05-23T10:00:03Z" }),
+      makeTask({ id: "qa-created", role: "qa", status: "created", result: null, created_at: "2026-05-23T10:00:04Z" }),
+    ],
+    [],
+  );
+
+  const queuedRows = timeline.filter((item) => item.id.startsWith("task:"));
+
+  assert.deepEqual(queuedRows.map((item) => item.status), ["waiting", "waiting"]);
+  assert.deepEqual(queuedRows.map((item) => item.summaryKey), [
+    "issue.command.summary.developmentTaskWaiting",
+    "issue.command.summary.batchTaskWaiting",
+  ]);
 });
 
 test("decision timeline execution summary surfaces dispatched development, QA, and finalize", () => {

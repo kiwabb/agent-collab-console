@@ -56,6 +56,15 @@ Redesign the issue-related UI so the workspace issue list and issue detail page 
 * `cd frontend && npm run lint` and `cd frontend && npm run build` pass, or failures are documented with cause.
 * Browser screenshots/DOM checks prove the redesigned pages render correctly without overlap.
 
+## Verification Notes
+
+* 2026-06-09: Browser runtime verification for the intelligent scheduling animation slice used a temporary mock backend on `localhost:9000` and `frontend` dev server on `localhost:4000`, then opened `/issues/mock-scheduling-issue`.
+* The issue detail page rendered without the Next.js runtime error overlay. DOM checks found an active Conductor strip with `border-brand/35 bg-brand-muted/10`, `animate-shimmer-sweep = 1`, and `animate-orbit = 1`.
+* The timeline rendered three running scheduling rows (`dispatch_batch`, tool call, and running engineer task). Each row had scheduling active chrome, `animate-shimmer-sweep = 1`, and `animate-orbit = 1`.
+* A mock `conductor_turn_delta` WebSocket event rendered the live thinking card with the streamed Conductor text and `animate-shimmer-sweep = 1`.
+* Follow-up fix: batch-expanded tasks now choose empty-summary copy from their actual timeline status, so a running engineer row says it is running instead of reusing the finished-task summary.
+* Screenshot artifact from the local verification run: `/tmp/conductor-animation-verification-live.png`.
+
 ## Out of Scope
 
 * Backend orchestration behavior changes.
