@@ -20,6 +20,7 @@ import type { CodexIssue, CodexTask, IssueDiffResult } from "@/lib/types";
 import { DiffSplitView } from "@/features/issues/components/DiffSplitView";
 import { DiffStatBar } from "@/features/issues/components/DiffStatBar";
 import { Button } from "@/components/ui/button";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
@@ -461,11 +462,12 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
                     ? t("task.diffMerge.nothingToOpenPr")
                     : t("task.diffMerge.createPrHint")
               }
-              className="bg-foreground text-background hover:bg-foreground/90"
+              data-density={busy === "pr-create" ? "diff-merge-create-pr-dispatch" : "diff-merge-create-pr"}
+              className={cn("bg-foreground text-background hover:bg-foreground/90", busy === "pr-create" && "motion-essential")}
             >
               {busy === "pr-create" ? (
                 <span className="flex items-center gap-1.5">
-                  <Loader2 size={12} className="animate-spin" /> {t("task.diffMerge.openingPr")}
+                  <AgentThinkingIndicator phase="dispatching" size={12} /> {t("task.diffMerge.openingPr")}
                 </span>
               ) : (
                 <span className="flex items-center gap-1.5">
