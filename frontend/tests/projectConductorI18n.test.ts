@@ -80,7 +80,7 @@ test("project conductor thread dock marks streaming runs with scheduling motion"
 
   assert.match(dock, /isProjectConductorStreaming/);
   assert.match(dock, /data-density="project-conductor-thread-dock"/);
-  assert.match(dock, /data-density="project-conductor-tool-card"/);
+  assert.match(dock, /"project-conductor-tool-card"/);
   assert.match(dock, /<AgentThinkingIndicator/);
   assert.match(dock, /animate-shimmer-sweep/);
   assert.match(dock, /phase=\{running \? "dispatching" : "streaming"\}/);
@@ -109,5 +109,17 @@ test("project conductor start loop cta uses dispatch motion while running", () =
   assert.match(dock, /<AgentThinkingIndicator phase="dispatching" size=\{14\}/);
   assert.match(dock, /<Play size=\{14\}/);
   assert.doesNotMatch(dock, /running \? <Loader2/);
+  assert.doesNotMatch(dock, /animate-pulse/);
+});
+
+test("project conductor latest tool card uses tool motion while streaming", () => {
+  const dock = readSource("features/projects/components/ProjectConductorThreadDock.tsx");
+
+  assert.match(dock, /const isProjectConductorToolActive = isProjectConductorStreaming && index === 0 && !tool\.is_error/);
+  assert.match(dock, /data-density=\{isProjectConductorToolActive \? "project-conductor-active-tool-card" : "project-conductor-tool-card"\}/);
+  assert.match(dock, /isProjectConductorToolActive && "motion-essential/);
+  assert.match(dock, /<AgentThinkingIndicator phase="tool" size=\{12\}/);
+  assert.match(dock, /isProjectConductorToolActive && \(/);
+  assert.match(dock, /animate-shimmer-sweep/);
   assert.doesNotMatch(dock, /animate-pulse/);
 });

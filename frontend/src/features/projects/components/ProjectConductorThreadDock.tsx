@@ -197,32 +197,39 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
           {tools.length === 0 ? (
             <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">{t("projectConductor.threadDock.empty.tools")}</p>
           ) : (
-            tools.map((tool, index) => (
-              <div
-                key={`${tool.id}-${index}`}
-                data-density="project-conductor-tool-card"
-                className={cn(
-                  "relative overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs transition-colors",
-                  isProjectConductorStreaming && index === 0 && !tool.is_error && "motion-essential border-brand/30 bg-brand-muted/10",
-                )}
-              >
-                {isProjectConductorStreaming && index === 0 && !tool.is_error && (
-                  <span
-                    aria-hidden
-                    className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
-                  />
-                )}
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-black text-text-primary">{tool.name}</span>
-                  <span className={tool.is_error ? "text-red-500" : "text-text-muted"}>
-                    {tool.is_error ? t("projectConductor.threadDock.toolState.error") : t("projectConductor.threadDock.toolState.ok")}
-                  </span>
+            tools.map((tool, index) => {
+              const isProjectConductorToolActive = isProjectConductorStreaming && index === 0 && !tool.is_error;
+
+              return (
+                <div
+                  key={`${tool.id}-${index}`}
+                  data-density={isProjectConductorToolActive ? "project-conductor-active-tool-card" : "project-conductor-tool-card"}
+                  className={cn(
+                    "relative overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs transition-colors",
+                    isProjectConductorToolActive && "motion-essential border-brand/30 bg-brand-muted/10",
+                  )}
+                >
+                  {isProjectConductorToolActive && (
+                    <span
+                      aria-hidden
+                      className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                    />
+                  )}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex min-w-0 items-center gap-1.5 font-black text-text-primary">
+                      {isProjectConductorToolActive && <AgentThinkingIndicator phase="tool" size={12} className="shrink-0" />}
+                      <span className="truncate">{tool.name}</span>
+                    </span>
+                    <span className={tool.is_error ? "text-red-500" : "text-text-muted"}>
+                      {tool.is_error ? t("projectConductor.threadDock.toolState.error") : t("projectConductor.threadDock.toolState.ok")}
+                    </span>
+                  </div>
+                  <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-text-muted">
+                    {JSON.stringify(tool.result, null, 2)}
+                  </pre>
                 </div>
-                <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-text-muted">
-                  {JSON.stringify(tool.result, null, 2)}
-                </pre>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
