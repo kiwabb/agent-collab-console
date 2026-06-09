@@ -53,6 +53,7 @@ export function TimelineRow({ item, onOpen }: Props) {
       item.kind === "dispatch" ||
       item.kind === "tool" ||
       item.kind === "memory" ||
+      item.kind === "clarification" ||
       item.kind === "finalize"
     );
   const timelineMotionPhase =
