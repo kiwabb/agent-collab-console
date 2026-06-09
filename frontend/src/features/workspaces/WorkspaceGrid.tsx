@@ -5,7 +5,7 @@ import type { Workspace } from "@/lib/types";
 import { Folder, ChevronRight, Clock, Plus, Trash2, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
-import { Skeleton } from "@/components/ui/skeleton";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
@@ -151,22 +151,20 @@ export function WorkspaceGrid({
       >
         <AnimatePresence mode="popLayout">
           {isLoading && (
-            <motion.div key="loading-skeletons">
-              {[1, 2, 3, 4].map((i) => (
-                <motion.div
-                  key={`skeleton-${i}`}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="p-6 rounded-2xl bg-surface/40 border border-border-subtle overflow-hidden"
-                >
-                  <div className="flex items-start justify-between mb-6">
-                    <Skeleton variant="circle" className="size-12" />
-                  </div>
-                  <Skeleton variant="text" className="w-3/4 mb-2" />
-                  <Skeleton variant="text" className="w-1/3" />
-                </motion.div>
-              ))}
+            <motion.div
+              key="workspace-grid-dispatch-loading"
+              data-density="workspace-grid-dispatch-loading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="motion-essential relative col-span-full flex min-h-[220px] items-center justify-center gap-2 overflow-hidden rounded-lg border border-status-running/25 bg-status-running/5 text-sm font-semibold text-text-muted"
+            >
+              <span
+                aria-hidden
+                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
+              />
+              <AgentThinkingIndicator phase="dispatching" size={16} />
+              {t("workspace.loading")}
             </motion.div>
           )}
 
