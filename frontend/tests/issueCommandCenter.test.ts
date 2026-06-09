@@ -121,6 +121,26 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(rowSource, /issue\.command\.rationalePlan/);
 });
 
+test("workflow graph marks active dispatch batch lanes with scheduling motion", () => {
+  const graphSource = readSource("features/workflow/WorkflowGraphView.tsx");
+
+  assert.match(graphSource, /isActiveSchedulingBatch/);
+  assert.match(graphSource, /data-density="parallel-dispatch-lane"/);
+  assert.match(graphSource, /<AgentThinkingIndicator/);
+  assert.match(graphSource, /animate-shimmer-sweep/);
+  assert.match(graphSource, /phase="dispatching"/);
+});
+
+test("conductor monitor marks live conductor rows with scheduling motion", () => {
+  const monitorSource = readSource("features/conductors/ConductorMonitorPage.tsx");
+
+  assert.match(monitorSource, /isConductorDispatching/);
+  assert.match(monitorSource, /data-density="conductor-monitor-row"/);
+  assert.match(monitorSource, /<AgentThinkingIndicator/);
+  assert.match(monitorSource, /animate-shimmer-sweep/);
+  assert.match(monitorSource, /phase=\{s\.phase \?\? "dispatching"\}/);
+});
+
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {
   const timeline = buildDecisionTimeline(
     [

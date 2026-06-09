@@ -16,6 +16,7 @@ import { Maximize2, Minus, Plus } from "lucide-react";
 
 import type { WorkflowGraph } from "@/lib/types";
 import type { GraphStatsResponse } from "@/lib/api";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import {
   AgentDagNode,
   type AgentDagNodeData,
@@ -59,6 +60,11 @@ const VALID_ROLES = new Set<RoleId>([
   "engineer_backend",
   "qa",
 ]);
+const ACTIVE_BATCH_STATUSES = new Set(["running", "responding", "in_progress"]);
+
+function isActiveSchedulingBatch(statuses: string[]): boolean {
+  return statuses.some((status) => ACTIVE_BATCH_STATUSES.has(status.toLowerCase()));
+}
 
 interface GraphLike {
   nodes: Array<{
@@ -151,7 +157,7 @@ function toReactFlow(
   // of nodes that were fanned out together via dispatch_batch (same batch_key).
   const nodeBox = new Map<
     string,
-    { x: number; y: number; batchKey: string | null }
+    { x: number; y: number; batchKey: string | null; status: string }
   >();
   const rfNodes: Node<AgentDagNodeData>[] = nodesWithConductor.map((n) => {
     const depth = depthByKey.get(n.node_key) ?? 0;
@@ -172,7 +178,7 @@ function toReactFlow(
       : stats?.nodes?.[n.node_key] ?? null;
     const x = depth * colWidth;
     const y = seen * rowHeight + 60;
-    nodeBox.set(n.node_key, { x, y, batchKey: n.batch_key ?? null });
+    nodeBox.set(n.node_key, { x, y, batchKey: n.batch_key ?? null, status: n.status ?? "pending" });
     return {
       id: n.node_key,
       type: "agent",
@@ -210,7 +216,7 @@ function toReactFlow(
     if (memberKeys.length < 2) return; // a lone agent isn't a visible "lane"
     const boxes = memberKeys
       .map((k) => nodeBox.get(k))
-      .filter((b): b is { x: number; y: number; batchKey: string | null } => !!b);
+      .filter((b): b is { x: number; y: number; batchKey: string | null; status: string } => !!b);
     const minX = Math.min(...boxes.map((b) => b.x));
     const minY = Math.min(...boxes.map((b) => b.y));
     const maxX = Math.max(...boxes.map((b) => b.x + NODE_W));
@@ -227,6 +233,7 @@ function toReactFlow(
         height: maxY - minY + PAD * 2 + 22,
         count: memberKeys.length,
         label: batchLabel,
+        isActive: isActiveSchedulingBatch(boxes.map((b) => b.status)),
       },
       zIndex: -1,
     });
@@ -456,6 +463,7 @@ export interface BatchGroupNodeData {
   /** Number of agents that fanned out in this batch. */
   count: number;
   label: string;
+  isActive: boolean;
 }
 
 /** Non-interactive swimlane drawn behind a set of agents that were dispatched
@@ -464,19 +472,37 @@ export interface BatchGroupNodeData {
 function BatchGroupNode({ data }: NodeProps<BatchGroupNodeData>) {
   return (
     <div
-      className="pointer-events-none rounded-2xl border border-dashed"
+      data-density="parallel-dispatch-lane"
+      className={cn(
+        "pointer-events-none relative overflow-hidden rounded-2xl border border-dashed transition-colors",
+        data.isActive && "motion-essential border-brand/60 bg-brand-muted/10 shadow-[0_0_28px_-18px_var(--color-brand)]",
+      )}
       style={{
         width: data.width,
         height: data.height,
-        borderColor: "color-mix(in srgb, var(--color-brand) 55%, transparent)",
-        background: "var(--color-brand-bg)",
+        borderColor: data.isActive
+          ? "color-mix(in srgb, var(--color-brand) 70%, transparent)"
+          : "color-mix(in srgb, var(--color-brand) 55%, transparent)",
+        background: data.isActive
+          ? "color-mix(in srgb, var(--color-brand) 14%, transparent)"
+          : "var(--color-brand-bg)",
       }}
     >
-      <div className="absolute left-2.5 top-1.5 inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md bg-background/80 backdrop-blur-sm border border-border-subtle font-mono text-[10.5px] uppercase tracking-[0.08em] text-brand">
+      {data.isActive && (
         <span
-          className="size-1.5 rounded-full"
-          style={{ background: "var(--color-brand)" }}
+          aria-hidden
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
         />
+      )}
+      <div className="absolute left-2.5 top-1.5 inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md bg-background/80 backdrop-blur-sm border border-border-subtle font-mono text-[10.5px] uppercase tracking-[0.08em] text-brand">
+        {data.isActive ? (
+          <AgentThinkingIndicator phase="dispatching" size={10} />
+        ) : (
+          <span
+            className="size-1.5 rounded-full"
+            style={{ background: "var(--color-brand)" }}
+          />
+        )}
         {data.label} · {data.count}
       </div>
     </div>

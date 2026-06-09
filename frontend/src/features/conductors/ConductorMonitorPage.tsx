@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertCircle, AlertTriangle, CheckCircle2, Loader2, Pause, RefreshCw } from "lucide-react";
 
 import { getConductors, type ConductorSession } from "@/lib/api";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
@@ -78,21 +79,34 @@ export function ConductorMonitorPage() {
           {sessions.map((s) => {
             const style = HEALTH_STYLE[s.health] ?? HEALTH_STYLE.ok;
             const Icon = style.icon;
+            const isConductorDispatching = s.status === "running" && s.alive && s.health === "ok";
             return (
               <li key={s.conductor_task_id}>
                 <button
                   type="button"
+                  data-density="conductor-monitor-row"
                   onClick={() => router.push(`/issues/${s.issue_id}`)}
                   className={cn(
-                    "grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 rounded-2xl border bg-surface-raised/70 p-4 text-left transition-colors hover:border-brand/50",
+                    "relative grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 overflow-hidden rounded-2xl border bg-surface-raised/70 p-4 text-left transition-colors hover:border-brand/50",
                     (s.health === "failed" || s.health === "stalled" || s.health === "danger") && "border-status-failed/30 bg-status-failed/5",
                     s.health === "warn" && "border-status-awaiting/30 bg-status-awaiting/5",
                     s.health === "ok" && "border-border-subtle",
                     s.health === "paused" && "border-border-subtle",
+                    isConductorDispatching && "motion-essential border-brand/35 bg-brand-muted/10",
                   )}
                 >
+                  {isConductorDispatching && (
+                    <span
+                      aria-hidden
+                      className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                    />
+                  )}
                   <span className={cn("inline-flex size-9 items-center justify-center rounded-xl border border-border-subtle bg-surface", style.dot)}>
-                    <Icon size={17} className={s.health === "ok" && s.alive ? "animate-pulse" : undefined} />
+                    {isConductorDispatching ? (
+                      <AgentThinkingIndicator phase={s.phase ?? "dispatching"} size={16} />
+                    ) : (
+                      <Icon size={17} className={s.health === "ok" && s.alive ? "animate-pulse" : undefined} />
+                    )}
                   </span>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
