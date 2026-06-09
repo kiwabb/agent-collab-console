@@ -1,7 +1,7 @@
 "use client";
 
 import type { ExecutionProcess, CodexTask, CodexTaskMessage, LogEvent, RuntimeCatalog, RunMode } from "@/lib/types";
-import { RotateCcw, Trash2, Send, MessageSquare, Play, Activity, AlertCircle, Check } from "lucide-react";
+import { RotateCcw, Trash2, Send, MessageSquare, Play, AlertCircle, Check } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
@@ -402,9 +402,10 @@ export function RunDetail({
             <Tooltip>
               <TooltipTrigger
                 onClick={onTerminate}
-                className="p-2.5 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all active:scale-[0.9] border border-transparent hover:border-error/20"
+                data-density="run-detail-terminate-tool"
+                className="motion-essential p-2.5 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-all active:scale-[0.9] border border-transparent hover:border-error/20"
               >
-                <Activity size={14} className="text-error animate-pulse" />
+                <AgentThinkingIndicator phase="tool" size={14} className="text-error" />
               </TooltipTrigger>
               <TooltipContent side="bottom">Stop Task</TooltipContent>
             </Tooltip>

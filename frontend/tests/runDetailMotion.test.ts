@@ -55,6 +55,18 @@ test("run detail logs loading uses tool motion", () => {
   assert.doesNotMatch(source, /<Terminal size=\{24\} className="animate-pulse text-brand" \/>/);
 });
 
+test("run detail terminate control uses tool motion", () => {
+  const source = readFileSync(
+    path.join(root, "src/features/runs/RunDetail.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /data-density="run-detail-terminate-tool"/);
+  assert.match(source, /className="motion-essential p-2\.5 rounded-lg hover:bg-error\/10 text-text-muted hover:text-error transition-all active:scale-\[0\.9\] border border-transparent hover:border-error\/20"/);
+  assert.match(source, /<AgentThinkingIndicator phase="tool" size=\{14\} className="text-error" \/>/);
+  assert.doesNotMatch(source, /<Activity size=\{14\} className="text-error animate-pulse" \/>/);
+});
+
 test("run detail pending assistant uses streaming motion", () => {
   const source = readFileSync(
     path.join(root, "src/features/runs/RunDetail.tsx"),
