@@ -26,3 +26,17 @@ test("agent live streaming assistant uses streaming motion", () => {
   assert.match(source, /animate-shimmer-sweep/);
   assert.match(source, /motion-essential/);
 });
+
+test("agent live execution controls use semantic busy motion", () => {
+  const source = readSource("features/runs/AgentLiveTimeline.tsx");
+
+  assert.match(source, /data-density=\{stopBusy \? "agent-live-stop-tool" : "agent-live-stop"\}/);
+  assert.match(source, /stopBusy && "motion-essential"/);
+  assert.match(source, /stopBusy \? \(\s*<AgentThinkingIndicator phase="tool" size=\{10\} \/>\s*\) : \(\s*<Square size=\{10\} className="fill-error" \/>\s*\)/);
+  assert.doesNotMatch(source, /stopBusy \? \(\s*<Loader2 size=\{10\} className="animate-spin" \/>\s*\) :/);
+
+  assert.match(source, /data-density=\{rerunBusy \? "agent-live-rerun-dispatch" : "agent-live-rerun"\}/);
+  assert.match(source, /rerunBusy && "motion-essential"/);
+  assert.match(source, /rerunBusy \? \(\s*<AgentThinkingIndicator phase="dispatching" size=\{11\} \/>\s*\) : \(\s*<RotateCcw size=\{11\} \/>\s*\)/);
+  assert.doesNotMatch(source, /rerunBusy \? \(\s*<Loader2 size=\{11\} className="animate-spin" \/>\s*\) :/);
+});

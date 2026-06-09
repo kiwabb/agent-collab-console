@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronDown, ChevronRight, Sparkles, Loader2, AlertCircle, WifiOff, XCircle, RotateCcw, Square } from "lucide-react";
+import { ChevronDown, ChevronRight, Sparkles, AlertCircle, WifiOff, XCircle, RotateCcw, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { useExecutionProcessLogStream } from "@/hooks/useExecutionProcessLogStream";
@@ -186,10 +186,14 @@ function WorkingIndicator({
             type="button"
             onClick={() => void onStop()}
             disabled={stopBusy}
-            className="inline-flex items-center gap-1 rounded border border-error/40 bg-error/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-error hover:bg-error/20 disabled:opacity-50 disabled:cursor-not-allowed"
+            data-density={stopBusy ? "agent-live-stop-tool" : "agent-live-stop"}
+            className={cn(
+              "inline-flex items-center gap-1 rounded border border-error/40 bg-error/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-error hover:bg-error/20 disabled:opacity-50 disabled:cursor-not-allowed",
+              stopBusy && "motion-essential",
+            )}
           >
             {stopBusy ? (
-              <Loader2 size={10} className="animate-spin" />
+              <AgentThinkingIndicator phase="tool" size={10} />
             ) : (
               <Square size={10} className="fill-error" />
             )}
@@ -334,10 +338,14 @@ export function AgentLiveTimeline({
                   type="button"
                   onClick={() => void handleRerun()}
                   disabled={rerunBusy}
-                  className="shrink-0 inline-flex items-center gap-1 rounded border border-error/40 bg-error/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-error hover:bg-error/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                  data-density={rerunBusy ? "agent-live-rerun-dispatch" : "agent-live-rerun"}
+                  className={cn(
+                    "shrink-0 inline-flex items-center gap-1 rounded border border-error/40 bg-error/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-error hover:bg-error/25 disabled:opacity-50 disabled:cursor-not-allowed",
+                    rerunBusy && "motion-essential",
+                  )}
                 >
                   {rerunBusy ? (
-                    <Loader2 size={11} className="animate-spin" />
+                    <AgentThinkingIndicator phase="dispatching" size={11} />
                   ) : (
                     <RotateCcw size={11} />
                   )}
