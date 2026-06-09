@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { CodexIssue, CodexTask, Artifact } from "@/lib/types";
 import { PHASE_CONFIG, PHASES, type Phase } from "./phaseUtils";
 import { Play, ChevronRight, Layout, ListTodo, FileText } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import type { TranslationKey } from "@/lib/i18n";
@@ -230,11 +231,23 @@ function StatusBadge({ status }: { status: string }) {
   const cls = colors[s] ?? "bg-surface-input text-text-muted border-border-subtle";
   
   return (
-    <div className={cn(
-      "flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[9px] font-black uppercase tracking-wider",
-      cls
-    )}>
-      {isLive && <div className="size-1 rounded-full bg-brand animate-pulse shadow-[0_0_5px_rgba(122,157,204,0.8)]" />}
+    <div
+      data-density={isLive ? "issue-detail-status-live" : "issue-detail-status"}
+      className={cn(
+        "relative flex items-center gap-1.5 overflow-hidden px-2 py-0.5 rounded-md border text-[9px] font-black uppercase tracking-wider",
+        isLive && "motion-essential",
+        cls
+      )}
+    >
+      {isLive ? (
+        <>
+          <span
+            aria-hidden
+            className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+          />
+          <AgentThinkingIndicator phase="dispatching" size={12} />
+        </>
+      ) : null}
       {status}
     </div>
   );
