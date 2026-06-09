@@ -21,6 +21,7 @@ import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { ExecutionConfigSelector, normalizeExecutionConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
 import { TasksOverviewBar } from "@/features/issues/components/TasksOverviewBar";
@@ -502,15 +503,27 @@ export function TasksRunsTab({ issueId, issue }: Props) {
 }
 
 function StatusDot({ status }: { status: string }) {
+  const isActive = status === "running" || status === "in_progress";
   const color =
     status === "done" || status === "passed"
       ? "bg-success"
       : status === "failed" || status === "error"
         ? "bg-error"
-        : status === "running" || status === "in_progress"
-          ? "bg-warning animate-pulse"
-          : "bg-text-muted";
-  return <span className={cn("inline-block size-2 rounded-full", color)} />;
+        : "bg-text-muted";
+
+  return (
+    <span
+      data-density={isActive ? "tasks-runs-active-status-dot" : "tasks-runs-status-dot"}
+      className={cn(
+        "inline-flex items-center justify-center rounded-full",
+        isActive ? "size-3" : "size-2",
+        isActive && "motion-essential",
+        !isActive && color,
+      )}
+    >
+      {isActive ? <AgentThinkingIndicator phase="dispatching" size={10} /> : null}
+    </span>
+  );
 }
 
 function ModeButton({
