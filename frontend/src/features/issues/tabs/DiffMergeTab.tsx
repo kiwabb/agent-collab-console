@@ -330,8 +330,10 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           variant="outline"
           disabled={isRefreshing || !!busy}
           onClick={() => void load("refresh")}
+          data-density={isRefreshing ? "diff-merge-refresh-tool" : "diff-merge-refresh"}
+          className={cn(isRefreshing && "motion-essential")}
         >
-          <RefreshCw size={12} className={cn("mr-1.5", isRefreshing && "animate-spin")} />
+          {isRefreshing ? <AgentThinkingIndicator phase="tool" size={12} /> : <RefreshCw size={12} />}
           {t("task.diffMerge.refresh")}
         </Button>
       </div>

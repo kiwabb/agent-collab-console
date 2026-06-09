@@ -47,6 +47,15 @@ test("diff merge PR refresh cta uses tool motion while syncing GitHub PR state",
   assert.doesNotMatch(source, /busy === "pr-refresh" \? \(\s*<Loader2 size=\{12\} className="animate-spin"/);
 });
 
+test("diff merge refresh cta uses tool motion while syncing diff state", () => {
+  const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
+
+  assert.match(source, /data-density=\{isRefreshing \? "diff-merge-refresh-tool" : "diff-merge-refresh"\}/);
+  assert.match(source, /isRefreshing && "motion-essential/);
+  assert.match(source, /isRefreshing \? <AgentThinkingIndicator phase="tool" size=\{12\} \/> : <RefreshCw size=\{12\}/);
+  assert.doesNotMatch(source, /<RefreshCw size=\{12\} className=\{cn\("mr-1\.5", isRefreshing && "animate-spin"\)\}/);
+});
+
 test("diff merge submit review cta uses thinking motion while submitting", () => {
   const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
 
