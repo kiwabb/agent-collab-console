@@ -235,8 +235,11 @@ export function RunDetail({
 
   if (isLoadingProcess) {
     return (
-      <div className="flex flex-col h-full items-center justify-center gap-4 text-text-muted">
-        <Activity size={32} className="animate-spin text-brand" />
+      <div
+        data-density="run-detail-process-loading"
+        className="motion-essential flex flex-col h-full items-center justify-center gap-4 text-text-muted"
+      >
+        <AgentThinkingIndicator phase="dispatching" size={32} />
         <p className="text-xs font-bold uppercase tracking-widest opacity-60">{t("run.loading")}</p>
       </div>
     );

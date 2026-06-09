@@ -19,6 +19,18 @@ test("run detail status badge marks live execution with dispatch motion", () => 
   assert.doesNotMatch(source, /bg-brand animate-pulse/);
 });
 
+test("run detail process loading uses dispatch motion", () => {
+  const source = readFileSync(
+    path.join(root, "src/features/runs/RunDetail.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /data-density="run-detail-process-loading"/);
+  assert.match(source, /className="motion-essential flex flex-col h-full items-center justify-center gap-4 text-text-muted"/);
+  assert.match(source, /<AgentThinkingIndicator phase="dispatching" size=\{32\} \/>/);
+  assert.doesNotMatch(source, /<Activity size=\{32\} className="animate-spin text-brand" \/>/);
+});
+
 test("run detail pending assistant uses streaming motion", () => {
   const source = readFileSync(
     path.join(root, "src/features/runs/RunDetail.tsx"),
