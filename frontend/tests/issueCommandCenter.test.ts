@@ -236,6 +236,16 @@ test("dispatch drawer action buttons use semantic motion while busy", () => {
   assert.doesNotMatch(drawerSource, /busyAction === "(chat|refine|rerun)" \? \(\s*<Loader2 size=\{13\} className="animate-spin"/);
 });
 
+test("dispatch drawer running summary uses semantic motion without spinner fallback", () => {
+  const drawerSource = readSource("features/issues/components/DispatchDrawer.tsx");
+
+  assert.match(drawerSource, /data-density="dispatch-drawer-running"/);
+  assert.match(drawerSource, /<AgentThinkingIndicator phase=\{drawerMotionPhase\} size=\{16\}/);
+  assert.match(drawerSource, /animate-shimmer-sweep/);
+  assert.match(drawerSource, /motion-essential/);
+  assert.doesNotMatch(drawerSource, /<Loader2 size=\{16\} className="animate-spin text-brand shrink-0"/);
+});
+
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {
   const timeline = buildDecisionTimeline(
     [

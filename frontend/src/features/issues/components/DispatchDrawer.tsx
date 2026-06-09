@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, RotateCcw, Send, Sparkles, X, Terminal, MessageSquare, Code2, Zap } from "lucide-react";
+import { RotateCcw, Send, Sparkles, X, Terminal, MessageSquare, Code2, Zap } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
@@ -262,20 +262,14 @@ export function DispatchDrawer({ item, onClose }: Props) {
               data-density="dispatch-drawer-running"
               className={cn(
                 "relative overflow-hidden rounded-2xl border p-5 flex items-center gap-3",
-                isSchedulingDrawerMotion ? "motion-essential border-brand/30 bg-brand-muted/10" : "border-brand/20 bg-brand/5",
+                "motion-essential border-brand/30 bg-brand-muted/10",
               )}
             >
-              {isSchedulingDrawerMotion && (
-                <span
-                  aria-hidden
-                  className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
-                />
-              )}
-              {isSchedulingDrawerMotion ? (
-                <AgentThinkingIndicator phase={drawerMotionPhase} size={16} className="shrink-0" />
-              ) : (
-                <Loader2 size={16} className="animate-spin text-brand shrink-0" />
-              )}
+              <span
+                aria-hidden
+                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+              />
+              <AgentThinkingIndicator phase={drawerMotionPhase} size={16} className="shrink-0" />
               <span className="text-[13px] italic text-text-muted">
                 {t("issue.command.drawer.runningSummaryPending")}
               </span>
