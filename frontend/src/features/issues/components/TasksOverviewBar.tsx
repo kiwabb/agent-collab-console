@@ -24,6 +24,8 @@ import {
 import type { CodexTask } from "@/lib/types";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
+import { cn } from "@/lib/utils";
 
 interface Props {
   issueId: string;
@@ -415,6 +417,7 @@ function GanttRow({
   durationMs: number;
 }) {
   const { left, width, tone, label } = barGeometry(stage, startMs, durationMs);
+  const isRunningStage = stage.status === "running";
 
   return (
     <div className="relative h-[18px] my-1 grid grid-cols-[64px_1fr] items-center gap-2.5">
@@ -424,7 +427,11 @@ function GanttRow({
       <div className="relative h-[18px] bg-white/[0.02] rounded">
         {width > 0 && (
           <div
-            className="absolute top-[2px] bottom-[2px] rounded-[3px] flex items-center px-1.5 overflow-hidden font-mono text-[10px] font-semibold"
+            data-density={isRunningStage ? "tasks-overview-running-gantt-bar" : "tasks-overview-gantt-bar"}
+            className={cn(
+              "absolute top-[2px] bottom-[2px] rounded-[3px] flex items-center gap-1 px-1.5 overflow-hidden font-mono text-[10px] font-semibold",
+              isRunningStage && "motion-essential",
+            )}
             style={{
               left: `${left}%`,
               width: `${Math.max(width, 0.6)}%`,
@@ -432,6 +439,13 @@ function GanttRow({
               color: tone.fg,
             }}
           >
+            {isRunningStage && (
+              <span
+                aria-hidden
+                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-white/80 to-transparent"
+              />
+            )}
+            {isRunningStage && <AgentThinkingIndicator phase="dispatching" size={10} className="shrink-0" />}
             <span className="truncate">{label}</span>
           </div>
         )}
