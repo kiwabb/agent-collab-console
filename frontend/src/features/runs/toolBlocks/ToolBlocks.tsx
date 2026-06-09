@@ -15,7 +15,6 @@ import {
   Copy,
   Check,
   AlertCircle,
-  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
@@ -499,8 +498,11 @@ export function ToolBlock({ entry }: ToolBlockProps) {
 export function ToolBlockEmpty() {
   const { t } = useI18n();
   return (
-    <div className="py-12 flex flex-col items-center justify-center text-text-muted gap-2">
-      <Loader2 size={20} className="opacity-30 animate-spin" />
+    <div
+      data-density="tool-block-empty-tool-sync"
+      className="motion-essential py-12 flex flex-col items-center justify-center text-text-muted gap-2"
+    >
+      <AgentThinkingIndicator phase="tool" size={20} className="opacity-40" />
       <span className="text-[10px] uppercase font-bold tracking-widest">{t("run.toolEmpty")}</span>
     </div>
   );
