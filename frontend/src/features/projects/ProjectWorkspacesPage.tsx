@@ -37,6 +37,7 @@ import {
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import { emitDataEvent } from "@/lib/dataEvents";
 import { workspaceLabel } from "@/lib/workspaceLabel";
@@ -619,7 +620,20 @@ function Kpi({
 }) {
   const t = TINT_TO_CSS[tint];
   return (
-    <div className="relative overflow-hidden rounded-xl border border-border-subtle bg-surface-raised p-3 hover:border-border-strong transition-colors">
+    <div
+      data-density={pulse ? "project-workspaces-active-kpi" : "project-workspaces-kpi"}
+      className={cn(
+        "relative overflow-hidden rounded-xl border border-border-subtle bg-surface-raised p-3 hover:border-border-strong transition-colors",
+        pulse && "motion-essential",
+        pulse && "border-status-running/35 bg-status-running/5",
+      )}
+    >
+      {pulse && (
+        <span
+          aria-hidden
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
+        />
+      )}
       <div className="flex items-center justify-between mb-2">
         <span
           className={cn(
@@ -627,12 +641,11 @@ function Kpi({
             t.iconBg,
           )}
         >
-          {icon}
+          {pulse ? <AgentThinkingIndicator phase="dispatching" size={14} /> : icon}
         </span>
         {pulse && (
-          <span className="relative inline-flex">
+          <span className="motion-essential relative inline-flex">
             <span className={cn("size-1.5 rounded-full", t.dot)} />
-            <span className={cn("absolute inset-0 rounded-full animate-ping opacity-60", t.dot)} />
           </span>
         )}
       </div>
