@@ -257,6 +257,9 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
         confirmText={t("task.abandon")}
         onConfirm={handleConfirmAbandon}
         isLoading={abandoning}
+        loadingMotionPhase="dispatching"
+        loadingDensity="git-info-abandon-dispatch-confirm"
+        loadingIndicatorSize={12}
         variant="destructive"
       />
 
@@ -270,6 +273,9 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
         confirmText={t("task.mergeBack")}
         onConfirm={handleConfirmMerge}
         isLoading={merging}
+        loadingMotionPhase="dispatching"
+        loadingDensity="git-info-merge-dispatch-confirm"
+        loadingIndicatorSize={12}
         variant="default"
       />
 

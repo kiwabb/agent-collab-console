@@ -168,6 +168,15 @@ test("git info diff loading uses tool motion while syncing diff state", () => {
   assert.doesNotMatch(gitSource, /<Loader2 className="animate-spin text-brand" size=\{14\} \/>/);
 });
 
+test("git info merge and abandon confirmations use dispatch motion", () => {
+  const gitSource = readSource("features/issues/components/GitInfoCard.tsx");
+
+  assert.match(gitSource, /loadingMotionPhase="dispatching"/);
+  assert.match(gitSource, /loadingIndicatorSize=\{12\}/);
+  assert.match(gitSource, /loadingDensity="git-info-abandon-dispatch-confirm"/);
+  assert.match(gitSource, /loadingDensity="git-info-merge-dispatch-confirm"/);
+});
+
 test("conductor monitor marks live conductor rows with scheduling motion", () => {
   const monitorSource = readSource("features/conductors/ConductorMonitorPage.tsx");
 
