@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useRoleStatus } from "@/features/agents/dock/AgentStatusProvider";
 import type { RoleId } from "@/features/agents/dock/personas";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 
@@ -261,10 +262,14 @@ function StatusDot({
 }: {
   mode: "done" | "running" | "failed" | "idle" | "awaiting" | "start";
 }) {
+  if (mode === "running") {
+    return <AgentThinkingIndicator phase="dispatching" size={10} />;
+  }
+
   const color =
     mode === "done"
       ? "var(--color-status-done)"
-      : mode === "running" || mode === "start"
+      : mode === "start"
         ? "var(--color-brand)"
         : mode === "failed"
           ? "var(--color-status-failed)"
@@ -274,17 +279,14 @@ function StatusDot({
   const ring =
     mode === "done"
       ? "var(--color-done-ring)"
-      : mode === "running" || mode === "start"
+      : mode === "start"
         ? "var(--color-brand-ring)"
         : mode === "failed"
           ? "var(--color-failed-ring)"
           : "transparent";
   return (
     <span
-      className={cn(
-        "shrink-0 size-[7px] rounded-full",
-        mode === "running" && "animate-pulse",
-      )}
+      className="shrink-0 size-[7px] rounded-full"
       style={{
         background: color,
         boxShadow: ring !== "transparent" ? `0 0 0 3px ${ring}` : undefined,

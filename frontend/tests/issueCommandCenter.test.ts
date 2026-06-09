@@ -123,12 +123,15 @@ test("issue detail page uses compact operations command-center chrome", () => {
 
 test("workflow graph marks active dispatch batch lanes with scheduling motion", () => {
   const graphSource = readSource("features/workflow/WorkflowGraphView.tsx");
+  const nodeSource = readSource("features/workflow/AgentDagNode.tsx");
 
   assert.match(graphSource, /isActiveSchedulingBatch/);
   assert.match(graphSource, /data-density="parallel-dispatch-lane"/);
   assert.match(graphSource, /<AgentThinkingIndicator/);
   assert.match(graphSource, /animate-shimmer-sweep/);
   assert.match(graphSource, /phase="dispatching"/);
+  assert.match(nodeSource, /<AgentThinkingIndicator phase="dispatching" size=\{10\}/);
+  assert.doesNotMatch(nodeSource, /animate-pulse/);
 });
 
 test("conductor monitor marks live conductor rows with scheduling motion", () => {
