@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Bot, Loader2, Network, RefreshCcw, ShieldCheck, Sparkles } from "lucide-react";
+import { Bot, Network, RefreshCcw, ShieldCheck, Sparkles } from "lucide-react";
 import { listAgents } from "@/lib/api";
 import type { Agent } from "@/lib/types";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useI18n } from "@/providers/I18nProvider";
@@ -131,9 +132,10 @@ export function AgentCatalogPanel() {
             variant="outline"
             onClick={() => void reload()}
             disabled={loading}
-            className="gap-2 rounded-xl"
+            data-density={loading ? "agent-catalog-refresh-dispatch" : "agent-catalog-refresh"}
+            className={cn("gap-2 rounded-xl", loading && "motion-essential")}
           >
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCcw size={14} />}
+            {loading ? <AgentThinkingIndicator phase="dispatching" size={14} /> : <RefreshCcw size={14} />}
             {t("settings.refresh")}
           </Button>
         </div>
@@ -144,8 +146,15 @@ export function AgentCatalogPanel() {
             {error}
           </div>
         ) : loading ? (
-          <div className="flex items-center justify-center py-16 gap-3 text-xs font-black uppercase tracking-[0.25em] text-brand">
-            <Loader2 size={18} className="animate-spin" />
+          <div
+            data-density="agent-catalog-dispatch-loading"
+            className="motion-essential relative flex items-center justify-center gap-3 overflow-hidden rounded-2xl border border-brand/25 bg-brand-muted/10 py-16 text-xs font-black uppercase tracking-[0.25em] text-brand"
+          >
+            <span
+              aria-hidden
+              className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+            />
+            <AgentThinkingIndicator phase="dispatching" size={18} />
             {t("settings.loadingCatalog")}
           </div>
         ) : (

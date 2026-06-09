@@ -83,3 +83,15 @@ test("settings translation keys are available in English", () => {
   assert.equal(getDictionaryValue("en-US", "runtime.catalog.validate"), "Validate");
   assert.equal(getDictionaryValue("en-US", "runtime.catalog.test"), "Test");
 });
+
+test("agent catalog loading state uses dispatch semantic motion", () => {
+  const agents = readSource("features/workflow/AgentCatalogPanel.tsx");
+
+  assert.match(agents, /data-density=\{loading \? "agent-catalog-refresh-dispatch" : "agent-catalog-refresh"\}/);
+  assert.match(agents, /loading && "motion-essential"/);
+  assert.match(agents, /data-density="agent-catalog-dispatch-loading"/);
+  assert.match(agents, /<AgentThinkingIndicator phase="dispatching" size=\{18\}/);
+  assert.match(agents, /animate-shimmer-sweep/);
+  assert.doesNotMatch(agents, /<Loader2 size=\{14\} className="animate-spin"/);
+  assert.doesNotMatch(agents, /<Loader2 size=\{18\} className="animate-spin"/);
+});
