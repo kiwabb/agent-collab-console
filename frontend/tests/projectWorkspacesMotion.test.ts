@@ -18,3 +18,16 @@ test("project workspaces active KPI uses dispatch motion", () => {
   assert.match(source, /animate-shimmer-sweep/);
   assert.doesNotMatch(source, /animate-ping/);
 });
+
+test("project workspaces running rows use dispatch motion", () => {
+  const source = readFileSync(
+    path.join(root, "src/features/projects/ProjectWorkspacesPage.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /const isWorkspaceActive = ws\.status === "running" \|\| ws\.status === "responding";/);
+  assert.match(source, /data-density=\{isWorkspaceActive \? "project-workspaces-active-row" : "project-workspaces-row"\}/);
+  assert.match(source, /isWorkspaceActive && "motion-essential"/);
+  assert.match(source, /<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
+  assert.match(source, /animate-shimmer-sweep/);
+});

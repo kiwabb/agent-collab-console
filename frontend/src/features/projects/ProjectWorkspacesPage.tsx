@@ -362,8 +362,22 @@ function WorkspaceRow({
 }) {
   const { t } = useI18n();
   const kind = inferStatusKind(ws.status);
+  const isWorkspaceActive = ws.status === "running" || ws.status === "responding";
   return (
-    <li className="grid grid-cols-[1fr_120px_90px_1.6fr_120px_70px] gap-3 px-4 py-3 items-center group hover:bg-surface-hover transition-colors">
+    <li
+      data-density={isWorkspaceActive ? "project-workspaces-active-row" : "project-workspaces-row"}
+      className={cn(
+        "relative grid grid-cols-[1fr_120px_90px_1.6fr_120px_70px] gap-3 px-4 py-3 items-center overflow-hidden group hover:bg-surface-hover transition-colors",
+        isWorkspaceActive && "motion-essential",
+        isWorkspaceActive && "bg-status-running/5",
+      )}
+    >
+      {isWorkspaceActive && (
+        <span
+          aria-hidden
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
+        />
+      )}
       <button
         type="button"
         onClick={onOpen}
@@ -378,7 +392,8 @@ function WorkspaceRow({
           className="text-text-muted opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
         />
       </button>
-      <div>
+      <div className="flex items-center gap-1.5">
+        {isWorkspaceActive && <AgentThinkingIndicator phase="dispatching" size={12} className="shrink-0" />}
         <StatusBadge kind={kind} label={humanStatus(t, ws.status)} />
       </div>
       <div className="text-right text-[13px] tabular-nums">
