@@ -7,6 +7,7 @@ import type { Phase } from "@/features/issues/phaseUtils";
 import { Activity, Clock, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pickLatestExecutionProcessForTask } from "@/lib/task-selection";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 interface TaskListProps {
   tasks: CodexTask[];
@@ -64,6 +65,7 @@ export function VirtualizedTaskList({
           const process = pickLatestExecutionProcessForTask(executionProcesses, task.id);
           const rawStatus = task.status || process?.status || "pending";
           const status = rawStatus.toLowerCase();
+          const isTaskActive = status === "running" || status === "responding";
           const unlocked = isDevelopmentTaskUnlocked(task, allTasks);
 
           return (
@@ -86,15 +88,23 @@ export function VirtualizedTaskList({
             >
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <div className={cn(
-                    "size-1.5 rounded-full",
-                    status === "running" || status === "responding" ? "bg-brand animate-pulse" :
-                    status === "failed" ? "bg-error" :
-                    status === "completed" || status === "done" ? "bg-success" :
-                    status === "awaiting_review" ? "bg-warning animate-pulse" :
-                    status === "rework" ? "bg-error shadow-[0_0_8px_rgba(239,68,68,0.4)]" :
-                    "bg-text-muted"
-                  )} />
+                  {isTaskActive ? (
+                    <div
+                      data-density="virtualized-task-active-status"
+                      className="motion-essential flex size-3 items-center justify-center rounded-full"
+                    >
+                      <AgentThinkingIndicator phase="dispatching" size={10} />
+                    </div>
+                  ) : (
+                    <div className={cn(
+                      "size-1.5 rounded-full",
+                      status === "failed" ? "bg-error" :
+                      status === "completed" || status === "done" ? "bg-success" :
+                      status === "awaiting_review" ? "bg-warning animate-pulse" :
+                      status === "rework" ? "bg-error shadow-[0_0_8px_rgba(239,68,68,0.4)]" :
+                      "bg-text-muted"
+                    )} />
+                  )}
                   <span className="text-[9px] font-black uppercase tracking-widest text-text-secondary group-hover/card:text-foreground">
                     {rawStatus}
                   </span>
