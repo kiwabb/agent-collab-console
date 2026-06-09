@@ -43,7 +43,7 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
   const isDone = status === "completed" || issue?.current_phase === "done" || isConductorDone;
   const isAbandoned = status === "abandoned" || issue?.git_merge_status === "abandoned";
   const isConductorActive = !isDone && !isPaused && !isAbandoned && (conductorStatus === "running" || Boolean(phase.phase));
-  const conductorMotionPhase = isConductorActive ? phase.phase ?? "working" : isPaused ? "paused" : "idle";
+  const conductorMotionPhase = isConductorActive ? phase.phase ?? "dispatching" : isPaused ? "paused" : "idle";
 
   return (
     <section
@@ -148,7 +148,7 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
         </div>
 
         <div
-          data-density="conductor-strip"
+          data-density={isConductorActive ? "command-conductor-active-strip" : "conductor-strip"}
           className={cn(
             "relative overflow-hidden rounded-md border px-2.5 py-2 transition-colors",
             phase.severity === "danger"
@@ -156,7 +156,7 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
               : phase.severity === "warn"
                 ? "border-status-awaiting/40 bg-status-awaiting/5"
                 : "border-border-subtle bg-surface-input/35",
-            isConductorActive && "border-brand/35 bg-brand-muted/10",
+            isConductorActive && "motion-essential border-brand/35 bg-brand-muted/10",
               )}
         >
           {isConductorActive && (

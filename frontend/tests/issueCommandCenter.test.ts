@@ -82,7 +82,7 @@ test("issue detail page uses compact operations command-center chrome", () => {
 
   assert.match(statusSource, /data-density="command-header"/);
   assert.match(statusSource, /data-density="command-actions"/);
-  assert.match(statusSource, /data-density="conductor-strip"/);
+  assert.match(statusSource, /"conductor-strip"/);
   assert.match(statusSource, /data-density="conductor-detail"/);
   assert.match(statusSource, /conductorStatus === "success"/);
   assert.match(statusSource, /phase\.phase === "done"/);
@@ -121,6 +121,17 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(readSource("features/issues/hooks/useDecisionTimeline.ts"), /dispatch_batch/);
   assert.match(rowSource, /issue\.command\.timelineStatus\.info/);
   assert.match(rowSource, /issue\.command\.rationalePlan/);
+});
+
+test("status strip marks active conductor phase with semantic motion", () => {
+  const statusSource = readSource("features/issues/components/StatusStrip.tsx");
+
+  assert.match(statusSource, /const conductorMotionPhase = isConductorActive \? phase\.phase \?\? "dispatching" : isPaused \? "paused" : "idle"/);
+  assert.match(statusSource, /data-density=\{isConductorActive \? "command-conductor-active-strip" : "conductor-strip"\}/);
+  assert.match(statusSource, /isConductorActive && "motion-essential/);
+  assert.match(statusSource, /<AgentThinkingIndicator phase=\{conductorMotionPhase\} size=\{14\}/);
+  assert.match(statusSource, /animate-shimmer-sweep/);
+  assert.doesNotMatch(statusSource, /animate-pulse/);
 });
 
 test("workflow graph marks active dispatch batch lanes with scheduling motion", () => {
