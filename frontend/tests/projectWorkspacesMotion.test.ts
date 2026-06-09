@@ -31,3 +31,15 @@ test("project workspaces running rows use dispatch motion", () => {
   assert.match(source, /<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
   assert.match(source, /animate-shimmer-sweep/);
 });
+
+test("project workspaces loading table uses dispatch motion", () => {
+  const source = readFileSync(
+    path.join(root, "src/features/projects/ProjectWorkspacesPage.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /data-density="project-workspaces-dispatch-loading"/);
+  assert.match(source, /className="motion-essential relative flex min-h-\[200px\] items-center justify-center gap-2 overflow-hidden px-4 py-10 text-sm font-semibold text-text-muted"/);
+  assert.match(source, /<AgentThinkingIndicator phase="dispatching" size=\{16\} \/>/);
+  assert.doesNotMatch(source, /<Loader variant="card" label=\{t\("workspace\.loading"\)\}/);
+});

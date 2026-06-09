@@ -43,7 +43,6 @@ import { emitDataEvent } from "@/lib/dataEvents";
 import { workspaceLabel } from "@/lib/workspaceLabel";
 import { useI18n } from "@/providers/I18nProvider";
 import { ProjectShell } from "@/features/projects/ProjectShell";
-import { Loader } from "@/components/ui/loader";
 
 interface Props {
   projectId: string;
@@ -260,7 +259,17 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             <div className="text-right">{t("workspace.table.actions")}</div>
           </div>
           {loading ? (
-            <Loader variant="card" label={t("workspace.loading")} className="border-0 bg-transparent rounded-none min-h-[200px]" />
+            <div
+              data-density="project-workspaces-dispatch-loading"
+              className="motion-essential relative flex min-h-[200px] items-center justify-center gap-2 overflow-hidden px-4 py-10 text-sm font-semibold text-text-muted"
+            >
+              <span
+                aria-hidden
+                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
+              />
+              <AgentThinkingIndicator phase="dispatching" size={16} />
+              {t("workspace.loading")}
+            </div>
           ) :
  filtered.length === 0 ? (
             <div className="py-12 text-center">
