@@ -36,3 +36,16 @@ test("workspace console uses dense operations queue chrome", () => {
   assert.doesNotMatch(panelSource, /rounded-\[1\.4rem\]|rounded-2xl|shadow-\[0_24px_80px/);
   assert.doesNotMatch(rowSource, /hover:-translate-y|rounded-2xl|tracking-\[-/);
 });
+
+test("workspace console marks running issue rows with scheduling motion", () => {
+  const rowSource = readSource("features/workspaces/IssueRow.tsx");
+
+  assert.match(rowSource, /isIssueScheduling/);
+  assert.match(rowSource, /data-density="workspace-scheduling-row"/);
+  assert.match(rowSource, /data-density="workspace-scheduling-role"/);
+  assert.match(rowSource, /<AgentThinkingIndicator/);
+  assert.match(rowSource, /animate-shimmer-sweep/);
+  assert.match(rowSource, /phase="dispatching"/);
+  assert.match(rowSource, /motion-essential/);
+  assert.doesNotMatch(rowSource, /animate-pulse/);
+});
