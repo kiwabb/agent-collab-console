@@ -14,6 +14,7 @@ import { WorkflowGraphView, type WorkflowNodeClickPayload } from "@/features/wor
 import { ConductorLogPanel } from "@/features/workflow/ConductorLogPanel";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { agentBus } from "@/features/agents/dock/agentBus";
@@ -246,6 +247,11 @@ export function DagTab({ issueId }: Props) {
               <span className="inline-flex items-center gap-1.5">
                 <span>status</span>
                 <span
+                  data-density={
+                    graph.status === "running"
+                      ? "dag-tab-running-status"
+                      : "dag-tab-status"
+                  }
                   className={cn(
                     "inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md border text-[11px] font-mono",
                     graph.status === "done"
@@ -255,6 +261,7 @@ export function DagTab({ issueId }: Props) {
                         : graph.status === "failed"
                           ? "border-status-failed/40 text-status-failed"
                           : "border-border-muted text-text-secondary",
+                    graph.status === "running" && "motion-essential",
                   )}
                   style={
                     graph.status === "done"
@@ -265,7 +272,7 @@ export function DagTab({ issueId }: Props) {
                   }
                 >
                   {graph.status === "running" && (
-                    <span className="size-1.5 rounded-full bg-brand animate-pulse" />
+                    <AgentThinkingIndicator phase="dispatching" size={10} />
                   )}
                   <span className="capitalize">{graph.status}</span>
                 </span>
