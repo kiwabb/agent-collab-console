@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { getDictionaryValue } from "../src/lib/i18n";
+
 const SRC_ROOT = join(process.cwd(), "src");
 
 function readSource(relativePath: string): string {
@@ -47,4 +49,17 @@ test("dag tab retry confirmation uses dispatch motion while redispatching", () =
   assert.match(dialogSource, /data-density=\{isLoading \? loadingDensity : undefined\}/);
   assert.match(dialogSource, /isLoading && loadingMotionPhase && "motion-essential"/);
   assert.match(dialogSource, /isLoading \? \(\s*loadingMotionPhase \? \(\s*<AgentThinkingIndicator\s*phase=\{loadingMotionPhase\}\s*size=\{loadingIndicatorSize\}/);
+});
+
+test("dag tab graph loading uses dispatch motion", () => {
+  const source = readSource("features/issues/tabs/DagTab.tsx");
+
+  assert.match(source, /data-density="dag-tab-graph-dispatch-loading"/);
+  assert.match(source, /className="motion-essential relative flex min-h-\[220px\] items-center justify-center gap-2 overflow-hidden rounded-lg border border-brand\/25 bg-brand-muted\/10 text-sm font-semibold text-text-muted"/);
+  assert.match(source, /<AgentThinkingIndicator phase="dispatching" size=\{16\} \/>/);
+  assert.match(source, /t\("issue\.workflow\.loading"\)/);
+  assert.match(source, /animate-shimmer-sweep/);
+  assert.doesNotMatch(source, /<Loader variant="card" label="Loading Workflow Graph\.\.\." \/>/);
+  assert.equal(getDictionaryValue("zh-CN", "issue.workflow.loading"), "加载工作流图中...");
+  assert.equal(getDictionaryValue("en-US", "issue.workflow.loading"), "Loading workflow graph...");
 });

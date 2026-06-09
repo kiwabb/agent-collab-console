@@ -23,8 +23,6 @@ import { AgentDecisionDrawer } from "@/features/issues/components/AgentDecisionD
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 
-import { Loader } from "@/components/ui/loader";
-
 interface Props {
   issueId: string;
 }
@@ -210,7 +208,19 @@ export function DagTab({ issueId }: Props) {
         </div>
       )}
 
-      {view === "loading" && <Loader variant="card" label="Loading Workflow Graph..." />}
+      {view === "loading" && (
+        <div
+          data-density="dag-tab-graph-dispatch-loading"
+          className="motion-essential relative flex min-h-[220px] items-center justify-center gap-2 overflow-hidden rounded-lg border border-brand/25 bg-brand-muted/10 text-sm font-semibold text-text-muted"
+        >
+          <span
+            aria-hidden
+            className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+          />
+          <AgentThinkingIndicator phase="dispatching" size={16} />
+          {t("issue.workflow.loading")}
+        </div>
+      )}
 
 
       {view === "no-graph" && (
