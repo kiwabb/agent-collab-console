@@ -160,7 +160,14 @@ function WorkingIndicator({
   }
 
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-brand/20 bg-brand/5 px-3 py-2 text-[11px]">
+    <div
+      data-density="agent-live-working-indicator"
+      className="motion-essential relative flex items-center gap-3 overflow-hidden rounded-xl border border-brand/20 bg-brand/5 px-3 py-2 text-[11px]"
+    >
+      <span
+        aria-hidden
+        className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+      />
       <AgentThinkingIndicator phase={phase} label={subtitle} size={14} />
       <div className="ml-auto flex items-center gap-2">
         {startedMs ? (
