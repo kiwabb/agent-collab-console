@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bot, Loader2, Play, RadioTower, Wrench } from "lucide-react";
+import { Bot, Play, RadioTower, Wrench } from "lucide-react";
 
 import { API_BASE, startProjectConductorLoop } from "@/lib/api";
 import type { ProjectConductorLoopResult, ProjectConductorToolEvent } from "@/lib/types";
@@ -156,8 +156,13 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
           placeholder={t("projectConductor.threadDock.promptPlaceholder")}
           className="bg-surface-input border-border-subtle"
         />
-        <Button onClick={() => void handleStartLoop()} disabled={running} className="gap-2 shrink-0">
-          {running ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+        <Button
+          data-density={running ? "project-conductor-loop-dispatch-cta" : "project-conductor-loop-cta"}
+          onClick={() => void handleStartLoop()}
+          disabled={running}
+          className={cn("gap-2 shrink-0", running && "motion-essential")}
+        >
+          {running ? <AgentThinkingIndicator phase="dispatching" size={14} /> : <Play size={14} />}
           {t("projectConductor.threadDock.startLoop")}
         </Button>
       </div>

@@ -100,3 +100,14 @@ test("project conductor page marks active ask or review requests with thinking m
   assert.match(page, /motion-essential/);
   assert.doesNotMatch(page, /animate-pulse/);
 });
+
+test("project conductor start loop cta uses dispatch motion while running", () => {
+  const dock = readSource("features/projects/components/ProjectConductorThreadDock.tsx");
+
+  assert.match(dock, /data-density=\{running \? "project-conductor-loop-dispatch-cta" : "project-conductor-loop-cta"\}/);
+  assert.match(dock, /running && "motion-essential/);
+  assert.match(dock, /<AgentThinkingIndicator phase="dispatching" size=\{14\}/);
+  assert.match(dock, /<Play size=\{14\}/);
+  assert.doesNotMatch(dock, /running \? <Loader2/);
+  assert.doesNotMatch(dock, /animate-pulse/);
+});
