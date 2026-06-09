@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, Bot, Loader2, Play, RadioTower, Wrench } from "lucide-react";
+import { Bot, Loader2, Play, RadioTower, Wrench } from "lucide-react";
 
 import { API_BASE, startProjectConductorLoop } from "@/lib/api";
 import type { ProjectConductorLoopResult, ProjectConductorToolEvent } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
@@ -27,6 +29,7 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
   const [events, setEvents] = useState<ThreadEvent[]>([]);
   const [tools, setTools] = useState<ProjectConductorToolEvent[]>([]);
   const [latestResult, setLatestResult] = useState<ProjectConductorLoopResult | null>(null);
+  const isProjectConductorStreaming = connected || running;
 
   const streamUrl = useMemo(
     () => `${API_BASE}/codex/projects/${encodeURIComponent(projectId)}/conductor/stream`,
@@ -98,10 +101,27 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
   }, [projectId, prompt, onLoopDone, connectStream, addToast, t]);
 
   return (
-    <div className="rounded-2xl border border-border-subtle bg-surface/75 p-4 shadow-inner shadow-black/5">
+    <div
+      data-density="project-conductor-thread-dock"
+      className={cn(
+        "relative overflow-hidden rounded-2xl border border-border-subtle bg-surface/75 p-4 shadow-inner shadow-black/5 transition-colors",
+        isProjectConductorStreaming && "motion-essential border-brand/35 bg-brand-muted/10",
+      )}
+    >
+      {isProjectConductorStreaming && (
+        <span
+          aria-hidden
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+        />
+      )}
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="flex items-start gap-3">
-          <div className="size-9 rounded-2xl border border-brand/20 bg-brand/10 flex items-center justify-center text-brand">
+          <div
+            className={cn(
+              "size-9 rounded-2xl border border-brand/20 bg-brand/10 flex items-center justify-center text-brand transition-colors",
+              isProjectConductorStreaming && "border-brand/35 bg-brand/15",
+            )}
+          >
             <RadioTower size={17} />
           </div>
           <div>
@@ -111,8 +131,17 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-text-muted">
-          <Activity size={14} className={connected || running ? "text-brand animate-pulse" : ""} />
+        <div
+          className={cn(
+            "flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-text-muted transition-colors",
+            isProjectConductorStreaming && "text-brand",
+          )}
+        >
+          {isProjectConductorStreaming ? (
+            <AgentThinkingIndicator phase={running ? "dispatching" : "streaming"} size={14} />
+          ) : (
+            <span aria-hidden className="size-2 rounded-full bg-text-muted" />
+          )}
           {running ? t("projectConductor.threadDock.status.running") : connected ? t("projectConductor.threadDock.status.streaming") : t("projectConductor.threadDock.status.idle")}
         </div>
       </div>
@@ -164,7 +193,20 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
             <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">{t("projectConductor.threadDock.empty.tools")}</p>
           ) : (
             tools.map((tool, index) => (
-              <div key={`${tool.id}-${index}`} className="rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs">
+              <div
+                key={`${tool.id}-${index}`}
+                data-density="project-conductor-tool-card"
+                className={cn(
+                  "relative overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs transition-colors",
+                  isProjectConductorStreaming && index === 0 && !tool.is_error && "motion-essential border-brand/30 bg-brand-muted/10",
+                )}
+              >
+                {isProjectConductorStreaming && index === 0 && !tool.is_error && (
+                  <span
+                    aria-hidden
+                    className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                  />
+                )}
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-black text-text-primary">{tool.name}</span>
                   <span className={tool.is_error ? "text-red-500" : "text-text-muted"}>

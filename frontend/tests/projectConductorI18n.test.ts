@@ -74,3 +74,16 @@ test("project conductor translation keys are available in English", () => {
   assert.equal(getDictionaryValue("en-US", "projectConductor.threadDock.startLoop"), "Start loop");
   assert.equal(getDictionaryValue("en-US", "projectConductor.threadDock.toolState.error"), "error");
 });
+
+test("project conductor thread dock marks streaming runs with scheduling motion", () => {
+  const dock = readSource("features/projects/components/ProjectConductorThreadDock.tsx");
+
+  assert.match(dock, /isProjectConductorStreaming/);
+  assert.match(dock, /data-density="project-conductor-thread-dock"/);
+  assert.match(dock, /data-density="project-conductor-tool-card"/);
+  assert.match(dock, /<AgentThinkingIndicator/);
+  assert.match(dock, /animate-shimmer-sweep/);
+  assert.match(dock, /phase=\{running \? "dispatching" : "streaming"\}/);
+  assert.match(dock, /motion-essential/);
+  assert.doesNotMatch(dock, /animate-pulse/);
+});
