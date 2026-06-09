@@ -141,6 +141,18 @@ test("conductor monitor marks live conductor rows with scheduling motion", () =>
   assert.match(monitorSource, /phase=\{s\.phase \?\? "dispatching"\}/);
 });
 
+test("issue side activity marks running pipeline stages with scheduling motion", () => {
+  const sideStackSource = readSource("features/issues/components/IssueSideStack.tsx");
+
+  assert.match(sideStackSource, /isScheduling/);
+  assert.match(sideStackSource, /data-density=\{evt\.isScheduling \? "insight-activity-scheduling" : "insight-activity-event"\}/);
+  assert.match(sideStackSource, /<AgentThinkingIndicator/);
+  assert.match(sideStackSource, /animate-shimmer-sweep/);
+  assert.match(sideStackSource, /phase="dispatching"/);
+  assert.match(sideStackSource, /motion-essential/);
+  assert.doesNotMatch(sideStackSource, /animate-pulse/);
+});
+
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {
   const timeline = buildDecisionTimeline(
     [

@@ -8,6 +8,7 @@ import {
   BarChart3,
   type LucideIcon,
 } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import {
   getCodexCostStats,
@@ -296,16 +297,31 @@ function ActivityCard({
           {events.map((evt, i) => (
             <div
               key={i}
-              className="relative grid grid-cols-[36px_1fr_auto] items-start gap-2.5 py-1.5"
+              data-density={evt.isScheduling ? "insight-activity-scheduling" : "insight-activity-event"}
+              className={cn(
+                "relative grid grid-cols-[36px_1fr_auto] items-start gap-2.5 overflow-hidden py-1.5",
+                evt.isScheduling && "motion-essential rounded-md border border-brand/25 bg-brand-muted/10 px-1.5",
+              )}
             >
+              {evt.isScheduling && (
+                <span
+                  aria-hidden
+                  className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                />
+              )}
               <span
-                className="relative z-[1] size-[18px] rounded-full border-2 justify-self-center mt-0.5"
+                className={cn(
+                  "relative z-[1] flex size-[18px] items-center justify-center rounded-full border-2 justify-self-center mt-0.5",
+                  evt.isScheduling && "motion-essential bg-brand-muted text-brand",
+                )}
                 style={{
                   background: evt.dot,
                   borderColor: "var(--color-surface)",
                   boxShadow: `0 0 0 3px ${evt.ring}`,
                 }}
-              />
+              >
+                {evt.isScheduling && <AgentThinkingIndicator phase="dispatching" size={10} />}
+              </span>
               <div className="min-w-0">
                 <div
                   className="font-mono text-[10px] uppercase tracking-[0.08em] font-black mb-0.5"
@@ -423,6 +439,7 @@ interface ActivityEvt {
   time: string;
   dot: string;
   ring: string;
+  isScheduling?: boolean;
 }
 
 function mapBackendEvent(e: ActivityEvent): ActivityEvt {
@@ -468,6 +485,7 @@ function mapBackendEvent(e: ActivityEvent): ActivityEvt {
     time: fmtTimeOnly(e.timestamp),
     dot: tone.dot,
     ring: tone.ring,
+    isScheduling: e.type === "task_started",
   };
 }
 
@@ -597,6 +615,7 @@ function stageToEvt(
       time: fmtTimeOnly(s.started_at),
       dot: "var(--color-brand)",
       ring: "var(--color-brand-bg)",
+      isScheduling: true,
     };
   }
   if (s.status === "awaiting") {
