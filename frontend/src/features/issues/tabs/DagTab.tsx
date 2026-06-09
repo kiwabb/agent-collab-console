@@ -221,9 +221,24 @@ export function DagTab({ issueId }: Props) {
           <Button
             onClick={() => void handleStart()}
             disabled={busy}
-            className="bg-brand text-black hover:bg-brand-strong font-semibold shadow-sm"
+            data-density={
+              busy
+                ? "dag-tab-start-conductor-dispatch-cta"
+                : "dag-tab-start-conductor-cta"
+            }
+            className={cn(
+              "bg-brand text-black hover:bg-brand-strong font-semibold shadow-sm",
+              busy && "motion-essential",
+            )}
           >
-            {busy ? "Starting…" : "Start Conductor"}
+            {busy ? (
+              <>
+                <AgentThinkingIndicator phase="dispatching" size={12} />
+                Starting…
+              </>
+            ) : (
+              "Start Conductor"
+            )}
           </Button>
         </div>
       )}
@@ -287,15 +302,28 @@ export function DagTab({ issueId }: Props) {
                 disabled={busy}
                 onClick={() => void handleStart()}
                 size="sm"
-                className="h-7 px-2.5 text-[12px] bg-brand hover:bg-brand-strong text-black font-semibold"
+                data-density={
+                  busy
+                    ? "dag-tab-toolbar-start-dispatch-cta"
+                    : "dag-tab-toolbar-start-cta"
+                }
+                className={cn(
+                  "h-7 px-2.5 text-[12px] bg-brand hover:bg-brand-strong text-black font-semibold",
+                  busy && "motion-essential",
+                )}
               >
-                {busy
-                  ? "Starting…"
-                  : graph.status === "running"
-                    ? "Re-run"
-                    : graph.status === "failed"
-                      ? "Retry"
-                      : "Re-run"}
+                {busy ? (
+                  <>
+                    <AgentThinkingIndicator phase="dispatching" size={11} />
+                    Starting…
+                  </>
+                ) : graph.status === "running" ? (
+                  "Re-run"
+                ) : graph.status === "failed" ? (
+                  "Retry"
+                ) : (
+                  "Re-run"
+                )}
               </Button>
             </div>
           </div>
