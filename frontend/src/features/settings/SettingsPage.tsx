@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AutoSaveIndicator } from "@/components/ui/auto-save-indicator";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import type { SaveStatus } from "@/hooks/useAutoSave";
 import {
   Moon,
@@ -372,9 +373,18 @@ export function SettingsPage() {
                   <CardContent className="p-0">
                     <div className="px-6">
                       {loading ? (
-                        <div className="flex flex-col items-center justify-center py-20 gap-4">
-                          <div className="size-12 border-4 border-brand/10 border-t-brand rounded-full animate-spin" />
-                          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-brand animate-pulse">{t("settings.syncingCatalog")}</p>
+                        <div
+                          data-density="settings-runtime-tool-loading"
+                          className="motion-essential relative flex min-h-[220px] flex-col items-center justify-center gap-3 overflow-hidden text-xs font-semibold text-text-muted"
+                        >
+                          <span
+                            aria-hidden
+                            className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-tool/70 to-transparent"
+                          />
+                          <AgentThinkingIndicator phase="tool" size={24} />
+                          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-text-muted">
+                            {t("settings.syncingCatalog")}
+                          </p>
                         </div>
                       ) : error ? (
                         <div className="p-6 rounded-2xl bg-error/5 border border-error/20 text-center">
