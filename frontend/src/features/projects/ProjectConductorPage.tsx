@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BrainCircuit, DatabaseZap, Loader2, MessageSquareText, RefreshCcw, Send } from "lucide-react";
 
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import {
   askProjectConductor,
   getProjectConductorState,
@@ -14,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { ProjectConductorThreadDock } from "@/features/projects/components/ProjectConductorThreadDock";
 import { useI18n } from "@/providers/I18nProvider";
+import { cn } from "@/lib/utils";
 
 export function ProjectConductorPage({ projectId }: { projectId: string }) {
   const { addToast } = useToast();
@@ -81,13 +83,35 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
   }, [projectId, load, addToast, t]);
 
   const latestHot = useMemo(() => state?.hot_thread.slice(-6).reverse() ?? [], [state]);
+  const isProjectConductorThinking = asking;
 
   return (
-    <section className="rounded-3xl border border-border-subtle bg-[radial-gradient(circle_at_top_left,rgba(230,149,82,0.18),transparent_34%),linear-gradient(135deg,var(--surface-raised),var(--surface))] overflow-hidden shadow-2xl shadow-black/5">
+    <section
+      data-density={isProjectConductorThinking ? "project-conductor-thinking-shell" : "project-conductor-shell"}
+      className={cn(
+        "relative overflow-hidden rounded-3xl border border-border-subtle bg-[radial-gradient(circle_at_top_left,rgba(230,149,82,0.18),transparent_34%),linear-gradient(135deg,var(--surface-raised),var(--surface))] shadow-2xl shadow-black/5",
+        isProjectConductorThinking && "motion-essential border-brand/35",
+      )}
+    >
+      {isProjectConductorThinking && (
+        <div
+          aria-hidden
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+        />
+      )}
       <div className="p-5 border-b border-border-subtle flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-start gap-3">
-          <div className="size-11 rounded-2xl bg-brand/15 border border-brand/20 flex items-center justify-center text-brand">
-            <BrainCircuit size={22} />
+          <div
+            className={cn(
+              "size-11 rounded-2xl bg-brand/15 border border-brand/20 flex items-center justify-center text-brand",
+              isProjectConductorThinking && "motion-essential border-brand/35 bg-brand-muted/15",
+            )}
+          >
+            {isProjectConductorThinking ? (
+              <AgentThinkingIndicator phase="thinking" size={20} />
+            ) : (
+              <BrainCircuit size={22} />
+            )}
           </div>
           <div>
             <h2 className="text-lg font-black tracking-tight">{t("projectConductor.title")}</h2>
@@ -102,7 +126,7 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
             {t("projectConductor.refresh")}
           </Button>
           <Button size="sm" onClick={() => void handleScheduledReview()} disabled={asking} className="gap-2 rounded-xl">
-            <DatabaseZap size={14} />
+            {asking ? <AgentThinkingIndicator phase="thinking" size={14} /> : <DatabaseZap size={14} />}
             {t("projectConductor.scheduleReview")}
           </Button>
         </div>
@@ -117,7 +141,19 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
             <Metric label={t("projectConductor.metric.tasksHandled")} value={state?.total_tasks_handled ?? 0} />
           </div>
 
-          <div className="rounded-2xl border border-border-subtle bg-surface/65 p-4">
+          <div
+            data-density={isProjectConductorThinking ? "project-conductor-thinking-actions" : "project-conductor-actions"}
+            className={cn(
+              "relative overflow-hidden rounded-2xl border border-border-subtle bg-surface/65 p-4",
+              isProjectConductorThinking && "motion-essential border-brand/30 bg-brand-muted/10",
+            )}
+          >
+            {isProjectConductorThinking && (
+              <div
+                aria-hidden
+                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+              />
+            )}
             <div className="flex items-center gap-2 mb-3">
               <MessageSquareText size={15} className="text-brand" />
               <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">{t("projectConductor.askTitle")}</h3>
@@ -133,7 +169,7 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
                 className="bg-surface-input border-border-subtle"
               />
               <Button onClick={() => void handleAsk()} disabled={asking || !question.trim()} className="gap-2">
-                {asking ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                {asking ? <AgentThinkingIndicator phase="thinking" size={14} /> : <Send size={14} />}
                 {t("projectConductor.askAction")}
               </Button>
             </div>

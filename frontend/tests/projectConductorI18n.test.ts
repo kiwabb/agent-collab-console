@@ -87,3 +87,16 @@ test("project conductor thread dock marks streaming runs with scheduling motion"
   assert.match(dock, /motion-essential/);
   assert.doesNotMatch(dock, /animate-pulse/);
 });
+
+test("project conductor page marks active ask or review requests with thinking motion", () => {
+  const page = readSource("features/projects/ProjectConductorPage.tsx");
+
+  assert.match(page, /isProjectConductorThinking/);
+  assert.match(page, /data-density=\{isProjectConductorThinking \? "project-conductor-thinking-shell" : "project-conductor-shell"\}/);
+  assert.match(page, /data-density=\{isProjectConductorThinking \? "project-conductor-thinking-actions" : "project-conductor-actions"\}/);
+  assert.match(page, /<AgentThinkingIndicator/);
+  assert.match(page, /animate-shimmer-sweep/);
+  assert.match(page, /phase="thinking"/);
+  assert.match(page, /motion-essential/);
+  assert.doesNotMatch(page, /animate-pulse/);
+});
