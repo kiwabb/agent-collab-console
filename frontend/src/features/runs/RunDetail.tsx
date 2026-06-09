@@ -309,18 +309,40 @@ export function RunDetail({
                 <button
                   onClick={onTransitionToArchitecture}
                   disabled={!canTransitionToArchitecture || isTransitioningToArchitecture}
-                  className="flex-2 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md active:scale-[0.98] disabled:opacity-50"
+                  data-density={isTransitioningToArchitecture ? "run-detail-transition-architecture-dispatch" : "run-detail-transition-architecture"}
+                  className={cn(
+                    "flex-2 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md active:scale-[0.98] disabled:opacity-50",
+                    isTransitioningToArchitecture && "motion-essential",
+                  )}
                 >
-                  {isTransitioningToArchitecture ? t("issue.transition.loading") : t("issue.transition.toArchitecture")}
+                  {isTransitioningToArchitecture ? (
+                    <>
+                      <AgentThinkingIndicator phase="dispatching" size={12} />
+                      {t("issue.transition.loading")}
+                    </>
+                  ) : (
+                    t("issue.transition.toArchitecture")
+                  )}
                 </button>
               )}
               {showTransitionToDevelopment && taskMeta?.phase === "architecture" && (
                 <button
                   onClick={onTransitionToDevelopment}
                   disabled={!canTransitionToDevelopment || isTransitioningToDevelopment}
-                  className="flex-2 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md active:scale-[0.98] disabled:opacity-50"
+                  data-density={isTransitioningToDevelopment ? "run-detail-transition-development-dispatch" : "run-detail-transition-development"}
+                  className={cn(
+                    "flex-2 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md active:scale-[0.98] disabled:opacity-50",
+                    isTransitioningToDevelopment && "motion-essential",
+                  )}
                 >
-                  {isTransitioningToDevelopment ? t("issue.transition.loading") : t("issue.transition.toDevelopment")}
+                  {isTransitioningToDevelopment ? (
+                    <>
+                      <AgentThinkingIndicator phase="dispatching" size={12} />
+                      {t("issue.transition.loading")}
+                    </>
+                  ) : (
+                    t("issue.transition.toDevelopment")
+                  )}
                 </button>
               )}
               {showTransitionToTesting && (taskMeta?.phase === "development" || taskMeta?.phase === "testing") && (
@@ -329,9 +351,20 @@ export function RunDetail({
                     <button
                       onClick={onTransitionToTesting}
                       disabled={!canTransitionToTesting || isTransitioningToTesting}
-                      className="flex-2 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md active:scale-[0.98] disabled:opacity-50"
+                      data-density={isTransitioningToTesting ? "run-detail-transition-testing-dispatch" : "run-detail-transition-testing"}
+                      className={cn(
+                        "flex-2 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all shadow-md active:scale-[0.98] disabled:opacity-50",
+                        isTransitioningToTesting && "motion-essential",
+                      )}
                     >
-                      {isTransitioningToTesting ? t("issue.transition.loading") : t("run.submitTesting")}
+                      {isTransitioningToTesting ? (
+                        <>
+                          <AgentThinkingIndicator phase="dispatching" size={12} />
+                          {t("issue.transition.loading")}
+                        </>
+                      ) : (
+                        t("run.submitTesting")
+                      )}
                     </button>
                   </TooltipTrigger>
                   {!canTransitionToTesting && !isTransitioningToTesting && (

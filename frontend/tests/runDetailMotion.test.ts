@@ -31,3 +31,20 @@ test("run detail pending assistant uses streaming motion", () => {
   assert.match(source, /motion-essential/);
   assert.doesNotMatch(source, /rounded-full bg-brand shadow-\[0_0_8px_rgba\(122,157,204,0\.6\)\] animate-pulse/);
 });
+
+test("run detail phase transition ctas use dispatch motion while scheduling next phase", () => {
+  const source = readFileSync(
+    path.join(root, "src/features/runs/RunDetail.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /data-density=\{isTransitioningToArchitecture \? "run-detail-transition-architecture-dispatch" : "run-detail-transition-architecture"\}/);
+  assert.match(source, /data-density=\{isTransitioningToDevelopment \? "run-detail-transition-development-dispatch" : "run-detail-transition-development"\}/);
+  assert.match(source, /data-density=\{isTransitioningToTesting \? "run-detail-transition-testing-dispatch" : "run-detail-transition-testing"\}/);
+  assert.match(source, /isTransitioningToArchitecture && "motion-essential"/);
+  assert.match(source, /isTransitioningToDevelopment && "motion-essential"/);
+  assert.match(source, /isTransitioningToTesting && "motion-essential"/);
+  assert.match(source, /isTransitioningToArchitecture \? \(\s*<>\s*<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
+  assert.match(source, /isTransitioningToDevelopment \? \(\s*<>\s*<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
+  assert.match(source, /isTransitioningToTesting \? \(\s*<>\s*<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
+});
