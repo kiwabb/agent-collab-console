@@ -153,6 +153,16 @@ test("issue side activity marks running pipeline stages with scheduling motion",
   assert.doesNotMatch(sideStackSource, /animate-pulse/);
 });
 
+test("command chat bar marks conductor clarification with scheduling motion", () => {
+  const chatSource = readSource("features/issues/components/CommandCenterChatBar.tsx");
+
+  assert.match(chatSource, /data-density="conductor-clarification-banner"/);
+  assert.match(chatSource, /<AgentThinkingIndicator/);
+  assert.match(chatSource, /animate-shimmer-sweep/);
+  assert.match(chatSource, /phase="thinking"/);
+  assert.match(chatSource, /motion-essential/);
+});
+
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {
   const timeline = buildDecisionTimeline(
     [
