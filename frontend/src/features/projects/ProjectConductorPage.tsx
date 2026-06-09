@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BrainCircuit, DatabaseZap, Loader2, MessageSquareText, RefreshCcw, Send } from "lucide-react";
+import { BrainCircuit, DatabaseZap, MessageSquareText, RefreshCcw, Send } from "lucide-react";
 
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import {
@@ -121,8 +121,15 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading} className="gap-2 rounded-xl">
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCcw size={14} />}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void load()}
+            disabled={loading}
+            data-density={loading ? "project-conductor-refresh-thinking" : "project-conductor-refresh"}
+            className={cn("gap-2 rounded-xl", loading && "motion-essential")}
+          >
+            {loading ? <AgentThinkingIndicator phase="thinking" size={14} /> : <RefreshCcw size={14} />}
             {t("projectConductor.refresh")}
           </Button>
           <Button size="sm" onClick={() => void handleScheduledReview()} disabled={asking} className="gap-2 rounded-xl">

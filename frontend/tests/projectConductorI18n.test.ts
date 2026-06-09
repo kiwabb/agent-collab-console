@@ -101,6 +101,17 @@ test("project conductor page marks active ask or review requests with thinking m
   assert.doesNotMatch(page, /animate-pulse/);
 });
 
+test("project conductor refresh cta uses thinking motion while loading", () => {
+  const page = readSource("features/projects/ProjectConductorPage.tsx");
+
+  assert.match(page, /data-density=\{loading \? "project-conductor-refresh-thinking" : "project-conductor-refresh"\}/);
+  assert.match(page, /loading && "motion-essential/);
+  assert.match(page, /<AgentThinkingIndicator phase="thinking" size=\{14\}/);
+  assert.match(page, /<RefreshCcw size=\{14\}/);
+  assert.doesNotMatch(page, /loading \? <Loader2/);
+  assert.doesNotMatch(page, /animate-pulse/);
+});
+
 test("project conductor start loop cta uses dispatch motion while running", () => {
   const dock = readSource("features/projects/components/ProjectConductorThreadDock.tsx");
 
