@@ -513,21 +513,26 @@ export function RunDetail({
                     {liveStream.pendingAssistant && (
                       <motion.div
                         key="pending-assistant"
+                        data-density="run-detail-streaming-assistant"
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0 }}
-                        className="flex flex-col gap-3"
+                        className="motion-essential flex flex-col gap-3"
                       >
                         <div className="flex items-center gap-2.5 px-1">
-                          <div className="size-1.5 rounded-full bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)] animate-pulse" />
+                          <AgentThinkingIndicator phase="streaming" size={12} />
                           <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">{t("task.assistantOutput")}</span>
                         </div>
-                        <div className="p-5 rounded-2xl text-[13.5px] leading-relaxed border font-medium bg-brand/5 border-brand/20 text-foreground/90 shadow-sm">
+                        <div className="motion-essential relative overflow-hidden p-5 rounded-2xl text-[13.5px] leading-relaxed border font-medium bg-brand/5 border-brand/20 text-foreground/90 shadow-sm">
+                          <span
+                            className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                            aria-hidden
+                          />
                           <MessageMarkdown content={liveStream.pendingAssistant.text || ""} />
                           <motion.span
                             animate={{ opacity: [0, 1, 0] }}
                             transition={{ duration: 0.8, repeat: Infinity }}
-                            className="inline-block ml-0.5 -mb-0.5 w-1.5 h-4 bg-brand align-middle"
+                            className="motion-essential inline-block ml-0.5 -mb-0.5 w-1.5 h-4 bg-brand align-middle"
                           >&nbsp;</motion.span>
                         </div>
                       </motion.div>
