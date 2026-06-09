@@ -1,0 +1,19 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+
+const root = path.resolve(import.meta.dirname, "..");
+
+test("running tool blocks use semantic tool motion", () => {
+  const source = readFileSync(
+    path.join(root, "src/features/runs/toolBlocks/ToolBlocks.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /data-density=\{isRunning \? "tool-block-active-tool" : "tool-block"\}/);
+  assert.match(source, /<AgentThinkingIndicator phase="tool" size=\{12\} \/>/);
+  assert.match(source, /animate-shimmer-sweep/);
+  assert.match(source, /motion-essential/);
+  assert.doesNotMatch(source, /bg-brand animate-pulse/);
+});

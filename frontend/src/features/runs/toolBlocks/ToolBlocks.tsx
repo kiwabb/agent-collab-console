@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import type { NormalizedEntry, ToolCategory } from "@/lib/types";
 import { cleanShellWrapper, getFileName, truncateText, asRecord } from "@/lib/toolConstants";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 interface ToolBlockProps {
   entry: NormalizedEntry;
@@ -62,9 +63,7 @@ function StatusDot({ status, isError }: { status?: "running" | "success" | "fail
   if (status === "success") {
     return <span className="size-1.5 rounded-full bg-success shadow-[0_0_6px_rgba(34,197,94,0.5)]" />;
   }
-  return (
-    <span className="size-1.5 rounded-full bg-brand animate-pulse shadow-[0_0_6px_rgba(122,157,204,0.7)]" />
-  );
+  return null;
 }
 
 function StatusLabel({
@@ -122,15 +121,25 @@ function ToolHeader({
   onToggle: () => void;
   rightSlot?: React.ReactNode;
 }) {
+  const isRunning = entry.status === "running";
+
   return (
     <button
       type="button"
       onClick={onToggle}
+      data-density={isRunning ? "tool-block-active-tool" : "tool-block"}
       className={cn(
-        "w-full flex items-center gap-3 px-3 py-2 text-left rounded-xl transition-colors",
+        "relative w-full flex items-center gap-3 overflow-hidden px-3 py-2 text-left rounded-xl transition-colors",
         "hover:bg-surface-hover/60",
+        isRunning && "motion-essential bg-brand/5",
       )}
     >
+      {isRunning && (
+        <span
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+          aria-hidden
+        />
+      )}
       <span className="shrink-0 text-text-muted">
         {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
       </span>
@@ -151,7 +160,11 @@ function ToolHeader({
       <span className="shrink-0 flex items-center gap-2">
         {rightSlot}
         <StatusLabel entry={entry} />
-        <StatusDot status={entry.status} isError={entry.isError} />
+        {isRunning ? (
+          <AgentThinkingIndicator phase="tool" size={12} />
+        ) : (
+          <StatusDot status={entry.status} isError={entry.isError} />
+        )}
       </span>
     </button>
   );
