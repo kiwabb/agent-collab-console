@@ -43,6 +43,15 @@ test("ConductorLogPanel marks active phase and pending dispatches with schedulin
   assert.match(source, /motion-essential/);
 });
 
+test("ConductorLogPanel send button uses thinking motion while sending", () => {
+  const source = readSource("features/workflow/ConductorLogPanel.tsx");
+
+  assert.match(source, /data-density=\{sending \? "conductor-message-send-thinking" : "conductor-message-send"\}/);
+  assert.match(source, /sending && "motion-essential"/);
+  assert.match(source, /<AgentThinkingIndicator phase="thinking" size=\{14\}/);
+  assert.doesNotMatch(source, /sending \?\s*\(\s*<Loader2 className="mr-1\.5 h-3\.5 w-3\.5 animate-spin"/);
+});
+
 test("Conductor streaming types expose phase/detail and llm_response", () => {
   const apiSource = readSource("lib/api.ts");
   const contextSource = readSource("contexts/ExecutionProcessesContext.tsx");

@@ -937,9 +937,14 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
             <p className="text-[11px] text-text-muted">
               {hasActiveLoop ? t("conductor.panel.queuedNoteHint") : t("conductor.panel.startLoopHint")}
             </p>
-            <Button onClick={() => void handleSend()} disabled={!hasActiveLoop || sending || !composer.trim()}>
+            <Button
+              data-density={sending ? "conductor-message-send-thinking" : "conductor-message-send"}
+              onClick={() => void handleSend()}
+              disabled={!hasActiveLoop || sending || !composer.trim()}
+              className={cn("gap-2", sending && "motion-essential")}
+            >
               {sending ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                <AgentThinkingIndicator phase="thinking" size={14} />
               ) : (
                 <SendHorizontal className="mr-1.5 h-3.5 w-3.5" />
               )}
