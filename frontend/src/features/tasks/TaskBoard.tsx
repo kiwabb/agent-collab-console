@@ -23,6 +23,7 @@ import type { CodexTask, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
 import { Plus, Layout, Activity, Clock, Terminal, Trash2, GripVertical, Link, Check, Table2, Kanban } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { type Phase, PHASE_CONFIG } from "@/features/issues/phaseUtils";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
 import { pickLatestExecutionProcessForTask } from "@/lib/task-selection";
@@ -109,6 +110,7 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
   const [copied, setCopied] = useState(false);
   const rawStatus = task.status || process?.status || "pending";
   const status = rawStatus.toLowerCase();
+  const isRunningTask = status === "running" || status === "responding";
 
   const handleCopyLink = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -124,23 +126,34 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
       onClick={onClick}
       whileHover={{ y: -2, scale: 1.01, boxShadow: "0 10px 25px -5px rgba(0,0,0,0.1)" }}
       whileTap={{ scale: 0.98 }}
+      data-density={isRunningTask ? "task-board-running-card" : "task-board-card"}
       className={cn(
-        "group/card p-5 rounded-2xl bg-surface/40 border border-border-subtle hover:bg-surface-hover hover:border-brand/30 transition-all cursor-pointer",
+        "group/card relative overflow-hidden p-5 rounded-2xl bg-surface/40 border border-border-subtle hover:bg-surface-hover hover:border-brand/30 transition-all cursor-pointer",
+        isRunningTask && "motion-essential border-brand/35 bg-brand/5",
         !unlocked && "opacity-60",
         isDragging && "shadow-2xl border-brand/50 bg-surface-raised rotate-2 z-50"
       )}
     >
+      {isRunningTask ? (
+        <span
+          aria-hidden
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+        />
+      ) : null}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2">
-          <div className={cn(
-            "size-1.5 rounded-full",
-            status === "running" || status === "responding" ? "bg-brand animate-pulse" :
-            status === "failed" ? "bg-error" :
-            status === "completed" || status === "done" ? "bg-success" :
-            status === "awaiting_review" ? "bg-warning animate-pulse" :
-            status === "rework" ? "bg-error shadow-[0_0_8px_rgba(239,68,68,0.4)]" :
-            "bg-text-muted"
-          )} />
+          {isRunningTask ? (
+            <AgentThinkingIndicator phase="dispatching" size={12} />
+          ) : (
+            <div className={cn(
+              "size-1.5 rounded-full",
+              status === "failed" ? "bg-error" :
+              status === "completed" || status === "done" ? "bg-success" :
+              status === "awaiting_review" ? "bg-warning animate-pulse" :
+              status === "rework" ? "bg-error shadow-[0_0_8px_rgba(239,68,68,0.4)]" :
+              "bg-text-muted"
+            )} />
+          )}
           <span className="text-[9px] font-black uppercase tracking-widest text-text-secondary group-hover/card:text-foreground transition-colors">
             {rawStatus}
           </span>
