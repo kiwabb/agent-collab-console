@@ -111,10 +111,13 @@ spurious 500s such as missing `vendor-chunks` files.
 - **Browser verification mocks must satisfy typed API shapes.** When
   a local mock backend drives a real page such as `/issues/[id]`,
   return the exact fields declared in `lib/api.ts` / `lib/types.ts`.
-  For issue detail verification, `CodexCostStats.est_cost_usd` and
-  `PipelineStagesResponse.total_duration_seconds` are real UI inputs;
-  omitting them can crash right-rail telemetry and invalidate the
-  browser result.
+  For issue detail verification, `CodexCostStats.est_cost_usd`,
+  `CodexCostStats.pricing.input_per_m`,
+  `CodexCostStats.pricing.output_per_m`,
+  `PipelineStagesResponse.total_duration_seconds`, and
+  `IssueDiffResult.diff` are real UI inputs; omitting them can crash
+  status-bar, diff, or right-rail surfaces and invalidate the browser
+  result.
 - **No snapshot tests.** They drift; the i18n coverage test and
   the per-feature derivation tests do the work snapshots would.
 - **i18n coverage test** (existing) verifies that the zh-CN and

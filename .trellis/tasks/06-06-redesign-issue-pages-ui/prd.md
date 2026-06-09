@@ -64,6 +64,9 @@ Redesign the issue-related UI so the workspace issue list and issue detail page 
 * A mock `conductor_turn_delta` WebSocket event rendered the live thinking card with the streamed Conductor text and `animate-shimmer-sweep = 1`.
 * Follow-up fix: batch-expanded tasks now choose empty-summary copy from their actual timeline status, so a running engineer row says it is running instead of reusing the finished-task summary.
 * Screenshot artifact from the local verification run: `/tmp/conductor-animation-verification-live.png`.
+* 2026-06-09 current-main recheck: Browser verification on `/issues/mock-scheduling-issue` rendered without the Next.js runtime error overlay after typed mock responses included `IssueDiffResult.diff` and `CodexCostStats.pricing`.
+* Current-main DOM checks found the active Conductor strip with `border-brand/35 bg-brand-muted/10`, `animate-shimmer-sweep = 1`, and `animate-orbit = 1`; three scheduling rows (`dispatch_batch`, running engineer task, and running tool call) each had `border-brand/40 bg-brand-muted/10`, `animate-shimmer-sweep = 1`, and `animate-orbit = 1`.
+* The mock global WebSocket stream delivered a `conductor_turn_delta`; the live thinking card rendered "Conductor is actively comparing dispatch paths and balancing agent load." with a shimmer scan line. Screenshot artifact: `/tmp/conductor-animation-current-main.png`.
 
 ## Out of Scope
 
