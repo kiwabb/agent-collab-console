@@ -3,6 +3,7 @@
 import { ArrowDownUp, Filter, Plus, RadioTower } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import type { CodexIssue, Project, Workspace } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
@@ -46,6 +47,7 @@ export function WorkspaceConsoleHeader({
     { total: 0, running: 0, awaiting: 0, queued: 0, done: 0, failed: 0 },
   );
   const repoLabel = formatWorkspaceConsoleRepoLabel(project?.repo_path);
+  const isQueueScheduling = counts.running > 0;
 
   return (
     <section className="rounded-lg border border-border-subtle bg-surface/90 p-3 md:p-4">
@@ -63,7 +65,21 @@ export function WorkspaceConsoleHeader({
             <h1 className="text-xl font-black text-foreground md:text-2xl">
               {workspace?.title ?? t("workspace.console.emptyTitle")}
             </h1>
-            <p className="pb-1 text-sm text-text-muted">
+            <p
+              data-density={isQueueScheduling ? "workspace-console-active-summary" : "workspace-console-summary"}
+              className={cn(
+                "relative inline-flex items-center gap-1.5 overflow-hidden rounded-md px-1.5 py-0.5 text-sm text-text-muted",
+                isQueueScheduling && "motion-essential",
+                isQueueScheduling && "bg-brand/5 text-text-secondary",
+              )}
+            >
+              {isQueueScheduling && (
+                <span
+                  aria-hidden
+                  className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                />
+              )}
+              {isQueueScheduling && <AgentThinkingIndicator phase="dispatching" size={12} className="shrink-0" />}
               {counts.running} running · {counts.awaiting} awaiting · {counts.total} total
             </p>
           </div>

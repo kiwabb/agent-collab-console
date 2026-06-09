@@ -49,3 +49,14 @@ test("workspace console marks running issue rows with scheduling motion", () => 
   assert.match(rowSource, /motion-essential/);
   assert.doesNotMatch(rowSource, /animate-pulse/);
 });
+
+test("workspace console header marks active queue totals with scheduling motion", () => {
+  const headerSource = readSource("features/workspaces/WorkspaceConsoleHeader.tsx");
+
+  assert.match(headerSource, /const isQueueScheduling = counts\.running > 0/);
+  assert.match(headerSource, /data-density=\{isQueueScheduling \? "workspace-console-active-summary" : "workspace-console-summary"\}/);
+  assert.match(headerSource, /isQueueScheduling && "motion-essential"/);
+  assert.match(headerSource, /<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
+  assert.match(headerSource, /animate-shimmer-sweep/);
+  assert.doesNotMatch(headerSource, /animate-pulse/);
+});
