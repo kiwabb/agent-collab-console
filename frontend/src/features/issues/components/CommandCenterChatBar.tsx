@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Send } from "lucide-react";
+import { Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { sendConductorMessage } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 
@@ -70,8 +71,13 @@ export function CommandCenterChatBar({ issueId, disabled, clarifyQuestion, onSen
           placeholder={disabled ? t("issue.command.chatPausedPlaceholder") : clarifyQuestion ? t("issue.command.chatAnswerPlaceholder") : t("issue.command.chatPlaceholder")}
           className="min-h-9 flex-1 resize-none rounded-md border border-transparent bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-text-muted focus:border-brand/40"
         />
-        <Button onClick={() => void submit()} disabled={disabled || sending || !draft.trim()} className="gap-2 rounded-md bg-brand text-black hover:bg-brand-strong">
-          {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+        <Button
+          onClick={() => void submit()}
+          disabled={disabled || sending || !draft.trim()}
+          data-density={sending ? "command-chat-send-thinking" : "command-chat-send"}
+          className={cn("gap-2 rounded-md bg-brand text-black hover:bg-brand-strong", sending && "motion-essential")}
+        >
+          {sending ? <AgentThinkingIndicator phase="thinking" size={14} /> : <Send size={14} />}
           {t("issue.command.send")}
         </Button>
       </div>
