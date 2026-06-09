@@ -12,6 +12,7 @@ import {
   EmptyStateAction,
   InteractionEmptyState,
 } from "@/components/ui/interaction-empty-state";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
@@ -94,9 +95,15 @@ export function ArtifactsHubPage() {
           size="sm"
           variant="outline"
           disabled={refreshing}
+          data-density={refreshing ? "artifacts-hub-refresh-tool" : "artifacts-hub-refresh"}
+          className={cn(refreshing && "motion-essential")}
           onClick={() => void load("refresh")}
         >
-          <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
+          {refreshing ? (
+            <AgentThinkingIndicator phase="tool" size={12} />
+          ) : (
+            <RefreshCw size={12} />
+          )}
           {t("artifacts.refresh")}
         </Button>
       )}
