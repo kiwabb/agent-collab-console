@@ -1,7 +1,6 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
-
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 
 export function SteerIssueDialog({
@@ -49,10 +49,15 @@ export function SteerIssueDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>
             {t("issue.cancel")}
           </Button>
-          <Button onClick={onSubmit} disabled={sending || !draft.trim()} className="bg-brand text-black hover:bg-brand-strong">
+          <Button
+            onClick={onSubmit}
+            disabled={sending || !draft.trim()}
+            data-density={sending ? "steer-issue-send-thinking" : "steer-issue-send"}
+            className={cn("bg-brand text-black hover:bg-brand-strong", sending && "motion-essential")}
+          >
             {sending ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> {t("issue.sending")}
+                <AgentThinkingIndicator phase="thinking" size={12} /> {t("issue.sending")}
               </span>
             ) : (
               t("issue.sendToAgent")

@@ -183,6 +183,15 @@ test("conductor chat bar uses thinking motion while sending", () => {
   assert.doesNotMatch(chatSource, /<Loader2 size=\{14\} className="animate-spin"/);
 });
 
+test("steer issue dialog send cta uses thinking motion while sending", () => {
+  const dialogSource = readSource("features/issues/components/SteerIssueDialog.tsx");
+
+  assert.match(dialogSource, /data-density=\{sending \? "steer-issue-send-thinking" : "steer-issue-send"\}/);
+  assert.match(dialogSource, /sending && "motion-essential"/);
+  assert.match(dialogSource, /<AgentThinkingIndicator phase="thinking" size=\{12\}/);
+  assert.doesNotMatch(dialogSource, /<Loader2 size=\{12\} className="animate-spin"/);
+});
+
 test("issue workbench tabs surface active conductor scheduling motion", () => {
   const pageSource = readSource("features/issues/IssueDetailPage.tsx");
 
