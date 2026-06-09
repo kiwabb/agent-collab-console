@@ -147,6 +147,16 @@ test("workflow graph marks active dispatch batch lanes with scheduling motion", 
   assert.doesNotMatch(nodeSource, /animate-pulse/);
 });
 
+test("git info diff loading uses tool motion while syncing diff state", () => {
+  const gitSource = readSource("features/issues/components/GitInfoCard.tsx");
+
+  assert.match(gitSource, /import \{ AgentThinkingIndicator \} from "@\/components\/ui\/AgentThinkingIndicator";/);
+  assert.match(gitSource, /data-density="git-ops-diff-tool-loading"/);
+  assert.match(gitSource, /className="motion-essential inline-flex items-center gap-2 p-4 text-sm font-semibold text-text-secondary"/);
+  assert.match(gitSource, /<AgentThinkingIndicator phase="tool" size=\{14\} \/>/);
+  assert.doesNotMatch(gitSource, /<Loader2 className="animate-spin text-brand" size=\{14\} \/>/);
+});
+
 test("conductor monitor marks live conductor rows with scheduling motion", () => {
   const monitorSource = readSource("features/conductors/ConductorMonitorPage.tsx");
 

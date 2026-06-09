@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { GitBranch, GitMerge, FileText, Loader2, Ban, Copy, Check } from "lucide-react";
+import { GitBranch, GitMerge, FileText, Ban, Copy, Check } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import {
   Dialog,
   DialogContent,
@@ -283,8 +284,11 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
           {/* Explicit maxHeight so overflow-y-auto has a constraint to work against */}
           <div className="overflow-y-auto" style={{ maxHeight: "calc(82vh - 4rem)" }}>
             {diffLoading ? (
-              <span className="inline-flex items-center gap-2 p-4 text-sm font-semibold text-text-secondary">
-                <Loader2 className="animate-spin text-brand" size={14} /> {t("task.diffMerge.loading")}
+              <span
+                data-density="git-ops-diff-tool-loading"
+                className="motion-essential inline-flex items-center gap-2 p-4 text-sm font-semibold text-text-secondary"
+              >
+                <AgentThinkingIndicator phase="tool" size={14} /> {t("task.diffMerge.loading")}
               </span>
             ) : (
               <DiffPanel
