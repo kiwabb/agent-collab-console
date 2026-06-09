@@ -438,11 +438,12 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
               variant="ghost"
               disabled={!!busy}
               onClick={() => void handleRefreshPR()}
-              className="ml-auto"
+              data-density={busy === "pr-refresh" ? "diff-merge-pr-refresh-tool" : "diff-merge-pr-refresh"}
+              className={cn("ml-auto", busy === "pr-refresh" && "motion-essential")}
               title={t("task.diffMerge.refreshPrHint")}
             >
               {busy === "pr-refresh" ? (
-                <Loader2 size={12} className="animate-spin" />
+                <AgentThinkingIndicator phase="tool" size={12} />
               ) : (
                 <RefreshCw size={12} />
               )}

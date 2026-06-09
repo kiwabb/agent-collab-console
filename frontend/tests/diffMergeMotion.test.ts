@@ -37,3 +37,12 @@ test("diff merge abandon cta uses dispatch motion while abandoning", () => {
   assert.match(source, /busy === "abandon" \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
   assert.doesNotMatch(source, /busy === "abandon" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
 });
+
+test("diff merge PR refresh cta uses tool motion while syncing GitHub PR state", () => {
+  const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
+
+  assert.match(source, /data-density=\{busy === "pr-refresh" \? "diff-merge-pr-refresh-tool" : "diff-merge-pr-refresh"\}/);
+  assert.match(source, /busy === "pr-refresh" && "motion-essential/);
+  assert.match(source, /busy === "pr-refresh" \? \(\s*<AgentThinkingIndicator phase="tool" size=\{12\}/);
+  assert.doesNotMatch(source, /busy === "pr-refresh" \? \(\s*<Loader2 size=\{12\} className="animate-spin"/);
+});
