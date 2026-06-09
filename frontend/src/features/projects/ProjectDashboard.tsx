@@ -12,10 +12,10 @@ import {
 import type { GitBranch, Project, ProjectStats, Workspace } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Plus, FolderGit2, GitBranch as GitBranchIcon } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useToast } from "@/components/ui/toast";
 import { emitDataEvent } from "@/lib/dataEvents";
 import { useI18n } from "@/providers/I18nProvider";
-import { Loader } from "@/components/ui/loader";
 
 interface Props {
   projectId: string;
@@ -68,7 +68,21 @@ export function ProjectDashboard({ projectId }: Props) {
     }
   }, [newTitle, projectId, router, addToast, t]);
 
-  if (!project) return <Loader variant="full" label="Loading Project..." />;
+  if (!project) {
+    return (
+      <div
+        data-density="project-dashboard-thinking-loading"
+        className="motion-essential relative mx-auto flex min-h-[360px] max-w-6xl items-center justify-center gap-2 overflow-hidden px-8 py-6 text-sm font-semibold text-text-muted"
+      >
+        <span
+          aria-hidden
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+        />
+        <AgentThinkingIndicator phase="thinking" size={16} />
+        {t("project.dashboard.loading")}
+      </div>
+    );
+  }
 
 
   return (
