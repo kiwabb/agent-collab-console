@@ -31,14 +31,23 @@ export function ConductorAlerts({ alerts, onDismiss }: Props) {
     <section className="flex flex-col gap-2" data-conductor-alerts>
       {alerts.map((alert) => {
         const Icon = SEVERITY_ICON[alert.severity];
+        const isOperationalConductorAlert = alert.severity !== "info";
         return (
           <div
             key={alert.id}
+            data-density={isOperationalConductorAlert ? "conductor-alert-operational" : "conductor-alert-info"}
             className={cn(
-              "flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5",
+              "relative flex items-center justify-between gap-3 overflow-hidden rounded-2xl border px-4 py-2.5",
               SEVERITY_STYLE[alert.severity],
+              isOperationalConductorAlert && "motion-essential",
             )}
           >
+            {isOperationalConductorAlert && (
+              <div
+                aria-hidden
+                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-current/60 to-transparent"
+              />
+            )}
             <div className="flex min-w-0 items-center gap-2">
               <Icon size={15} className="shrink-0" />
               <p className="truncate text-sm font-semibold">{t(alert.titleKey, alert.params)}</p>

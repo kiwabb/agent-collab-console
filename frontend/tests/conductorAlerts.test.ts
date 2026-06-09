@@ -1,7 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { alertSeverityFor, describeAlert } from "../src/features/issues/hooks/useConductorAlerts";
+
+const SRC_ROOT = join(process.cwd(), "src");
+
+function readSource(relativePath: string): string {
+  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
+}
 
 test("severity maps terminal failures to danger and stalls to warn", () => {
   assert.equal(alertSeverityFor("conductor_relaunch_exhausted"), "danger");
@@ -36,4 +44,15 @@ test("describeAlert falls back to sensible defaults on missing fields", () => {
   assert.equal(titleKey, "issue.command.alert.executorFailedToStart");
   assert.equal(params.executor, "executor");
   assert.equal(params.reason, "unknown");
+});
+
+test("ConductorAlerts marks operational warnings with semantic motion", () => {
+  const source = readSource("features/issues/components/ConductorAlerts.tsx");
+
+  assert.match(source, /const isOperationalConductorAlert = alert\.severity !== "info"/);
+  assert.match(source, /data-density=\{isOperationalConductorAlert \? "conductor-alert-operational" : "conductor-alert-info"\}/);
+  assert.match(source, /isOperationalConductorAlert && "motion-essential/);
+  assert.match(source, /isOperationalConductorAlert && \(/);
+  assert.match(source, /animate-shimmer-sweep/);
+  assert.doesNotMatch(source, /animate-pulse/);
 });
