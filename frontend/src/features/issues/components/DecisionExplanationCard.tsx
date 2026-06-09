@@ -1,6 +1,7 @@
 "use client";
 
 import { Info, Network } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import type { IssueOrchestrationPolicy } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
@@ -39,8 +40,22 @@ export function DecisionExplanationCard({ policy, loading }: Props) {
       {policy ? (
         <PolicyBody policy={policy} />
       ) : (
-        <div className="px-4 py-4 text-[12px] leading-relaxed text-text-muted">
-          {loading ? t("issue.decision.loading") : t("issue.decision.empty")}
+        <div
+          className={cn(
+            "px-4 py-4 text-[12px] leading-relaxed text-text-muted",
+            loading && "motion-essential relative flex items-center gap-2 overflow-hidden",
+          )}
+        >
+          {loading && (
+            <>
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+              />
+              <RoutingMotion isParallelRouting={false} />
+            </>
+          )}
+          <span>{loading ? t("issue.decision.loading") : t("issue.decision.empty")}</span>
         </div>
       )}
     </section>
@@ -50,14 +65,35 @@ export function DecisionExplanationCard({ policy, loading }: Props) {
 function PolicyBody({ policy }: { policy: IssueOrchestrationPolicy }) {
   const { t } = useI18n();
   const view = deriveDecisionExplanationView(policy);
+  const isParallelRouting = view.tone === "parallel" || policy.batch_allowed;
   return (
     <div className="p-2.5 space-y-2.5">
       <div className="grid grid-cols-2 gap-2">
-        <div className="rounded-lg border border-border-subtle/50 bg-surface-input/35 p-2.5">
+        <div
+          data-density="decision-routing-intelligence"
+          className={cn(
+            "rounded-lg border border-border-subtle/50 bg-surface-input/35 p-2.5",
+            isParallelRouting && "motion-essential relative overflow-hidden border-status-tool/30 bg-status-tool/10",
+          )}
+        >
+          {isParallelRouting && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-tool/70 to-transparent"
+            />
+          )}
           <div className="font-mono text-[9px] uppercase tracking-[0.18em] font-extrabold text-text-muted">
             {t("issue.decision.recommendation.label")}
           </div>
-          <div className={cn("mt-2 inline-flex min-h-7 max-w-full items-center rounded-md border px-2 py-1 text-[12px] font-black leading-snug", TONE_CLASS[view.tone])}>
+          <div
+            data-density="decision-routing-badge"
+            className={cn(
+              "mt-2 inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-[12px] font-black leading-snug",
+              TONE_CLASS[view.tone],
+              isParallelRouting && "motion-essential",
+            )}
+          >
+            {isParallelRouting && <RoutingMotion isParallelRouting={isParallelRouting} />}
             {t(view.recommendationKey)}
           </div>
         </div>
@@ -102,5 +138,15 @@ function PolicyBody({ policy }: { policy: IssueOrchestrationPolicy }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+function RoutingMotion({ isParallelRouting }: { isParallelRouting: boolean }) {
+  return (
+    <AgentThinkingIndicator
+      phase={isParallelRouting ? "dispatching" : "thinking"}
+      size={12}
+      className="shrink-0"
+    />
   );
 }

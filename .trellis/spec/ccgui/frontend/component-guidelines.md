@@ -98,6 +98,27 @@ the token, never an inline `bg-green-500`.
 chrome. Custom gradients or shadow recipes go through a shared utility
 in `globals.css` first; per-component one-offs are a smell.
 
+### Scheduling motion convention
+
+Conductor, dispatch, policy-routing, and active tool surfaces use semantic
+motion rather than generic pulsing. The contract is:
+
+- Gate the motion behind real scheduling state (running conductor phase,
+  `dispatch_batch`, active tool call, streaming project conductor, loading
+  routing policy, or `batch_allowed` policy); do not animate idle/history-only
+  cards just to add decoration.
+- Reuse `AgentThinkingIndicator` with the matching phase:
+  `thinking` for policy/LLM analysis, `dispatching` for sub-agent dispatch,
+  `tool` for active tool work, and `streaming` for token streams.
+- Mark essential feedback with `motion-essential` and pair the active surface
+  with the existing `animate-shimmer-sweep` top scan line. Do not introduce a
+  new animation name or one-off duration unless it becomes a shared utility in
+  `globals.css`.
+- Give the animated surface a stable `data-density` value so source-contract
+  tests and browser checks can prove the mounted component did not regress.
+- Avoid `animate-pulse` on scheduling surfaces; it reads as a generic loading
+  placeholder instead of intelligent routing.
+
 ### Tailwind v4 gotcha (from CLAUDE.md)
 
 `bg-popover` requires an explicit alias in `@theme`:

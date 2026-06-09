@@ -134,3 +134,15 @@ test("issue side rail renders the decision explanation panel without adding a to
   assert.match(sideStackSource, /issue_steered/);
   assert.doesNotMatch(pageSource, /value="decision"/);
 });
+
+test("decision explanation panel marks active routing intelligence with scheduling motion", () => {
+  const source = readSource("features/issues/components/DecisionExplanationCard.tsx");
+
+  assert.match(source, /isParallelRouting/);
+  assert.match(source, /data-density="decision-routing-intelligence"/);
+  assert.match(source, /data-density="decision-routing-badge"/);
+  assert.match(source, /<AgentThinkingIndicator/);
+  assert.match(source, /animate-shimmer-sweep/);
+  assert.match(source, /phase=\{isParallelRouting \? "dispatching" : "thinking"\}/);
+  assert.match(source, /motion-essential/);
+});
