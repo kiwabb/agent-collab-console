@@ -18,6 +18,7 @@ import { renderMessageWithLinks } from "@/lib/utils";
 import { shouldShowTopErrorCard } from "@/lib/runDetailErrorState";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { AgentLiveTimeline } from "./AgentLiveTimeline";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 interface RunDetailProps {
   process: ExecutionProcess | null;
@@ -691,6 +692,7 @@ function QaReportBadge({
 
 function StatusBadge({ status }: { status: string }) {
   const s = status.toLowerCase();
+  const isLiveRunStatus = s === "running" || s === "responding";
   const map: Record<string, string> = {
     running: "bg-brand/10 text-brand border-brand/30",
     responding: "bg-brand/10 text-brand border-brand/30",
@@ -701,16 +703,24 @@ function StatusBadge({ status }: { status: string }) {
     rework: "bg-error/10 text-error border-error/30 shadow-[0_0_8px_rgba(239,68,68,0.1)]",
   };
   const cls = map[s] ?? "bg-surface-input text-text-muted border-border-subtle";
-  
+
   return (
-    <div className={cn(
-      "flex items-center gap-1.5 px-2.5 py-0.5 rounded-md border text-[9px] font-black uppercase tracking-wider",
-      cls
-    )}>
-      {(s === "running" || s === "responding") && (
-        <div className="size-1 rounded-full bg-brand animate-pulse shadow-[0_0_5px_rgba(122,157,204,0.8)]" />
+    <div
+      data-density={isLiveRunStatus ? "run-detail-live-status" : "run-detail-status"}
+      className={cn(
+        "relative flex items-center gap-1.5 overflow-hidden px-2.5 py-0.5 rounded-md border text-[9px] font-black uppercase tracking-wider",
+        cls,
+        isLiveRunStatus && "motion-essential",
       )}
-      {status}
+    >
+      {isLiveRunStatus && (
+        <span
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+          aria-hidden
+        />
+      )}
+      {isLiveRunStatus && <AgentThinkingIndicator phase="dispatching" size={12} />}
+      <span>{status}</span>
     </div>
   );
 }
