@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import type { CodexTask, HelpRequest, ExecutionProcess } from "@/lib/types";
 import { HelpCircle, ArrowRight, Activity, Clock, Users } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { getTaskRuntimeStatus, pickLatestExecutionProcessForTask } from "@/lib/task-selection";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
@@ -73,15 +74,20 @@ export function AgentCoordinationPanel({
                   <button
                     key={proc.id}
                     onClick={() => onSelectProcess(proc.id)}
-                    className="w-full text-left p-4 rounded-2xl border border-brand/20 bg-brand/5 hover:bg-brand/10 transition-all group relative overflow-hidden"
+                    data-density="agent-coordination-active-process"
+                    className="motion-essential w-full text-left p-4 rounded-2xl border border-brand/20 bg-brand/5 hover:bg-brand/10 transition-all group relative overflow-hidden"
                   >
+                    <span
+                      aria-hidden
+                      className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                    />
                     <div className="absolute left-0 top-0 bottom-0 w-1 bg-brand" />
                     <span className="text-[13.5px] font-bold text-foreground/90 truncate block mb-1.5 transition-colors">
                       {task?.title || proc.task_id}
                     </span>
                     <div className="flex items-center gap-3">
                       <div className="flex items-center gap-1.5">
-                        <div className="size-1.5 rounded-full bg-brand animate-pulse shadow-[0_0_8px_rgba(122,157,204,0.5)]" />
+                        <AgentThinkingIndicator phase="dispatching" size={12} />
                         <span className="text-[10px] font-black text-brand uppercase tracking-widest">{proc.status}</span>
                       </div>
                       <div className="h-3 w-px bg-brand/20" />
@@ -160,6 +166,7 @@ export function AgentCoordinationPanel({
                     return (
                       <button
                         key={task.id}
+                        data-density={isTaskRunning ? "agent-coordination-running-task" : "agent-coordination-task"}
                         onClick={() => {
                           if (latestProcess) {
                             onSelectProcess(latestProcess.id);
@@ -168,18 +175,25 @@ export function AgentCoordinationPanel({
                           }
                         }}
                         className={cn(
-                          "w-full text-left p-3 rounded-xl border transition-all",
+                          "relative w-full overflow-hidden text-left p-3 rounded-xl border transition-all",
                           isTaskRunning 
-                            ? "border-brand/40 bg-brand/5" 
+                            ? "motion-essential border-brand/40 bg-brand/5"
                             : "border-border-subtle bg-surface/20 hover:border-border-strong hover:bg-surface/40"
                         )}
                       >
+                        {isTaskRunning ? (
+                          <span
+                            aria-hidden
+                            className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                          />
+                        ) : null}
                         <span className="text-[12.5px] font-bold text-text-secondary truncate block mb-1.5 tracking-tight group-hover:text-foreground">{task.title}</span>
                         <div className="flex items-center gap-2.5">
-                          <div className={cn(
-                            "size-1.5 rounded-full",
-                            isTaskRunning ? "bg-brand animate-pulse shadow-[0_0_5px_rgba(122,157,204,0.6)]" : "bg-surface-input border border-border-strong"
-                          )} />
+                          {isTaskRunning ? (
+                            <AgentThinkingIndicator phase="dispatching" size={12} />
+                          ) : (
+                            <div className="size-1.5 rounded-full bg-surface-input border border-border-strong" />
+                          )}
                           <span className={cn(
                             "text-[9px] font-black uppercase tracking-widest",
                             isTaskRunning ? "text-brand" : "text-text-muted/60"
