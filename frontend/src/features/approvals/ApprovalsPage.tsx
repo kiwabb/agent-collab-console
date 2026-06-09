@@ -545,9 +545,14 @@ function RowCard({
             size="sm"
             disabled={busy}
             onClick={() => void action.approve!()}
-            className="bg-success text-black hover:bg-success/90"
+            data-density={busy ? "approvals-row-approve-tool" : "approvals-row-approve"}
+            className={cn("bg-success text-black hover:bg-success/90", busy && "motion-essential")}
           >
-            {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+            {busy ? (
+              <AgentThinkingIndicator phase="tool" size={12} />
+            ) : (
+              <CheckCircle2 size={12} />
+            )}
             <span className="ml-1">{t("approvals.approve")}</span>
           </Button>
         )}
