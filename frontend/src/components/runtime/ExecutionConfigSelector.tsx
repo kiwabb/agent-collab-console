@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -134,9 +135,16 @@ export function ExecutionConfigSelector({
 
   if (!catalog) {
     return (
-      <div className={cn("grid grid-cols-1 gap-2 sm:grid-cols-2", className)}>
-        <div className="h-8 rounded-lg bg-surface-hover animate-pulse" />
-        <div className="h-8 rounded-lg bg-surface-hover animate-pulse" />
+      <div
+        data-density="execution-config-tool-loading"
+        className={cn("motion-essential relative flex min-h-[40px] items-center justify-center gap-2 overflow-hidden rounded-lg border border-status-tool/25 bg-status-tool/5 px-3 text-xs font-semibold text-text-muted", className)}
+      >
+        <span
+          aria-hidden
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-tool/70 to-transparent"
+        />
+        <AgentThinkingIndicator phase="tool" size={14} />
+        {t("settings.loadingCatalog")}
       </div>
     );
   }
