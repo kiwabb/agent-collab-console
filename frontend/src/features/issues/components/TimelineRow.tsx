@@ -47,7 +47,11 @@ export function TimelineRow({ item, onOpen }: Props) {
     : t("issue.command.rationale");
   const rationale = item.rationale ? formatRationale(item.rationale, t) : null;
   const summary = item.summaryKey ? t(item.summaryKey, item.summaryParams) : item.summary;
-  const isSchedulingMotion = item.status === "running" && (item.kind === "dispatch" || item.kind === "tool");
+  const isSchedulingMotion =
+    item.status === "running" &&
+    (item.kind === "dispatch" || item.kind === "tool" || item.kind === "finalize");
+  const timelineMotionPhase =
+    item.kind === "dispatch" ? "dispatching" : item.kind === "tool" ? "tool" : "thinking";
 
   return (
     <article
@@ -83,7 +87,7 @@ export function TimelineRow({ item, onOpen }: Props) {
               isSchedulingMotion && "border-brand/35 bg-brand-muted/15 text-brand",
             )}>
               {isSchedulingMotion ? (
-                <AgentThinkingIndicator phase={item.kind === "dispatch" ? "dispatching" : "tool"} size={14} />
+                <AgentThinkingIndicator phase={timelineMotionPhase} size={14} />
               ) : (
                 <Icon size={15} className={item.status === "running" ? "animate-spin" : undefined} />
               )}

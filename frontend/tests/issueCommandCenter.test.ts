@@ -101,10 +101,12 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(timelineSource, /deriveTimelineExecutionSummary/);
   assert.doesNotMatch(rowSource, /truncate|line-clamp|max-h-36|rounded-2xl/);
   assert.match(rowSource, /isSchedulingMotion/);
+  assert.match(rowSource, /item\.kind === "finalize"/);
+  assert.match(rowSource, /timelineMotionPhase/);
   assert.match(rowSource, /data-density=\{isSchedulingMotion \? "decision-timeline-scheduling-row" : "decision-timeline-row"\}/);
   assert.match(rowSource, /isSchedulingMotion && "motion-essential"/);
   assert.match(rowSource, /animate-shimmer-sweep/);
-  assert.match(rowSource, /phase=\{item\.kind === "dispatch" \? "dispatching" : "tool"\}/);
+  assert.match(rowSource, /phase=\{timelineMotionPhase\}/);
   assert.match(drawerSource, /isSchedulingDrawerMotion/);
   assert.match(drawerSource, /drawerMotionPhase/);
   assert.match(drawerSource, /data-density="dispatch-drawer-running"/);
