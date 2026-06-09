@@ -27,10 +27,16 @@ export function ConductorMonitorPage() {
   const { t } = useI18n();
   const [sessions, setSessions] = useState<ConductorSession[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
-    setSessions(await getConductors().catch(() => []));
-    setLoading(false);
+  const load = useCallback(async (showRefreshing = false) => {
+    if (showRefreshing) setRefreshing(true);
+    try {
+      setSessions(await getConductors().catch(() => []));
+    } finally {
+      setLoading(false);
+      if (showRefreshing) setRefreshing(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -53,8 +59,15 @@ export function ConductorMonitorPage() {
       title={t("conductorMonitor.title")}
       description={t("conductorMonitor.description")}
       actions={
-        <Button size="sm" variant="outline" onClick={() => void load()} className="gap-2">
-          <RefreshCw size={14} />
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void load(true)}
+          disabled={refreshing}
+          data-density={refreshing ? "conductor-monitor-refresh-tool" : "conductor-monitor-refresh"}
+          className={cn("gap-2", refreshing && "motion-essential")}
+        >
+          {refreshing ? <AgentThinkingIndicator phase="tool" size={14} /> : <RefreshCw size={14} />}
           {t("conductorMonitor.refresh")}
         </Button>
       }

@@ -198,6 +198,16 @@ test("conductor monitor loading state uses thinking motion", () => {
   assert.doesNotMatch(monitorSource, /<Loader2 size=\{15\} className="animate-spin"/);
 });
 
+test("conductor monitor refresh cta uses tool motion while syncing", () => {
+  const monitorSource = readSource("features/conductors/ConductorMonitorPage.tsx");
+
+  assert.match(monitorSource, /const \[refreshing, setRefreshing\] = useState\(false\)/);
+  assert.match(monitorSource, /data-density=\{refreshing \? "conductor-monitor-refresh-tool" : "conductor-monitor-refresh"\}/);
+  assert.match(monitorSource, /className=\{cn\("gap-2", refreshing && "motion-essential"\)\}/);
+  assert.match(monitorSource, /refreshing \? <AgentThinkingIndicator phase="tool" size=\{14\} \/> : <RefreshCw size=\{14\} \/>/);
+  assert.doesNotMatch(monitorSource, /RefreshCw size=\{14\} className=\{[^}]*animate-spin/);
+});
+
 test("issue side activity marks running pipeline stages with scheduling motion", () => {
   const sideStackSource = readSource("features/issues/components/IssueSideStack.tsx");
 
