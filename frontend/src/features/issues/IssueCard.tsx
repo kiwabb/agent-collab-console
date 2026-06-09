@@ -8,6 +8,7 @@ const MERGE_STATUS_KEY = {
   abandoned: "task.mergeStatus.abandoned",
 } as const satisfies Record<GitMergeStatus, "task.mergeStatus.open" | "task.mergeStatus.merged" | "task.mergeStatus.abandoned">;
 import { PHASE_CONFIG, type Phase } from "./phaseUtils";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { InlineEdit } from "@/components/ui/inline-edit";
@@ -155,8 +156,15 @@ export function IssueCard({
             </div>
 
             {runningCount > 0 && (
-              <div className="flex items-center gap-1.5 bg-brand/10 px-2 py-0.5 rounded-md border border-brand/20">
-                <div className="size-1 rounded-full bg-brand animate-pulse shadow-[0_0_8px_rgba(122,157,204,0.5)]" />
+              <div
+                data-density="issue-card-live-dispatch"
+                className="motion-essential relative flex items-center gap-1.5 overflow-hidden bg-brand/10 px-2 py-0.5 rounded-md border border-brand/20"
+              >
+                <span
+                  aria-hidden
+                  className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                />
+                <AgentThinkingIndicator phase="dispatching" size={12} />
                 <span className="text-[10px] font-black text-brand uppercase tracking-wider">{t("issue.live")}</span>
                 <span className="text-[11px] font-bold text-brand">{runningCount}</span>
               </div>
