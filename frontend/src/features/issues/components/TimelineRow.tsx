@@ -52,11 +52,13 @@ export function TimelineRow({ item, onOpen }: Props) {
   return (
     <article
       id={`timeline-${item.id}`}
+      data-density={isSchedulingMotion ? "decision-timeline-scheduling-row" : "decision-timeline-row"}
       className={cn(
         "relative overflow-hidden rounded-lg border bg-surface-raised/70 p-3 transition-colors hover:border-brand/50 sm:p-4",
         failed && "border-status-failed/35 bg-status-failed/5",
         waiting && "border-status-awaiting/35 bg-status-awaiting/5",
         !failed && !waiting && (isSchedulingMotion ? "border-brand/40 bg-brand-muted/10" : "border-border-subtle"),
+        isSchedulingMotion && "motion-essential",
       )}
     >
       {isSchedulingMotion && (
