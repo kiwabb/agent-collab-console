@@ -60,3 +60,15 @@ test("workspace console header marks active queue totals with scheduling motion"
   assert.match(headerSource, /animate-shimmer-sweep/);
   assert.doesNotMatch(headerSource, /animate-pulse/);
 });
+
+test("workspace console running filter uses dispatch motion for live work", () => {
+  const headerSource = readSource("features/workspaces/WorkspaceConsoleHeader.tsx");
+
+  assert.match(headerSource, /const isRunningFilterLive = filter === "running" && counts\.running > 0/);
+  assert.match(headerSource, /data-density=\{isRunningFilterLive \? "workspace-console-running-filter" : "workspace-console-filter"\}/);
+  assert.match(headerSource, /isRunningFilterLive && "motion-essential"/);
+  assert.match(headerSource, /<AgentThinkingIndicator phase="dispatching" size=\{10\}/);
+  assert.match(headerSource, /isRunningFilterLive && \(/);
+  assert.match(headerSource, /animate-shimmer-sweep/);
+  assert.doesNotMatch(headerSource, /animate-pulse/);
+});

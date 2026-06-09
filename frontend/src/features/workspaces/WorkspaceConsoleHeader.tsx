@@ -98,21 +98,36 @@ export function WorkspaceConsoleHeader({
           <span className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-text-muted">
             <Filter size={12} /> {t("workspace.console.filter")}
           </span>
-          {FILTERS.map((filter) => (
-            <button
-              key={filter}
-              type="button"
-              onClick={() => onStatusFilterChange(filter)}
-              className={cn(
-                "rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors",
-                statusFilter === filter
-                  ? "border-brand bg-brand/15 text-foreground"
-                  : "border-border-subtle bg-surface-raised/70 text-text-muted hover:text-foreground",
-              )}
-            >
-              {t(`workspace.console.filter.${filter}`)} · {filter === "all" ? counts.total : counts[filter]}
-            </button>
-          ))}
+          {FILTERS.map((filter) => {
+            const isRunningFilterLive = filter === "running" && counts.running > 0;
+
+            return (
+              <button
+                key={filter}
+                type="button"
+                data-density={isRunningFilterLive ? "workspace-console-running-filter" : "workspace-console-filter"}
+                onClick={() => onStatusFilterChange(filter)}
+                className={cn(
+                  "relative inline-flex items-center gap-1.5 overflow-hidden rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors",
+                  statusFilter === filter
+                    ? "border-brand bg-brand/15 text-foreground"
+                    : "border-border-subtle bg-surface-raised/70 text-text-muted hover:text-foreground",
+                  isRunningFilterLive && "motion-essential",
+                )}
+              >
+                {isRunningFilterLive && (
+                  <span
+                    aria-hidden
+                    className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                  />
+                )}
+                {isRunningFilterLive && <AgentThinkingIndicator phase="dispatching" size={10} className="shrink-0" />}
+                <span>
+                  {t(`workspace.console.filter.${filter}`)} · {filter === "all" ? counts.total : counts[filter]}
+                </span>
+              </button>
+            );
+          })}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-text-muted">
