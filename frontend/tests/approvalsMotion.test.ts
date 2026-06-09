@@ -30,6 +30,15 @@ test("approvals row approve action uses tool motion while resolving gates", () =
   assert.doesNotMatch(source, /\{busy \? <Loader2 size=\{12\} className="animate-spin" \/> : <CheckCircle2 size=\{12\} \/>}/);
 });
 
+test("approvals row reject action uses tool motion while resolving gates", () => {
+  const source = readSource("features/approvals/ApprovalsPage.tsx");
+
+  assert.match(source, /data-density=\{busy \? "approvals-row-reject-tool" : "approvals-row-reject"\}/);
+  assert.match(source, /className=\{cn\(busy && "motion-essential"\)\}/);
+  assert.match(source, /busy \? \(\s*<AgentThinkingIndicator phase="tool" size=\{12\} \/>/);
+  assert.match(source, /<XCircle size=\{12\} \/>/);
+});
+
 test("approvals clarification answer cta uses thinking motion while handing off", () => {
   const source = readSource("features/approvals/ApprovalsPage.tsx");
 

@@ -562,8 +562,14 @@ function RowCard({
             disabled={busy}
             variant="outline"
             onClick={() => void action.reject!()}
+            data-density={busy ? "approvals-row-reject-tool" : "approvals-row-reject"}
+            className={cn(busy && "motion-essential")}
           >
-            <XCircle size={12} />
+            {busy ? (
+              <AgentThinkingIndicator phase="tool" size={12} />
+            ) : (
+              <XCircle size={12} />
+            )}
             <span className="ml-1">{t("approvals.reject")}</span>
           </Button>
         )}
