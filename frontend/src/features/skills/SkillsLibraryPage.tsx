@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { SkillMarkdown } from "./SkillMarkdown";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
@@ -1096,8 +1097,11 @@ function SkillImportDialog({
           />
 
           {busy && (
-            <div className="flex items-center justify-center gap-2 text-[12px] text-text-muted">
-              <Loader2 size={12} className="animate-spin" /> {t("skills.import.processing")}
+            <div
+              data-density="skills-import-processing-tool"
+              className="motion-essential flex items-center justify-center gap-2 text-[12px] text-text-muted"
+            >
+              <AgentThinkingIndicator phase="tool" size={12} /> {t("skills.import.processing")}
             </div>
           )}
         </div>
