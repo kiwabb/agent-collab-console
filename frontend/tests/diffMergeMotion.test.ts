@@ -91,3 +91,13 @@ test("diff merge review decision ctas use thinking motion while approving or rej
   assert.match(source, /isLoading \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="thinking" size=\{12\}/);
   assert.doesNotMatch(source, /isLoading \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
 });
+
+test("diff merge confirmation dialogs use semantic motion while dispatching", () => {
+  const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
+
+  assert.match(source, /loadingMotionPhase="dispatching"/);
+  assert.match(source, /loadingIndicatorSize=\{12\}/);
+  assert.match(source, /loadingDensity="diff-merge-confirm-merge-dispatch"/);
+  assert.match(source, /loadingDensity="diff-merge-confirm-force-merge-dispatch"/);
+  assert.match(source, /loadingDensity="diff-merge-confirm-abandon-dispatch"/);
+});

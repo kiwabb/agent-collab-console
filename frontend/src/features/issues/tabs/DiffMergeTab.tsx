@@ -620,6 +620,9 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         confirmText={t("task.mergeBack")}
         variant="default"
         isLoading={busy === "merge"}
+        loadingMotionPhase="dispatching"
+        loadingDensity="diff-merge-confirm-merge-dispatch"
+        loadingIndicatorSize={12}
         onConfirm={() => void performMerge(false)}
       />
 
@@ -640,6 +643,9 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         confirmText={t("task.diffMerge.forceMerge")}
         variant="warning"
         isLoading={busy === "merge"}
+        loadingMotionPhase="dispatching"
+        loadingDensity="diff-merge-confirm-force-merge-dispatch"
+        loadingIndicatorSize={12}
         onConfirm={() => void performMerge(true)}
       />
 
@@ -651,6 +657,9 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         confirmText={t("task.abandon")}
         variant="destructive"
         isLoading={busy === "abandon"}
+        loadingMotionPhase="dispatching"
+        loadingDensity="diff-merge-confirm-abandon-dispatch"
+        loadingIndicatorSize={12}
         onConfirm={() => void handleAbandon()}
       />
 
