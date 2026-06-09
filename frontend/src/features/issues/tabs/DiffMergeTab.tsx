@@ -502,10 +502,12 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
             disabled={!!busy || isAbandoned}
             variant="outline"
             onClick={() => setConfirmKind("abandon")}
+            data-density={busy === "abandon" ? "diff-merge-abandon-dispatch" : "diff-merge-abandon"}
+            className={cn(busy === "abandon" && "motion-essential")}
           >
             {busy === "abandon" ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> {t("task.diffMerge.abandoning")}
+                <AgentThinkingIndicator phase="dispatching" size={12} /> {t("task.diffMerge.abandoning")}
               </span>
             ) : isAbandoned ? (
               t("task.mergeStatus.abandoned")

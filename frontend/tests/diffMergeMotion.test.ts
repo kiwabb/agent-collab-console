@@ -28,3 +28,12 @@ test("diff merge merge-back cta uses dispatch motion while merging", () => {
   assert.match(source, /busy === "merge" \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
   assert.doesNotMatch(source, /busy === "merge" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
 });
+
+test("diff merge abandon cta uses dispatch motion while abandoning", () => {
+  const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
+
+  assert.match(source, /data-density=\{busy === "abandon" \? "diff-merge-abandon-dispatch" : "diff-merge-abandon"\}/);
+  assert.match(source, /busy === "abandon" && "motion-essential/);
+  assert.match(source, /busy === "abandon" \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
+  assert.doesNotMatch(source, /busy === "abandon" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
+});
