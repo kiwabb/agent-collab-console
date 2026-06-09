@@ -13,7 +13,8 @@ import type {
 } from "@/lib/types";
 import type { TranslationKey } from "@/lib/i18n";
 import { testRuntimeExecutor, validateRuntimeCatalog } from "@/lib/api";
-import { Loader2, CheckCircle, XCircle } from "lucide-react";
+import { CheckCircle, XCircle } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 interface RuntimeCatalogEditorProps {
   catalog: RuntimeCatalog;
@@ -448,9 +449,11 @@ function ExecutorCard({
               size="sm"
               onClick={handleTest}
               disabled={testing}
+              data-density={testing ? "runtime-catalog-test-tool" : "runtime-catalog-test"}
+              className={cn(testing && "motion-essential")}
             >
               {testing ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <AgentThinkingIndicator phase="tool" size={12} />
               ) : testResult ? (
                 testResult.success ? (
                   <CheckCircle className="h-3 w-3 text-green-500" />
