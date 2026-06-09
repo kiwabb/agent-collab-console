@@ -31,3 +31,20 @@ test("dag tab start conductor ctas use dispatch motion while scheduling", () => 
   assert.doesNotMatch(source, /\{busy \? "Starting…" : "Start Conductor"\}/);
   assert.doesNotMatch(source, /busy\s*\?\s*"Starting…"\s*:\s*graph\.status === "running"/);
 });
+
+test("dag tab retry confirmation uses dispatch motion while redispatching", () => {
+  const dagSource = readSource("features/issues/tabs/DagTab.tsx");
+  const dialogSource = readSource("components/ui/confirm-dialog.tsx");
+
+  assert.match(dagSource, /loadingMotionPhase="dispatching"/);
+  assert.match(dagSource, /loadingDensity="dag-tab-retry-node-dispatch-confirm"/);
+  assert.match(dagSource, /loadingIndicatorSize=\{12\}/);
+
+  assert.match(dialogSource, /import \{ AgentThinkingIndicator \} from "@\/components\/ui\/AgentThinkingIndicator";/);
+  assert.match(dialogSource, /loadingMotionPhase\?: string;/);
+  assert.match(dialogSource, /loadingDensity\?: string;/);
+  assert.match(dialogSource, /loadingIndicatorSize\?: number;/);
+  assert.match(dialogSource, /data-density=\{isLoading \? loadingDensity : undefined\}/);
+  assert.match(dialogSource, /isLoading && loadingMotionPhase && "motion-essential"/);
+  assert.match(dialogSource, /isLoading \? \(\s*loadingMotionPhase \? \(\s*<AgentThinkingIndicator\s*phase=\{loadingMotionPhase\}\s*size=\{loadingIndicatorSize\}/);
+});

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,9 @@ interface ConfirmDialogProps {
   cancelText?: string;
   onConfirm: () => void;
   isLoading?: boolean;
+  loadingMotionPhase?: string;
+  loadingDensity?: string;
+  loadingIndicatorSize?: number;
   variant?: "destructive" | "warning" | "default";
 }
 
@@ -34,6 +38,9 @@ export function ConfirmDialog({
   cancelText,
   onConfirm,
   isLoading = false,
+  loadingMotionPhase,
+  loadingDensity,
+  loadingIndicatorSize = 12,
   variant = "destructive",
 }: ConfirmDialogProps) {
   const { t } = useI18n();
@@ -78,16 +85,28 @@ export function ConfirmDialog({
             type="button"
             onClick={onConfirm}
             disabled={isLoading}
-            className={cn(variantStyles[variant], "shadow-md")}
+            data-density={isLoading ? loadingDensity : undefined}
+            className={cn(
+              variantStyles[variant],
+              "shadow-md",
+              isLoading && loadingMotionPhase && "motion-essential",
+            )}
           >
             {isLoading ? (
-              <span className="flex items-center gap-2">
-                <div className="flex gap-1">
-                  <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.3s]" />
-                  <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.15s]" />
-                  <div className="size-1 bg-current rounded-full animate-bounce" />
-                </div>
-              </span>
+              loadingMotionPhase ? (
+                <AgentThinkingIndicator
+                  phase={loadingMotionPhase}
+                  size={loadingIndicatorSize}
+                />
+              ) : (
+                <span className="flex items-center gap-2">
+                  <div className="flex gap-1">
+                    <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.3s]" />
+                    <div className="size-1 bg-current rounded-full animate-bounce [animation-delay:-0.15s]" />
+                    <div className="size-1 bg-current rounded-full animate-bounce" />
+                  </div>
+                </span>
+              )
             ) : (
               confirmText || t("issue.deleteConfirm")
             )}

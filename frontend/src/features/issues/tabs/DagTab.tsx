@@ -359,6 +359,9 @@ export function DagTab({ issueId }: Props) {
         confirmText={t("issue.retry")}
         variant="warning"
         isLoading={retryBusy}
+        loadingMotionPhase="dispatching"
+        loadingDensity="dag-tab-retry-node-dispatch-confirm"
+        loadingIndicatorSize={12}
         onConfirm={() => void handleRetryConfirm()}
       />
     </div>
