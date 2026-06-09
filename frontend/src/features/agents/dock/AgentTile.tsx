@@ -6,6 +6,7 @@ import type { RoleStatus } from "./useAgentStatus";
 import { StatusBubble } from "./StatusBubble";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 interface Props {
   persona: Persona;
@@ -44,6 +45,7 @@ export function AgentTile({
         type="button"
         onClick={onClick}
         layout
+        data-density={isActive ? "agent-dock-active-tile" : "agent-dock-tile"}
         animate={{
           scale: isActive ? [1, 1.04, 1] : [1, 1.015, 1],
           rotate: isActive ? -3 : 0,
@@ -58,6 +60,7 @@ export function AgentTile({
           "leading-none select-none cursor-pointer",
           "bg-surface border-2 shadow",
           isActive && "shadow-xl",
+          isActive && "motion-essential",
           isFailed && "bg-error/5",
           isDone && "bg-success/5",
         )}
@@ -74,21 +77,25 @@ export function AgentTile({
       >
         <span aria-hidden>{persona.emoji}</span>
         {/* Status dot */}
-        <span
-          className={cn(
-            "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-surface",
-            isActive && "animate-pulse",
-          )}
-          style={{
-            background: isFailed
-              ? "var(--error)"
-              : isDone
-                ? "var(--success)"
-                : isActive
-                  ? persona.color
+        {isActive && !isFailed && !isDone ? (
+          <span
+            data-density="agent-dock-active-status"
+            className="motion-essential absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full border-2 border-surface bg-surface"
+          >
+            <AgentThinkingIndicator phase="dispatching" size={10} />
+          </span>
+        ) : (
+          <span
+            className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-surface"
+            style={{
+              background: isFailed
+                ? "var(--error)"
+                : isDone
+                  ? "var(--success)"
                   : "var(--border-subtle, #cbd5e1)",
-          }}
-        />
+            }}
+          />
+        )}
         {/* Typing dots while active */}
         {isActive && !isFailed && !isDone && (
           <div className="absolute -top-2 left-1/2 -translate-x-1/2 flex gap-0.5">
