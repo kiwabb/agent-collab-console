@@ -15,6 +15,7 @@ import { getAuditLog, type AuditLog, type AuditLogCategory } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
 import { useI18n } from "@/providers/I18nProvider";
@@ -311,8 +312,16 @@ export function AuditLogPage() {
 
       {/* List */}
       {loading ? (
-        <div className="flex items-center gap-2 rounded-2xl border border-border-subtle bg-surface-input/40 px-6 py-12 text-sm text-text-muted">
-          <Loader2 size={15} className="animate-spin" /> {t("auditLog.loading")}
+        <div
+          data-density="audit-log-tool-loading"
+          className="motion-essential relative flex items-center gap-2 overflow-hidden rounded-2xl border border-border-subtle bg-surface-input/40 px-6 py-12 text-sm text-text-muted"
+        >
+          <span
+            aria-hidden
+            className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-tool/70 to-transparent"
+          />
+          <AgentThinkingIndicator phase="tool" size={15} />
+          {t("auditLog.loading")}
         </div>
       ) : items.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border-subtle bg-surface-input/40 px-6 py-12 text-center text-sm text-text-muted">
