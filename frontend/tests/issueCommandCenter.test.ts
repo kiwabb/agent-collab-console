@@ -139,6 +139,7 @@ test("conductor monitor marks live conductor rows with scheduling motion", () =>
   assert.match(monitorSource, /<AgentThinkingIndicator/);
   assert.match(monitorSource, /animate-shimmer-sweep/);
   assert.match(monitorSource, /phase=\{s\.phase \?\? "dispatching"\}/);
+  assert.doesNotMatch(monitorSource, /animate-pulse/);
 });
 
 test("issue side activity marks running pipeline stages with scheduling motion", () => {

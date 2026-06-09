@@ -105,7 +105,7 @@ export function ConductorMonitorPage() {
                     {isConductorDispatching ? (
                       <AgentThinkingIndicator phase={s.phase ?? "dispatching"} size={16} />
                     ) : (
-                      <Icon size={17} className={s.health === "ok" && s.alive ? "animate-pulse" : undefined} />
+                      <Icon size={17} />
                     )}
                   </span>
                   <div className="min-w-0">
