@@ -17,3 +17,12 @@ test("agent live working indicator marks active run work with scheduling motion"
   assert.match(source, /motion-essential/);
   assert.match(source, /<AgentThinkingIndicator phase=\{phase\} label=\{subtitle\} size=\{14\} \/>/);
 });
+
+test("agent live streaming assistant uses streaming motion", () => {
+  const source = readSource("features/runs/AgentLiveTimeline.tsx");
+
+  assert.match(source, /data-density="agent-live-streaming-assistant"/);
+  assert.match(source, /<AgentThinkingIndicator phase="streaming" size=\{12\} \/>/);
+  assert.match(source, /animate-shimmer-sweep/);
+  assert.match(source, /motion-essential/);
+});

@@ -66,8 +66,16 @@ function ThinkingBlock({ content }: { content: string }) {
 function StreamingAssistantBubble({ text }: { text: string }) {
   if (!text) return null;
   return (
-    <div className="rounded-xl border border-brand/30 bg-brand/5 px-3 py-2">
+    <div
+      data-density="agent-live-streaming-assistant"
+      className="motion-essential relative overflow-hidden rounded-xl border border-brand/30 bg-brand/5 px-3 py-2"
+    >
+      <span
+        aria-hidden
+        className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+      />
       <div className="mb-1 flex items-center gap-2">
+        <AgentThinkingIndicator phase="streaming" size={12} />
         <span className="text-[9px] font-black uppercase tracking-[0.16em] text-brand">
           Assistant
         </span>
