@@ -167,6 +167,13 @@ test("command chat bar marks conductor clarification with scheduling motion", ()
   assert.match(chatSource, /motion-essential/);
 });
 
+test("conductor chat bar uses thinking motion while sending", () => {
+  const chatSource = readSource("features/issues/components/ConductorChatBar.tsx");
+
+  assert.match(chatSource, /<AgentThinkingIndicator phase="thinking" size=\{14\}/);
+  assert.doesNotMatch(chatSource, /<Loader2 size=\{14\} className="animate-spin"/);
+});
+
 test("issue workbench tabs surface active conductor scheduling motion", () => {
   const pageSource = readSource("features/issues/IssueDetailPage.tsx");
 

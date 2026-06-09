@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { Send } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { appendConductorMessage } from "@/lib/api";
 
 interface Props {
@@ -60,7 +61,7 @@ export function ConductorChatBar({ projectId, onSent }: Props) {
           className="shrink-0 inline-flex items-center justify-center gap-1.5 rounded-md bg-brand hover:bg-brand-strong text-black font-semibold text-[13px] px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {loading ? (
-            <Loader2 size={14} className="animate-spin" />
+            <AgentThinkingIndicator phase="thinking" size={14} />
           ) : (
             <Send size={14} />
           )}
