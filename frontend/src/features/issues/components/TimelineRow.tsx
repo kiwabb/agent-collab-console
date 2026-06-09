@@ -49,9 +49,14 @@ export function TimelineRow({ item, onOpen }: Props) {
   const summary = item.summaryKey ? t(item.summaryKey, item.summaryParams) : item.summary;
   const isSchedulingMotion =
     item.status === "running" &&
-    (item.kind === "dispatch" || item.kind === "tool" || item.kind === "finalize");
+    (
+      item.kind === "dispatch" ||
+      item.kind === "tool" ||
+      item.kind === "memory" ||
+      item.kind === "finalize"
+    );
   const timelineMotionPhase =
-    item.kind === "dispatch" ? "dispatching" : item.kind === "tool" ? "tool" : "thinking";
+    item.kind === "dispatch" ? "dispatching" : item.kind === "tool" || item.kind === "memory" ? "tool" : "thinking";
 
   return (
     <article
