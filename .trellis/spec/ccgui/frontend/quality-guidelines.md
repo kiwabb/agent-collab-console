@@ -118,6 +118,12 @@ spurious 500s such as missing `vendor-chunks` files.
   `IssueDiffResult.diff` are real UI inputs; omitting them can crash
   status-bar, diff, or right-rail surfaces and invalidate the browser
   result.
+- **Browser verification must target a mounted component.** Before
+  spending time on DOM or screenshot checks, confirm the route still
+  renders the component under test. For example, `/issues/[id]/workflow`
+  currently redirects to `/issues/[id]`, so legacy `DagTab` /
+  `ConductorLogPanel` changes are proven by source contracts and build
+  checks unless that route is reintroduced or a real harness mounts them.
 - **No snapshot tests.** They drift; the i18n coverage test and
   the per-feature derivation tests do the work snapshots would.
 - **i18n coverage test** (existing) verifies that the zh-CN and

@@ -446,6 +446,8 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
     .map((entry) => entry.chunk)
     .join("");
   const stuck = conductorPhase === "awaiting_subagent" && phaseElapsedSeconds > 30;
+  const isConductorLogScheduling = hasActiveLoop && !isPaused && !stuck;
+  const conductorLogMotionPhase = conductorPhase ?? (conductorStatus === "running" ? "working" : "idle");
   const timelineNodes = buildTimelineNodes(stateLog, conductorPhase, conductorState?.detail ?? null, nowMs);
   const currentEstimate = conductorPhase ? phaseEstimates[conductorPhase] : undefined;
   const estimateLabel = currentEstimate?.p50_ms != null
@@ -516,14 +518,22 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
           </SheetDescription>
           {(conductorPhase || conductorDetail || streamingPreview) && (
             <div
+              data-density="conductor-log-live-phase"
               className={cn(
-                "mt-3 rounded-2xl border px-3 py-3 text-xs",
+                "relative mt-3 overflow-hidden rounded-2xl border px-3 py-3 text-xs transition-colors",
                 stuck ? "border-warning/50 bg-warning/10 text-warning" : "border-border-subtle bg-surface-raised/80 text-text-secondary",
+                isConductorLogScheduling && "motion-essential border-brand/35 bg-brand-muted/10",
               )}
             >
+              {isConductorLogScheduling && (
+                <span
+                  aria-hidden
+                  className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                />
+              )}
               {conductorPhase && (
                 <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em]">
-                  {!isPaused && <AgentThinkingIndicator phase={conductorPhase} size={12} />}
+                  {isConductorLogScheduling && <AgentThinkingIndicator phase={conductorLogMotionPhase} size={12} />}
                   {conductorPhase}
                 </div>
               )}
@@ -538,7 +548,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
             </div>
           )}
           {timelineNodes.length > 0 && (
-            <div className="mt-3 rounded-2xl border border-border-subtle bg-background/60 px-3 py-3">
+            <div data-density="conductor-phase-timeline" className="mt-3 rounded-2xl border border-border-subtle bg-background/60 px-3 py-3">
               <div className="mb-2 flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-text-muted">
                 <span>{t("conductor.panel.timeline")}</span>
                 <span>{timelineNodes.length}</span>
@@ -565,9 +575,26 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                           transition={{ type: "spring", stiffness: 320, damping: 24, mass: 0.7 }}
                           className="relative flex items-start gap-3"
                         >
-                          <div className={cn("flex w-[154px] shrink-0 flex-col rounded-2xl border px-3 py-2.5", nodeTone)}>
+                          <div
+                            data-density={node.isCurrent ? "conductor-phase-current-node" : "conductor-phase-node"}
+                            className={cn(
+                              "relative flex w-[154px] shrink-0 flex-col overflow-hidden rounded-2xl border px-3 py-2.5 transition-colors",
+                              nodeTone,
+                              node.isCurrent && !node.isPaused && "motion-essential border-brand/45 bg-brand-muted/10",
+                            )}
+                          >
+                            {node.isCurrent && !node.isPaused && (
+                              <span
+                                aria-hidden
+                                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                              />
+                            )}
                             <div className="flex items-center gap-2">
-                              <Icon className={cn("h-3.5 w-3.5", node.isCurrent && !node.isPaused && "motion-essential animate-neural-pulse")} />
+                              {node.isCurrent && !node.isPaused ? (
+                                <AgentThinkingIndicator phase={node.phase} size={12} />
+                              ) : (
+                                <Icon className="h-3.5 w-3.5" />
+                              )}
                               <span className="font-mono text-[11px] uppercase tracking-wider">{node.phase}</span>
                             </div>
                             <div className="mt-1 text-[10px] leading-relaxed text-text-muted">
@@ -711,8 +738,13 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
           {!loading && activeTab === "thread" && (
             <>
               {pending.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-brand/20 bg-brand/5 p-3">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-brand mb-2">
+                <div data-density="conductor-pending-dispatches" className="motion-essential relative mb-4 overflow-hidden rounded-2xl border border-brand/35 bg-brand-muted/10 p-3">
+                  <span
+                    aria-hidden
+                    className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                  />
+                  <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-brand">
+                    <AgentThinkingIndicator phase="dispatching" size={12} />
                     {pending.length > 1 ? t("conductor.panel.pendingDispatch", { count: pending.length }) : t("conductor.panel.pendingDispatchSingular")}
                   </div>
                   {pending.map((p, i) => {

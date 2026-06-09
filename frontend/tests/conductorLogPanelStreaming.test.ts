@@ -27,6 +27,22 @@ test("ConductorLogPanel subscribes to streaming delta and phase/detail state", (
   assert.match(source, /slowerThanP95/);
 });
 
+test("ConductorLogPanel marks active phase and pending dispatches with scheduling motion", () => {
+  const source = readSource("features/workflow/ConductorLogPanel.tsx");
+
+  assert.match(source, /isConductorLogScheduling/);
+  assert.match(source, /conductorLogMotionPhase/);
+  assert.match(source, /data-density="conductor-log-live-phase"/);
+  assert.match(source, /data-density="conductor-phase-timeline"/);
+  assert.match(source, /data-density=\{node\.isCurrent \? "conductor-phase-current-node" : "conductor-phase-node"\}/);
+  assert.match(source, /data-density="conductor-pending-dispatches"/);
+  assert.match(source, /animate-shimmer-sweep/);
+  assert.match(source, /phase=\{conductorLogMotionPhase\}/);
+  assert.match(source, /phase=\{node\.phase\}/);
+  assert.match(source, /phase="dispatching"/);
+  assert.match(source, /motion-essential/);
+});
+
 test("Conductor streaming types expose phase/detail and llm_response", () => {
   const apiSource = readSource("lib/api.ts");
   const contextSource = readSource("contexts/ExecutionProcessesContext.tsx");
