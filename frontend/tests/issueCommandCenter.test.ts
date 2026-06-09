@@ -176,6 +176,18 @@ test("issue workbench tabs surface active conductor scheduling motion", () => {
   assert.match(pageSource, /motion-essential/);
 });
 
+test("mesh feed marks active specialist calls with dispatch motion", () => {
+  const feedSource = readSource("features/issues/tabs/CollabFeedTab.tsx");
+
+  assert.match(feedSource, /isActiveSpecialistDispatch/);
+  assert.match(feedSource, /data-density=\{isActiveSpecialistDispatch \? "mesh-specialist-dispatch" : "mesh-agent-message"\}/);
+  assert.match(feedSource, /<AgentThinkingIndicator/);
+  assert.match(feedSource, /animate-shimmer-sweep/);
+  assert.match(feedSource, /phase="dispatching"/);
+  assert.match(feedSource, /motion-essential/);
+  assert.doesNotMatch(feedSource, /animate-pulse/);
+});
+
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {
   const timeline = buildDecisionTimeline(
     [

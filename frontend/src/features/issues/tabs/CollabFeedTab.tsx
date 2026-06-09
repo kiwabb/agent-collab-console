@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, MessageSquareQuote, RefreshCw } from "lucide-react";
+
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { getAgentMessages, type AgentMessage } from "@/lib/api";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { cn } from "@/lib/utils";
@@ -148,10 +150,12 @@ export function CollabFeedTab({ issueId, active }: Props) {
           </div>
         )}
 
-        {messages.map((msg) => {
+        {messages.map((msg, index) => {
           const cfg = TYPE_CONFIG[msg.message_type] ?? TYPE_CONFIG.handoff;
           const fromLabel = ROLE_LABEL[msg.from_node_key] ?? msg.from_node_key;
           const toLabel = ROLE_LABEL[msg.to_node_key] ?? msg.to_node_key;
+          const isActiveSpecialistDispatch =
+            msg.message_type === "specialist_call" && index === messages.length - 1;
           const ts = msg.created_at
             ? new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
             : null;
@@ -159,12 +163,20 @@ export function CollabFeedTab({ issueId, active }: Props) {
           return (
             <div
               key={msg.id}
+              data-density={isActiveSpecialistDispatch ? "mesh-specialist-dispatch" : "mesh-agent-message"}
               className={cn(
-                "rounded-lg border border-border-subtle border-l-2 px-3 py-2.5",
+                "relative overflow-hidden rounded-lg border border-border-subtle border-l-2 px-3 py-2.5",
                 cfg.borderClass,
                 cfg.bgClass,
+                isActiveSpecialistDispatch && "motion-essential border-brand/35 bg-brand-muted/10",
               )}
             >
+              {isActiveSpecialistDispatch && (
+                <div
+                  aria-hidden
+                  className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                />
+              )}
               {/* Header row: from → to + type badge + timestamp */}
               <div className="flex items-center gap-1.5 mb-1.5 text-[11px]">
                 <span className="font-mono font-semibold text-foreground">{fromLabel}</span>
@@ -172,10 +184,12 @@ export function CollabFeedTab({ issueId, active }: Props) {
                 <span className="font-mono font-semibold text-foreground">{toLabel}</span>
                 <span
                   className={cn(
-                    "ml-1 px-1.5 py-0.5 rounded font-mono text-[10px] font-semibold uppercase tracking-wide border border-current/20",
+                    "ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] font-semibold uppercase tracking-wide border border-current/20",
                     cfg.colorClass,
+                    isActiveSpecialistDispatch && "motion-essential border-brand/25 bg-brand-muted/15 text-brand",
                   )}
                 >
+                  {isActiveSpecialistDispatch && <AgentThinkingIndicator phase="dispatching" size={10} />}
                   {cfg.label}
                 </span>
                 {ts && (
