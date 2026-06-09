@@ -89,7 +89,7 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(statusSource, /isConductorActive/);
   assert.match(statusSource, /<AgentThinkingIndicator/);
   assert.match(pageSource, /data-density="issue-workbench"/);
-  assert.match(pageSource, /data-density="workbench-tabs"/);
+  assert.match(pageSource, /data-density=\{isWorkbenchSchedulingMotion \? "workbench-scheduling-tabs" : "workbench-tabs"\}/);
   assert.doesNotMatch(pageSource, /\?\? tasks\[0\]/);
   assert.match(sideStackSource, /data-density="insight-rail"/);
   assert.match(gitSource, /data-density="git-ops"/);
@@ -161,6 +161,19 @@ test("command chat bar marks conductor clarification with scheduling motion", ()
   assert.match(chatSource, /animate-shimmer-sweep/);
   assert.match(chatSource, /phase="thinking"/);
   assert.match(chatSource, /motion-essential/);
+});
+
+test("issue workbench tabs surface active conductor scheduling motion", () => {
+  const pageSource = readSource("features/issues/IssueDetailPage.tsx");
+
+  assert.match(pageSource, /isWorkbenchSchedulingMotion/);
+  assert.match(pageSource, /workbenchMotionPhase/);
+  assert.match(pageSource, /data-density=\{isWorkbenchSchedulingMotion \? "workbench-scheduling-tabs" : "workbench-tabs"\}/);
+  assert.match(pageSource, /data-density="workbench-scheduling-tab"/);
+  assert.match(pageSource, /<AgentThinkingIndicator/);
+  assert.match(pageSource, /animate-shimmer-sweep/);
+  assert.match(pageSource, /phase=\{workbenchMotionPhase\}/);
+  assert.match(pageSource, /motion-essential/);
 });
 
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {

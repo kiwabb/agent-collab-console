@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FolderArchive, GitPullRequest, Network, Clock } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 import {
   getAgentMesh,
@@ -27,6 +28,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
+import { cn } from "@/lib/utils";
 import { StatusStrip } from "./components/StatusStrip";
 import { LatestFailureAlert } from "./components/LatestFailureAlert";
 import { ConductorAlerts } from "./components/ConductorAlerts";
@@ -149,6 +151,12 @@ export function IssueDetailPage({ issueId }: Props) {
     [timeline],
   );
   const paused = phase.state?.conductor_status === "paused" || issue?.status === "awaiting_approval";
+  const isWorkbenchSchedulingMotion =
+    !paused &&
+    phase.state?.conductor_status !== "success" &&
+    phase.phase !== "done" &&
+    (phase.state?.conductor_status === "running" || Boolean(phase.phase));
+  const workbenchMotionPhase = phase.phase === "awaiting_subagent" ? "dispatching" : phase.phase ?? "thinking";
 
   const handlePause = async () => {
     try {
@@ -259,10 +267,32 @@ export function IssueDetailPage({ issueId }: Props) {
               />
 
               <Tabs value={activeTab} onValueChange={handleTabChange} className="flex w-full flex-col gap-3">
-                <div data-density="workbench-tabs" className="sticky top-0 z-20 border-b border-border-subtle/70 bg-background/95 pb-2 pt-1 backdrop-blur">
+                <div
+                  data-density={isWorkbenchSchedulingMotion ? "workbench-scheduling-tabs" : "workbench-tabs"}
+                  className={cn(
+                    "sticky top-0 z-20 border-b border-border-subtle/70 bg-background/95 pb-2 pt-1 backdrop-blur",
+                    isWorkbenchSchedulingMotion && "motion-essential relative overflow-hidden border-brand/30",
+                  )}
+                >
+                  {isWorkbenchSchedulingMotion && (
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                    />
+                  )}
                   <TabsList className="grid h-10 w-full grid-cols-4 rounded-lg border border-border-subtle bg-surface/90 p-1 sm:max-w-[520px]">
-                    <TabsTrigger value="timeline" className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer">
+                    <TabsTrigger
+                      value="timeline"
+                      data-density="workbench-scheduling-tab"
+                      className={cn(
+                        "min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer",
+                        isWorkbenchSchedulingMotion && "motion-essential text-brand",
+                      )}
+                    >
                       <Clock size={14} className="shrink-0" />
+                      <span aria-hidden className="inline-flex size-3.5 shrink-0 items-center justify-center">
+                        {isWorkbenchSchedulingMotion && <AgentThinkingIndicator phase={workbenchMotionPhase} size={12} />}
+                      </span>
                       <span className="truncate max-sm:sr-only">{t("issue.command.timelineTitle")}</span>
                     </TabsTrigger>
                     <TabsTrigger value="artifacts" className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer">
