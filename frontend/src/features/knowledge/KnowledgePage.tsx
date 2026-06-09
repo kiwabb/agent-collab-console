@@ -21,6 +21,8 @@ import {
   EmptyStateAction,
   InteractionEmptyState,
 } from "@/components/ui/interaction-empty-state";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
+import { cn } from "@/lib/utils";
 
 type Tab = "search" | "team-notes";
 
@@ -136,9 +138,13 @@ export function KnowledgePage() {
             type="button"
             onClick={handleReindex}
             disabled={reindexing}
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 text-xs hover:bg-surface-hover disabled:opacity-50"
+            data-density={reindexing ? "knowledge-reindex-tool" : "knowledge-reindex"}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 text-xs hover:bg-surface-hover disabled:opacity-50",
+              reindexing && "motion-essential",
+            )}
           >
-            <RefreshCw size={12} className={reindexing ? "animate-spin" : ""} />
+            {reindexing ? <AgentThinkingIndicator phase="tool" size={12} /> : <RefreshCw size={12} />}
             {t("knowledge.reindex")}
           </button>
         </>
