@@ -55,3 +55,16 @@ test("diff merge submit review cta uses thinking motion while submitting", () =>
   assert.match(source, /busy === "submit" \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="thinking" size=\{12\}/);
   assert.doesNotMatch(source, /busy === "submit" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
 });
+
+test("diff merge review decision ctas use thinking motion while approving or rejecting", () => {
+  const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
+
+  assert.match(source, /data-density=\{busy === "review-approve" \? "diff-merge-review-approve-thinking" : "diff-merge-review-approve"\}/);
+  assert.match(source, /busy === "review-approve" && "motion-essential/);
+  assert.match(source, /busy === "review-approve" \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="thinking" size=\{12\}/);
+  assert.doesNotMatch(source, /busy === "review-approve" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
+  assert.match(source, /data-density=\{isLoading \? "diff-merge-review-reject-thinking" : "diff-merge-review-reject"\}/);
+  assert.match(source, /isLoading && "motion-essential/);
+  assert.match(source, /isLoading \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="thinking" size=\{12\}/);
+  assert.doesNotMatch(source, /isLoading \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
+});

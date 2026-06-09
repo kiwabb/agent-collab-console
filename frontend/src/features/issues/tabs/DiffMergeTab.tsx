@@ -347,10 +347,12 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
               <Button
                 disabled={!!busy}
                 onClick={() => void handleApprove()}
+                data-density={busy === "review-approve" ? "diff-merge-review-approve-thinking" : "diff-merge-review-approve"}
+                className={cn(busy === "review-approve" && "motion-essential")}
               >
                 {busy === "review-approve" ? (
                   <span className="flex items-center gap-1.5">
-                    <Loader2 size={12} className="animate-spin" /> {t("task.review.approving")}
+                    <AgentThinkingIndicator phase="thinking" size={12} /> {t("task.review.approving")}
                   </span>
                 ) : (
                   t("task.review.approve")
@@ -700,12 +702,13 @@ function RejectDialog({ open, reason, onReasonChange, isLoading, onClose, onConf
           </Button>
           <Button
             disabled={isLoading}
-            className="bg-warning text-background hover:bg-warning/90"
+            data-density={isLoading ? "diff-merge-review-reject-thinking" : "diff-merge-review-reject"}
+            className={cn("bg-warning text-background hover:bg-warning/90", isLoading && "motion-essential")}
             onClick={onConfirm}
           >
             {isLoading ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> {t("task.review.rejecting")}
+                <AgentThinkingIndicator phase="thinking" size={12} /> {t("task.review.rejecting")}
               </span>
             ) : (
               t("task.review.reject")
