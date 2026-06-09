@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Copy, ExternalLink, GitPullRequest, Loader2, RefreshCw, Terminal } from "lucide-react";
+import { Copy, ExternalLink, GitPullRequest, RefreshCw, Terminal } from "lucide-react";
 import {
   abandonCodexIssue,
   createGithubPR,
@@ -568,10 +568,11 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
                 variant="outline"
                 disabled={!!busy || isAbandoned || !diff || diff.diff.length === 0}
                 onClick={() => void handleCreatePR()}
-                className="h-7 px-2.5 text-[12px]"
+                data-density={busy === "pr-create" ? "diff-merge-toolbar-create-pr-dispatch" : "diff-merge-toolbar-create-pr"}
+                className={cn("h-7 px-2.5 text-[12px]", busy === "pr-create" && "motion-essential")}
               >
                 {busy === "pr-create" ? (
-                  <Loader2 size={11} className="animate-spin" />
+                  <AgentThinkingIndicator phase="dispatching" size={11} />
                 ) : (
                   <GitPullRequest size={11} className="mr-1.5" />
                 )}
@@ -582,11 +583,15 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
               size="sm"
               disabled={!!busy || isAbandoned || !diff || diff.diff.length === 0}
               onClick={() => setConfirmKind("merge")}
-              className="h-7 px-2.5 text-[12px] bg-brand hover:bg-brand-strong text-black font-semibold"
+              data-density={busy === "merge" ? "diff-merge-toolbar-back-dispatch" : "diff-merge-toolbar-back"}
+              className={cn(
+                "h-7 px-2.5 text-[12px] bg-brand hover:bg-brand-strong text-black font-semibold",
+                busy === "merge" && "motion-essential",
+              )}
             >
               {busy === "merge" ? (
                 <span className="flex items-center gap-1.5">
-                  <Loader2 size={11} className="animate-spin" />
+                  <AgentThinkingIndicator phase="dispatching" size={11} />
                   {t("task.diffMerge.merging")}
                 </span>
               ) : (

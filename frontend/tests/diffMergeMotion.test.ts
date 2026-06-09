@@ -29,6 +29,20 @@ test("diff merge merge-back cta uses dispatch motion while merging", () => {
   assert.doesNotMatch(source, /busy === "merge" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
 });
 
+test("diff merge toolbar ctas use dispatch motion while busy", () => {
+  const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
+
+  assert.match(source, /data-density=\{busy === "pr-create" \? "diff-merge-toolbar-create-pr-dispatch" : "diff-merge-toolbar-create-pr"\}/);
+  assert.match(source, /busy === "pr-create" && "motion-essential"/);
+  assert.match(source, /busy === "pr-create" \? \(\s*<AgentThinkingIndicator phase="dispatching" size=\{11\}/);
+  assert.doesNotMatch(source, /busy === "pr-create" \? \(\s*<Loader2 size=\{11\} className="animate-spin" \/>/);
+
+  assert.match(source, /data-density=\{busy === "merge" \? "diff-merge-toolbar-back-dispatch" : "diff-merge-toolbar-back"\}/);
+  assert.match(source, /busy === "merge" && "motion-essential"/);
+  assert.match(source, /busy === "merge" \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="dispatching" size=\{11\}/);
+  assert.doesNotMatch(source, /busy === "merge" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{11\} className="animate-spin" \/>/);
+});
+
 test("diff merge abandon cta uses dispatch motion while abandoning", () => {
   const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
 
