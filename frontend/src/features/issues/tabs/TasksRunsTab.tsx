@@ -146,6 +146,12 @@ export function TasksRunsTab({ issueId, issue }: Props) {
 
   const { logs } = useExecutionProcessLogStream(selectedRunId);
   const { messages, pendingAssistant } = useExecutionProcessMessageStream(selectedRunId);
+  const composerBusyMotionPhase = mode === "rerun" ? "dispatching" : "thinking";
+  const composerBusyDensity = mode === "rerun"
+    ? "tasks-runs-rerun-dispatch-cta"
+    : mode === "refine"
+      ? "tasks-runs-refine-thinking-cta"
+      : "tasks-runs-chat-thinking-cta";
 
   // A task is "fresh" if it has never been executed — show a primary Run
   // button instead of the chat/refine/rerun composer.
@@ -450,8 +456,20 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                   </div>
                 )}
                 <div className="flex justify-end">
-                  <Button onClick={() => void handleRunFresh()} disabled={busy || !selectedTaskId}>
-                    {busy ? "Starting…" : "Run"}
+                  <Button
+                    onClick={() => void handleRunFresh()}
+                    disabled={busy || !selectedTaskId}
+                    data-density={busy ? "tasks-runs-run-dispatch-cta" : "tasks-runs-run-cta"}
+                    className={cn(busy && "motion-essential")}
+                  >
+                    {busy ? (
+                      <>
+                        <AgentThinkingIndicator phase="dispatching" size={12} />
+                        Starting…
+                      </>
+                    ) : (
+                      "Run"
+                    )}
                   </Button>
                 </div>
               </>
@@ -489,8 +507,18 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                   />
                 )}
                 <div className="flex justify-end">
-                  <Button onClick={() => void send()} disabled={busy || !selectedTaskId || (mode !== "rerun" && !composer.trim())}>
-                    {busy ? "Sending…" : mode === "rerun" ? "Rerun" : mode === "refine" ? "Refine" : "Send"}
+                  <Button
+                    onClick={() => void send()}
+                    disabled={busy || !selectedTaskId || (mode !== "rerun" && !composer.trim())}
+                    data-density={busy ? composerBusyDensity : "tasks-runs-composer-cta"}
+                    className={cn(busy && "motion-essential")}
+                  >
+                    {busy ? (
+                      <>
+                        <AgentThinkingIndicator phase={composerBusyMotionPhase} size={12} />
+                        Sending…
+                      </>
+                    ) : mode === "rerun" ? "Rerun" : mode === "refine" ? "Refine" : "Send"}
                   </Button>
                 </div>
               </>
