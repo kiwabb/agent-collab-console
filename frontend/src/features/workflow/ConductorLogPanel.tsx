@@ -734,7 +734,13 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
 
         <div className="flex-1 overflow-auto px-5 py-4">
           {loading && (
-            <div className="text-sm text-text-muted py-6 text-center">{t("conductor.panel.loading")}</div>
+            <div
+              data-density="conductor-panel-thinking-loading"
+              className="motion-essential flex items-center justify-center gap-2 py-6 text-sm font-semibold text-text-muted"
+            >
+              <AgentThinkingIndicator phase="thinking" size={14} />
+              {t("conductor.panel.loading")}
+            </div>
           )}
 
           {!loading && activeTab === "thread" && (
