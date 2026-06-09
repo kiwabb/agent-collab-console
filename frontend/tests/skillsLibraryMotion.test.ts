@@ -18,3 +18,12 @@ test("skills import processing uses tool motion while ingesting capabilities", (
   assert.match(source, /<AgentThinkingIndicator phase="tool" size=\{12\} \/> \{t\("skills\.import\.processing"\)\}/);
   assert.doesNotMatch(source, /<Loader2 size=\{12\} className="animate-spin" \/> \{t\("skills\.import\.processing"\)\}/);
 });
+
+test("skills preview loading uses tool motion while fetching capability content", () => {
+  const source = readSource("features/skills/SkillsLibraryPage.tsx");
+
+  assert.match(source, /data-density="skills-preview-loading-tool"/);
+  assert.match(source, /className="motion-essential flex items-center gap-2 text-\[12px\] text-text-muted"/);
+  assert.match(source, /<AgentThinkingIndicator phase="tool" size=\{12\} \/> \{t\("skills\.preview\.loading"\)\}/);
+  assert.doesNotMatch(source, /<Loader2 size=\{12\} className="animate-spin" \/> \{t\("skills\.preview\.loading"\)\}/);
+});

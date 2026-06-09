@@ -853,8 +853,11 @@ function SkillDetailPanel({
       )}
       <div className="flex-1 min-h-0 overflow-auto px-6 py-4">
         {loading && (
-          <div className="text-[12px] text-text-muted flex items-center gap-2">
-            <Loader2 size={12} className="animate-spin" /> {t("skills.preview.loading")}
+          <div
+            data-density="skills-preview-loading-tool"
+            className="motion-essential flex items-center gap-2 text-[12px] text-text-muted"
+          >
+            <AgentThinkingIndicator phase="tool" size={12} /> {t("skills.preview.loading")}
           </div>
         )}
         {fetchErr && (
