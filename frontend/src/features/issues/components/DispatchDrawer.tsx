@@ -341,7 +341,7 @@ export function DispatchDrawer({ item, onClose }: Props) {
                   className="gap-2 rounded-xl px-4 hover:border-brand/40 hover:bg-brand/5 transition-all"
                 >
                   {busyAction === "chat" ? (
-                    <Loader2 size={13} className="animate-spin" />
+                    <AgentThinkingIndicator phase="thinking" size={13} />
                   ) : (
                     <Send size={13} />
                   )}
@@ -355,7 +355,7 @@ export function DispatchDrawer({ item, onClose }: Props) {
                   className="gap-2 rounded-xl px-4 hover:border-brand/40 hover:bg-brand/5 transition-all"
                 >
                   {busyAction === "refine" ? (
-                    <Loader2 size={13} className="animate-spin" />
+                    <AgentThinkingIndicator phase="thinking" size={13} />
                   ) : (
                     <Sparkles size={13} />
                   )}
@@ -369,7 +369,7 @@ export function DispatchDrawer({ item, onClose }: Props) {
                   className="gap-2 rounded-xl px-4 hover:border-brand/40 hover:bg-brand/5 transition-all"
                 >
                   {busyAction === "rerun" ? (
-                    <Loader2 size={13} className="animate-spin" />
+                    <AgentThinkingIndicator phase="dispatching" size={13} />
                   ) : (
                     <RotateCcw size={13} />
                   )}

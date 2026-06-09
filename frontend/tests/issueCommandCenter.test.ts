@@ -192,6 +192,15 @@ test("mesh feed marks active specialist calls with dispatch motion", () => {
   assert.doesNotMatch(feedSource, /animate-pulse/);
 });
 
+test("dispatch drawer action buttons use semantic motion while busy", () => {
+  const drawerSource = readSource("features/issues/components/DispatchDrawer.tsx");
+
+  assert.match(drawerSource, /busyAction === "chat" \? \(\s*<AgentThinkingIndicator phase="thinking" size=\{13\}/);
+  assert.match(drawerSource, /busyAction === "refine" \? \(\s*<AgentThinkingIndicator phase="thinking" size=\{13\}/);
+  assert.match(drawerSource, /busyAction === "rerun" \? \(\s*<AgentThinkingIndicator phase="dispatching" size=\{13\}/);
+  assert.doesNotMatch(drawerSource, /busyAction === "(chat|refine|rerun)" \? \(\s*<Loader2 size=\{13\} className="animate-spin"/);
+});
+
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {
   const timeline = buildDecisionTimeline(
     [
