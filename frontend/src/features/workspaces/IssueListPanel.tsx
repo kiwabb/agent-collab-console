@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { Inbox } from "lucide-react";
 
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
-import { Loader } from "@/components/ui/loader";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { CodexIssue, CodexTask, Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
@@ -65,7 +65,17 @@ export function IssueListPanel({
 
       <div className="h-full min-h-0 overflow-auto">
         {isLoading && (
-          <Loader variant="card" label={t("workspace.console.loading")} className="border-0 bg-transparent rounded-none h-48 min-h-0" />
+          <div
+            data-density="workspace-console-dispatch-loading"
+            className="motion-essential relative flex h-48 min-h-0 items-center justify-center gap-2 overflow-hidden text-sm font-semibold text-text-muted"
+          >
+            <span
+              aria-hidden
+              className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
+            />
+            <AgentThinkingIndicator phase="dispatching" size={16} />
+            {t("workspace.console.loading")}
+          </div>
         )}
 
 

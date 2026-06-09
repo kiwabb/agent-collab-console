@@ -37,6 +37,17 @@ test("workspace console uses dense operations queue chrome", () => {
   assert.doesNotMatch(rowSource, /hover:-translate-y|rounded-2xl|tracking-\[-/);
 });
 
+test("workspace operations queue loading uses dispatch motion", () => {
+  const panelSource = readSource("features/workspaces/IssueListPanel.tsx");
+
+  assert.match(panelSource, /import \{ AgentThinkingIndicator \} from "@\/components\/ui\/AgentThinkingIndicator";/);
+  assert.match(panelSource, /data-density="workspace-console-dispatch-loading"/);
+  assert.match(panelSource, /className="motion-essential relative flex h-48 min-h-0 items-center justify-center gap-2 overflow-hidden text-sm font-semibold text-text-muted"/);
+  assert.match(panelSource, /<AgentThinkingIndicator phase="dispatching" size=\{16\} \/>/);
+  assert.match(panelSource, /animate-shimmer-sweep/);
+  assert.doesNotMatch(panelSource, /<Loader variant="card" label=\{t\("workspace\.console\.loading"\)\}/);
+});
+
 test("workspace console marks running issue rows with scheduling motion", () => {
   const rowSource = readSource("features/workspaces/IssueRow.tsx");
 
