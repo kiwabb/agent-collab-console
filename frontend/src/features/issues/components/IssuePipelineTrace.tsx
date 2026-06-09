@@ -17,6 +17,7 @@ import {
 } from "@/lib/api";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 interface Props {
   issueId: string;
@@ -185,21 +186,30 @@ function Station({
 }) {
   const Icon = ROLE_ICON[stage.role] ?? BarChart3;
   const tone = stationTone(stage.status);
+  const isRunningStage = stage.status === "running";
 
   return (
-      <div className="relative px-3.5 flex flex-col items-center text-center min-w-0">
+    <div className="relative px-3.5 flex flex-col items-center text-center min-w-0">
       <div
+        data-density={isRunningStage ? "issue-pipeline-running-stage" : "issue-pipeline-stage"}
         className={cn(
           // bg-surface-raised covers the connecting rail line so it
           // doesn't visually cut through the icon tile.
-          "relative w-[60px] h-[60px] rounded-2xl flex items-center justify-center mb-3.5 z-[1] shadow-[0_10px_24px_-20px_rgba(0,0,0,0.75)]",
+          "relative w-[60px] h-[60px] overflow-hidden rounded-2xl flex items-center justify-center mb-3.5 z-[1] shadow-[0_10px_24px_-20px_rgba(0,0,0,0.75)]",
           "border bg-surface-raised",
           tone.nodeBorder,
           tone.nodeBg,
           tone.nodeText,
+          isRunningStage && "motion-essential bg-status-running/10",
         )}
         style={tone.nodeShadow ? { boxShadow: tone.nodeShadow } : undefined}
       >
+        {isRunningStage && (
+          <span
+            className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
+            aria-hidden
+          />
+        )}
         <Icon size={22} strokeWidth={1.8} />
         {stage.status === "done" && (
           <span
@@ -209,11 +219,13 @@ function Station({
             <Check size={10} strokeWidth={3.5} color="#06140b" />
           </span>
         )}
-        {stage.status === "running" && (
+        {isRunningStage && (
           <span
-            className="absolute -top-1 -right-1 size-[10px] rounded-full bg-status-running animate-pulse border-2"
+            className="absolute -top-1 -right-1 flex size-[18px] items-center justify-center rounded-full border-2 bg-surface z-[2]"
             style={{ borderColor: "var(--color-surface)" }}
-          />
+          >
+            <AgentThinkingIndicator phase="dispatching" size={12} />
+          </span>
         )}
         {stage.status === "failed" && (
           <span
