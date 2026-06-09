@@ -504,8 +504,11 @@ export function RunDetail({
           <div className="flex-1 min-h-0 relative">
             <TabsContent ref={messagesContainerRef} value="messages" className="absolute inset-0 m-0 overflow-y-auto p-6 space-y-6 animate-in fade-in duration-300">
               {isLoadingMessages ? (
-                <div className="py-20 flex flex-col items-center justify-center gap-4 text-[10px] uppercase font-black tracking-widest text-text-muted opacity-40">
-                  <Activity size={24} className="animate-spin text-brand" />
+                <div
+                  data-density="run-detail-messages-loading"
+                  className="motion-essential py-20 flex flex-col items-center justify-center gap-4 text-[10px] uppercase font-black tracking-widest text-text-muted opacity-40"
+                >
+                  <AgentThinkingIndicator phase="streaming" size={24} />
                   <span>{t("run.loadingMessages")}</span>
                 </div>
               ) : mergedMessages.length === 0 && !liveStream.pendingAssistant ? (

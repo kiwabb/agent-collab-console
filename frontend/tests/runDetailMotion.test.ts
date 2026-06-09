@@ -31,6 +31,18 @@ test("run detail process loading uses dispatch motion", () => {
   assert.doesNotMatch(source, /<Activity size=\{32\} className="animate-spin text-brand" \/>/);
 });
 
+test("run detail messages loading uses streaming motion", () => {
+  const source = readFileSync(
+    path.join(root, "src/features/runs/RunDetail.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /data-density="run-detail-messages-loading"/);
+  assert.match(source, /className="motion-essential py-20 flex flex-col items-center justify-center gap-4 text-\[10px\] uppercase font-black tracking-widest text-text-muted opacity-40"/);
+  assert.match(source, /<AgentThinkingIndicator phase="streaming" size=\{24\} \/>/);
+  assert.doesNotMatch(source, /<Activity size=\{24\} className="animate-spin text-brand" \/>/);
+});
+
 test("run detail pending assistant uses streaming motion", () => {
   const source = readFileSync(
     path.join(root, "src/features/runs/RunDetail.tsx"),
