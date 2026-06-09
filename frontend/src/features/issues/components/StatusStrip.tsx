@@ -2,6 +2,7 @@
 
 import { Clock3, Pause, Play, RotateCcw, Trash2, GitBranch, Terminal } from "lucide-react";
 
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
 import type { CodexIssue, CodexTask } from "@/lib/types";
@@ -41,6 +42,8 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
   const isPaused = conductorStatus === "paused" || status === "awaiting_approval";
   const isDone = status === "completed" || issue?.current_phase === "done" || isConductorDone;
   const isAbandoned = status === "abandoned" || issue?.git_merge_status === "abandoned";
+  const isConductorActive = !isDone && !isPaused && !isAbandoned && (conductorStatus === "running" || Boolean(phase.phase));
+  const conductorMotionPhase = isConductorActive ? phase.phase ?? "working" : isPaused ? "paused" : "idle";
 
   return (
     <section
@@ -147,24 +150,37 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
         <div
           data-density="conductor-strip"
           className={cn(
-            "rounded-md border px-2.5 py-2 transition-colors",
+            "relative overflow-hidden rounded-md border px-2.5 py-2 transition-colors",
             phase.severity === "danger"
               ? "border-status-failed/40 bg-status-failed/5"
               : phase.severity === "warn"
                 ? "border-status-awaiting/40 bg-status-awaiting/5"
                 : "border-border-subtle bg-surface-input/35",
+            isConductorActive && "border-brand/35 bg-brand-muted/10",
               )}
         >
+          {isConductorActive && (
+            <span
+              aria-hidden
+              className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+            />
+          )}
           <div className="grid gap-2 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:items-start">
             <div className="min-w-0 flex items-start gap-2">
-              <span
-                className={cn(
-                  "mt-1.5 size-2.5 shrink-0 rounded-full",
-                  isDone ? "bg-status-done" :
-                  isPaused ? "bg-status-awaiting" :
-                  isAbandoned ? "bg-text-muted" : "bg-brand",
+              <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
+                {isConductorActive ? (
+                  <AgentThinkingIndicator phase={conductorMotionPhase} size={14} />
+                ) : (
+                  <span
+                    className={cn(
+                      "size-2.5 rounded-full",
+                      isDone ? "bg-status-done" :
+                      isPaused ? "bg-status-awaiting" :
+                      isAbandoned ? "bg-text-muted" : "bg-brand",
+                    )}
+                  />
                 )}
-              />
+              </span>
               <div className="min-w-0 space-y-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="text-[10px] uppercase tracking-wider font-black text-text-muted">

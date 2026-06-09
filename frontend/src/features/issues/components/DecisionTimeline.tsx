@@ -80,7 +80,11 @@ export function DecisionTimeline({ items, onOpenItem, liveThinking }: Props) {
             <TimelineRow key={item.id} item={item} onOpen={() => onOpenItem(item)} />
           ))}
           {liveThinking && (
-            <div className="rounded-lg border border-brand/30 bg-brand-muted/10 p-4">
+            <div className="motion-essential relative overflow-hidden rounded-lg border border-brand/30 bg-brand-muted/10 p-4">
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+              />
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-[0.18em] text-brand">
                 <AgentThinkingIndicator phase="thinking" size={12} />
                 {t("issue.command.liveThinking")}

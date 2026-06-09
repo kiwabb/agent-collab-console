@@ -85,6 +85,8 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(statusSource, /data-density="conductor-detail"/);
   assert.match(statusSource, /conductorStatus === "success"/);
   assert.match(statusSource, /phase\.phase === "done"/);
+  assert.match(statusSource, /isConductorActive/);
+  assert.match(statusSource, /<AgentThinkingIndicator/);
   assert.match(pageSource, /data-density="issue-workbench"/);
   assert.match(pageSource, /data-density="workbench-tabs"/);
   assert.doesNotMatch(pageSource, /\?\? tasks\[0\]/);
@@ -97,6 +99,9 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(timelineSource, /data-timeline-execution-summary/);
   assert.match(timelineSource, /deriveTimelineExecutionSummary/);
   assert.doesNotMatch(rowSource, /truncate|line-clamp|max-h-36|rounded-2xl/);
+  assert.match(rowSource, /isSchedulingMotion/);
+  assert.match(rowSource, /animate-shimmer-sweep/);
+  assert.match(rowSource, /phase=\{item\.kind === "dispatch" \? "dispatching" : "tool"\}/);
 
   assert.doesNotMatch(pageSource, /radial-gradient|rounded-\[24px\]|rounded-2xl/);
   assert.doesNotMatch(statusSource, /xl:grid-cols-\[minmax\(0,1\.2fr\)_minmax\(320px,0\.72fr\)_auto\]/);

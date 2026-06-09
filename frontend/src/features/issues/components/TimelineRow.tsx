@@ -2,6 +2,7 @@
 
 import { AlertCircle, CheckCircle2, HelpCircle, Lightbulb, Loader2, MessageCircle, Square } from "lucide-react";
 
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { formatTok, formatCost } from "@/lib/format";
@@ -46,17 +47,24 @@ export function TimelineRow({ item, onOpen }: Props) {
     : t("issue.command.rationale");
   const rationale = item.rationale ? formatRationale(item.rationale, t) : null;
   const summary = item.summaryKey ? t(item.summaryKey, item.summaryParams) : item.summary;
+  const isSchedulingMotion = item.status === "running" && (item.kind === "dispatch" || item.kind === "tool");
 
   return (
     <article
       id={`timeline-${item.id}`}
       className={cn(
-        "rounded-lg border bg-surface-raised/70 p-3 transition-colors hover:border-brand/50 sm:p-4",
+        "relative overflow-hidden rounded-lg border bg-surface-raised/70 p-3 transition-colors hover:border-brand/50 sm:p-4",
         failed && "border-status-failed/35 bg-status-failed/5",
         waiting && "border-status-awaiting/35 bg-status-awaiting/5",
-        !failed && !waiting && "border-border-subtle",
+        !failed && !waiting && (isSchedulingMotion ? "border-brand/40 bg-brand-muted/10" : "border-border-subtle"),
       )}
     >
+      {isSchedulingMotion && (
+        <span
+          aria-hidden
+          className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+        />
+      )}
       <button type="button" onClick={onOpen} className="grid w-full grid-cols-[64px_minmax(0,1fr)] gap-3 text-left lg:grid-cols-[84px_minmax(0,1fr)_auto]">
         <div className="font-mono text-xs text-text-muted">
           {item.createdAt ? new Date(item.createdAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" }) : "—"}
@@ -70,8 +78,13 @@ export function TimelineRow({ item, onOpen }: Props) {
               item.status === "running" && "border-status-running/30 bg-status-running/10 text-status-running",
               item.status === "waiting" && "border-status-awaiting/30 bg-status-awaiting/10 text-status-awaiting",
               item.status === "info" && "border-border-subtle bg-surface text-text-muted",
+              isSchedulingMotion && "border-brand/35 bg-brand-muted/15 text-brand",
             )}>
-              <Icon size={15} className={item.status === "running" ? "animate-spin" : undefined} />
+              {isSchedulingMotion ? (
+                <AgentThinkingIndicator phase={item.kind === "dispatch" ? "dispatching" : "tool"} size={14} />
+              ) : (
+                <Icon size={15} className={item.status === "running" ? "animate-spin" : undefined} />
+              )}
             </span>
             <span className="font-mono text-xs font-bold uppercase text-brand">{roleLabel}</span>
             <span className="rounded-full border border-border-subtle px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-text-muted">
