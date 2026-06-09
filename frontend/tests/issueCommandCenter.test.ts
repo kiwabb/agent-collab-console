@@ -260,6 +260,15 @@ test("mesh feed marks active specialist calls with dispatch motion", () => {
   assert.doesNotMatch(feedSource, /animate-pulse/);
 });
 
+test("mesh feed refresh cta uses tool motion while syncing agent messages", () => {
+  const feedSource = readSource("features/issues/tabs/CollabFeedTab.tsx");
+
+  assert.match(feedSource, /data-density=\{loading \? "mesh-feed-refresh-tool" : "mesh-feed-refresh"\}/);
+  assert.match(feedSource, /loading && "motion-essential"/);
+  assert.match(feedSource, /loading \? <AgentThinkingIndicator phase="tool" size=\{12\} \/> : <RefreshCw size=\{12\}/);
+  assert.doesNotMatch(feedSource, /<RefreshCw size=\{12\} className=\{loading \? "animate-spin" : ""\} \/>/);
+});
+
 test("dispatch drawer action buttons use semantic motion while busy", () => {
   const drawerSource = readSource("features/issues/components/DispatchDrawer.tsx");
 

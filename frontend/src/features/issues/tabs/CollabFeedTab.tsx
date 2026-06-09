@@ -131,10 +131,11 @@ export function CollabFeedTab({ issueId, active }: Props) {
           type="button"
           onClick={() => void load()}
           disabled={loading}
-          className="text-text-muted hover:text-foreground transition-colors"
+          data-density={loading ? "mesh-feed-refresh-tool" : "mesh-feed-refresh"}
+          className={cn("text-text-muted hover:text-foreground transition-colors", loading && "motion-essential")}
           title="Refresh"
         >
-          <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+          {loading ? <AgentThinkingIndicator phase="tool" size={12} /> : <RefreshCw size={12} />}
         </button>
       </div>
 
