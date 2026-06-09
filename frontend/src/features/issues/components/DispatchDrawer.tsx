@@ -6,6 +6,7 @@ import { Loader2, RotateCcw, Send, Sparkles, X, Terminal, MessageSquare, Code2, 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import {
   chatCodexTask,
   refineCodexTask,
@@ -15,6 +16,7 @@ import {
 import { formatTok, formatCost, formatDuration } from "@/lib/format";
 import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
 import { SubAgentResultCard } from "./SubAgentResultCard";
+import { cn } from "@/lib/utils";
 import type { DecisionTimelineItem } from "../hooks/useDecisionTimeline";
 
 interface Props {
@@ -58,6 +60,9 @@ export function DispatchDrawer({ item, onClose }: Props) {
   const taskIsRunning = useMemo(() => {
     return RUNNING_STATUSES.has(String(taskStatusRaw || "").toLowerCase());
   }, [taskStatusRaw]);
+  const isSchedulingDrawerMotion =
+    item?.status === "running" && (item.kind === "dispatch" || item.kind === "tool");
+  const drawerMotionPhase = item?.kind === "tool" ? "tool" : "dispatching";
 
   if (!item) return null;
 
@@ -143,11 +148,20 @@ export function DispatchDrawer({ item, onClose }: Props) {
       <aside className="absolute right-0 top-0 flex h-full w-[680px] max-w-[calc(100vw-24px)] flex-col border-l border-border-subtle bg-background shadow-[0_0_80px_-20px_rgba(0,0,0,0.6)]">
         {/* ─── Premium Header ─── */}
         <div
-          className="relative flex items-start justify-between gap-4 px-6 py-5 border-b border-border-subtle overflow-hidden"
+          className={cn(
+            "relative flex items-start justify-between gap-4 px-6 py-5 border-b border-border-subtle overflow-hidden transition-colors",
+            isSchedulingDrawerMotion && "motion-essential border-brand/35",
+          )}
           style={{
             background: `linear-gradient(135deg, color-mix(in srgb, ${statusColor} 8%, var(--color-surface)) 0%, var(--color-surface) 100%)`,
           }}
         >
+          {isSchedulingDrawerMotion && (
+            <span
+              aria-hidden
+              className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+            />
+          )}
           {/* Subtle accent line */}
           <div
             className="absolute bottom-0 left-0 right-0 h-[2px]"
@@ -159,6 +173,11 @@ export function DispatchDrawer({ item, onClose }: Props) {
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2.5 mb-2">
+              {isSchedulingDrawerMotion && (
+                <span className="inline-flex size-6 items-center justify-center rounded-lg border border-brand/30 bg-brand-muted/15 text-brand">
+                  <AgentThinkingIndicator phase={drawerMotionPhase} size={13} />
+                </span>
+              )}
               <span
                 className="inline-flex px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-[0.15em] border"
                 style={{
@@ -239,8 +258,24 @@ export function DispatchDrawer({ item, onClose }: Props) {
               running task shows a pending placeholder; the raw summary is the
               fallback only when no structured SubAgentResult was persisted. */}
           {taskIsRunning ? (
-            <div className="rounded-2xl border border-brand/20 bg-brand/5 p-5 flex items-center gap-3">
-              <Loader2 size={16} className="animate-spin text-brand shrink-0" />
+            <div
+              data-density="dispatch-drawer-running"
+              className={cn(
+                "relative overflow-hidden rounded-2xl border p-5 flex items-center gap-3",
+                isSchedulingDrawerMotion ? "motion-essential border-brand/30 bg-brand-muted/10" : "border-brand/20 bg-brand/5",
+              )}
+            >
+              {isSchedulingDrawerMotion && (
+                <span
+                  aria-hidden
+                  className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                />
+              )}
+              {isSchedulingDrawerMotion ? (
+                <AgentThinkingIndicator phase={drawerMotionPhase} size={16} className="shrink-0" />
+              ) : (
+                <Loader2 size={16} className="animate-spin text-brand shrink-0" />
+              )}
               <span className="text-[13px] italic text-text-muted">
                 {t("issue.command.drawer.runningSummaryPending")}
               </span>

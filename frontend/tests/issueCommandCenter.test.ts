@@ -77,6 +77,7 @@ test("issue detail page uses compact operations command-center chrome", () => {
   const gitSource = readSource("features/issues/components/GitInfoCard.tsx");
   const timelineSource = readSource("features/issues/components/DecisionTimeline.tsx");
   const rowSource = readSource("features/issues/components/TimelineRow.tsx");
+  const drawerSource = readSource("features/issues/components/DispatchDrawer.tsx");
   const chatSource = readSource("features/issues/components/CommandCenterChatBar.tsx");
 
   assert.match(statusSource, /data-density="command-header"/);
@@ -102,6 +103,12 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(rowSource, /isSchedulingMotion/);
   assert.match(rowSource, /animate-shimmer-sweep/);
   assert.match(rowSource, /phase=\{item\.kind === "dispatch" \? "dispatching" : "tool"\}/);
+  assert.match(drawerSource, /isSchedulingDrawerMotion/);
+  assert.match(drawerSource, /drawerMotionPhase/);
+  assert.match(drawerSource, /data-density="dispatch-drawer-running"/);
+  assert.match(drawerSource, /<AgentThinkingIndicator/);
+  assert.match(drawerSource, /animate-shimmer-sweep/);
+  assert.match(drawerSource, /phase=\{drawerMotionPhase\}/);
 
   assert.doesNotMatch(pageSource, /radial-gradient|rounded-\[24px\]|rounded-2xl/);
   assert.doesNotMatch(statusSource, /xl:grid-cols-\[minmax\(0,1\.2fr\)_minmax\(320px,0\.72fr\)_auto\]/);
