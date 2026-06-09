@@ -6,6 +6,7 @@ import { ChevronLeft, GitBranch as GitBranchIcon, Plus, Trash2, Wrench } from "l
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InteractionEmptyState } from "@/components/ui/interaction-empty-state";
 import { useToast } from "@/components/ui/toast";
@@ -412,7 +413,17 @@ export function ProjectsPage() {
                 </CardHeader>
                 <CardContent>
                   {branchesLoading ? (
-                    <Skeleton className="h-32 w-full" />
+                    <div
+                      data-density="projects-branches-tool-loading"
+                      className="motion-essential relative flex min-h-[128px] items-center justify-center gap-2 overflow-hidden rounded-lg border border-status-tool/25 bg-status-tool/5 text-sm font-semibold text-text-muted"
+                    >
+                      <span
+                        aria-hidden
+                        className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-tool/70 to-transparent"
+                      />
+                      <AgentThinkingIndicator phase="tool" size={16} />
+                      {t("projects.branches")}
+                    </div>
                   ) : (
                     <BranchListView branches={branches} defaultBranch={activeProject.default_branch} />
                   )}
