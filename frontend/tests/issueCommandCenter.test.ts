@@ -111,6 +111,11 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(rowSource, /item\.kind === "memory" \? "tool"/);
   assert.match(rowSource, /: "thinking"/);
   assert.match(rowSource, /phase=\{timelineMotionPhase\}/);
+  assert.match(rowSource, /data-density=\{isTimelineRunning \? "decision-timeline-running-status" : "decision-timeline-status"\}/);
+  assert.match(rowSource, /isTimelineRunning && "motion-essential"/);
+  assert.match(rowSource, /isTimelineRunning \? \(\s*<AgentThinkingIndicator phase=\{timelineMotionPhase\} size=\{14\} \/>/);
+  assert.doesNotMatch(rowSource, /Loader2/);
+  assert.doesNotMatch(rowSource, /item\.status === "running" \? "animate-spin" : undefined/);
   assert.match(drawerSource, /isSchedulingDrawerMotion/);
   assert.match(drawerSource, /drawerMotionPhase/);
   assert.match(drawerSource, /data-density="dispatch-drawer-running"/);

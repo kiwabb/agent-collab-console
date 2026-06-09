@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, CheckCircle2, HelpCircle, Lightbulb, Loader2, MessageCircle, Square } from "lucide-react";
+import { AlertCircle, CheckCircle2, HelpCircle, Lightbulb, MessageCircle, Square } from "lucide-react";
 
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,7 @@ interface Props {
 }
 
 const STATUS_ICON = {
-  running: Loader2,
+  running: Square,
   done: CheckCircle2,
   failed: AlertCircle,
   waiting: HelpCircle,
@@ -47,8 +47,9 @@ export function TimelineRow({ item, onOpen }: Props) {
     : t("issue.command.rationale");
   const rationale = item.rationale ? formatRationale(item.rationale, t) : null;
   const summary = item.summaryKey ? t(item.summaryKey, item.summaryParams) : item.summary;
+  const isTimelineRunning = item.status === "running";
   const isSchedulingMotion =
-    item.status === "running" &&
+    isTimelineRunning &&
     (
       item.kind === "dispatch" ||
       item.kind === "tool" ||
@@ -83,19 +84,23 @@ export function TimelineRow({ item, onOpen }: Props) {
         </div>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className={cn(
-              "inline-flex size-7 items-center justify-center rounded-md border",
-              item.status === "failed" && "border-status-failed/30 bg-status-failed/10 text-status-failed",
-              item.status === "done" && "border-status-done/30 bg-status-done/10 text-status-done",
-              item.status === "running" && "border-status-running/30 bg-status-running/10 text-status-running",
-              item.status === "waiting" && "border-status-awaiting/30 bg-status-awaiting/10 text-status-awaiting",
-              item.status === "info" && "border-border-subtle bg-surface text-text-muted",
-              isSchedulingMotion && "border-brand/35 bg-brand-muted/15 text-brand",
-            )}>
-              {isSchedulingMotion ? (
+            <span
+              data-density={isTimelineRunning ? "decision-timeline-running-status" : "decision-timeline-status"}
+              className={cn(
+                "inline-flex size-7 items-center justify-center rounded-md border",
+                item.status === "failed" && "border-status-failed/30 bg-status-failed/10 text-status-failed",
+                item.status === "done" && "border-status-done/30 bg-status-done/10 text-status-done",
+                item.status === "running" && "border-status-running/30 bg-status-running/10 text-status-running",
+                item.status === "waiting" && "border-status-awaiting/30 bg-status-awaiting/10 text-status-awaiting",
+                item.status === "info" && "border-border-subtle bg-surface text-text-muted",
+                isSchedulingMotion && "border-brand/35 bg-brand-muted/15 text-brand",
+                isTimelineRunning && "motion-essential",
+              )}
+            >
+              {isTimelineRunning ? (
                 <AgentThinkingIndicator phase={timelineMotionPhase} size={14} />
               ) : (
-                <Icon size={15} className={item.status === "running" ? "animate-spin" : undefined} />
+                <Icon size={15} />
               )}
             </span>
             <span className="font-mono text-xs font-bold uppercase text-brand">{roleLabel}</span>
