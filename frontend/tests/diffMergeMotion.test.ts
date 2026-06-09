@@ -46,3 +46,12 @@ test("diff merge PR refresh cta uses tool motion while syncing GitHub PR state",
   assert.match(source, /busy === "pr-refresh" \? \(\s*<AgentThinkingIndicator phase="tool" size=\{12\}/);
   assert.doesNotMatch(source, /busy === "pr-refresh" \? \(\s*<Loader2 size=\{12\} className="animate-spin"/);
 });
+
+test("diff merge submit review cta uses thinking motion while submitting", () => {
+  const source = readSource("features/issues/tabs/DiffMergeTab.tsx");
+
+  assert.match(source, /data-density=\{busy === "submit" \? "diff-merge-submit-review-thinking" : "diff-merge-submit-review"\}/);
+  assert.match(source, /busy === "submit" && "motion-essential/);
+  assert.match(source, /busy === "submit" \? \(\s*<span className="flex items-center gap-1\.5">\s*<AgentThinkingIndicator phase="thinking" size=\{12\}/);
+  assert.doesNotMatch(source, /busy === "submit" \? \(\s*<span className="flex items-center gap-1\.5">\s*<Loader2 size=\{12\} className="animate-spin"/);
+});

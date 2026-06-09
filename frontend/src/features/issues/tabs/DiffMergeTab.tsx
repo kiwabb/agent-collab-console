@@ -369,10 +369,15 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
             </div>
           </div>
         ) : doneTaskForSubmit ? (
-          <Button disabled={!!busy} onClick={() => void handleSubmit()}>
+          <Button
+            disabled={!!busy}
+            onClick={() => void handleSubmit()}
+            data-density={busy === "submit" ? "diff-merge-submit-review-thinking" : "diff-merge-submit-review"}
+            className={cn(busy === "submit" && "motion-essential")}
+          >
             {busy === "submit" ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> {t("task.review.submitting")}
+                <AgentThinkingIndicator phase="thinking" size={12} /> {t("task.review.submitting")}
               </span>
             ) : (
               t("task.submitForReview")
