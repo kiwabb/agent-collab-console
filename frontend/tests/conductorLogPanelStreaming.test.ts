@@ -32,7 +32,8 @@ test("ConductorLogPanel marks active phase and pending dispatches with schedulin
 
   assert.match(source, /isConductorLogScheduling/);
   assert.match(source, /conductorLogMotionPhase/);
-  assert.match(source, /data-density="conductor-log-live-phase"/);
+  assert.match(source, /conductorLogMotionPhase = conductorPhase \?\? \(conductorStatus === "running" \? "dispatching" : "idle"\)/);
+  assert.match(source, /data-density=\{isConductorLogScheduling \? "conductor-log-active-phase" : "conductor-log-live-phase"\}/);
   assert.match(source, /data-density="conductor-phase-timeline"/);
   assert.match(source, /data-density=\{node\.isCurrent \? "conductor-phase-current-node" : "conductor-phase-node"\}/);
   assert.match(source, /data-density="conductor-pending-dispatches"/);

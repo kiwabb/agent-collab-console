@@ -447,7 +447,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
     .join("");
   const stuck = conductorPhase === "awaiting_subagent" && phaseElapsedSeconds > 30;
   const isConductorLogScheduling = hasActiveLoop && !isPaused && !stuck;
-  const conductorLogMotionPhase = conductorPhase ?? (conductorStatus === "running" ? "working" : "idle");
+  const conductorLogMotionPhase = conductorPhase ?? (conductorStatus === "running" ? "dispatching" : "idle");
   const timelineNodes = buildTimelineNodes(stateLog, conductorPhase, conductorState?.detail ?? null, nowMs);
   const currentEstimate = conductorPhase ? phaseEstimates[conductorPhase] : undefined;
   const estimateLabel = currentEstimate?.p50_ms != null
@@ -518,7 +518,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
           </SheetDescription>
           {(conductorPhase || conductorDetail || streamingPreview) && (
             <div
-              data-density="conductor-log-live-phase"
+              data-density={isConductorLogScheduling ? "conductor-log-active-phase" : "conductor-log-live-phase"}
               className={cn(
                 "relative mt-3 overflow-hidden rounded-2xl border px-3 py-3 text-xs transition-colors",
                 stuck ? "border-warning/50 bg-warning/10 text-warning" : "border-border-subtle bg-surface-raised/80 text-text-secondary",
