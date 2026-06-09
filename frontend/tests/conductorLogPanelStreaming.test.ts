@@ -52,6 +52,15 @@ test("ConductorLogPanel send button uses thinking motion while sending", () => {
   assert.doesNotMatch(source, /sending \?\s*\(\s*<Loader2 className="mr-1\.5 h-3\.5 w-3\.5 animate-spin"/);
 });
 
+test("ConductorLogPanel pause resume control uses thinking motion while busy", () => {
+  const source = readSource("features/workflow/ConductorLogPanel.tsx");
+
+  assert.match(source, /data-density=\{statusBusy \? "conductor-pause-resume-thinking" : "conductor-pause-resume"\}/);
+  assert.match(source, /statusBusy && "motion-essential"/);
+  assert.match(source, /statusBusy \?\s*\(\s*<AgentThinkingIndicator phase="thinking" size=\{14\}/);
+  assert.doesNotMatch(source, /statusBusy \?\s*\(\s*<Loader2 className="mr-1\.5 h-3\.5 w-3\.5 animate-spin"/);
+});
+
 test("Conductor streaming types expose phase/detail and llm_response", () => {
   const apiSource = readSource("lib/api.ts");
   const contextSource = readSource("contexts/ExecutionProcessesContext.tsx");

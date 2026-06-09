@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Circle, HelpCircle, Loader2, Pause, PauseCircle, Play, SendHorizontal, XCircle } from "lucide-react";
+import { AlertTriangle, Circle, HelpCircle, Pause, PauseCircle, Play, SendHorizontal, XCircle } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -675,11 +675,13 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
             <Button
               size="sm"
               variant="outline"
+              data-density={statusBusy ? "conductor-pause-resume-thinking" : "conductor-pause-resume"}
               disabled={!hasActiveLoop || !!statusBusy}
               onClick={() => void handlePauseResume()}
+              className={cn(statusBusy && "motion-essential")}
             >
               {statusBusy ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                <AgentThinkingIndicator phase="thinking" size={14} />
               ) : isPaused ? (
                 <Play className="mr-1.5 h-3.5 w-3.5" />
               ) : (
