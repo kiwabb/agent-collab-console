@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Inbox, FileBox, FileText, GitBranch, Library, Loader2, Search, ShieldCheck, Users } from "lucide-react";
+import { Inbox, FileBox, FileText, GitBranch, Library, Search, ShieldCheck, Users } from "lucide-react";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { getCodexIssues, getWorkspaces, listProjects, searchKnowledge } from "@/lib/api";
 import type { CodexIssue, Project, Workspace } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -292,7 +293,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             placeholder={t("cmd.placeholder")}
             className="flex-1 bg-transparent outline-none text-[14px] placeholder:text-text-muted"
           />
-          {loading && <Loader2 size={12} className="animate-spin text-text-muted" />}
+          {loading && <AgentThinkingIndicator phase="tool" size={12} className="text-text-muted" />}
           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-input text-text-muted border border-border-subtle">
             esc
           </kbd>

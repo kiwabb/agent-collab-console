@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   ExternalLink,
   GitBranch,
-  Loader2,
   Moon,
   Settings as SettingsIcon,
   Sun,
@@ -13,6 +12,7 @@ import {
 import { checkBackendHealth, getCodexCostStats } from "@/lib/api";
 import { useTheme } from "@/providers/ThemeProvider";
 import { cn } from "@/lib/utils";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 /**
  * "Account" surface in the top-right of the header. Replaces the dead
@@ -83,8 +83,8 @@ export function AccountPopover() {
             <div className="text-[13px] font-semibold">Agent Collab Console</div>
             <div className="text-[10px] text-text-muted mt-0.5 font-mono">
               {loading ? (
-                <span className="inline-flex items-center gap-1">
-                  <Loader2 size={10} className="animate-spin" /> loading
+                <span data-density="account-popover-version-tool" className="motion-essential inline-flex items-center gap-1">
+                  <AgentThinkingIndicator phase="tool" size={10} /> loading
                 </span>
               ) : version ? (
                 `version ${version}`
