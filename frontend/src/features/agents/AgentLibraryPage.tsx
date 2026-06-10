@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Pencil, Plus, Trash2, X, Loader2 } from "lucide-react";
+import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { WorkbenchShell } from "@/features/workbench/WorkbenchShell";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import {
   createAgent,
   deleteAgent,
@@ -370,11 +371,12 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
           <Button
             onClick={() => void handleSave()}
             disabled={!canSubmit || saving}
-            className="bg-brand hover:bg-brand-strong text-black font-semibold"
+            data-density={saving ? "agent-library-save-tool" : "agent-library-save"}
+            className={cn("bg-brand hover:bg-brand-strong text-black font-semibold", saving && "motion-essential")}
           >
             {saving ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> {t("agents.saving")}
+                <AgentThinkingIndicator phase="tool" size={12} /> {t("agents.saving")}
               </span>
             ) : editing ? t("agents.saveChanges") : t("agents.createAgent")}
           </Button>
