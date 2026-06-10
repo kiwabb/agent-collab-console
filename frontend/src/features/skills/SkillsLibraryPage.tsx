@@ -991,8 +991,13 @@ function SkillEditorDialog({
           <Button variant="outline" onClick={onClose} disabled={submitting}>
             {t("skills.btn.cancel")}
           </Button>
-          <Button onClick={submit} disabled={submitting} className="gap-1">
-            {submitting && <Loader2 size={12} className="animate-spin" />}
+          <Button
+            onClick={submit}
+            disabled={submitting}
+            data-density={submitting ? "skills-editor-save-tool" : "skills-editor-save"}
+            className={cn("gap-1", submitting && "motion-essential")}
+          >
+            {submitting && <AgentThinkingIndicator phase="tool" size={12} />}
             {t("skills.btn.save")}
           </Button>
         </DialogFooter>

@@ -27,3 +27,13 @@ test("skills preview loading uses tool motion while fetching capability content"
   assert.match(source, /<AgentThinkingIndicator phase="tool" size=\{12\} \/> \{t\("skills\.preview\.loading"\)\}/);
   assert.doesNotMatch(source, /<Loader2 size=\{12\} className="animate-spin" \/> \{t\("skills\.preview\.loading"\)\}/);
 });
+
+test("skills editor save cta uses tool motion while persisting capability metadata", () => {
+  const source = readSource("features/skills/SkillsLibraryPage.tsx");
+
+  assert.match(source, /data-density=\{submitting \? "skills-editor-save-tool" : "skills-editor-save"\}/);
+  assert.match(source, /className=\{cn\("gap-1", submitting && "motion-essential"\)\}/);
+  assert.match(source, /submitting && <AgentThinkingIndicator phase="tool" size=\{12\} \/>/);
+  assert.match(source, /\{t\("skills\.btn\.save"\)\}/);
+  assert.doesNotMatch(source, /<Loader2 size=\{12\} className="animate-spin" \/>\s*\{t\("skills\.btn\.save"\)\}/);
+});
