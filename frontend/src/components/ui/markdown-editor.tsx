@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Pencil, Check, X, Loader2, Eye, Edit3, Bold, Italic, Code, Link, Smile } from "lucide-react";
+import { Pencil, Check, X, Eye, Edit3, Bold, Italic, Code, Link, Smile } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useI18n } from "@/providers/I18nProvider";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -250,10 +251,11 @@ export function MarkdownEditor({
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50 text-xs font-bold"
+            data-density={isSaving ? "markdown-editor-save-tool" : "markdown-editor-save"}
+            className={cn("inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50 text-xs font-bold", isSaving && "motion-essential")}
             title={t("ui.saveShortcut")}
           >
-            {isSaving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+            {isSaving ? <AgentThinkingIndicator phase="tool" size={12} /> : <Check size={12} />}
             {t("ui.save")}
           </button>
           <button

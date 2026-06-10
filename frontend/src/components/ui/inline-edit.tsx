@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Pencil, Check, X, Loader2 } from "lucide-react";
+import { Pencil, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useI18n } from "@/providers/I18nProvider";
 
 interface InlineEditProps {
@@ -127,11 +128,12 @@ export function InlineEdit({
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="p-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50"
+          data-density={isSaving ? "inline-edit-save-tool" : "inline-edit-save"}
+          className={cn("p-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50", isSaving && "motion-essential")}
           title={t("ui.saveShortcut")}
           aria-label={t("ui.save")}
         >
-          {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+          {isSaving ? <AgentThinkingIndicator phase="tool" size={14} /> : <Check size={14} />}
         </button>
         <button
           onClick={handleCancel}
