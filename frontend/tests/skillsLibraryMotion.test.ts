@@ -37,3 +37,32 @@ test("skills editor save cta uses tool motion while persisting capability metada
   assert.match(source, /\{t\("skills\.btn\.save"\)\}/);
   assert.doesNotMatch(source, /<Loader2 size=\{12\} className="animate-spin" \/>\s*\{t\("skills\.btn\.save"\)\}/);
 });
+
+test("skills list loading uses tool motion while fetching the capability list", () => {
+  const source = readSource("features/skills/SkillsLibraryPage.tsx");
+
+  assert.match(source, /data-density="skills-list-loading-tool"/);
+  assert.match(source, /<AgentThinkingIndicator phase="tool" size=\{12\} \/> \{t\("skills\.loading"\)\}/);
+  assert.doesNotMatch(source, /<Loader2 size=\{12\} className="animate-spin" \/> \{t\("skills\.loading"\)\}/);
+});
+
+test("skills language translate buttons use tool motion while translating", () => {
+  const source = readSource("features/skills/SkillsLibraryPage.tsx");
+
+  assert.match(source, /<AgentThinkingIndicator phase="tool" size=\{11\} className="inline" \/>/);
+  assert.doesNotMatch(source, /<Loader2 size=\{11\} className="animate-spin inline" \/>/);
+});
+
+test("skills paste save-all cta uses tool motion while persisting pasted rows", () => {
+  const source = readSource("features/skills/SkillsLibraryPage.tsx");
+
+  assert.match(source, /data-density=\{submitting \? "skills-paste-saveall-tool" : "skills-paste-saveall"\}/);
+  assert.match(source, /submitting && "motion-essential"/);
+  assert.match(source, /\{submitting && <AgentThinkingIndicator phase="tool" size=\{12\} \/>\}/);
+  assert.doesNotMatch(source, /\{submitting && <Loader2 size=\{12\} className="animate-spin" \/>\}/);
+});
+
+test("skills library no longer imports the Loader2 spinner", () => {
+  const source = readSource("features/skills/SkillsLibraryPage.tsx");
+  assert.doesNotMatch(source, /\bLoader2\b/);
+});

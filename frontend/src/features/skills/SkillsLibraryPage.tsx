@@ -9,7 +9,6 @@ import {
   Copy,
   ExternalLink,
   Search,
-  Loader2,
   FileText,
   FileSpreadsheet,
   X,
@@ -409,8 +408,8 @@ export function SkillsLibraryPage() {
 
             <div className="flex-1 overflow-auto">
               {loading && (
-                <div className="px-4 py-6 text-[12px] text-text-muted flex items-center gap-2">
-                  <Loader2 size={12} className="animate-spin" /> {t("skills.loading")}
+                <div data-density="skills-list-loading-tool" className="motion-essential px-4 py-6 text-[12px] text-text-muted flex items-center gap-2">
+                  <AgentThinkingIndicator phase="tool" size={12} /> {t("skills.loading")}
                 </div>
               )}
               {error && (
@@ -812,7 +811,7 @@ function SkillDetailPanel({
               title={t("skills.translate.toZh")}
             >
               {translating === "zh" ? (
-                <Loader2 size={11} className="animate-spin inline" />
+                <AgentThinkingIndicator phase="tool" size={11} className="inline" />
               ) : (
                 t("skills.translate.zh")
               )}
@@ -830,7 +829,7 @@ function SkillDetailPanel({
               title={t("skills.translate.toEn")}
             >
               {translating === "en" ? (
-                <Loader2 size={11} className="animate-spin inline" />
+                <AgentThinkingIndicator phase="tool" size={11} className="inline" />
               ) : (
                 t("skills.translate.en")
               )}
@@ -1400,9 +1399,10 @@ function SkillPasteDialog({
           <Button
             onClick={submit}
             disabled={rows.length === 0 || submitting}
-            className="gap-1 bg-brand hover:bg-brand-strong text-black font-semibold"
+            data-density={submitting ? "skills-paste-saveall-tool" : "skills-paste-saveall"}
+            className={cn("gap-1 bg-brand hover:bg-brand-strong text-black font-semibold", submitting && "motion-essential")}
           >
-            {submitting && <Loader2 size={12} className="animate-spin" />}
+            {submitting && <AgentThinkingIndicator phase="tool" size={12} />}
             {t("skills.paste.saveAll")} ({rows.length})
           </Button>
         </DialogFooter>
