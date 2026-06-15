@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import subprocess
 import time
 
 from pydantic import BaseModel, Field, ValidationError
 
+from app.application.command_safety import REFUSED_COMMAND_PATTERNS as _REFUSED_COMMAND_PATTERNS
+from app.application.command_safety import refuse_reason as _shared_refuse_reason
 from app.application.issue_artifact_documents import IssueArtifactDocuments
 from app.application.qa_failure_summary import format_qa_failure_narrative
 
@@ -29,22 +30,9 @@ QA_TOTAL_BUDGET_S = int(os.getenv("QA_TOTAL_BUDGET_S", "300"))
 # mode. Disable for offline tests / quick demos.
 QA_EXECUTE_COMMANDS = os.getenv("QA_EXECUTE_COMMANDS", os.getenv("REAL_CLI", "true")).lower() == "true"
 
-# Patterns we refuse to run even if the LLM proposes them. These are the
-# obvious foot-guns; the worktree is sandboxed-ish (per-issue branch) but
-# never bet the farm on the LLM picking safe commands.
-_REFUSED_COMMAND_PATTERNS = [
-    re.compile(r"\brm\s+-[rRf]"),
-    re.compile(r"\bsudo\b"),
-    re.compile(r"\b(curl|wget)\b[^|;]*\|\s*(sh|bash|zsh|python|node)\b"),
-    re.compile(r":\(\)\s*\{"),  # fork bomb prefix
-    re.compile(r"\bdd\s+if=.*\bof="),
-    re.compile(r"\bmkfs\b|\bfdisk\b|\bformat\b"),
-    re.compile(r"\bshutdown\b|\breboot\b|\bhalt\b|\bpoweroff\b"),
-    re.compile(r"\bgit\s+push\b"),  # the agent should NOT push; user merges.
-    re.compile(r"\bgit\s+reset\s+--hard\b"),
-    re.compile(r"\b(npm|yarn|pnpm)\s+publish\b"),
-    re.compile(r"\bpip\s+install\b.*--user"),  # force into the system env
-]
+# Patterns we refuse to run even if the LLM proposes them live in the shared
+# `command_safety` module (also used by the project dev-server runner). Imported
+# above as `_REFUSED_COMMAND_PATTERNS` to keep this module's existing references.
 
 
 class QAReportDocument(BaseModel):
@@ -391,10 +379,7 @@ class QAWorkflow:
 
     @staticmethod
     def _refuse_reason(cmd: str) -> str | None:
-        for pat in _REFUSED_COMMAND_PATTERNS:
-            if pat.search(cmd):
-                return pat.pattern
-        return None
+        return _shared_refuse_reason(cmd)
 
     @staticmethod
     def _reconcile_status_with_execution(

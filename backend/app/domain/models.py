@@ -104,6 +104,7 @@ class Project(BaseModel):
     default_branch: str = "main"
     origin_url: str | None = None  # Set when project was created via `git clone`
     setup_script: str | None = None  # Optional shell snippet run after worktree creation (e.g. `npm install`)
+    run_command: str | None = None  # Optional dev-server command run in repo_path (e.g. `npm run dev`)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

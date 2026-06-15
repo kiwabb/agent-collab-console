@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Plus,
@@ -13,6 +13,11 @@ import {
   Inbox,
   CheckCircle2,
   Activity,
+  RefreshCw,
+  DownloadCloud,
+  Play,
+  Square,
+  X,
 } from "lucide-react";
 
 import {
@@ -20,10 +25,24 @@ import {
   deleteWorkspace,
   getCodexIssues,
   getProject,
+  getProjectRemoteStatus,
+  getProjectRunLogs,
+  getProjectRunStatus,
   getWorkspaces,
+  isProjectRunStartError,
+  pullProject,
+  startProjectRun,
+  stopProjectRun,
   updateWorkspace,
 } from "@/lib/api";
-import type { CodexIssue, Project, Workspace } from "@/lib/types";
+import type {
+  CodexIssue,
+  Project,
+  ProjectRemoteStatus,
+  ProjectRunLogLine,
+  ProjectRunStatus,
+  Workspace,
+} from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -43,6 +62,14 @@ import { emitDataEvent } from "@/lib/dataEvents";
 import { workspaceLabel } from "@/lib/workspaceLabel";
 import { useI18n } from "@/providers/I18nProvider";
 import { ProjectShell } from "@/features/projects/ProjectShell";
+import { RemoteUpdateBadge } from "./RemoteUpdateBadge";
+import { describePullResult } from "./projectRemoteStatus";
+
+// How often to silently re-check the selected project against its remote.
+const REMOTE_POLL_MS = 5 * 60_000;
+
+// How often to poll for new lines from a running project process.
+const RUN_LOG_POLL_MS = 2_000;
 
 interface Props {
   projectId: string;
@@ -77,6 +104,23 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const [pendingDelete, setPendingDelete] = useState<Workspace | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Remote-update detection. `null` status = not yet loaded → badge shows
+  // "checking…".
+  const [remoteStatus, setRemoteStatus] = useState<ProjectRemoteStatus | null>(null);
+  const [remoteChecking, setRemoteChecking] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  // One-click project run (dev server). `runStatus` mirrors the backend
+  // in-memory process; `runLogs` accumulates streamed lines (polled while
+  // running). `lastSeqRef` tracks the highest seq we've appended so we only
+  // request the delta.
+  const [runStatus, setRunStatus] = useState<ProjectRunStatus | null>(null);
+  const [runBusy, setRunBusy] = useState(false);
+  const [runLogs, setRunLogs] = useState<ProjectRunLogLine[]>([]);
+  const [logsOpen, setLogsOpen] = useState(false);
+  const lastSeqRef = useRef(0);
+  const logEndRef = useRef<HTMLDivElement | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -105,6 +149,183 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Fetch the project's remote status: immediately on mount / projectId change
+  // (with a real `git fetch`), then poll on an interval. Failures stay silent —
+  // the next poll (or a manual check) retries.
+  const loadRemoteStatus = useCallback(
+    async (id: string, opts: { fetch: boolean }) => {
+      setRemoteChecking(true);
+      try {
+        return await getProjectRemoteStatus(id, { fetch: opts.fetch });
+      } finally {
+        setRemoteChecking(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setRemoteStatus(null);
+    const run = async () => {
+      try {
+        const status = await loadRemoteStatus(projectId, { fetch: true });
+        if (!cancelled) setRemoteStatus(status);
+      } catch {
+        // Network/transient error — leave the badge checking; the next poll
+        // (or a manual "check for updates") will retry.
+      }
+    };
+    void run();
+    const id = setInterval(run, REMOTE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [projectId, loadRemoteStatus]);
+
+  const handleCheckUpdate = useCallback(async () => {
+    try {
+      const status = await loadRemoteStatus(projectId, { fetch: true });
+      setRemoteStatus(status);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t("projects.syncFailedOffline");
+      addToast({ type: "error", title: msg });
+    }
+  }, [projectId, loadRemoteStatus, addToast, t]);
+
+  const handleSync = useCallback(async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const result = await pullProject(projectId);
+      const toast = describePullResult(result, t);
+      addToast({ type: toast.type, title: toast.title });
+      // Refresh status (cheap, no fetch) so the badge reflects the new HEAD.
+      const status = await loadRemoteStatus(projectId, { fetch: false });
+      setRemoteStatus(status);
+      // Refresh the workspaces list so any branch-derived fields stay current.
+      if (result.success) void load();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t("projects.syncFailed");
+      addToast({ type: "error", title: msg });
+    } finally {
+      setSyncing(false);
+    }
+  }, [projectId, syncing, loadRemoteStatus, load, addToast, t]);
+
+  // Fetch the project's run status once on mount / projectId change. Reset the
+  // log buffer when switching projects.
+  useEffect(() => {
+    let cancelled = false;
+    setRunStatus(null);
+    setRunLogs([]);
+    setLogsOpen(false);
+    lastSeqRef.current = 0;
+    void (async () => {
+      try {
+        const status = await getProjectRunStatus(projectId);
+        if (!cancelled) {
+          setRunStatus(status);
+          if (status.running) setLogsOpen(true);
+        }
+      } catch {
+        // Non-fatal — the run controls just stay in their default state.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  // While the process is running, poll for new log lines (~2s). The `running` /
+  // `exit_code` from each response keep `runStatus` fresh; once the process
+  // stops, `running` flips false and the effect tears down the interval.
+  const running = runStatus?.running ?? false;
+  useEffect(() => {
+    if (!running) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await getProjectRunLogs(projectId, lastSeqRef.current);
+        if (cancelled) return;
+        if (res.lines.length > 0) {
+          lastSeqRef.current = res.last_seq;
+          setRunLogs((prev) => [...prev, ...res.lines]);
+        }
+        setRunStatus((prev) =>
+          prev
+            ? { ...prev, running: res.running, exit_code: res.exit_code }
+            : prev,
+        );
+      } catch {
+        // Transient — retry on the next tick.
+      }
+    };
+    void tick();
+    const id = setInterval(tick, RUN_LOG_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [running, projectId]);
+
+  // Keep the log panel scrolled to the newest line.
+  useEffect(() => {
+    if (logsOpen) logEndRef.current?.scrollIntoView({ block: "end" });
+  }, [runLogs, logsOpen]);
+
+  const handleStartRun = useCallback(async () => {
+    if (runBusy) return;
+    setRunBusy(true);
+    try {
+      const result = await startProjectRun(projectId);
+      if (isProjectRunStartError(result)) {
+        if (result.error === "already_running") {
+          // Re-sync with the live status rather than show a hard error.
+          const status = await getProjectRunStatus(projectId).catch(() => null);
+          if (status) setRunStatus(status);
+          addToast({ type: "info", title: t("projects.runAlreadyRunning") });
+        } else if (result.error === "no_run_command") {
+          addToast({ type: "error", title: t("projects.runNoCommand") });
+        } else {
+          // refused
+          addToast({
+            type: "error",
+            title: t("projects.runRefused"),
+            message: result.pattern ?? undefined,
+          });
+        }
+        return;
+      }
+      // Success: reset the log buffer for the fresh process and start polling.
+      lastSeqRef.current = 0;
+      setRunLogs([]);
+      setRunStatus(result);
+      setLogsOpen(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t("projects.runStartFailed");
+      addToast({ type: "error", title: msg });
+    } finally {
+      setRunBusy(false);
+    }
+  }, [projectId, runBusy, addToast, t]);
+
+  const handleStopRun = useCallback(async () => {
+    if (runBusy) return;
+    setRunBusy(true);
+    try {
+      const status = await stopProjectRun(projectId);
+      setRunStatus(status);
+      addToast({ type: "success", title: t("projects.runStopped") });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t("projects.runStopFailed");
+      addToast({ type: "error", title: msg });
+    } finally {
+      setRunBusy(false);
+    }
+  }, [projectId, runBusy, addToast, t]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -216,13 +437,21 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             tint="info"
             loading={loading}
           />
-          <Kpi
-            icon={<CheckCircle2 size={14} />}
-            label={t("workspace.projectPage.kpiBranch")}
-            valueText={project?.default_branch ?? "—"}
-            tint="done"
-            loading={loading}
-          />
+          <div className="relative">
+            <Kpi
+              icon={<CheckCircle2 size={14} />}
+              label={t("workspace.projectPage.kpiBranch")}
+              valueText={project?.default_branch ?? "—"}
+              tint="done"
+              loading={loading}
+            />
+            <div className="absolute right-3 bottom-3">
+              <RemoteUpdateBadge
+                status={remoteStatus}
+                checking={remoteChecking && remoteStatus === null}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Toolbar */}
@@ -240,13 +469,125 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             />
           </div>
           <Button
+            size="sm"
+            variant="outline"
+            onClick={handleCheckUpdate}
+            disabled={remoteChecking}
+            aria-label={t("projects.checkUpdate")}
+            title={t("projects.checkUpdate")}
+            className="gap-1 ml-auto"
+          >
+            <RefreshCw size={14} className={cn(remoteChecking && "animate-spin")} />
+            {remoteChecking ? t("projects.checking") : t("projects.checkUpdate")}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleSync}
+            disabled={syncing || !remoteStatus?.can_fast_forward}
+            aria-label={t("projects.sync")}
+            title={t("projects.sync")}
+            className="gap-1"
+          >
+            <DownloadCloud size={14} className={cn(syncing && "animate-pulse")} />
+            {syncing ? t("projects.syncing") : t("projects.sync")}
+          </Button>
+          {running ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleStopRun}
+              disabled={runBusy}
+              aria-label={t("projects.runStop")}
+              title={t("projects.runStop")}
+              className="gap-1"
+            >
+              <span
+                aria-hidden
+                className="inline-block size-2 rounded-full bg-status-running animate-pulse"
+              />
+              <Square size={14} />
+              {runBusy ? t("projects.runStopping") : t("projects.runStop")}
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleStartRun}
+              disabled={runBusy || !project?.run_command}
+              aria-label={t("projects.runStart")}
+              title={project?.run_command ? t("projects.runStart") : t("projects.runNoCommand")}
+              className="gap-1"
+            >
+              <Play size={14} />
+              {runBusy ? t("projects.runStarting") : t("projects.runStart")}
+            </Button>
+          )}
+          <Button
             onClick={() => setCreateOpen(true)}
             size="sm"
-            className="gap-1 bg-brand hover:bg-brand-strong text-black font-semibold ml-auto"
+            className="gap-1 bg-brand hover:bg-brand-strong text-black font-semibold"
           >
             <Plus size={14} /> {t("workspace.projectPage.new")}
           </Button>
         </div>
+
+        {/* Run log panel */}
+        {logsOpen && runLogs.length > 0 && (
+          <section className="rounded-xl border border-border-subtle bg-black/90 overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle bg-surface text-[12px]">
+              <span
+                aria-hidden
+                className={cn(
+                  "inline-block size-2 rounded-full",
+                  running ? "bg-status-running animate-pulse" : "bg-text-muted",
+                )}
+              />
+              <span className="font-semibold">{t("projects.runLogsTitle")}</span>
+              <span className="text-text-muted">
+                {running ? t("projects.runRunning") : t("projects.runStopped")}
+                {runStatus?.pid != null && running ? ` · pid ${runStatus.pid}` : ""}
+                {!running && runStatus?.exit_code != null
+                  ? ` · ${t("projects.runExitCode", { code: runStatus.exit_code })}`
+                  : ""}
+              </span>
+              <div className="ml-auto flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRunLogs([]);
+                    lastSeqRef.current = runStatus?.running ? lastSeqRef.current : 0;
+                  }}
+                  className="rounded-md px-2 py-1 text-text-muted hover:bg-surface-input hover:text-foreground transition-colors"
+                >
+                  {t("projects.runClearLogs")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogsOpen(false)}
+                  aria-label={t("workspace.cancel")}
+                  className="size-7 rounded-md text-text-muted hover:bg-surface-input hover:text-foreground flex items-center justify-center transition-colors"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+            <div className="max-h-72 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed">
+              {runLogs.map((l) => (
+                <div
+                  key={l.seq}
+                  className={cn(
+                    "whitespace-pre-wrap break-all",
+                    l.stream === "stderr" ? "text-status-failed" : "text-text-secondary",
+                  )}
+                >
+                  {l.line}
+                </div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+          </section>
+        )}
 
         {/* Table */}
         <section className="rounded-xl border border-border-subtle bg-surface-raised overflow-hidden">

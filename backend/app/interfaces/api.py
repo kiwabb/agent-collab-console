@@ -22,6 +22,7 @@ from app.application.phase_duration_estimator import get_phase_duration_estimato
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.process_runtime_common import is_agent_message_item_type, is_unusable_result_text
 from app.application.project_service import ProjectError
+from app.application.project_run_manager import ProjectRunError, project_run_manager
 from app.application.skill_service import SkillError
 from app.application.worktree_manager import WorktreeError
 from app.application.git_service import GitError
@@ -797,6 +798,7 @@ class UpdateProjectRequest(BaseModel):
     name: str | None = None
     default_branch: str | None = None
     setup_script: str | None = None
+    run_command: str | None = None
 
 
 def _require_project_service():
@@ -870,6 +872,7 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
             name=request.name,
             default_branch=request.default_branch,
             setup_script=request.setup_script,
+            run_command=request.run_command,
         )
     except ProjectError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -961,6 +964,100 @@ async def get_project_stats(project_id: str):
         "issues_merged": counts["merged"],
         "issues_abandoned": counts["abandoned"],
     }
+
+
+@router.get("/projects/{project_id}/remote-status")
+async def get_project_remote_status(project_id: str, fetch: bool = True):
+    """Whether the project's default branch is behind/ahead of its remote.
+
+    `fetch=true` (default) runs `git fetch` first so the comparison reflects the
+    real remote; `fetch=false` compares against already-known remote-tracking
+    refs (cheaper, for frequent polling). Degraded states (no origin, offline,
+    not a git repo) come back in the `error` field with HTTP 200 rather than an
+    exception, so the UI can show them inline.
+    """
+    svc = _require_project_service()
+    try:
+        return await svc.remote_status(project_id, do_fetch=fetch)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/projects/{project_id}/pull")
+async def pull_project(project_id: str):
+    """Fast-forward the project's default branch to its remote.
+
+    Only performs a clean fast-forward; on any unsafe condition the repo is left
+    untouched and a 409 is returned with a machine `reason`.
+    """
+    svc = _require_project_service()
+    try:
+        result = await svc.fast_forward_pull(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except GitError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if not result.get("success"):
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+# --- Project dev-server runner (ephemeral, in-memory) ---
+
+
+@router.post("/projects/{project_id}/run/start")
+async def start_project_run(project_id: str):
+    """Start the project's configured `run_command` in `repo_path`.
+
+    409 with `{reason}` for no_run_command / already_running / refused
+    (refused additionally carries `pattern`).
+    """
+    svc = _require_project_service()
+    try:
+        project = await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    command = (project.run_command or "").strip()
+    if not command:
+        raise HTTPException(status_code=409, detail={"reason": "no_run_command"})
+    try:
+        return await project_run_manager.start(project_id, command, project.repo_path)
+    except ProjectRunError as exc:
+        detail: dict = {"reason": exc.reason}
+        if exc.pattern is not None:
+            detail["pattern"] = exc.pattern
+        raise HTTPException(status_code=409, detail=detail)
+
+
+@router.post("/projects/{project_id}/run/stop")
+async def stop_project_run(project_id: str):
+    """Idempotently stop the project's dev server. Always 200."""
+    svc = _require_project_service()
+    try:
+        await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return await project_run_manager.stop(project_id)
+
+
+@router.get("/projects/{project_id}/run/status")
+async def get_project_run_status(project_id: str):
+    svc = _require_project_service()
+    try:
+        await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return project_run_manager.status(project_id)
+
+
+@router.get("/projects/{project_id}/run/logs")
+async def get_project_run_logs(project_id: str, after: int = 0):
+    svc = _require_project_service()
+    try:
+        await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return project_run_manager.get_logs(project_id, after)
 
 
 # --- Skills library ---

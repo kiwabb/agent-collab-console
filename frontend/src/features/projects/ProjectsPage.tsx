@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, GitBranch as GitBranchIcon, Plus, Trash2, Wrench } from "lucide-react";
+import { ChevronLeft, DownloadCloud, GitBranch as GitBranchIcon, Plus, RefreshCw, Trash2, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,9 +13,9 @@ import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
-import { deleteProject, getProjectAudit, getProjectBranches, getProjectStats, listProjects, repairProject, updateProject } from "@/lib/api";
+import { deleteProject, getProjectAudit, getProjectBranches, getProjectRemoteStatus, getProjectStats, listProjects, pullProject, repairProject, updateProject } from "@/lib/api";
 import { emitDataEvent } from "@/lib/dataEvents";
-import type { ProjectAuditEntry, ProjectStats } from "@/lib/types";
+import type { ProjectAuditEntry, ProjectRemoteStatus, ProjectStats } from "@/lib/types";
 import { Textarea } from "@/components/ui/textarea";
 import type { GitBranch, Project } from "@/lib/types";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
@@ -23,6 +23,11 @@ import { PageFrame } from "@/features/workbench/components/PageFrame";
 import { CreateProjectDialog } from "./CreateProjectDialog";
 import { BranchListView } from "./BranchListView";
 import { STATS_LABELS } from "./statsLabels";
+import { RemoteUpdateBadge } from "./RemoteUpdateBadge";
+import { describePullResult } from "./projectRemoteStatus";
+
+// How often to silently re-check the selected project against its remote.
+const REMOTE_POLL_MS = 5 * 60_000;
 
 function SetupScriptCard({
   project,
@@ -80,6 +85,62 @@ function SetupScriptCard({
   );
 }
 
+function RunCommandCard({
+  project,
+  onUpdated,
+}: {
+  project: Project;
+  onUpdated: (next: Project) => void;
+}) {
+  const { t } = useI18n();
+  const { addToast } = useToast();
+  const [draft, setDraft] = useState(project.run_command ?? "");
+  const [saving, setSaving] = useState(false);
+  // Reset the draft when the user switches between projects.
+  useEffect(() => {
+    setDraft(project.run_command ?? "");
+  }, [project.id, project.run_command]);
+  const dirty = draft !== (project.run_command ?? "");
+
+  async function save() {
+    if (saving || !dirty) return;
+    setSaving(true);
+    try {
+      const next = await updateProject(project.id, { run_command: draft });
+      onUpdated(next);
+      addToast({ type: "success", title: t("projects.runCommandSaved") });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save run command";
+      addToast({ type: "error", title: msg });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="enterprise-card rounded-2xl overflow-hidden">
+      <CardHeader>
+        <CardTitle className="text-base">{t("projects.runCommandLabel")}</CardTitle>
+        <CardDescription>{t("projects.runCommandHelp")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <Textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={t("projects.runCommandPlaceholder")}
+          rows={3}
+          className="font-mono text-xs"
+        />
+        <div className="flex justify-end">
+          <Button size="sm" onClick={save} disabled={!dirty || saving}>
+            {saving ? t("projects.savingSetup") : t("projects.saveSetup")}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 const SELECTED_PROJECT_KEY = "selectedProjectId";
 
 function formatRelative(iso: string | null): string {
@@ -118,6 +179,11 @@ export function ProjectsPage() {
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [stats, setStats] = useState<ProjectStats | null>(null);
   const [audit, setAudit] = useState<ProjectAuditEntry[]>([]);
+  // Remote-update detection for the selected project. `null` status = not yet
+  // loaded → the badge shows "checking…".
+  const [remoteStatus, setRemoteStatus] = useState<ProjectRemoteStatus | null>(null);
+  const [remoteChecking, setRemoteChecking] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   // Tick state: bumps every 60s so the "5m ago" labels stay reasonably fresh
   // without re-fetching the audit log. Used implicitly by formatRelative since
   // each render recomputes against Date.now().
@@ -205,6 +271,83 @@ export function ProjectsPage() {
       cancelled = true;
     };
   }, [activeId, addToast]);
+
+  // Fetch the selected project's remote status: immediately on selection (with
+  // a real `git fetch`), then poll on an interval. Only the visible project is
+  // checked, to keep network/process cost bounded.
+  const loadRemoteStatus = useCallback(
+    async (projectId: string, opts: { fetch: boolean }) => {
+      setRemoteChecking(true);
+      try {
+        const status = await getProjectRemoteStatus(projectId, { fetch: opts.fetch });
+        return status;
+      } finally {
+        setRemoteChecking(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!activeId) {
+      setRemoteStatus(null);
+      return;
+    }
+    let cancelled = false;
+    const projectId = activeId;
+    setRemoteStatus(null);
+    const run = async () => {
+      try {
+        const status = await loadRemoteStatus(projectId, { fetch: true });
+        if (!cancelled) setRemoteStatus(status);
+      } catch {
+        // Network/transient error — leave the badge in its checking state; the
+        // next poll (or a manual "check for updates") will retry.
+      }
+    };
+    void run();
+    const id = setInterval(run, REMOTE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [activeId, loadRemoteStatus]);
+
+  const handleCheckUpdate = useCallback(async () => {
+    if (!activeProject) return;
+    try {
+      const status = await loadRemoteStatus(activeProject.id, { fetch: true });
+      setRemoteStatus(status);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t("projects.syncFailedOffline");
+      addToast({ type: "error", title: msg });
+    }
+  }, [activeProject, addToast, loadRemoteStatus, t]);
+
+  const handleSync = useCallback(async () => {
+    if (!activeProject || syncing) return;
+    setSyncing(true);
+    try {
+      const result = await pullProject(activeProject.id);
+      const toast = describePullResult(result, t);
+      addToast({ type: toast.type, title: toast.title });
+      // Refresh status + branches so the UI reflects the new HEAD.
+      const status = await loadRemoteStatus(activeProject.id, { fetch: false });
+      setRemoteStatus(status);
+      if (result.success) {
+        try {
+          setBranches(await getProjectBranches(activeProject.id));
+        } catch {
+          // Branch list refresh is best-effort; the sync itself already landed.
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t("projects.syncFailed");
+      addToast({ type: "error", title: msg });
+    } finally {
+      setSyncing(false);
+    }
+  }, [activeProject, addToast, loadRemoteStatus, syncing, t]);
 
   const performDelete = useCallback(
     async (project: Project, force: boolean) => {
@@ -337,6 +480,28 @@ export function ProjectsPage() {
                     <Button
                       size="sm"
                       variant="outline"
+                      onClick={handleCheckUpdate}
+                      disabled={remoteChecking}
+                      aria-label={t("projects.checkUpdate")}
+                      title={t("projects.checkUpdate")}
+                    >
+                      <RefreshCw size={14} className={cn("mr-1", remoteChecking && "animate-spin")} />
+                      {remoteChecking ? t("projects.checking") : t("projects.checkUpdate")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleSync}
+                      disabled={syncing || !remoteStatus?.can_fast_forward}
+                      aria-label={t("projects.sync")}
+                      title={t("projects.sync")}
+                    >
+                      <DownloadCloud size={14} className={cn("mr-1", syncing && "animate-pulse")} />
+                      {syncing ? t("projects.syncing") : t("projects.sync")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
                       onClick={async () => {
                         try {
                           const res = await repairProject(activeProject.id);
@@ -369,7 +534,10 @@ export function ProjectsPage() {
                   <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                     <div>
                       <div className="text-muted-foreground text-xs">{t("projects.defaultBranch")}</div>
-                      <div className="font-mono">{activeProject.default_branch}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono">{activeProject.default_branch}</span>
+                        <RemoteUpdateBadge status={remoteStatus} checking={remoteChecking && remoteStatus === null} />
+                      </div>
                     </div>
                     <div>
                       <div className="text-muted-foreground text-xs">{t("projects.origin")}</div>
@@ -399,6 +567,12 @@ export function ProjectsPage() {
                 </CardContent>
               </Card>
               <SetupScriptCard
+                project={activeProject}
+                onUpdated={(next) => {
+                  setProjects((prev) => (prev ?? []).map((p) => (p.id === next.id ? next : p)));
+                }}
+              />
+              <RunCommandCard
                 project={activeProject}
                 onUpdated={(next) => {
                   setProjects((prev) => (prev ?? []).map((p) => (p.id === next.id ? next : p)));

@@ -109,9 +109,38 @@ export interface Project {
   default_branch: string;
   origin_url: string | null;
   setup_script: string | null;
+  run_command?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
+
+/** Live status of a project's one-click `run_command` dev process. */
+export interface ProjectRunStatus {
+  running: boolean;
+  command: string | null;
+  pid: number | null;
+  started_at: string | null;
+  exit_code: number | null;
+}
+
+/** One captured line from a running project process. */
+export interface ProjectRunLogLine {
+  seq: number;
+  stream: "stdout" | "stderr";
+  line: string;
+  ts: string;
+}
+
+/** Incremental log response from `GET /run/logs?after=<seq>`. */
+export interface ProjectRunLogsResponse {
+  lines: ProjectRunLogLine[];
+  last_seq: number;
+  running: boolean;
+  exit_code: number | null;
+}
+
+/** Refusal reason returned (409) by `POST /run/start`. */
+export type ProjectRunStartReason = "no_run_command" | "already_running" | "refused";
 
 export interface GitBranch {
   name: string;
@@ -518,6 +547,7 @@ export interface UpdateProjectRequest {
   name?: string;
   default_branch?: string;
   setup_script?: string;
+  run_command?: string | null;
 }
 
 export interface MergeIssueResult {
@@ -547,6 +577,42 @@ export interface ProjectStats {
   issues_open: number;
   issues_merged: number;
   issues_abandoned: number;
+}
+
+export type ProjectRemoteError =
+  | "not_a_git_repo"
+  | "no_origin"
+  | "fetch_failed"
+  | "no_remote_branch"
+  | null;
+
+export interface ProjectRemoteStatus {
+  branch: string;
+  current_branch: string;
+  has_origin: boolean;
+  dirty: boolean;
+  behind: number;
+  ahead: number;
+  can_fast_forward: boolean;
+  fetched: boolean;
+  error: ProjectRemoteError;
+}
+
+export type ProjectPullReason =
+  | "no_origin"
+  | "fetch_failed"
+  | "no_remote_branch"
+  | "not_on_default"
+  | "dirty"
+  | "diverged"
+  | "already_up_to_date";
+
+export interface ProjectPullResult {
+  success: boolean;
+  branch: string;
+  new_sha?: string;
+  behind_before?: number;
+  reason?: ProjectPullReason;
 }
 
 export interface ProjectConductorState {

@@ -243,6 +243,87 @@ export async function getProjectStats(projectId: string): Promise<import("./type
   return handleResponse<import("./types").ProjectStats>(response);
 }
 
+export async function getProjectRemoteStatus(
+  projectId: string,
+  options: { fetch?: boolean } = {},
+): Promise<import("./types").ProjectRemoteStatus> {
+  const doFetch = options.fetch ?? true;
+  const response = await fetch(
+    `${API_BASE}/projects/${projectId}/remote-status?fetch=${doFetch ? "true" : "false"}`,
+  );
+  return handleResponse<import("./types").ProjectRemoteStatus>(response);
+}
+
+export async function pullProject(
+  projectId: string,
+): Promise<import("./types").ProjectPullResult> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/pull`, { method: "POST" });
+  // 200 → the ProjectPullResult directly. 409 → FastAPI wraps our refusal
+  // payload as {detail: ProjectPullResult}. Both carry the structured reason we
+  // want to show, so unwrap them here rather than throwing on 409.
+  if (response.status === 200) {
+    return (await response.json()) as import("./types").ProjectPullResult;
+  }
+  if (response.status === 409) {
+    const body = (await response.json()) as { detail: import("./types").ProjectPullResult };
+    return body.detail;
+  }
+  // 404 / 500 etc. are genuine errors — surface them.
+  return handleResponse<import("./types").ProjectPullResult>(response);
+}
+
+// --- Project run (one-click dev server) APIs ---
+
+/**
+ * Result of starting a project's run_command. On success the live
+ * {@link ProjectRunStatus} is returned. On a 409 refusal we unwrap FastAPI's
+ * `{detail: {reason, pattern?}}` into `{error, pattern?}` so the caller can
+ * branch on the reason without catching a thrown error.
+ */
+export type StartProjectRunResult =
+  | import("./types").ProjectRunStatus
+  | { error: import("./types").ProjectRunStartReason; pattern?: string };
+
+export function isProjectRunStartError(
+  result: StartProjectRunResult,
+): result is { error: import("./types").ProjectRunStartReason; pattern?: string } {
+  return "error" in result;
+}
+
+export async function startProjectRun(projectId: string): Promise<StartProjectRunResult> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/run/start`, { method: "POST" });
+  if (response.status === 200) {
+    return (await response.json()) as import("./types").ProjectRunStatus;
+  }
+  if (response.status === 409) {
+    // FastAPI wraps the refusal payload as {detail: {reason, pattern?}}.
+    const body = (await response.json()) as {
+      detail: { reason: import("./types").ProjectRunStartReason; pattern?: string };
+    };
+    return { error: body.detail.reason, pattern: body.detail.pattern };
+  }
+  // 404 / 500 etc. are genuine errors — surface them.
+  return handleResponse<import("./types").ProjectRunStatus>(response);
+}
+
+export async function stopProjectRun(projectId: string): Promise<import("./types").ProjectRunStatus> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/run/stop`, { method: "POST" });
+  return handleResponse<import("./types").ProjectRunStatus>(response);
+}
+
+export async function getProjectRunStatus(projectId: string): Promise<import("./types").ProjectRunStatus> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/run/status`);
+  return handleResponse<import("./types").ProjectRunStatus>(response);
+}
+
+export async function getProjectRunLogs(
+  projectId: string,
+  after = 0,
+): Promise<import("./types").ProjectRunLogsResponse> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/run/logs?after=${after}`);
+  return handleResponse<import("./types").ProjectRunLogsResponse>(response);
+}
+
 export async function getProjectConductorState(projectId: string): Promise<ProjectConductorState> {
   const response = await fetch(`${API_BASE}/codex/projects/${projectId}/conductor-state`);
   return handleResponse<ProjectConductorState>(response);

@@ -94,6 +94,7 @@ class ProjectService:
         name: str | None = None,
         default_branch: str | None = None,
         setup_script: str | None = None,
+        run_command: str | None = None,
     ) -> Project:
         project = await self.get(project_id)
         if name is not None:
@@ -102,6 +103,8 @@ class ProjectService:
             project.default_branch = default_branch
         if setup_script is not None:
             project.setup_script = setup_script
+        if run_command is not None:
+            project.run_command = run_command
         project.updated_at = datetime.now()
         await self.store.save_project(project)
         return project
@@ -112,6 +115,64 @@ class ProjectService:
     async def list_branches(self, project_id: str):
         project = await self.get(project_id)
         return await self.git.list_branches(project.repo_path)
+
+    async def remote_status(self, project_id: str, *, do_fetch: bool = True) -> dict:
+        """How the project's default branch relates to its remote.
+
+        Thin wrapper over GitService.remote_status that resolves the project's
+        repo_path/default_branch. Never raises for common degraded states (no
+        origin / offline / not a git repo) — those surface in the `error` field.
+        """
+        project = await self.get(project_id)
+        return await self.git.remote_status(
+            project.repo_path,
+            branch=project.default_branch,
+            do_fetch=do_fetch,
+        )
+
+    async def fast_forward_pull(self, project_id: str) -> dict:
+        """Fast-forward the project's default branch to its remote.
+
+        Re-checks the safety preconditions server-side (never trusts a prior
+        status the client may have cached) and refuses unless the pull is a
+        clean fast-forward. Returns either:
+          {"success": True, "new_sha", "behind_before", "branch"}
+        or, when it cannot fast-forward:
+          {"success": False, "reason", "branch"}  with reason in
+          no_origin / fetch_failed / no_remote_branch / not_on_default /
+          dirty / diverged / already_up_to_date.
+        The repository is never modified in the failure cases.
+        """
+        project = await self.get(project_id)
+        status = await self.git.remote_status(
+            project.repo_path,
+            branch=project.default_branch,
+            do_fetch=True,
+        )
+        branch = status["branch"]
+        reason: str | None = None
+        if not status["has_origin"]:
+            reason = "no_origin"
+        elif status["error"] in {"fetch_failed", "no_remote_branch"}:
+            reason = status["error"]
+        elif status["current_branch"] != branch:
+            reason = "not_on_default"
+        elif status["dirty"]:
+            reason = "dirty"
+        elif status["ahead"] > 0:
+            reason = "diverged"
+        elif status["behind"] == 0:
+            reason = "already_up_to_date"
+        if reason is not None:
+            return {"success": False, "reason": reason, "branch": branch}
+        behind_before = status["behind"]
+        new_sha = await self.git.fast_forward(project.repo_path, branch)
+        return {
+            "success": True,
+            "new_sha": new_sha,
+            "behind_before": behind_before,
+            "branch": branch,
+        }
 
 
 def _slug_from_url(url: str) -> str:

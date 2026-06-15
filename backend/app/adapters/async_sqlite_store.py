@@ -431,6 +431,7 @@ class AsyncSQLiteStore:
                 default_branch TEXT NOT NULL DEFAULT 'main',
                 origin_url TEXT,
                 setup_script TEXT,
+                run_command TEXT,
                 created_at TEXT,
                 updated_at TEXT
             )
@@ -477,6 +478,8 @@ class AsyncSQLiteStore:
             # last-observed review state for the issue's branch.
             "ALTER TABLE codex_issues ADD COLUMN github_pr_url TEXT",
             "ALTER TABLE codex_issues ADD COLUMN github_pr_state TEXT",
+            # Project dev-server runner: persisted command run in repo_path.
+            "ALTER TABLE projects ADD COLUMN run_command TEXT",
         ):
             try:
                 await conn.execute(stmt)
@@ -1379,7 +1382,7 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
-            "INSERT OR REPLACE INTO projects (id, name, repo_path, default_branch, origin_url, setup_script, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO projects (id, name, repo_path, default_branch, origin_url, setup_script, run_command, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 project.id,
                 project.name,
@@ -1387,6 +1390,7 @@ class AsyncSQLiteStore:
                 project.default_branch,
                 project.origin_url,
                 project.setup_script,
+                project.run_command,
                 self._format_datetime(project.created_at),
                 self._format_datetime(project.updated_at),
             ),
@@ -1408,6 +1412,7 @@ class AsyncSQLiteStore:
             default_branch=row["default_branch"] or "main",
             origin_url=row["origin_url"],
             setup_script=row["setup_script"],
+            run_command=row["run_command"],
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1427,6 +1432,7 @@ class AsyncSQLiteStore:
             default_branch=row["default_branch"] or "main",
             origin_url=row["origin_url"],
             setup_script=row["setup_script"],
+            run_command=row["run_command"],
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1445,6 +1451,7 @@ class AsyncSQLiteStore:
                 default_branch=r["default_branch"] or "main",
                 origin_url=r["origin_url"],
                 setup_script=r["setup_script"],
+                run_command=r["run_command"],
                 created_at=self._parse_datetime(r["created_at"]),
                 updated_at=self._parse_datetime(r["updated_at"]),
             )

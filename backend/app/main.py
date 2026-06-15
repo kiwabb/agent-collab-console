@@ -192,6 +192,12 @@ async def lifespan(app: FastAPI):
                 await result
     except Exception:
         pass
+    # Kill any project dev-server processes so we never leak orphans on restart.
+    try:
+        from app.application.project_run_manager import project_run_manager
+        await project_run_manager.shutdown_all()
+    except Exception:
+        pass
     # Flush + stop the audit-log drain worker before closing the store so any
     # queued audit rows land instead of being dropped on shutdown.
     try:

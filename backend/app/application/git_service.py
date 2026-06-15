@@ -27,10 +27,19 @@ class GitError(RuntimeError):
 # Disallows leading dash so the value can never be interpreted as a flag.
 _BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 
+# Remote names are narrower than branch names (no slashes).
+_REMOTE_RE = re.compile(r"^(?!-)[A-Za-z0-9._-]+$")
+
 
 def _validate_branch(name: str) -> str:
     if not name or not _BRANCH_RE.fullmatch(name):
         raise GitError(f"invalid branch name: {name!r}")
+    return name
+
+
+def _validate_remote(name: str) -> str:
+    if not name or not _REMOTE_RE.fullmatch(name):
+        raise GitError(f"invalid remote name: {name!r}")
     return name
 
 
@@ -224,6 +233,174 @@ class GitService:
         # Most recent first.
         out.sort(key=lambda b: b.last_commit_date or datetime.min, reverse=True)
         return out
+
+    # --- Remote sync ---
+
+    async def has_remote(self, repo_path: str | Path, remote: str = "origin") -> bool:
+        """Return True iff `remote` is configured on the repo."""
+        _validate_path(repo_path)
+        if not _REMOTE_RE.fullmatch(remote):
+            return False
+        result = await self._run(["remote"], cwd=repo_path, check=False)
+        return remote in result.stdout.split()
+
+    async def current_branch(self, repo_path: str | Path) -> str:
+        """Return the currently checked-out branch name (empty if detached)."""
+        _validate_path(repo_path)
+        result = await self._run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path, check=False)
+        name = result.stdout.strip()
+        # Detached HEAD reports "HEAD"; treat as no branch.
+        return "" if name == "HEAD" else name
+
+    async def _ref_exists(self, repo_path: str | Path, ref: str) -> bool:
+        result = await self._run(
+            ["show-ref", "--verify", "--quiet", ref],
+            cwd=repo_path,
+            check=False,
+        )
+        return result.returncode == 0
+
+    async def _count_range(self, repo_path: str | Path, range_expr: str) -> int:
+        result = await self._run(
+            ["rev-list", "--count", range_expr],
+            cwd=repo_path,
+            check=False,
+        )
+        try:
+            return int(result.stdout.strip() or "0")
+        except ValueError:
+            return 0
+
+    async def fetch(
+        self,
+        repo_path: str | Path,
+        remote: str = "origin",
+        branch: str | None = None,
+        timeout: float = 120.0,
+    ) -> None:
+        """`git fetch` to update remote-tracking refs. Raises GitError on failure
+        (e.g. no network / auth). Never touches the working tree."""
+        _validate_path(repo_path)
+        _validate_remote(remote)
+        args = ["fetch", "--quiet", remote]
+        if branch is not None:
+            _validate_branch(branch)
+            args.append(branch)
+        await self._run(args, cwd=repo_path, timeout=timeout)
+
+    async def fast_forward(
+        self,
+        repo_path: str | Path,
+        branch: str,
+        remote: str = "origin",
+    ) -> str:
+        """Fast-forward the repo's checked-out branch to `<remote>/<branch>`.
+
+        Uses `merge --ff-only` (NO autostash): if the merge cannot be a clean
+        fast-forward — diverged history, or local edits that would be
+        overwritten — git refuses and the working tree is left exactly as it
+        was. Raises GitError in that case. Returns the new HEAD SHA on success.
+        Callers must pre-check that the repo is on `branch` and clean.
+        """
+        _validate_path(repo_path)
+        _validate_branch(branch)
+        _validate_remote(remote)
+        result = await self._run(
+            ["merge", "--ff-only", f"{remote}/{branch}"],
+            cwd=repo_path,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise GitError(
+                f"fast-forward failed: {result.stderr.strip() or result.stdout.strip()}"
+            )
+        head = await self._run(["rev-parse", "HEAD"], cwd=repo_path)
+        return head.stdout.strip()
+
+    async def remote_status(
+        self,
+        repo_path: str | Path,
+        branch: str | None = None,
+        remote: str = "origin",
+        do_fetch: bool = True,
+    ) -> dict:
+        """Compute how the local default branch relates to its remote.
+
+        Returns a dict shaped for the API/UI:
+          - branch:          the default branch we compare (resolved if not given)
+          - current_branch:  what the repo currently has checked out
+          - has_origin:      whether `remote` is configured
+          - dirty:           working tree has uncommitted changes
+          - behind / ahead:  commit counts of local `branch` vs `<remote>/<branch>`
+          - can_fast_forward: safe to one-click pull (on default, clean, behind>0, ahead==0)
+          - fetched:         whether a fetch actually ran and succeeded
+          - error:           machine reason when status is degraded, else None
+                             (not_a_git_repo / no_origin / fetch_failed / no_remote_branch)
+
+        Never raises for the common failure modes — they surface via `error`.
+        """
+        _validate_path(repo_path)
+        if not await self.is_git_repo(repo_path):
+            return {
+                "branch": branch or "",
+                "current_branch": "",
+                "has_origin": False,
+                "dirty": False,
+                "behind": 0,
+                "ahead": 0,
+                "can_fast_forward": False,
+                "fetched": False,
+                "error": "not_a_git_repo",
+            }
+
+        has_origin = await self.has_remote(repo_path, remote)
+        branch = _validate_branch(branch or await self.default_branch(repo_path))
+
+        error: str | None = None
+        fetched = False
+        if not has_origin:
+            error = "no_origin"
+        elif do_fetch:
+            try:
+                await self.fetch(repo_path, remote=remote, branch=branch)
+                fetched = True
+            except GitError:
+                error = "fetch_failed"
+
+        current_branch = await self.current_branch(repo_path)
+        dirty = bool((await self.status_porcelain(repo_path)).strip())
+
+        behind = ahead = 0
+        remote_ref = f"{remote}/{branch}"
+        remote_ref_exists = has_origin and await self._ref_exists(
+            repo_path, f"refs/remotes/{remote_ref}"
+        )
+        local_ref_exists = await self._ref_exists(repo_path, f"refs/heads/{branch}")
+        if remote_ref_exists and local_ref_exists:
+            behind = await self._count_range(repo_path, f"{branch}..{remote_ref}")
+            ahead = await self._count_range(repo_path, f"{remote_ref}..{branch}")
+        elif has_origin and not remote_ref_exists and error is None:
+            error = "no_remote_branch"
+
+        can_fast_forward = (
+            has_origin
+            and error is None
+            and not dirty
+            and current_branch == branch
+            and ahead == 0
+            and behind > 0
+        )
+        return {
+            "branch": branch,
+            "current_branch": current_branch,
+            "has_origin": has_origin,
+            "dirty": dirty,
+            "behind": behind,
+            "ahead": ahead,
+            "can_fast_forward": can_fast_forward,
+            "fetched": fetched,
+            "error": error,
+        }
 
     # --- Worktrees ---
 

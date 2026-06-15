@@ -640,3 +640,116 @@ def test_conductor_restart_rejects_missing_project_repo_without_creating_graph(c
     assert refreshed["git_branch"] == issue["git_branch"]
     graph = client.get(f"/api/codex/issues/{issue['id']}/graph")
     assert graph.status_code == 404
+
+
+# --- Remote update detection / fast-forward pull ---
+
+
+def _make_cloned_project(client, tmp_path: Path, name: str):
+    """Create an origin (bare) + working clone, register the clone as a project.
+
+    Returns (project_json, origin_path, work_path).
+    """
+    seed = _make_git_repo(tmp_path / f"{name}-seed")
+    origin = tmp_path / f"{name}-origin.git"
+    subprocess.run(["git", "clone", "--bare", str(seed), str(origin)], check=True, capture_output=True)
+    work = tmp_path / name
+    subprocess.run(["git", "clone", str(origin), str(work)], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@e"], cwd=work, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=work, check=True, capture_output=True)
+    resp = client.post(
+        "/api/projects",
+        json={"name": name, "source": "local", "repo_path": str(work)},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json(), origin, work
+
+
+def _push_upstream_commit(origin: Path, tmp_path: Path, name: str):
+    pusher = tmp_path / f"{name}-pusher"
+    subprocess.run(["git", "clone", str(origin), str(pusher)], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@e"], cwd=pusher, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=pusher, check=True, capture_output=True)
+    (pusher / "upstream.txt").write_text("new upstream work\n")
+    subprocess.run(["git", "add", "upstream.txt"], cwd=pusher, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "upstream"], cwd=pusher, check=True, capture_output=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=pusher, check=True, capture_output=True)
+
+
+def test_remote_status_up_to_date(client, tmp_path):
+    project, _origin, _work = _make_cloned_project(client, tmp_path, "rs-uptodate")
+    resp = client.get(f"/api/projects/{project['id']}/remote-status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["has_origin"] is True
+    assert body["behind"] == 0
+    assert body["can_fast_forward"] is False
+    assert body["error"] is None
+
+
+def test_remote_status_detects_behind(client, tmp_path):
+    project, origin, _work = _make_cloned_project(client, tmp_path, "rs-behind")
+    _push_upstream_commit(origin, tmp_path, "rs-behind")
+    resp = client.get(f"/api/projects/{project['id']}/remote-status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["behind"] == 1
+    assert body["can_fast_forward"] is True
+
+
+def test_remote_status_no_origin(client, tmp_path):
+    project = _create_project(client, tmp_path, name="rs-no-origin")
+    resp = client.get(f"/api/projects/{project['id']}/remote-status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["has_origin"] is False
+    assert body["error"] == "no_origin"
+
+
+def test_remote_status_unknown_project_404(client):
+    resp = client.get("/api/projects/does-not-exist/remote-status")
+    assert resp.status_code == 404
+
+
+def test_pull_fast_forwards_when_behind(client, tmp_path):
+    project, origin, work = _make_cloned_project(client, tmp_path, "pull-ok")
+    _push_upstream_commit(origin, tmp_path, "pull-ok")
+    resp = client.post(f"/api/projects/{project['id']}/pull")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    assert body["behind_before"] == 1
+    assert (work / "upstream.txt").exists()
+    # Now reports up to date.
+    again = client.get(f"/api/projects/{project['id']}/remote-status?fetch=false").json()
+    assert again["behind"] == 0
+
+
+def test_pull_refuses_when_already_up_to_date(client, tmp_path):
+    project, _origin, _work = _make_cloned_project(client, tmp_path, "pull-noop")
+    resp = client.post(f"/api/projects/{project['id']}/pull")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["reason"] == "already_up_to_date"
+
+
+def test_pull_refuses_when_dirty_and_leaves_repo_untouched(client, tmp_path):
+    project, origin, work = _make_cloned_project(client, tmp_path, "pull-dirty")
+    _push_upstream_commit(origin, tmp_path, "pull-dirty")
+    (work / "README.md").write_text("locally edited, uncommitted\n")
+    resp = client.post(f"/api/projects/{project['id']}/pull")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["reason"] == "dirty"
+    # Local edit preserved, upstream change NOT pulled.
+    assert (work / "README.md").read_text() == "locally edited, uncommitted\n"
+    assert not (work / "upstream.txt").exists()
+
+
+def test_pull_refuses_when_diverged(client, tmp_path):
+    project, origin, work = _make_cloned_project(client, tmp_path, "pull-diverged")
+    _push_upstream_commit(origin, tmp_path, "pull-diverged")
+    (work / "local.txt").write_text("local commit\n")
+    subprocess.run(["git", "add", "local.txt"], cwd=work, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "local"], cwd=work, check=True, capture_output=True)
+    resp = client.post(f"/api/projects/{project['id']}/pull")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["reason"] == "diverged"
