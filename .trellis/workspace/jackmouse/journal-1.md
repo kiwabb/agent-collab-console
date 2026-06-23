@@ -601,3 +601,37 @@ Added deterministic Conductor orchestration policy, exposed it in the issue deta
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: 原型设计工具 + 任务批量收尾
+
+**Date**: 2026-06-23
+**Task**: 原型设计工具 + 任务批量收尾
+**Package**: ccgui
+**Branch**: `feat/project-remote-update-detection`
+
+### Summary
+
+新增类 Claude Design 的单文件 HTML 原型设计工具(Project 下 SSE 流式生成 + iframe 沙箱预览 + 版本化迭代),后端 prototype_service + 6 端点 + 2 表,前端 features/prototype,20 测试通过 tsc 绿;归档全部 6 个 in_progress/completed 任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `46e70aa` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

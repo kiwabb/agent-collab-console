@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
-- **Last Active**: 2026-06-08
+- **Total Sessions**: 18
+- **Last Active**: 2026-06-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~603 | Active |
+| `journal-1.md` | ~637 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-06-23 | 原型设计工具 + 任务批量收尾 | `46e70aa` | `feat/project-remote-update-detection` |
 | 17 | 2026-06-08 | Conductor policy and decision explanation | `63f787e`, `8b2c2be`, `a198f2c`, `baf18eb`, `a61163d`, `468fc73` | `main` |
 | 16 | 2026-06-06 | Coordinator source-informed upgrade | `a677095`, `6c426cb`, `8800780` | `main` |
 | 15 | 2026-06-03 | Fix audit log time-filter boundary minute exclusion | `6376dc9` | `main` |
