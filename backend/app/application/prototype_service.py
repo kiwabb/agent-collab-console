@@ -374,6 +374,87 @@ class PrototypeService:
             },
         )
 
+    # --- Project-level batch regen --------------------------------------------
+
+    async def regenerate_all_stream(
+        self, project_id: str
+    ) -> AsyncIterator[StreamEvent]:
+        """Project-level batch regen: re-run generation for every prototype
+        under `project_id` from its original seed brief (i.e. `instruction=None`,
+        which is the same path as the first-time generation — no iteration
+        drift).
+
+        Serial: one prototype at a time, sharing the single SSE connection
+        back to the caller. Inner failures are recorded into `failed` and
+        surfaced as `prototype_error` events; we never break the loop on a
+        bad prototype so a single LLM hiccup doesn't strand the rest.
+
+        Event contract:
+            event: batch_meta       {"count": int}
+            event: prototype_start  {"prototype_id", "title"}
+            event: prototype_delta  {"prototype_id", "chunk"}    (zero or more)
+            event: prototype_done   {"prototype_id", "version_no", "html", "disk_path"}
+            event: prototype_error  {"prototype_id", "message"}
+            ... (per prototype, in order)
+            event: all_done         {"ok": [prototype_id...], "failed": [{"prototype_id","message"}]}
+        """
+        project = await self.store.load_project(project_id)
+        if project is None:
+            raise PrototypeError(f"project not found: {project_id}")
+
+        prototypes = await self.list_for_project(project_id)
+        yield StreamEvent("batch_meta", {"count": len(prototypes)})
+
+        ok: list[str] = []
+        failed: list[dict] = []
+
+        for p in prototypes:
+            yield StreamEvent(
+                "prototype_start",
+                {"prototype_id": p.id, "title": p.title},
+            )
+            try:
+                async for ev in self.stream_events(p.id, instruction=None):
+                    if ev.event == "meta":
+                        # Outer already announced prototype_start with the title;
+                        # the inner model name is noise in the batch view.
+                        continue
+                    if ev.event == "delta":
+                        yield StreamEvent(
+                            "prototype_delta",
+                            {"prototype_id": p.id, **ev.data},
+                        )
+                    elif ev.event == "done":
+                        ok.append(p.id)
+                        yield StreamEvent(
+                            "prototype_done",
+                            {"prototype_id": p.id, **ev.data},
+                        )
+                    elif ev.event == "error":
+                        message = str(ev.data.get("message", "unknown error"))
+                        failed.append({"prototype_id": p.id, "message": message})
+                        yield StreamEvent(
+                            "prototype_error",
+                            {"prototype_id": p.id, "message": message},
+                        )
+            except Exception as exc:  # noqa: BLE001
+                # stream_events normally translates all internal failures
+                # (timeout, runtime error, empty html, missing seed, ...) into
+                # an `error` event and returns cleanly. Anything that bubbles
+                # up here is unexpected (e.g. DB write failure); we still
+                # record it and keep going so the rest of the batch runs.
+                logger.warning(
+                    "regenerate_all: prototype %s aborted: %s", p.id, exc
+                )
+                message = str(exc) or exc.__class__.__name__
+                failed.append({"prototype_id": p.id, "message": message})
+                yield StreamEvent(
+                    "prototype_error",
+                    {"prototype_id": p.id, "message": message},
+                )
+
+        yield StreamEvent("all_done", {"ok": ok, "failed": failed})
+
     # --- Disk helpers ----------------------------------------------------------
 
     @staticmethod

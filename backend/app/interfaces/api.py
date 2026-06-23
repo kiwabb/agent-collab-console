@@ -1118,6 +1118,42 @@ async def stream_prototype(
     )
 
 
+@router.get("/projects/{project_id}/prototypes/regenerate-all/stream")
+async def regenerate_all_project_prototypes(project_id: str):
+    """SSE: batch-regenerate every prototype under a project from its seed brief.
+
+    Project must exist (404 otherwise). The stream emits `batch_meta`,
+    then one `prototype_start` / `prototype_delta*` / `prototype_done` (or
+    `prototype_error`) tuple per prototype, then `all_done` summarizing
+    `{ok, failed}`. Individual prototype failures don't break the batch —
+    they show up as `prototype_error` events plus entries in `all_done.failed`.
+
+    See `PrototypeService.regenerate_all_stream` for the full event contract.
+    """
+    svc = _require_prototype_service()
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    if await codex_store.load_project(project_id) is None:
+        raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+
+    from fastapi.responses import StreamingResponse
+
+    async def gen():
+        async for event in svc.regenerate_all_stream(project_id):
+            payload = json.dumps(event.data, ensure_ascii=False, default=str)
+            yield f"event: {event.event}\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/projects/{project_id}/branches")
 async def get_project_branches(project_id: str):
     svc = _require_project_service()

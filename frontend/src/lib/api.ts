@@ -2048,3 +2048,14 @@ export function getPrototypeStreamUrl(
   if (!instruction || !instruction.trim()) return base;
   return `${base}?instruction=${encodeURIComponent(instruction)}`;
 }
+
+/**
+ * SSE URL for the project-level batch regen endpoint. The stream emits
+ * `batch_meta` → (per-prototype `prototype_start` / `prototype_delta*` /
+ * `prototype_done` | `prototype_error`)* → `all_done` summarizing
+ * `{ok, failed}`. See `PrototypeService.regenerate_all_stream` for the
+ * server contract.
+ */
+export function getRegenerateAllStreamUrl(projectId: string): string {
+  return `${API_BASE}/projects/${encodeURIComponent(projectId)}/prototypes/regenerate-all/stream`;
+}

@@ -279,3 +279,70 @@ def _consume_sse_response(text: str) -> list[dict]:
         if ev_type and ev_data is not None:
             events.append({"event": ev_type, "data": ev_data})
     return events
+
+
+# ---------------------------------------------------------------------------
+# Batch regenerate-all endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_regenerate_all_stream_emits_batch_envelope_and_per_prototype_done(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    c1 = client.post(
+        f"/api/projects/{pid}/prototypes",
+        json={"title": "A", "brief": "brief a"},
+    ).json()
+    c2 = client.post(
+        f"/api/projects/{pid}/prototypes",
+        json={"title": "B", "brief": "brief b"},
+    ).json()
+
+    with client.stream(
+        "GET", f"/api/projects/{pid}/prototypes/regenerate-all/stream"
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    types = [e["event"] for e in events]
+
+    assert types[0] == "batch_meta"
+    assert events[0]["data"] == {"count": 2}
+    assert types[-1] == "all_done"
+
+    starts = [e for e in events if e["event"] == "prototype_start"]
+    assert {e["data"]["prototype_id"] for e in starts} == {c1["id"], c2["id"]}
+
+    dones = [e for e in events if e["event"] == "prototype_done"]
+    assert {e["data"]["prototype_id"] for e in dones} == {c1["id"], c2["id"]}
+    for e in dones:
+        assert e["data"]["version_no"] == 1
+
+    # The ok list follows list_for_project's updated_at-DESC ordering, which
+    # is unstable for ties within the same second — compare as sets.
+    summary = events[-1]["data"]
+    assert sorted(summary["ok"]) == sorted([c1["id"], c2["id"]])
+    assert summary["failed"] == []
+
+
+def test_regenerate_all_stream_returns_404_for_unknown_project(client):
+    resp = client.get(
+        "/api/projects/no-such-project/prototypes/regenerate-all/stream"
+    )
+    assert resp.status_code == 404
+
+
+def test_regenerate_all_stream_with_no_prototypes_emits_zero_summary(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    with client.stream(
+        "GET", f"/api/projects/{pid}/prototypes/regenerate-all/stream"
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    assert [e["event"] for e in events] == ["batch_meta", "all_done"]
+    assert events[0]["data"] == {"count": 0}
+    assert events[-1]["data"] == {"ok": [], "failed": []}

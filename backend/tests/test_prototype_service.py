@@ -335,3 +335,142 @@ async def test_stream_aborts_on_runtime_error(
     assert "502" in events[-1].data["message"]
     reloaded = await svc.get(proto.id)
     assert reloaded.current_version == 0
+
+
+# ---------------------------------------------------------------------------
+# Project-level batch regenerate
+# ---------------------------------------------------------------------------
+
+
+async def _collect_batch(svc: PrototypeService, project_id: str):
+    return [
+        ev
+        async for ev in svc.regenerate_all_stream(project_id)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_regenerate_all_emits_done_per_prototype_and_empty_failed(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    p1 = await svc.create(project.id, "Pricing", "brief 1")
+    p2 = await svc.create(project.id, "Landing", "brief 2")
+
+    events = await _collect_batch(svc, project.id)
+    types = [ev.event for ev in events]
+
+    # Envelope: batch_meta first, all_done last.
+    assert types[0] == "batch_meta"
+    assert events[0].data == {"count": 2}
+    assert types[-1] == "all_done"
+
+    # One prototype_start per prototype; list_for_project orders by
+    # updated_at DESC, which is non-deterministic for ties within the same
+    # second, so we only assert membership here.
+    starts = [ev for ev in events if ev.event == "prototype_start"]
+    assert {ev.data["prototype_id"] for ev in starts} == {p1.id, p2.id}
+    for ev in starts:
+        assert ev.data["title"]
+
+    dones = [ev for ev in events if ev.event == "prototype_done"]
+    assert {ev.data["prototype_id"] for ev in dones} == {p1.id, p2.id}
+    for ev in dones:
+        assert ev.data["version_no"] == 1
+        assert ev.data["html"].lstrip().startswith("<!DOCTYPE html>")
+        assert ev.data["disk_path"]
+
+    deltas = [ev for ev in events if ev.event == "prototype_delta"]
+    assert deltas, "expected per-prototype deltas to be forwarded"
+    assert all(d.data["prototype_id"] in {p1.id, p2.id} for d in deltas)
+
+    assert not [ev for ev in events if ev.event == "prototype_error"]
+
+    summary = events[-1].data
+    assert sorted(summary["ok"]) == sorted([p1.id, p2.id])
+    assert summary["failed"] == []
+
+    # Both prototypes now have a v1 row.
+    for proto in (p1, p2):
+        reloaded = await svc.get(proto.id)
+        assert reloaded.current_version == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_regenerate_all_skips_failure_and_continues_with_remaining(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    p1 = await svc.create(project.id, "Boom", "brief 1")
+    p2 = await svc.create(project.id, "OK", "brief 2")
+    p3 = await svc.create(project.id, "AlsoOK", "brief 3")
+
+    # First call: boom. Subsequent calls: the regular happy-path fake.
+    call_count = {"n": 0}
+
+    async def conditional_stream(prompt, ctx):  # noqa: ARG001
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("upstream 502")
+            yield ""  # pragma: no cover - keeps it a generator
+        async for chunk in _fake_stream_html_chunks(prompt, ctx):
+            yield chunk
+
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        conditional_stream,
+    )
+
+    events = await _collect_batch(svc, project.id)
+    summary = events[-1].data
+    ok_set = set(summary["ok"])
+    failed_set = {f["prototype_id"] for f in summary["failed"]}
+    # `conditional_stream` makes the first call (whichever prototype that
+    # is, in list_for_project's updated_at-DESC order) fail. The other two
+    # succeed. We don't pin down which id is which — only the cardinality
+    # and disjointness, since the store's tie-break on identical updated_at
+    # is non-deterministic.
+    assert ok_set | failed_set == {p1.id, p2.id, p3.id}
+    assert ok_set & failed_set == set()
+    assert len(summary["failed"]) == 1
+    assert "502" in summary["failed"][0]["message"]
+
+    # Error event appeared once, before the remaining two prototypes had
+    # a chance to start.
+    error_events = [ev for ev in events if ev.event == "prototype_error"]
+    assert len(error_events) == 1
+    assert error_events[0].data["prototype_id"] == next(iter(failed_set))
+
+    # All three prototypes were attempted (start + per-prototype events).
+    starts = [ev for ev in events if ev.event == "prototype_start"]
+    assert {ev.data["prototype_id"] for ev in starts} == {p1.id, p2.id, p3.id}
+
+    # The failed prototype stays at current_version=0; the survivors got v1.
+    failed_id = next(iter(failed_set))
+    survivors = {p1.id, p2.id, p3.id} - {failed_id}
+    assert (await svc.get(failed_id)).current_version == 0
+    for sid in survivors:
+        assert (await svc.get(sid)).current_version == 1
+
+
+@pytest.mark.asyncio
+async def test_regenerate_all_with_no_prototypes_emits_zero_summary(
+    svc: PrototypeService, project: Project
+):
+    events = await _collect_batch(svc, project.id)
+    types = [ev.event for ev in events]
+    assert types == ["batch_meta", "all_done"]
+    assert events[0].data == {"count": 0}
+    assert events[-1].data == {"ok": [], "failed": []}
+
+
+@pytest.mark.asyncio
+async def test_regenerate_all_raises_for_unknown_project(svc: PrototypeService):
+    from app.application.prototype_service import PrototypeError
+    with pytest.raises(PrototypeError, match="project not found"):
+        async for _ in svc.regenerate_all_stream("no-such-project"):
+            pass
