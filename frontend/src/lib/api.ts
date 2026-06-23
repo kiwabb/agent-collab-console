@@ -1986,3 +1986,65 @@ export async function translateSkillContent(
   });
   return handleResponse(response);
 }
+
+// ---------------------------------------------------------------------------
+// Prototype design tool (PRD 06-23).
+//
+// All endpoints live under the project tree (`/api/projects/:id/prototypes`)
+// or the prototype tree (`/api/prototypes/:id`). The SSE stream endpoint
+// lives at `/api/prototypes/:id/stream` and is consumed by `EventSource` on
+// the client; we expose `getPrototypeStreamUrl` (instead of a fetch helper)
+// because EventSource owns the connection lifecycle itself.
+// ---------------------------------------------------------------------------
+
+export async function listPrototypes(projectId: string): Promise<import("./types").Prototype[]> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/prototypes`);
+  return handleResponse<import("./types").Prototype[]>(response);
+}
+
+export async function createPrototype(
+  projectId: string,
+  body: { title: string; brief: string },
+): Promise<import("./types").Prototype> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/prototypes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<import("./types").Prototype>(response);
+}
+
+export async function getPrototype(
+  prototypeId: string,
+): Promise<import("./types").PrototypeDetail> {
+  const response = await fetch(`${API_BASE}/prototypes/${prototypeId}`);
+  return handleResponse<import("./types").PrototypeDetail>(response);
+}
+
+export async function getPrototypeVersion(
+  prototypeId: string,
+  versionNo: number,
+): Promise<{ html: string; version_no: number }> {
+  const response = await fetch(
+    `${API_BASE}/prototypes/${prototypeId}/versions/${versionNo}`,
+  );
+  return handleResponse<{ html: string; version_no: number }>(response);
+}
+
+export async function deletePrototype(
+  prototypeId: string,
+): Promise<{ deleted: string }> {
+  const response = await fetch(`${API_BASE}/prototypes/${prototypeId}`, {
+    method: "DELETE",
+  });
+  return handleResponse<{ deleted: string }>(response);
+}
+
+export function getPrototypeStreamUrl(
+  prototypeId: string,
+  instruction?: string,
+): string {
+  const base = `${API_BASE}/prototypes/${encodeURIComponent(prototypeId)}/stream`;
+  if (!instruction || !instruction.trim()) return base;
+  return `${base}?instruction=${encodeURIComponent(instruction)}`;
+}

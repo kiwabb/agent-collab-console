@@ -7,7 +7,7 @@ from uuid import uuid4
 import aiosqlite
 
 from app.adapters.audit_log_query import build_audit_log_query as _build_audit_log_query
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, Project, Skill
+from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, Project, Prototype, PrototypeVersion, Skill
 
 
 class AsyncSQLiteStore:
@@ -888,6 +888,37 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_category_created ON audit_log(category, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)")
+        # --- Prototype design tool (PRD 06-23) ---
+        # Single-file HTML prototypes hang off a Project; iterations are
+        # append-only PrototypeVersion rows. HTML body lives inline so the
+        # SSE-driven preview can render without a disk round-trip.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS prototypes (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                framework TEXT NOT NULL DEFAULT 'html',
+                current_version INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_prototypes_project_id ON prototypes(project_id)")
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS prototype_versions (
+                id TEXT PRIMARY KEY,
+                prototype_id TEXT NOT NULL,
+                version_no INTEGER NOT NULL,
+                instruction TEXT,
+                html TEXT NOT NULL,
+                disk_path TEXT,
+                created_at TEXT,
+                UNIQUE(prototype_id, version_no),
+                FOREIGN KEY (prototype_id) REFERENCES prototypes(id) ON DELETE CASCADE
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_prototype_versions_prototype_id ON prototype_versions(prototype_id)")
         # Phase 4: add instance_index to workflow_nodes for existing DBs
         try:
             await conn.execute(
@@ -1463,6 +1494,144 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         await conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         await conn.commit()
+
+    # --- Prototype store methods (PRD 06-23) ---
+
+    async def save_prototype(self, prototype: Prototype) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            "INSERT OR REPLACE INTO prototypes (id, project_id, title, framework, current_version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                prototype.id,
+                prototype.project_id,
+                prototype.title,
+                prototype.framework,
+                prototype.current_version,
+                self._format_datetime(prototype.created_at),
+                self._format_datetime(prototype.updated_at),
+            ),
+        )
+        await conn.commit()
+
+    async def load_prototype(self, prototype_id: str) -> Prototype | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM prototypes WHERE id = ?", (prototype_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return Prototype(
+            id=row["id"],
+            project_id=row["project_id"],
+            title=row["title"],
+            framework=row["framework"] or "html",
+            current_version=row["current_version"] or 0,
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    async def list_prototypes(self, project_id: str) -> list[Prototype]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM prototypes WHERE project_id = ? ORDER BY updated_at DESC",
+            (project_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            Prototype(
+                id=r["id"],
+                project_id=r["project_id"],
+                title=r["title"],
+                framework=r["framework"] or "html",
+                current_version=r["current_version"] or 0,
+                created_at=self._parse_datetime(r["created_at"]),
+                updated_at=self._parse_datetime(r["updated_at"]),
+            )
+            for r in rows
+        ]
+
+    async def delete_prototype(self, prototype_id: str) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        # Versions CASCADE via FK; explicit delete for clarity in logs.
+        await conn.execute(
+            "DELETE FROM prototype_versions WHERE prototype_id = ?", (prototype_id,)
+        )
+        await conn.execute("DELETE FROM prototypes WHERE id = ?", (prototype_id,))
+        await conn.commit()
+
+    async def save_prototype_version(self, version: PrototypeVersion) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            "INSERT OR REPLACE INTO prototype_versions (id, prototype_id, version_no, instruction, html, disk_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                version.id,
+                version.prototype_id,
+                version.version_no,
+                version.instruction,
+                version.html,
+                version.disk_path,
+                self._format_datetime(version.created_at),
+            ),
+        )
+        await conn.execute(
+            "UPDATE prototypes SET current_version = ?, updated_at = ? WHERE id = ?",
+            (version.version_no, self._format_datetime(version.created_at), version.prototype_id),
+        )
+        await conn.commit()
+
+    async def list_prototype_versions(self, prototype_id: str) -> list[PrototypeVersion]:
+        """Return lightweight metadata rows (no html body) for the version picker."""
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT id, prototype_id, version_no, instruction, disk_path, created_at FROM prototype_versions WHERE prototype_id = ? ORDER BY version_no ASC",
+            (prototype_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            PrototypeVersion(
+                id=r["id"],
+                prototype_id=r["prototype_id"],
+                version_no=r["version_no"],
+                instruction=r["instruction"],
+                html="",
+                disk_path=r["disk_path"],
+                created_at=self._parse_datetime(r["created_at"]),
+            )
+            for r in rows
+        ]
+
+    async def load_prototype_version(
+        self, prototype_id: str, version_no: int
+    ) -> PrototypeVersion | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM prototype_versions WHERE prototype_id = ? AND version_no = ?",
+            (prototype_id, version_no),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return PrototypeVersion(
+            id=row["id"],
+            prototype_id=row["prototype_id"],
+            version_no=row["version_no"],
+            instruction=row["instruction"],
+            html=row["html"],
+            disk_path=row["disk_path"],
+            created_at=self._parse_datetime(row["created_at"]),
+        )
 
     async def append_project_audit(
         self,

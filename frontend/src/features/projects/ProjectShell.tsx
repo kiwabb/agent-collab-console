@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BrainCircuit, Folder, Layers } from "lucide-react";
+import { BrainCircuit, Folder, Layers, Palette } from "lucide-react";
 
 import type { Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
@@ -18,10 +18,12 @@ export function ProjectShell({ projectId, project, children }: Props) {
   const { t } = useI18n();
   const pathname = usePathname();
   const conductorHref = `/projects/${projectId}/conductor`;
+  const prototypesHref = `/projects/${projectId}/prototypes`;
   const workspacesHref = `/projects/${projectId}`;
   const navItems = [
     { href: workspacesHref, label: t("project.nav.workspaces"), icon: Layers },
     { href: conductorHref, label: t("project.nav.conductor"), icon: BrainCircuit },
+    { href: prototypesHref, label: t("project.nav.prototypes"), icon: Palette },
   ];
 
   return (

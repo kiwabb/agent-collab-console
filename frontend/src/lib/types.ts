@@ -114,6 +114,33 @@ export interface Project {
   updated_at: string | null;
 }
 
+/** A Claude-Design-style prototype under a Project (PRD 06-23). */
+export interface Prototype {
+  id: string;
+  project_id: string;
+  title: string;
+  framework: string;
+  current_version: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** Lightweight metadata for one prototype version (no html body). */
+export interface PrototypeVersion {
+  id: string;
+  prototype_id: string;
+  version_no: number;
+  instruction: string | null;
+  disk_path: string | null;
+  created_at: string | null;
+}
+
+/** Detail payload for `GET /api/prototypes/:id`. */
+export interface PrototypeDetail {
+  prototype: Prototype;
+  versions: PrototypeVersion[];
+}
+
 /** Live status of a project's one-click `run_command` dev process. */
 export interface ProjectRunStatus {
   running: boolean;

@@ -109,6 +109,37 @@ class Project(BaseModel):
     updated_at: datetime | None = None
 
 
+class Prototype(BaseModel):
+    """A Claude-Design-style prototype under a Project.
+
+    Holds metadata only — each generated version is a separate
+    `PrototypeVersion` row so iterations (v1→v2→…) are reproducible.
+    """
+    id: str
+    project_id: str
+    title: str
+    framework: str = "html"  # reserved for future multi-file scaffolds
+    current_version: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class PrototypeVersion(BaseModel):
+    """A single generated HTML version of a Prototype.
+
+    `html` is stored in DB so the UI can hydrate the iframe preview without
+    re-reading disk; `disk_path` records the on-disk mirror for downstream
+    tooling (e.g. external prototype indexing).
+    """
+    id: str
+    prototype_id: str
+    version_no: int
+    instruction: str | None = None  # user brief for v1, refinement text for vN+1
+    html: str
+    disk_path: str | None = None
+    created_at: datetime | None = None
+
+
 class Skill(BaseModel):
     """A reusable skill reference: pointer to an externally hosted markdown
     playbook (frontmatter + body) that an agent could later be configured to use.

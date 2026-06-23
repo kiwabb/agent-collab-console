@@ -18,6 +18,8 @@ from app.application.help_orchestrator import HelpOrchestrator
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.git_service import GitService
 from app.application.project_service import ProjectService
+from app.application.prototype_service import PrototypeService
+from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.application.skill_service import SkillService
 from app.application.worktree_manager import WorktreeManager
 
@@ -102,6 +104,17 @@ git_service = GitService()
 project_service = ProjectService(store=async_store, git=git_service) if async_store is not None else None
 skill_service = SkillService(store=async_store) if async_store is not None else None
 worktree_manager = WorktreeManager(git=git_service)
+
+# Runtime catalog service used by both the conductor loop and the prototype
+# design tool. Constructed lazily on first access so missing catalog settings
+# don't break boot; the conductor already does `await catalog_service.load_catalog()`
+# so the prototype path uses the same code path.
+runtime_catalog_service = RuntimeCatalogService(store=async_store) if async_store is not None else None
+prototype_service = (
+    PrototypeService(store=async_store, runtime_catalog_service=runtime_catalog_service)
+    if async_store is not None and runtime_catalog_service is not None
+    else None
+)
 
 # Codex process manager - lazy imported to avoid pty dependency on import
 codex_process_manager = None

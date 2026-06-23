@@ -14,8 +14,8 @@ from pydantic import BaseModel, Field
 from typing import Literal
 import subprocess
 
-from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service, skill_service
-from app.domain.models import CodexIssue, ConductorTask, Project
+from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service, skill_service, prototype_service
+from app.domain.models import CodexIssue, ConductorTask, Project, Prototype, PrototypeVersion
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
 from app.application.phase_duration_estimator import get_phase_duration_estimator
@@ -23,6 +23,7 @@ from app.application.role_workflow_service import RoleWorkflowService
 from app.application.process_runtime_common import is_agent_message_item_type, is_unusable_result_text
 from app.application.project_service import ProjectError
 from app.application.project_run_manager import ProjectRunError, project_run_manager
+from app.application.prototype_service import PrototypeError
 from app.application.skill_service import SkillError
 from app.application.worktree_manager import WorktreeError
 from app.application.git_service import GitError
@@ -919,6 +920,139 @@ async def delete_project(project_id: str, force: bool = False):
             pass
     await svc.delete(project_id)
     return {"deleted": project_id, "cascaded_sessions": len(related_sessions)}
+
+
+# ---------------------------------------------------------------------------
+# Prototype design tool (PRD 06-23): single-file HTML prototypes under a
+# Project, streamed from the LLM via SSE, versioned per iteration.
+# ---------------------------------------------------------------------------
+
+
+class CreatePrototypeRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    brief: str = Field(..., min_length=1, max_length=4000)
+
+
+def _require_prototype_service():
+    if prototype_service is None:
+        raise HTTPException(status_code=503, detail="prototype service not available")
+    return prototype_service
+
+
+def _prototype_to_dict(p: Prototype) -> dict:
+    return {
+        "id": p.id,
+        "project_id": p.project_id,
+        "title": p.title,
+        "framework": p.framework,
+        "current_version": p.current_version,
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+    }
+
+
+def _prototype_version_meta_to_dict(v: PrototypeVersion) -> dict:
+    """Lightweight version row — strips `html` to keep the list endpoint cheap."""
+    return {
+        "id": v.id,
+        "prototype_id": v.prototype_id,
+        "version_no": v.version_no,
+        "instruction": v.instruction,
+        "disk_path": v.disk_path,
+        "created_at": v.created_at.isoformat() if v.created_at else None,
+    }
+
+
+@router.get("/projects/{project_id}/prototypes")
+async def list_project_prototypes(project_id: str):
+    svc = _require_prototype_service()
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    if await codex_store.load_project(project_id) is None:
+        raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+    prototypes = await svc.list_for_project(project_id)
+    return [_prototype_to_dict(p) for p in prototypes]
+
+
+@router.post("/projects/{project_id}/prototypes", status_code=201)
+async def create_project_prototype(project_id: str, request: CreatePrototypeRequest):
+    svc = _require_prototype_service()
+    try:
+        prototype = await svc.create(project_id, request.title, request.brief)
+    except PrototypeError as exc:
+        # 404 (project missing) vs 400 (validation) — message prefix decides.
+        status = 404 if "project not found" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc))
+    return _prototype_to_dict(prototype)
+
+
+@router.get("/prototypes/{prototype_id}")
+async def get_prototype(prototype_id: str):
+    svc = _require_prototype_service()
+    try:
+        detail = await svc.get_with_versions(prototype_id)
+    except PrototypeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {
+        "prototype": _prototype_to_dict(detail["prototype"]),
+        "versions": [_prototype_version_meta_to_dict(v) for v in detail["versions"]],
+    }
+
+
+@router.delete("/prototypes/{prototype_id}")
+async def delete_prototype(prototype_id: str):
+    svc = _require_prototype_service()
+    try:
+        await svc.delete(prototype_id)
+    except PrototypeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"deleted": prototype_id}
+
+
+@router.get("/prototypes/{prototype_id}/versions/{version_no}")
+async def get_prototype_version_html(prototype_id: str, version_no: int):
+    """Return just the HTML body for a version. Used by the version picker."""
+    svc = _require_prototype_service()
+    try:
+        html = await svc.get_version_html(prototype_id, version_no)
+    except PrototypeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"html": html, "version_no": version_no}
+
+
+@router.get("/prototypes/{prototype_id}/stream")
+async def stream_prototype(
+    prototype_id: str,
+    instruction: str | None = Query(default=None, max_length=4000),
+):
+    """SSE: stream a fresh prototype (v1) or an iteration (vN+1).
+
+    Event types: meta, delta, done, error. See `PrototypeService.stream_events`
+    for the full contract.
+    """
+    svc = _require_prototype_service()
+    # Pre-validate the prototype exists so the first SSE frame isn't an error.
+    try:
+        await svc.get(prototype_id)
+    except PrototypeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    from fastapi.responses import StreamingResponse
+
+    async def gen():
+        async for event in svc.stream_events(prototype_id, instruction):
+            payload = json.dumps(event.data, ensure_ascii=False, default=str)
+            yield f"event: {event.event}\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/projects/{project_id}/branches")
