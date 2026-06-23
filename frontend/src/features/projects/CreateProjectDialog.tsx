@@ -36,6 +36,13 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const [originUrl, setOriginUrl] = useState("");
   const [destParent, setDestParent] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Guards against double-firing the native directory picker: the OS dialog is
+  // async, and a second click while it's open spawns a second picker.
+  const [selectingDir, setSelectingDir] = useState(false);
+  // Tracks whether the current name was auto-derived from a picked folder (vs
+  // typed by the user). Lets us refresh the name when the user re-picks a
+  // different folder, without clobbering a name they typed themselves.
+  const [nameAutoFilled, setNameAutoFilled] = useState(false);
 
   // Reset form when dialog opens
   useEffect(() => {
@@ -50,6 +57,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
     setOriginUrl("");
     setDestParent("");
     setSource("local");
+    setNameAutoFilled(false);
   }
 
   async function handleSubmit() {
@@ -65,6 +73,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       });
       emitDataEvent("projects:changed");
       reset();
+      addToast({ type: "success", title: t("projects.toastLoaded") });
       onCreated(project);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to create project";
@@ -75,22 +84,29 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   }
 
   async function handleSelectDirectory(setter: (val: string) => void) {
+    if (selectingDir) return;
+    setSelectingDir(true);
     try {
       const path = await selectDirectory();
       if (path) {
         setter(path);
-        // If name is empty, try to auto-fill it from the folder name
-        if (!name.trim()) {
+        // Auto-fill the name from the folder when it's empty OR was itself
+        // auto-filled from a previous pick — so re-picking a different folder
+        // refreshes the name, but a name the user typed by hand is kept.
+        if (!name.trim() || nameAutoFilled) {
           const parts = path.split(/[/\\]/);
           const lastPart = parts[parts.length - 1] || parts[parts.length - 2]; // handle trailing slash
           if (lastPart) {
             setName(lastPart);
+            setNameAutoFilled(true);
           }
         }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to select directory";
       addToast({ type: "error", title: msg });
+    } finally {
+      setSelectingDir(false);
     }
   }
 
@@ -130,7 +146,14 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
         <div className="space-y-3">
           <div>
             <label className="text-xs font-medium block mb-1">{t("projects.name")}</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="agent-collab-console" />
+            <Input
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameAutoFilled(false);
+              }}
+              placeholder="agent-collab-console"
+            />
           </div>
           {source === "local" ? (
             <div>
@@ -147,6 +170,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
                   variant="outline"
                   size="icon"
                   onClick={() => handleSelectDirectory(setRepoPath)}
+                  disabled={selectingDir}
                   title={t("projects.browse")}
                 >
                   <FolderOpen className="h-4 w-4" />
@@ -177,6 +201,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
                     variant="outline"
                     size="icon"
                     onClick={() => handleSelectDirectory(setDestParent)}
+                    disabled={selectingDir}
                     title={t("projects.browse")}
                   >
                     <FolderOpen className="h-4 w-4" />

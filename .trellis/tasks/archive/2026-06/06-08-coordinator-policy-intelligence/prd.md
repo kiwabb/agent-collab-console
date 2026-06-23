@@ -1,111 +1,116 @@
-# Coordinator Policy Intelligence Phase
+# brainstorm: coordinator policy intelligence
 
 ## Goal
 
-Make the issue Conductor better at choosing the right workflow size before it
-dispatches agents. The immediate problem is that Conductor can execute parallel
-fan-out well, but it does not clearly distinguish "this simple task explicitly
-asked for parallelism" from "this simple task should be handled by one engineer."
+Make the issue Conductor more policy-aware without reducing trust. This slice
+adds deterministic policy intelligence around Conductor LLM usage: the system
+should know when a turn is worth an LLM call, explain why a call was skipped or
+allowed, and turn repeated policy/routing failures into review-only
+self-improvement proposals.
 
-The next phase should add a small, testable scheduling-policy layer that steers
-PM / architect / engineer / QA / batch decisions and explains the reason.
+This advances the Moonshot autonomy goal by making orchestration cheaper, more
+observable, and more capable of learning from stalled or wasteful issue loops.
 
 ## What I Already Know
 
-- The current Conductor prompt already contains broad rules:
-  - use PM for unclear requirements;
-  - use architect for cross-layer/risky changes;
-  - use engineer for code changes;
-  - use QA before success;
-  - use `dispatch_batch` only for independent work.
-- `dispatch_batch` is already robust: isolated worktrees, partial join, merge,
-  conflict reporting, budget-aware concurrency downscale, role retry budget.
-- Budget pressure can reduce batch concurrency, but healthy budget does not stop
-  unnecessary fan-out.
-- Real run `c13b189c...` used 3 engineers because the issue description
-  explicitly said to "Dispatch all three engineers in parallel as one batch."
-  That was correct for a parallel-swarm validation issue, but it exposes that
-  the product needs clearer policy and explanation.
-- UI work has made batch-derived engineer tasks visible, so the next phase can
-  focus on backend decision quality rather than merely presentation.
+* `docs/CONDUCTOR.md` lists trigger gating, historical context, sample
+  efficiency, and policy learning as deferred Conductor work.
+* `backend/app/application/conductor_main_loop.py` builds one large prompt and
+  currently calls the Conductor LLM each loop turn unless no LLM is configured.
+* `run_conductor_loop(...)` already records `llm_request`, `llm_response`,
+  `tool_use`, `tool_result`, and `finalize` turns.
+* `backend/app/application/conductor_tools.py` already enforces several
+  runtime policies, including per-role redispatch limits, role-busy handling,
+  dispatch batch concurrency, and budget-supported fan-out.
+* `backend/app/application/self_improvement_service.py` now writes
+  review-only proposals for QA failures and runtime failures after issue seal.
+* The first self-improvement PR deliberately avoids auto-mutating specs,
+  prompts, policy, memory, or code.
 
 ## Assumptions
 
-- We should not remove `dispatch_batch`; it is valuable when work is truly
-  independent or explicitly requested.
-- The first implementation should be deterministic and testable without running
-  an LLM.
-- The LLM should still be allowed to make nuanced decisions, but the prompt
-  should include a stable policy recommendation and require explicit reasoning
-  when overriding it.
+* The first coordinator-policy slice should be deterministic and review-only.
+* It should not silently change `.trellis/spec/`, prompts, model settings, or
+  runtime policy.
+* Conductor must remain best-effort: policy intelligence failure must not block
+  issue completion.
+* The implementation should stay backend-first; frontend UI can read existing
+  events/proposals later.
 
 ## Requirements
 
-1. Add a pure orchestration-policy classifier for issue title/description.
-   - Detect explicit parallel/batch requests.
-   - Detect trivial/single-slice work.
-   - Detect independent multi-slice work.
-   - Detect ambiguity that should start with PM.
-   - Detect risk/cross-layer/public-contract cues that should start with
-     architect.
-2. Render the classifier result into the Conductor prompt as a new
-   `## ORCHESTRATION POLICY` block.
-3. Policy defaults:
-   - explicit parallel + independent slices -> batch allowed;
-   - trivial work without explicit parallel -> prefer one engineer;
-   - ambiguous requirements -> PM first;
-   - risky/cross-layer work -> architect first;
-   - implementation still requires QA before success.
-4. Preserve existing budget semantics:
-   - budget can downscale concurrency;
-   - budget must not hard-kill the loop;
-   - the new policy must not increase `MAX_PARALLEL_DISPATCH_PER_BATCH`.
-5. Make the policy testable with unit tests around prompt rendering and
-   classification examples.
+* Add a small policy-decision module for Conductor issue turns.
+* Derive a policy decision from current issue/task/graph evidence before a
+  Conductor LLM turn.
+* Represent at least:
+  * `call_llm`: the turn needs the Conductor LLM.
+  * `skip_llm`: the turn is low-value and can avoid an LLM call.
+  * `policy_hint`: short text explaining evidence that should be injected into
+    the Conductor prompt when an LLM call is allowed.
+* Record the policy decision as durable turn/event evidence so operators and
+  tests can see why the Conductor called or skipped the LLM.
+* Keep skip behavior conservative:
+  * Do not skip the initial Conductor decision for a live issue.
+  * Do not skip when a subagent failed, stalled, returned invalid artifacts,
+    exhausted retries, hit role-busy, hit dispatch merge conflicts, or budget
+    warnings/over-budget evidence exists.
+  * Skipping is only allowed for low-signal repeated proceed/finalize-like
+    situations where recent evidence shows no policy risk.
+* Extend self-improvement extraction to create `conductor_policy` proposals
+  when conductor evidence shows repeated role redispatch exhaustion, role-busy
+  loops, invalid artifacts, dispatch-batch conflicts, or illegal/blocked phase
+  transitions.
+* Add focused backend tests for policy classification, prompt/event wiring, and
+  self-improvement proposal extraction.
 
 ## Acceptance Criteria
 
-- [x] A trivial single-file/focused issue without explicit parallel language
-      produces a policy that recommends one engineer and discourages batch.
-- [x] The same style of trivial issue with explicit "parallel/batch" language
-      and independent slices allows batch fan-out.
-- [x] Ambiguous requirement text recommends PM before implementation.
-- [x] Cross-layer/risky/public API/migration language recommends architect.
-- [x] `build_issue_conductor_prompt(...)` includes the policy block.
-- [x] Existing Conductor prompt tests and dispatch/budget tests still pass.
-- [x] Backend tests cover the classifier and prompt injection.
+* [x] A pure function or small service class classifies Conductor policy
+      decisions from issue/task/turn evidence without requiring an LLM.
+* [x] Policy decisions include stable reason codes suitable for tests,
+      proposal fingerprints, and event/audit payloads.
+* [x] `run_issue_conductor_loop(...)` records policy evidence without changing
+      terminal issue sealing semantics.
+* [x] Low-risk skip decisions avoid an LLM call while still recording a
+      `conductor_turn`/event that explains the skip.
+* [x] Risky evidence produces `call_llm` with prompt guidance, not a skip.
+* [x] Self-improvement extraction emits idempotent `conductor_policy`
+      proposals for repeated routing/policy failures.
+* [x] Existing Conductor behavior remains backward-compatible when no policy
+      evidence exists.
+* [x] Focused backend tests pass.
 
-## Out Of Scope
+## Definition of Done
 
-- Replacing the LLM planner with a full deterministic workflow engine.
-- Removing `dispatch_batch`.
-- Changing the worktree merge strategy.
-- Changing UI beyond whatever is needed to expose a policy reason later.
-- Hard-stopping the Conductor on budget pressure.
+* Backend tests added/updated for the new policy module and integration points.
+* Existing focused Conductor and self-improvement tests pass.
+* Full backend test suite passes or any unrelated failure is documented with
+  evidence.
+* `.trellis/spec/` is updated only if the implementation teaches a reusable
+  convention.
+* No automatic policy/spec/prompt mutation is introduced in this slice.
+
+## Out of Scope
+
+* Auto-applying self-improvement proposals.
+* Frontend proposal inbox or Conductor policy dashboard.
+* Model tiering, prompt caching, or external memory APIs.
+* Replacing the Conductor tool loop architecture.
+* Running public SWE-bench evaluations in this task.
 
 ## Technical Notes
 
-- Likely new helper: `backend/app/application/conductor_policy.py`.
-- Likely integration point: `build_issue_conductor_prompt(...)` in
-  `backend/app/application/conductor_main_loop.py`.
-- Relevant specs:
-  - `.trellis/spec/vibe-kanban/backend/index.md`
-  - `.trellis/spec/vibe-kanban/backend/quality-guidelines.md`
-  - `.trellis/spec/vibe-kanban/backend/testing-guidelines.md`
-  - `.trellis/spec/guides/cross-layer-thinking-guide.md`
-- Research notes:
-  - `.trellis/tasks/06-08-coordinator-policy-intelligence/research/current-conductor-policy-baseline.md`
-
-## Recommended MVP
-
-Implement the deterministic classifier and prompt block first. This gives us a
-fast quality improvement, a stable test surface, and a clear foundation for a
-later runtime tool guard or UI decision-explanation panel.
-
-## Implementation Summary
-
-- Added `backend/app/application/conductor_policy.py`.
-- Injected `## ORCHESTRATION POLICY` into the Conductor prompt.
-- Added classifier and prompt injection tests in
-  `backend/tests/test_conductor_policy.py`.
-- Verified related dispatch and budget behavior still passes.
+* Relevant docs: `docs/CONDUCTOR.md`,
+  `docs/superpowers/specs/2026-06-08-self-improvement-loop-design.md`.
+* Research baseline:
+  `.trellis/tasks/06-08-coordinator-policy-intelligence/research/current-conductor-policy-baseline.md`.
+* Likely backend files:
+  * `backend/app/application/conductor_main_loop.py`
+  * `backend/app/application/conductor_tools.py`
+  * `backend/app/application/self_improvement_service.py`
+  * `backend/app/domain/models.py`
+  * `backend/tests/test_conductor_main_loop.py`
+  * `backend/tests/test_self_improvement_service.py`
+* Existing turn kinds are already persisted through `persist_turn(...)`.
+* Existing proposal fingerprints are
+  `project_id|issue_id|target_kind|rule_id`.

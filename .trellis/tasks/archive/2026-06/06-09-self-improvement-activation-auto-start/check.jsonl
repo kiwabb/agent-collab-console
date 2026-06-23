@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared thinking guides for verification"}
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend package conventions"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Verify self-improvement ledger contract"}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Verify HTTP error behavior"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Verify backend quality bar"}

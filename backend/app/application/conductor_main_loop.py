@@ -28,11 +28,17 @@ from app.application.conductor_policy import render_issue_orchestration_policy_b
 from app.application.conductor_tools import build_conductor_tools
 from app.application.conductor_lease import get_conductor_lease_owner, get_conductor_lease_ttl_s
 from app.application.conductor_pause_registry import ConductorPauseRegistry
+from app.application.conductor_policy import (
+    ConductorPolicyDecision,
+    decide_conductor_policy,
+    render_conductor_policy_hint,
+)
 from app.application.phase_duration_estimator import get_phase_duration_estimator
 from app.application.conductor_llm import call_conductor_llm, resolve_conductor_llm_context
 from app.application.project_conductor import ProjectConductor
 from app.application.project_memory_service import record_project_memory
 from app.application.runtime_catalog_service import RuntimeCatalogService
+from app.application.self_improvement_service import record_issue_self_improvement
 from app.domain.models import ConductorStateLog, ConductorTask, ConductorTurn
 
 
@@ -106,11 +112,17 @@ def build_issue_conductor_prompt(
     project_context: str,
     budget_context: str,
     language_directive: str,
+    conductor_policy_hint: str = "",
 ) -> str:
     """Build the issue-level Conductor operating prompt.
 
     Kept as a pure helper so changes to the Conductor's operating contract are
     testable without running the long-lived loop.
+
+    Two policy layers feed the prompt: the static `orchestration_policy` block
+    (serial vs parallel recommendation from the issue text) and the runtime
+    `conductor_policy_hint` (per-loop decision from recent turns / graph /
+    budget — empty string when unavailable).
     """
     orchestration_policy = render_issue_orchestration_policy_block(
         issue.title,
@@ -121,7 +133,7 @@ def build_issue_conductor_prompt(
 ## Issue
 Title: {issue.title}
 Description: {issue.description or "(no description provided)"}
-{project_context}{budget_context}{orchestration_policy}
+{project_context}{budget_context}{orchestration_policy}{conductor_policy_hint}
 
 ## Your Job
 Complete the issue by choosing the smallest reliable multi-agent workflow. You own
@@ -877,6 +889,7 @@ async def run_issue_conductor_loop(
         # the loop is never hard-killed here. Best-effort: a failure must never
         # block the loop.
         budget_context = ""
+        budget_status = None
         try:
             budget_status = await compute_issue_budget_status(store, issue)
             candidates = collect_candidate_model_prices(catalog)
@@ -890,14 +903,54 @@ async def run_issue_conductor_loop(
         except Exception:  # noqa: BLE001
             pass
 
+        # Runtime per-loop policy decision (origin/main design). Required even
+        # when the prompt is built by the local helper below, because the `llm`
+        # closure downstream branches on `policy_decision.action == "skip_llm"`.
+        policy_decision = ConductorPolicyDecision(
+            action="call_llm",
+            reason_code="policy_unavailable",
+            reason="Policy evidence could not be loaded; falling back to the Conductor LLM.",
+        )
+        try:
+            list_turns = getattr(store, "list_conductor_turns", None)
+            recent_turns = []
+            if callable(list_turns):
+                recent_turns = await _maybe_await(list_turns(issue.id, limit=20))
+            graph = None
+            load_graph = getattr(store, "load_workflow_graph_for_issue", None)
+            if callable(load_graph):
+                graph = await _maybe_await(load_graph(issue.id))
+            policy_decision = decide_conductor_policy(
+                issue,
+                conductor_task,
+                recent_turns=recent_turns or [],
+                graph=graph,
+                budget_status=budget_status,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("conductor policy decision failed for issue %s: %s", issue.id, exc)
+
+        # Local refactored prompt builder (Operating Contract design) + the
+        # runtime policy hint injected as a second policy layer.
         prompt = build_issue_conductor_prompt(
             issue=issue,
             project_context=project_context,
             budget_context=budget_context,
             language_directive=language_directive,
+            conductor_policy_hint=render_conductor_policy_hint(policy_decision),
         )
 
         async def llm(messages, tools, on_token_delta=None):
+            if policy_decision.action == "skip_llm":
+                return {
+                    "stop_reason": "tool_use",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "toolu_policy_skip",
+                        "name": "finalize_task",
+                        "input": {"status": "done", "answer": policy_decision.reason},
+                    }],
+                }
             if cllm is None:
                 return {
                     "stop_reason": "tool_use",
@@ -940,6 +993,13 @@ async def run_issue_conductor_loop(
 
         heartbeat_pulse_task = asyncio.create_task(
             heartbeat_pulse(), name=f"conductor-heartbeat-{issue.id[:8]}"
+        )
+
+        await persist_turn(
+            turn_index=-1,
+            sub_index=0,
+            kind="policy_decision",
+            payload=policy_decision.to_payload(),
         )
 
         result = await run_conductor_loop(
@@ -1131,6 +1191,10 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
                 await store.save_workflow_graph(graph)
             if graph_status == "done":
                 await record_project_memory(graph.id, store)
+                try:
+                    await record_issue_self_improvement(issue, store)
+                except Exception as exc:  # noqa: BLE001
+                    logging.getLogger(__name__).warning("self_improvement extraction failed: %s", exc)
         if issue.status not in {"awaiting_approval", "awaiting_review", "awaiting_merge"}:
             issue.status = "completed" if graph_status == "done" else "failed"
             issue.updated_at = datetime.now()
@@ -1199,6 +1263,8 @@ def _summarize_turn(kind: str, payload: dict[str, Any]) -> str:
     if kind == "tool_result":
         status = "error" if payload.get("is_error") else "ok"
         return f"Tool result: {payload.get('name') or 'unknown'} ({status})"
+    if kind == "policy_decision":
+        return f"Policy decision: {payload.get('action') or 'call_llm'} ({payload.get('reason_code') or 'unknown'})"
     if kind == "finalize":
         return f"Finalize: {payload.get('status') or 'done'}"
     if kind == "error":

@@ -716,6 +716,43 @@ class ProjectMemoryEmbedding:
     created_at: datetime | None = None
 
 
+@dataclass
+class SelfImprovementProposal:
+    """Review-only proposal row produced from issue completion evidence."""
+
+    id: str
+    project_id: str
+    issue_id: str
+    target_kind: str
+    title: str
+    recommendation: str
+    evidence_json: str = "[]"
+    severity: str = "info"
+    confidence: float = 0.0
+    status: str = "proposed"
+    fingerprint: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass
+class SelfImprovementApplicationEvent:
+    """Durable audit row for reviewed self-improvement apply/rollback attempts."""
+
+    id: str
+    proposal_id: str
+    project_id: str
+    issue_id: str
+    target_kind: str
+    action: str
+    status: str
+    path: str | None = None
+    content_sha256: str | None = None
+    result_json: str = "{}"
+    error: str | None = None
+    created_at: datetime | None = None
+
+
 AgentMessageType = Literal["handoff", "critique", "clarification", "answer", "specialist_call", "specialist_result"]
 
 

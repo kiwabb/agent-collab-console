@@ -44,10 +44,13 @@ async def test_lifespan_recovers_conductors_and_runs_watchdog(monkeypatch):
     import asyncio
     import app.bootstrap as bootstrap_module
     import app.application.conductor_recovery as conductor_recovery
+    import app.application.project_review_scheduler as project_review_scheduler
+    import app.application.self_improvement_proposal_scheduler as self_improvement_proposal_scheduler
     import app.application.stall_watchdog as stall_watchdog
 
     calls: list[tuple[str, str | None]] = []
     created_tasks: list[str | None] = []
+    tasks: list[FakeTask] = []
 
     class FakeTask:
         def __init__(self, name: str | None) -> None:
@@ -75,15 +78,29 @@ async def test_lifespan_recovers_conductors_and_runs_watchdog(monkeypatch):
     async def fake_stall_watchdog(store, get_process_manager, run_task_with_user_content):
         return None
 
+    async def fake_project_review_scheduler(store, *, event_bus=None):
+        return None
+
+    async def fake_self_improvement_proposal_scheduler(store, *, activate_fn, event_bus=None):
+        return None
+
     def fake_create_task(coro, *, name=None, context=None):
         created_tasks.append(name)
         coro.close()
-        return FakeTask(name)
+        task = FakeTask(name)
+        tasks.append(task)
+        return task
 
     monkeypatch.setattr(bootstrap_module, "async_store", _AsyncStore())
     monkeypatch.setattr(bootstrap_module, "codex_process_manager", _AwaitableProcessManager())
     monkeypatch.setattr(conductor_recovery, "recover_orphaned_conductors", fake_recover)
     monkeypatch.setattr(conductor_recovery, "run_watchdog", fake_conductor_watchdog)
+    monkeypatch.setattr(project_review_scheduler, "run_project_review_scheduler_loop", fake_project_review_scheduler)
+    monkeypatch.setattr(
+        self_improvement_proposal_scheduler,
+        "run_self_improvement_proposal_scheduler_loop",
+        fake_self_improvement_proposal_scheduler,
+    )
     monkeypatch.setattr(stall_watchdog, "run", fake_stall_watchdog)
     monkeypatch.setattr(asyncio, "create_task", fake_create_task)
 
@@ -93,3 +110,7 @@ async def test_lifespan_recovers_conductors_and_runs_watchdog(monkeypatch):
     assert calls[0][0] == "recover"
     assert calls[0][1]
     assert "conductor-recovery-watchdog" in created_tasks
+    assert "project-review-scheduler" in created_tasks
+    assert "self-improvement-proposal-scheduler" in created_tasks
+    assert any(task.name == "project-review-scheduler" and task.cancelled for task in tasks)
+    assert any(task.name == "self-improvement-proposal-scheduler" and task.cancelled for task in tasks)

@@ -153,6 +153,9 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-card: var(--card);
+
+  /* Settings page sidebar width (configurable via this variable) */
+  --width-settings-sidebar: 15rem;
 }
 
 @layer base {

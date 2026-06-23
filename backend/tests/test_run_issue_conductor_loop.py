@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.application.conductor_policy import ConductorPolicyDecision
 from app.domain.models import CodexIssue, ProjectConductorState, WorkflowGraph
 
 
@@ -475,3 +476,130 @@ async def test_loop_pause_resume_cancels_inflight_llm_and_retries():
     assert result.status == "done"
     assert result.final_text == "resumed cleanly"
     assert llm_calls >= 2
+
+
+@pytest.mark.asyncio
+async def test_loop_records_policy_decision_and_injects_prompt_hint():
+    from app.application.conductor_main_loop import run_issue_conductor_loop
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    store = _make_store(issue, graph)
+    store.save_conductor_turn = AsyncMock()
+    store.list_conductor_turns = AsyncMock(return_value=[])
+    event_bus = MagicMock()
+    event_bus.append = AsyncMock()
+
+    captured = {}
+
+    async def stub_llm(messages=None, tools=None, *args, **kwargs):
+        if messages is None and args:
+            messages = args[0]
+        captured["prompt"] = str(messages[0]["content"])
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "policy hint observed"},
+                }
+            ],
+        }
+
+    registry = _make_noop_conductor_tools_registry()
+    mock_conductor = MagicMock()
+    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.append_hot_event = AsyncMock()
+    policy = ConductorPolicyDecision(
+        action="call_llm",
+        reason_code="role_retries_exhausted",
+        reason="engineer exhausted redispatch budget",
+        prompt_hint="Do not dispatch engineer again.",
+        evidence=[{"kind": "test"}],
+    )
+
+    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
+         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
+         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm), \
+         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
+         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
+         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock), \
+         patch("app.application.conductor_main_loop.decide_conductor_policy", return_value=policy):
+
+        mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
+
+        result = await run_issue_conductor_loop(
+            issue=issue,
+            project_id="proj-001",
+            store=store,
+            event_bus=event_bus,
+            task_dispatcher_fn=None,
+        )
+
+    assert result.status == "done"
+    assert "## POLICY HINT" in captured["prompt"]
+    assert "Do not dispatch engineer again." in captured["prompt"]
+    policy_turns = [
+        call.args[0]
+        for call in store.save_conductor_turn.call_args_list
+        if call.args and call.args[0].kind == "policy_decision"
+    ]
+    assert len(policy_turns) == 1
+    assert "role_retries_exhausted" in policy_turns[0].payload_json
+    assert any(
+        call.args
+        and call.args[0].get("type") == "conductor_turn"
+        and call.args[0].get("kind") == "policy_decision"
+        for call in event_bus.append.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_loop_safe_skip_avoids_conductor_llm_call():
+    from app.application.conductor_main_loop import run_issue_conductor_loop
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+
+    issue = _make_issue()
+    graph = _make_graph(issue.id)
+    store = _make_store(issue, graph)
+    store.save_conductor_turn = AsyncMock()
+    store.list_conductor_turns = AsyncMock(return_value=[])
+    registry = _make_noop_conductor_tools_registry()
+    mock_conductor = MagicMock()
+    mock_conductor._load_state = AsyncMock(return_value=None)
+    mock_conductor.append_hot_event = AsyncMock()
+    policy = ConductorPolicyDecision(
+        action="skip_llm",
+        reason_code="recent_safe_finalize",
+        reason="Recent Conductor evidence already finalized successfully; avoid a redundant LLM turn.",
+        evidence=[{"kind": "recent_finalize_count", "count": 2}],
+    )
+
+    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
+         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
+         patch("app.application.conductor_main_loop.call_conductor_llm", new_callable=AsyncMock) as mock_llm, \
+         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
+         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
+         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock), \
+         patch("app.application.conductor_main_loop.decide_conductor_policy", return_value=policy):
+
+        mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
+
+        result = await run_issue_conductor_loop(
+            issue=issue,
+            project_id="proj-001",
+            store=store,
+            event_bus=None,
+            task_dispatcher_fn=None,
+        )
+
+    assert result.status == "done"
+    assert result.final_text == policy.reason
+    assert mock_llm.await_count == 0

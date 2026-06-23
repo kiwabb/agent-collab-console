@@ -6,18 +6,24 @@ LLM spend. The storage model is ready for a richer embedding backend later.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from app.application.github_pr_followup import sweep_project_github_prs
 from app.domain.models import (
     ConductorTask,
     ProjectConductorState,
     ProjectMemoryEmbedding,
     SubAgentResult,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def estimate_tokens(text: str) -> int:
@@ -41,6 +47,19 @@ def _tokenize(text: str) -> set[str]:
         for token in re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
         if len(token) >= 3
     }
+
+
+async def _run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> subprocess.CompletedProcess[str]:
+    def _run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+
+    return await asyncio.get_running_loop().run_in_executor(None, _run)
 
 
 class ProjectConductor:
@@ -77,24 +96,46 @@ class ProjectConductor:
         if task.task_kind == "scheduled_review" and not question:
             question = "Run a scheduled project health review."
         answer = await self.answer_question(question, state=state)
+        github_pr_followup = await self._run_scheduled_pr_followup(task)
         await self._append_hot_without_compaction(
             state,
             {"role": "user", "kind": task.task_kind, "content": question, "task_id": task.id},
         )
+        answer_event = {"role": "project_conductor", "kind": "answer", "content": answer, "task_id": task.id}
+        if github_pr_followup is not None:
+            answer_event["github_pr_followup"] = github_pr_followup
         await self._append_hot_without_compaction(
             state,
-            {"role": "project_conductor", "kind": "answer", "content": answer, "task_id": task.id},
+            answer_event,
         )
         state.total_tasks_handled += 1
         await self._ensure_token_budget(state)
         await self.store.save_project_conductor_state(state)
 
         result = {"status": "done", "answer": answer, "task_id": task.id}
+        if github_pr_followup is not None:
+            result["github_pr_followup"] = github_pr_followup
         task.status = "done"
         task.result_json = json.dumps(result, ensure_ascii=False)
         task.updated_at = datetime.now()
         await self.store.save_conductor_task(task)
         return result
+
+    async def _run_scheduled_pr_followup(self, task: ConductorTask) -> dict[str, object] | None:
+        if task.task_kind != "scheduled_review":
+            return None
+        try:
+            summary = await sweep_project_github_prs(
+                self.project_id,
+                store=self.store,
+                event_bus=self.event_bus,
+                run_subprocess=_run_subprocess,
+                auto_merge=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - scheduled reviews are best-effort supervisor work.
+            logger.exception("scheduled GitHub PR follow-up failed project_id=%s task_id=%s", self.project_id, task.id)
+            return {"status": "failed", "error": str(exc)}
+        return summary.to_dict()
 
     async def notify_subagent_complete(
         self,

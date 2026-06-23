@@ -15,6 +15,7 @@ import {
   Users,
   ChevronsUpDown,
   Library,
+  Plus,
   Sparkles,
   Activity,
   ScrollText,
@@ -178,21 +179,17 @@ export function AppSidebar() {
     <aside className="enterprise-panel w-64 shrink-0 h-full rounded-[30px] flex flex-col overflow-hidden">
       {/* PROJECT SELECTOR */}
       <div className="p-3">
-        <div className="mb-2 rounded-2xl border border-border-subtle bg-surface/50 px-3 py-2">
-          <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-[0.18em] text-text-muted">
-            <span>multi-agent ops</span>
-            <span className="agent-orb" />
-          </div>
-          <div className="agent-rail mt-2 h-px opacity-80" />
-        </div>
         <DropdownMenu>
           <DropdownMenuTrigger className="w-full flex items-center gap-3 p-2 rounded-2xl border border-border-subtle bg-surface-raised/80 hover:bg-surface-hover transition-colors text-left outline-none cursor-default">
             <div className="size-8 shrink-0 rounded-xl bg-brand/15 flex items-center justify-center text-brand font-bold text-xs uppercase">
               {(projects.find(p => p.id === projectId)?.name || "P").charAt(0)}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-semibold truncate text-foreground">
-                {projects.find(p => p.id === projectId)?.name || t("workbench.projectSwitcher")}
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[13px] font-semibold truncate text-foreground">
+                  {projects.find(p => p.id === projectId)?.name || t("workbench.projectSwitcher")}
+                </span>
+                <span className="agent-orb shrink-0" aria-hidden />
               </div>
               <div className="text-[10px] text-text-muted truncate">
                 {t("workbench.changeProject")}
@@ -222,7 +219,7 @@ export function AppSidebar() {
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => router.push("/projects")}>
-              <Settings size={14} className="mr-2 opacity-50" />
+              <Plus size={14} className="mr-2 opacity-50" />
               {t("workbench.manageProjects")}
             </DropdownMenuItem>
           </DropdownMenuContent>

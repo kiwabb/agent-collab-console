@@ -103,6 +103,9 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const [editing, setEditing] = useState<Workspace | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Workspace | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Guards the auto-create-default-workspace path so it fires at most once per
+  // mount (React strict-mode double effects / re-loads won't spawn duplicates).
+  const autoCreatedRef = useRef(false);
 
   // Remote-update detection. `null` status = not yet loaded → badge shows
   // "checking…".
@@ -129,6 +132,25 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
         getWorkspaces(projectId),
       ]);
       setProject(proj);
+      // Default workspace: never force the user to hand-create one. If a project
+      // has no workspace yet, auto-create a default and drop straight into it.
+      if (ws.length === 0 && !autoCreatedRef.current) {
+        autoCreatedRef.current = true;
+        try {
+          const name = proj.name.trim().length >= 3 ? proj.name.trim() : t("workspace.defaultName");
+          const created = await createWorkspace(name, projectId, proj.repo_path ?? "");
+          emitDataEvent("workspaces:changed");
+          router.replace(`/workspaces/${created.id}`);
+          return;
+        } catch (err) {
+          // Fall through to the normal (empty) list so the user can retry by hand.
+          addToast({
+            type: "error",
+            title: t("workspace.toast.createFailed"),
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       setWorkspaces(ws);
       // Load issues per workspace in parallel for the count column.
       const entries = await Promise.all(
@@ -144,7 +166,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [projectId, addToast, t]);
+  }, [projectId, addToast, t, router]);
 
   useEffect(() => {
     void load();

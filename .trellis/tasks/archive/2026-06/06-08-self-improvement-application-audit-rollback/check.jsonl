@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared Trellis development guidelines"}
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend API and persistence guidelines"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Self-improvement proposal/application storage and API contracts"}

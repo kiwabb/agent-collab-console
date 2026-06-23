@@ -102,8 +102,17 @@ store gets a real-async-store migration test.
 
 #### 3. Contracts
 
-- Top-level response fields: `service`, `status`, `generated_at`, `database`, `runtime_catalog`, `executors`, `websockets`, `config`, `checks`.
+- Top-level response fields: `service`, `status`, `generated_at`, `database`,
+  `runtime_catalog`, `github_pr_followup`, `project_review_scheduler`,
+  `executors`, `websockets`, `config`, `checks`.
 - `status` is `"ok"` only when all checks are ok; use `"degraded"` when any check is degraded or errored but the endpoint can still return a snapshot.
+- Supervisor snapshots such as `github_pr_followup` and
+  `project_review_scheduler` produce degraded checks when `last_error` is set
+  or when `running` is `true`; running-state details must be short generic
+  messages, not project/issue/task content.
+- Scheduler-style snapshots with `interval_s` and `last_completed_at` may also
+  produce degraded stale checks when the last completion is older than twice the
+  configured interval. Missing `last_completed_at` alone is not stale.
 - Runtime catalog entries may expose booleans such as `api_endpoint_configured` and `api_key_configured`.
 - Runtime catalog entries must not expose raw secret values, raw API keys, bearer tokens, auth headers, or provider credentials.
 - Config fields should expose booleans for whether sensitive paths or env values are configured, not their raw values.
@@ -114,6 +123,15 @@ store gets a real-async-store migration test.
 - Database query raises -> keep HTTP `200`, set `database.status = "error"`, append a database error check, and set top-level `status = "degraded"`.
 - Runtime catalog load raises -> keep HTTP `200`, set `runtime_catalog.status = "error"`, append a runtime catalog error check, and set top-level `status = "degraded"`.
 - Runtime catalog has no enabled executor -> keep HTTP `200`, append a degraded runtime catalog check, and set top-level `status = "degraded"`.
+- Supervisor snapshot has `last_error` -> keep HTTP `200`, append a degraded
+  supervisor check using that safe error text, and set top-level `status =
+  "degraded"`.
+- Supervisor snapshot has `running=true` and no error -> keep HTTP `200`,
+  append a degraded supervisor check with a generic running-state detail, and
+  set top-level `status = "degraded"`.
+- Scheduler snapshot has `last_completed_at` older than `interval_s * 2` and
+  no error/running state -> keep HTTP `200`, append a degraded stale check with
+  a generic detail, and set top-level `status = "degraded"`.
 
 #### 5. Good/Base/Bad Cases
 
@@ -943,6 +961,488 @@ await store.save_audit_log(...)        # direct write at a choke point → drift
 Correct:
 ```python
 audit_logger.record("git_command", issue_id=..., payload={...}, status="ok")  # enqueue, best-effort, non-blocking
+```
+
+---
+
+### Scenario: GitHub PR Follow-Up Sweep (review / CI / merge state)
+
+#### 1. Scope / Trigger
+
+- Trigger: changing GitHub PR refresh, project-level PR sweeps, or any
+  conductor/scheduled-review path that follows an opened PR through review,
+  status checks, and remote merge.
+- Why code-spec depth: this is the autonomy bridge after "open PR". If it
+  falls back to a manual Refresh PR button, issues stall outside the conductor.
+  If one PR refresh failure aborts the sweep, unattended project operation drops
+  work.
+
+#### 2. Signatures
+
+```python
+# github_pr_followup.py
+async def refresh_issue_github_pr(issue_id, *, store, event_bus, run_subprocess) -> GitHubPRFollowupResult
+async def sweep_project_github_prs(project_id, *, store, event_bus, run_subprocess, auto_merge=False) -> GitHubPRFollowupSummary
+def get_github_pr_followup_status() -> dict[str, object]
+def reset_github_pr_followup_status() -> None
+
+# api.py
+POST /api/codex/issues/{issue_id}/pr/refresh -> CodexIssue
+POST /api/codex/projects/{project_id}/pr/follow-up {"auto_merge": false} -> {
+    project_id, counts, results: [{issue_id, status, github_pr_state, message, error}]
+}
+GET /api/diagnostics -> {"github_pr_followup": {...}, ...}
+
+# project_conductor.py
+ProjectConductor.handle_task(ConductorTask(task_kind="scheduled_review")) -> {
+    status, answer, task_id, github_pr_followup
+}
+```
+
+#### 3. Contracts
+
+- The single-issue manual endpoint and project sweep MUST share the same
+  application-layer refresh implementation.
+- `gh pr view` MUST request
+  `state,reviewDecision,reviews,mergeStateStatus,statusCheckRollup` so review,
+  CI, and merge state are visible in one call.
+- Stable result statuses are:
+  - `updated`: PR open, no requested changes or failed completed checks.
+  - `changes_requested`: `reviewDecision == "CHANGES_REQUESTED"`; latest
+    engineer task is set to `pending` with review feedback.
+  - `checks_failed`: at least one completed status check conclusion is not
+    success/skipped/neutral; result message names failed checks.
+  - `checks_pending`: at least one status check is not completed; auto-merge
+    MUST NOT run while this is true.
+  - `checks_missing`: auto-merge was requested but GitHub returned no status
+    checks; missing checks are not treated as green.
+  - `review_required`: auto-merge was requested but the PR is not approved.
+  - `merge_blocked`: auto-merge was requested but `mergeStateStatus` is not a
+    known mergeable value.
+  - `merge_failed`: `gh pr merge` returned non-zero; audit/event recorded and
+    the sweep continues.
+  - `merged`: `state == "MERGED"`; issue becomes
+    `git_merge_status="merged"` and lifecycle `status="completed"`.
+  - `failed`: `gh` non-zero, bad JSON, or subprocess exception.
+- Auto-merge is opt-in only (`auto_merge=True`). Default project follow-up MUST
+  never merge.
+- Auto-merge may call
+  `gh pr merge <github_pr_url> --merge --delete-branch` only when:
+  `state == "OPEN"`, `reviewDecision == "APPROVED"`,
+  `mergeStateStatus in {"CLEAN", "HAS_HOOKS", "UNSTABLE"}`, at least one
+  status check exists, every status check is completed, and no completed status
+  check failed.
+- Every result writes `project_audit` event
+  `github_pr_followup_<status>` and emits an `issue_pr_followup` event.
+- The project sweep skips issues with no `github_pr_url` or already merged
+  `git_merge_status`.
+- The project sweep MUST maintain an in-memory operational status snapshot with
+  only safe fields: `configured`, `running`, `sweep_count`, `last_started_at`,
+  `last_completed_at`, `last_error`, `last_summary_counts`, and
+  `auto_merge_enabled`.
+- `GET /api/diagnostics` MUST expose that snapshot as top-level
+  `github_pr_followup`. It must not expose GitHub tokens, project names, repo
+  paths, prompts, issue titles/descriptions, or full tracebacks.
+- A successful project sweep records completion time, increments
+  `sweep_count`, clears `last_error`, and stores summary counts. A sweep-level
+  exception records safe error text, increments `sweep_count`, clears
+  `running`, and re-raises so callers keep their existing supervisor behavior.
+- Manual single-issue PR refresh MUST NOT update the project sweep status
+  snapshot.
+- A `ProjectConductor` scheduled review MUST run the project sweep with
+  `auto_merge=True`, then include the sweep summary under
+  `github_pr_followup` in the returned result, persisted task `result_json`,
+  and project hot-thread answer event.
+- Scheduled-review PR follow-up is best-effort supervisor work. A sweep
+  exception is logged and reported as `{"status": "failed", "error": ...}`,
+  but the conductor task still completes so the project review loop survives.
+
+#### 4. Validation & Error Matrix
+
+- Missing issue -> service raises `not_found`; manual endpoint maps 404.
+- Issue without PR -> service raises `no_pr`; manual endpoint maps 409.
+- `gh` unavailable -> endpoint maps 412 before service call.
+- `gh pr view` non-zero / bad JSON / subprocess exception -> result
+  `failed`, audit/event recorded, sweep continues.
+- `auto_merge=False` -> never call `gh pr merge`, even if the PR is approved
+  and green.
+- `auto_merge=True` + pending checks -> `checks_pending`, no merge.
+- `auto_merge=True` + no checks -> `checks_missing`, no merge.
+- `auto_merge=True` + not approved -> `review_required`, no merge.
+- `auto_merge=True` + unmergeable status -> `merge_blocked`, no merge.
+- `auto_merge=True` + merge command non-zero or subprocess exception ->
+  `merge_failed`, issue remains open, sweep continues.
+- One failed issue in a sweep -> included as `failed`; following issues still
+  refresh.
+- Sweep-level exception before/after issue iteration -> status snapshot records
+  `last_error` and clears `running`; exception propagates to the conductor or
+  endpoint boundary.
+- Scheduled-review sweep raises unexpectedly -> conductor result includes a
+  failed `github_pr_followup` payload and the conductor task status remains
+  `done`.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: one project sweep refreshes ten open PRs, requeues one engineer for
+  requested changes, auto-merges one approved green PR, marks one remotely
+  merged issue completed, records one failed CI status, and reports two `gh`
+  failures without aborting the sweep.
+- Base: manual refresh of a single issue returns the updated `CodexIssue`, as
+  before, but now uses the shared service.
+- Bad: duplicating PR parsing in `api.py`; treating a bad JSON response as an
+  unhandled exception; only polling review state and ignoring status checks.
+
+#### 6. Tests Required
+
+- Single refresh: remote merged PR updates `git_merge_status`, lifecycle status,
+  audit, and event.
+- Single refresh: changes requested writes review feedback into latest engineer
+  task and emits `task_status`.
+- Single refresh: failed completed status check returns `checks_failed` and
+  names the failed check.
+- Single refresh: bad JSON / non-zero `gh` returns `failed` with audit/event.
+- Project sweep: skips no-PR / already-merged issues and isolates failures.
+- Project sweep status records success counts, failure error text, running
+  transitions, and the `auto_merge_enabled` flag.
+- Endpoint: project follow-up returns best-effort summary instead of HTTP
+  failing for one broken PR.
+- Diagnostics includes top-level `github_pr_followup` and degrades when its
+  `last_error` is present or `running` is `true`.
+- ProjectConductor scheduled review: calls project sweep with `auto_merge=True`
+  and records the summary in return payload, `result_json`, and hot memory.
+- ProjectConductor scheduled review: sweep exception is reported without
+  raising or failing the conductor task.
+- Auto-merge: approved + all-green + mergeable -> calls `gh pr merge`, marks
+  merged/completed, records `github_pr_followup_merged`.
+- Auto-merge: missing checks / pending checks / review required / merge command
+  failure -> no unsafe merge; stable status returned.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+```python
+# API-only parsing means background/conductor paths cannot reuse the logic.
+data = json.loads(await gh_pr_view(...))
+issue.github_pr_state = f"{data['state']}:{data['reviewDecision']}"
+```
+
+Correct:
+```python
+summary = await sweep_project_github_prs(
+    project_id,
+    store=codex_store,
+    event_bus=event_bus,
+    run_subprocess=_run_subprocess,
+)
+```
+
+---
+
+### Scenario: Workflow Failed Node Auto Retry
+
+#### 1. Scope / Trigger
+
+- Trigger: changing `WorkflowScheduler.on_task_completed`, workflow node
+  terminal status handling, task runner completion events, or automatic recovery
+  for DAG-backed tasks.
+- Why code-spec depth: this hook is the bridge between executor failures and
+  unattended issue progress. A single transient failed task must not strand the
+  workflow, but deterministic failures must still surface as failed once the
+  node retry budget is exhausted.
+
+#### 2. Signatures
+
+```python
+# workflow_scheduler.py
+class WorkflowScheduler:
+    async def on_task_completed(self, task: CodexTask) -> None
+```
+
+Relevant storage calls:
+
+```python
+await store.save_codex_task(retry_task)
+await store.update_workflow_node(
+    node.id,
+    status="running",
+    task_id=retry_task.id,
+    retries=node.retries + 1,
+    started_at=retry_task.created_at,
+    completed_at=None,
+)
+```
+
+Relevant events:
+
+```json
+{"type": "workflow_node_diff_guard_failed", "task_id": "...", "reason": "..."}
+{"type": "workflow_node_retrying", "previous_task_id": "...", "retry_task_id": "..."}
+{"type": "workflow_node_retry_failed", "retry_task_id": "...", "status": "failed"}
+{"type": "task_status", "task_id": "...", "status": "pending|failed"}
+```
+
+#### 3. Contracts
+
+- Auto-retry applies only to tasks with `workflow_node_id` whose terminal task
+  status maps to workflow node `failed`.
+- Before a workflow-backed Engineer task (`engineer`, `engineer_frontend`, or
+  `engineer_backend`) is allowed to mark its node `done`, the scheduler MUST
+  honor the Engineer diff cross-check's hard failure note. If the persisted
+  Engineer document says the Engineer claimed changed files but git diff
+  against the base branch showed no file changes, the scheduler converts the
+  completion to `failed`, persists that task status, emits
+  `workflow_node_diff_guard_failed`, and then lets the normal auto-retry logic
+  handle the failed node. This keeps deterministic "report-only implementation"
+  failures self-healing before Architect Review / QA.
+- The diff completion guard MUST NOT fire for honest empty-diff Engineer
+  reports (`changed_files=[]`, no hard cross-check note), non-Engineer roles,
+  or arbitrary prose that happens to mention git diff outside the managed
+  Engineer report document.
+- A node is eligible only when `node.retries < node.max_retries` and the
+  scheduler has both an issue row and a `task_dispatcher`.
+- The retry creates a fresh `CodexTask` for the same workflow node:
+  `parent_task_id` points to the failed task, `workflow_node_id` is unchanged,
+  project/session/issue/role/prompt/executor/provider/model/git fields are
+  inherited, and status starts as `pending`.
+- The retry task `review_comment` MUST include a short `[AUTO RETRY X/Y]`
+  framework note and may include truncated previous result/review context.
+- The workflow node MUST be moved back to `running`, `completed_at` cleared to
+  `NULL`, `task_id` set to the retry task, and `retries` incremented before the
+  retry dispatcher is started.
+- While a retry is launched, the Conductor completion registry MUST NOT receive
+  the original failed result. It should observe the retry task's eventual
+  terminal result instead.
+- If retry dispatch itself raises, mark the retry task `failed`, emit
+  `workflow_node_retry_failed`, restore normal failed-node handling for the
+  original task, and keep the original failed task id on the final node status.
+- Once retry budget is exhausted, keep existing failed-node behavior: mark the
+  node failed, signal Conductor with the failed result, and do not advance the
+  issue phase as if the node succeeded.
+
+#### 4. Validation & Error Matrix
+
+- Task has no `workflow_node_id` -> no scheduler action.
+- Task status is non-terminal or maps to no node status -> no scheduler action.
+- Failed node with retries remaining and dispatcher available -> create retry
+  task, update node to running, emit retry events, start dispatcher, return.
+- Done Engineer node with persisted diff-guard failure note and retries
+  remaining -> persist the original task as failed, emit
+  `workflow_node_diff_guard_failed`, create retry task, update node to running,
+  emit retry events, start dispatcher, return.
+- Done Engineer node with no diff-guard failure note -> mark node done normally.
+- Done non-Engineer node with similar text -> mark node done normally.
+- Failed node with retries exhausted -> mark node failed and continue existing
+  Conductor signaling.
+- Failed node with no issue row or no dispatcher -> mark node failed and
+  continue existing Conductor signaling.
+- Retry dispatcher raises -> retry task becomes failed, retry-failed event is
+  emitted, original node becomes failed, and the exception does not escape the
+  scheduler hook.
+- Event emission failure -> log/debug and continue; observability must not
+  break the recovery path.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a transient executor startup failure on `engineer` creates
+  `task-retry`, moves `engineer` back to running with `retries=1`, and the
+  Conductor only sees the retry's eventual result.
+- Base: a deterministic QA command failure with `retries == max_retries` marks
+  the QA node failed and gives Conductor the failed result.
+- Bad: signaling the first failed task to Conductor and also starting a retry,
+  leaving two supervisors racing over the same node.
+
+#### 6. Tests Required
+
+- First failed workflow task creates and dispatches a retry task, increments
+  node retries, clears node completion time, and emits retry/task events.
+- Retry budget exhausted preserves existing failed-node behavior and does not
+  create a retry task.
+- Retry dispatch failure marks the retry task failed, emits
+  `workflow_node_retry_failed`, and falls back to final failed-node handling.
+- Diff completion guard converts a `done` Engineer task with the hard
+  diff-cross-check note into a failed original task, emits
+  `workflow_node_diff_guard_failed`, and then uses the same retry behavior as a
+  regular failed node.
+- Guard boundaries: a `done` Engineer task without that note marks the node
+  done; a `done` non-Engineer task with similar text also marks the node done.
+- Existing artifact-validation signaling tests still pass, proving completion
+  registry behavior stays compatible.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+```python
+await store.update_workflow_node(node.id, status="failed")
+reg.signal(task.id, {"status": "failed"})
+await dispatch_retry_later(task)
+```
+
+Correct:
+```python
+if task.status == "failed" and node.retries < node.max_retries:
+    retry_task = build_retry_task(task, node)
+    await store.save_codex_task(retry_task)
+    await store.update_workflow_node(
+        node.id,
+        status="running",
+        task_id=retry_task.id,
+        retries=node.retries + 1,
+        completed_at=None,
+    )
+    await task_dispatcher(retry_task)
+    return
+```
+
+---
+
+### Scenario: Project Review Scheduler Tick
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing backend automation that periodically runs
+  project-level reviews across projects.
+- The scheduler tick is the bridge between an operator-triggered scheduled
+  review endpoint and unattended project operation.
+
+#### 2. Signatures
+
+```python
+async def run_project_review_tick(
+    store,
+    *,
+    event_bus=None,
+    conductor_factory=_default_conductor_factory,
+    limit=None,
+) -> ProjectReviewTickSummary
+```
+
+#### 3. Contracts
+
+- The scheduler MUST list projects through the typed store API
+  (`list_projects`); it does not query SQL directly.
+- Each selected project gets a `ConductorTask` with
+  `task_kind="scheduled_review"` and the standard scheduled health-review
+  question.
+- The scheduler MUST call `ProjectConductor.handle_task(...)` instead of
+  duplicating GitHub PR follow-up, auto-merge, or memory logic.
+- A per-project failure is isolated and returned as a `failed` result with
+  safe error text. Later projects in the same tick still run.
+- The tick supports a `limit` parameter so future background loops can bound
+  work per scan.
+
+#### 4. Tests Required
+
+- Project list with two projects -> two scheduled-review conductor tasks.
+- First project raises -> first result `failed`, second project still runs.
+- `limit=2` with three projects -> only first two projects are reviewed.
+
+#### 5. Wrong vs Correct
+
+Wrong:
+```python
+# Re-implements scheduled review internals and silently diverges from
+# ProjectConductor / PR follow-up behavior.
+await sweep_project_github_prs(project.id, auto_merge=True, ...)
+```
+
+Correct:
+```python
+conductor = ProjectConductor(project_id=project.id, store=store, event_bus=event_bus)
+await conductor.handle_task(scheduled_review_task)
+```
+
+### Scenario: Project Review Scheduler Background Loop
+
+#### 1. Scope / Trigger
+
+- Trigger: wiring project review scheduling into long-running backend
+  process startup, shutdown, or cadence controls.
+- The background loop is the unattended supervisor around
+  `run_project_review_tick`; it does not change scheduled-review semantics.
+
+#### 2. Signatures
+
+```python
+async def run_project_review_scheduler_loop(
+    store,
+    *,
+    event_bus=None,
+    interval_s=None,
+    limit=None,
+    tick_fn=run_project_review_tick,
+    sleep_fn=asyncio.sleep,
+) -> None
+
+def get_project_review_scheduler_status() -> dict[str, object]
+```
+
+#### 3. Contracts
+
+- The loop MUST delegate actual work to `run_project_review_tick(...)`.
+- Cadence and default work bounds MUST be read through
+  `app.application.timeouts` accessors. Feature code must not call
+  `os.getenv` directly.
+- A tick-level unexpected exception is a loop-boundary failure: log it with
+  `logger.exception(...)`, then continue to the next sleep/cycle.
+- `asyncio.CancelledError` MUST propagate so FastAPI lifespan shutdown can
+  stop the task promptly.
+- Tests SHOULD inject `tick_fn` and `sleep_fn` so loop cadence, exception
+  survival, and cancellation are deterministic.
+- FastAPI lifespan starts the loop only when `async_store` is available, names
+  the task `project-review-scheduler`, and cancels/awaits it during shutdown.
+- The loop MUST maintain an in-memory operational status snapshot with only
+  safe fields: `configured`, `interval_s`, `limit`, `running`, `tick_count`,
+  `last_started_at`, `last_completed_at`, `last_error`, and
+  `last_summary_counts`.
+- `GET /api/diagnostics` MUST expose that snapshot as top-level
+  `project_review_scheduler`. It must not expose project names, repo paths,
+  prompts, task payloads, credentials, or full tracebacks.
+- A successful tick records completion time, increments `tick_count`, clears
+  `last_error`, and stores summary counts. A regular tick exception records
+  safe error text, increments `tick_count`, and keeps the loop alive.
+- Cancellation sets `running=False` and propagates `asyncio.CancelledError`; it
+  must not be counted as a successful completed tick.
+- Diagnostics treats a scheduler status as stale when `last_completed_at` is
+  present and older than `interval_s * 2`. Error and running states take
+  precedence over stale; a scheduler that has never completed a tick is not
+  stale from the missing completion timestamp alone.
+
+#### 4. Tests Required
+
+- Loop calls the tick, sleeps the configured interval, and repeats.
+- Tick raises a regular exception -> loop logs/survives and runs another tick.
+- Tick or sleep raises `CancelledError` -> cancellation propagates.
+- Lifespan creates and later cancels the named `project-review-scheduler`
+  task.
+- Scheduler status records success, failure, and cancellation transitions.
+- Diagnostics includes `project_review_scheduler` with configured interval and
+  limit, degrades when `last_error` is present, `running` is `true`, or the last
+  completion is stale, and does not leak runtime catalog API keys.
+
+#### 5. Wrong vs Correct
+
+Wrong:
+```python
+while True:
+    await run_project_review_tick(store)
+    await asyncio.sleep(float(os.getenv("PROJECT_REVIEW_INTERVAL_S", "3600")))
+```
+
+Correct:
+```python
+await run_project_review_scheduler_loop(
+    store,
+    event_bus=event_bus,
+    interval_s=timeouts.project_review_interval_s(),
+)
+```
+
+Correct:
+```python
+return {
+    "project_review_scheduler": get_project_review_scheduler_status(),
+    ...
+}
 ```
 
 ---

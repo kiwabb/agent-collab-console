@@ -15,12 +15,13 @@ from typing import Literal
 import subprocess
 
 from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service, skill_service, prototype_service
-from app.domain.models import CodexIssue, ConductorTask, Project, Prototype, PrototypeVersion
+from app.domain.models import CodexIssue, ConductorTask, Project, Prototype, PrototypeVersion, SelfImprovementApplicationEvent
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
 from app.application.phase_duration_estimator import get_phase_duration_estimator
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.process_runtime_common import is_agent_message_item_type, is_unusable_result_text
+from app.application.github_pr_followup import GitHubPRFollowupError, refresh_issue_github_pr, sweep_project_github_prs
 from app.application.project_service import ProjectError
 from app.application.project_run_manager import ProjectRunError, project_run_manager
 from app.application.prototype_service import PrototypeError
@@ -376,6 +377,39 @@ def _is_task_running(status: str | None) -> bool:
     return str(status or "").lower() in {"running", "responding"}
 
 
+def _supervisor_status_check(
+    name: str,
+    status: dict[str, object],
+    *,
+    running_detail: str,
+    stale_detail: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    last_error = status.get("last_error")
+    if last_error:
+        return {"name": name, "status": "degraded", "detail": last_error}
+    if status.get("running") is True:
+        return {"name": name, "status": "degraded", "detail": running_detail}
+    if stale_detail and _is_supervisor_status_stale(status, now=now):
+        return {"name": name, "status": "degraded", "detail": stale_detail}
+    return {"name": name, "status": "ok", "detail": None}
+
+
+def _is_supervisor_status_stale(status: dict[str, object], *, now: datetime | None = None) -> bool:
+    completed_raw = status.get("last_completed_at")
+    if not isinstance(completed_raw, str) or not completed_raw:
+        return False
+    interval_raw = status.get("interval_s")
+    if not isinstance(interval_raw, (int, float)) or interval_raw <= 0:
+        return False
+    try:
+        completed_at = datetime.fromisoformat(completed_raw)
+    except ValueError:
+        return False
+    current = now or datetime.now(tz=completed_at.tzinfo)
+    return (current - completed_at).total_seconds() > float(interval_raw) * 2
+
+
 def _delete_issue_artifact_root(workspace_path: str | None, issue_id: str):
     if not workspace_path:
         return
@@ -550,6 +584,32 @@ async def diagnostics():
         runtime_catalog = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         checks.append({"name": "runtime_catalog", "status": "error", "detail": runtime_catalog["error"]})
 
+    from app.application.github_pr_followup import get_github_pr_followup_status
+    from app.application.project_review_scheduler import get_project_review_scheduler_status
+    from app.application.self_improvement_proposal_scheduler import (
+        get_self_improvement_proposal_scheduler_status,
+    )
+    github_pr_followup = get_github_pr_followup_status()
+    checks.append(_supervisor_status_check(
+        "github_pr_followup",
+        github_pr_followup,
+        running_detail="GitHub PR follow-up sweep is running",
+    ))
+    project_review_scheduler = get_project_review_scheduler_status()
+    checks.append(_supervisor_status_check(
+        "project_review_scheduler",
+        project_review_scheduler,
+        running_detail="Project review scheduler is running",
+        stale_detail="Project review scheduler has not completed recently",
+    ))
+    self_improvement_proposal_scheduler = get_self_improvement_proposal_scheduler_status()
+    checks.append(_supervisor_status_check(
+        "self_improvement_proposal_scheduler",
+        self_improvement_proposal_scheduler,
+        running_detail="Self-improvement proposal scheduler is running",
+        stale_detail="Self-improvement proposal scheduler has not completed recently",
+    ))
+
     config = {
         "real_cli_enabled": os.getenv("REAL_CLI", "true").lower() == "true",
         "codex_launch_enabled": os.getenv("CODEX_LAUNCH_ENABLED", "true").lower() != "false",
@@ -595,6 +655,9 @@ async def diagnostics():
         "generated_at": now,
         "database": database,
         "runtime_catalog": runtime_catalog,
+        "github_pr_followup": github_pr_followup,
+        "project_review_scheduler": project_review_scheduler,
+        "self_improvement_proposal_scheduler": self_improvement_proposal_scheduler,
         "executors": executors,
         "websockets": websockets,
         "config": config,
@@ -3706,6 +3769,10 @@ class CreatePRRequest(BaseModel):
     draft: bool = False
 
 
+class ProjectPRFollowupRequest(BaseModel):
+    auto_merge: bool = False
+
+
 @router.post("/codex/issues/{issue_id}/pr/create")
 async def create_github_pr(issue_id: str, request: CreatePRRequest):
     """Push the issue's worktree branch to origin and open a GitHub PR via
@@ -3797,72 +3864,47 @@ async def refresh_github_pr(issue_id: str):
     recent task's `review_comment` so the existing rework loop fires."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    issue = await codex_store.load_codex_issue(issue_id)
-    if issue is None:
-        raise HTTPException(status_code=404, detail="Issue not found")
-    if not issue.github_pr_url:
-        raise HTTPException(status_code=409, detail="Issue has no PR yet")
     import shutil
     if not shutil.which("gh"):
         raise HTTPException(status_code=412, detail="gh CLI is not installed")
-
-    cwd = issue.git_worktree_path or "."
-    view = await _run_subprocess(
-        ["gh", "pr", "view", issue.github_pr_url, "--json",
-         "state,reviewDecision,reviews,mergeStateStatus"],
-        cwd=cwd,
-        timeout_s=30,
-    )
-    if view.returncode != 0:
-        raise HTTPException(
-            status_code=502,
-            detail=f"gh pr view failed: {view.stderr.strip()[:500]}",
-        )
     try:
-        data = json.loads(view.stdout)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=502, detail="gh pr view returned non-JSON")
-
-    state = data.get("state") or "OPEN"
-    decision = data.get("reviewDecision") or ""
-    issue.github_pr_state = f"{state}:{decision}"
-
-    # Flip merge state if PR was merged remotely.
-    if state == "MERGED" and issue.git_merge_status != "merged":
-        issue.git_merge_status = "merged"
-
-    issue.updated_at = datetime.now()
-    await codex_store.save_codex_issue(issue)
-
-    # If reviewers requested changes, surface the most recent review body
-    # back into the engineer's review_comment so the agent re-runs.
-    if decision == "CHANGES_REQUESTED":
-        reviews = data.get("reviews") or []
-        latest_review_body = ""
-        if reviews:
-            latest_review_body = (reviews[-1] or {}).get("body") or ""
-        if latest_review_body:
-            tasks = await codex_store.list_codex_tasks(issue_id=issue.id)
-            engineer_tasks = [t for t in tasks if t.get("role") == "engineer"]
-            if engineer_tasks:
-                eng = await codex_store.load_codex_task(engineer_tasks[-1]["id"])
-                if eng:
-                    eng.status = "pending"
-                    eng.review_comment = (
-                        "GitHub PR review requested changes. Address the feedback below "
-                        "before re-submitting.\n\n" + latest_review_body
-                    )
-                    eng.updated_at = datetime.now()
-                    await codex_store.save_codex_task(eng)
-                    await event_bus.append({
-                        "type": "task_status",
-                        "task_id": eng.id,
-                        "issue_id": eng.issue_id,
-                        "session_id": eng.session_id,
-                        "status": "pending",
-                    })
+        result = await refresh_issue_github_pr(
+            issue_id,
+            store=codex_store,
+            event_bus=event_bus,
+            run_subprocess=_run_subprocess,
+        )
+    except GitHubPRFollowupError as exc:
+        if exc.status == "not_found":
+            raise HTTPException(status_code=404, detail=exc.message) from exc
+        if exc.status == "no_pr":
+            raise HTTPException(status_code=409, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=exc.message) from exc
+    if result.status == "failed":
+        raise HTTPException(status_code=502, detail=result.error)
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
 
     return issue
+
+
+@router.post("/codex/projects/{project_id}/pr/follow-up")
+async def follow_up_project_github_prs(project_id: str, request: ProjectPRFollowupRequest | None = None):
+    """Refresh all open GitHub PR-backed issues for a project."""
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    import shutil
+    if not shutil.which("gh"):
+        raise HTTPException(status_code=412, detail="gh CLI is not installed")
+    summary = await sweep_project_github_prs(
+        project_id,
+        store=codex_store,
+        event_bus=event_bus,
+        run_subprocess=_run_subprocess,
+        auto_merge=bool(request.auto_merge) if request is not None else False,
+    )
+    return summary.to_dict()
 
 
 def _build_default_pr_body(issue) -> str:
@@ -5220,10 +5262,17 @@ async def test_runtime_executor(request: TestExecutorRequest):
             "error": f"local CLI '{cli_bin}' not found on PATH (or set {env_var_name} to use a remote API)",
         }
 
+    # Pick the request shape by the executor's HTTP protocol, not just its type.
+    # A claude-type executor can point at an OpenAI-compatible endpoint (e.g.
+    # DeepSeek), which serves /chat/completions, not Anthropic's /v1/messages —
+    # testing the wrong path there returns a misleading 404. Mirrors how the
+    # Conductor selects its request adapter from `protocol`.
+    use_openai = (getattr(executor, "protocol", None) == "openai") or executor_type == "codex"
+
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            if executor_type == "codex":
+            if use_openai:
                 response = await client.post(
                     f"{endpoint.rstrip('/')}/chat/completions",
                     headers={
@@ -5710,28 +5759,27 @@ def _conductor_stub() -> dict:
     }
 
 
-@router.post("/codex/issues/{issue_id}/graph/auto-start", status_code=201)
-async def auto_start_issue_graph(issue_id: str):
-    """Start Conductor-driven orchestration for an issue.
-
-    Creates a minimal WorkflowGraph and launches run_issue_conductor_loop as a
-    background task. The Conductor decides which agents to run and in what order,
-    dynamically populating the graph with nodes for visualization.
-    """
-    import asyncio
+async def _start_issue_conductor_graph(issue_id: str, *, store) -> dict:
     from app.application.conductor_session_registry import ConductorSessionRegistry
-    store = _require_agent_store()
+
     issue = await store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
 
+    registry = ConductorSessionRegistry.instance()
+    was_alive = registry.is_alive(issue_id)
+
     # Idempotency: if a live conductor session already exists for this issue,
     # do not start a second one — return the existing graph instead. This is
     # the first line of defense against duplicate conductors.
-    if ConductorSessionRegistry.instance().is_alive(issue_id):
+    if was_alive:
         existing_graph = await store.load_workflow_graph_for_issue(issue_id)
         if existing_graph is not None:
-            return _graph_to_dict(existing_graph)
+            return {
+                "graph": _graph_to_dict(existing_graph),
+                "started": False,
+                "already_running": True,
+            }
 
     # Ensure worktree exists
     if issue.project_id and not issue.git_worktree_path and project_service is not None:
@@ -5772,7 +5820,7 @@ async def auto_start_issue_graph(issue_id: str):
     from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
     from app.application.event_bus import _workflow_task_dispatcher
 
-    handle = await ConductorSessionRegistry.instance().try_start(
+    handle = await registry.try_start(
         issue_id,
         lambda: run_issue_conductor_loop(
             issue=issue,
@@ -5792,7 +5840,24 @@ async def auto_start_issue_graph(issue_id: str):
             )
         )
 
-    return _graph_to_dict(graph)
+    return {
+        "graph": _graph_to_dict(graph),
+        "started": handle is not None,
+        "already_running": handle is None,
+    }
+
+
+@router.post("/codex/issues/{issue_id}/graph/auto-start", status_code=201)
+async def auto_start_issue_graph(issue_id: str):
+    """Start Conductor-driven orchestration for an issue.
+
+    Creates a minimal WorkflowGraph and launches run_issue_conductor_loop as a
+    background task. The Conductor decides which agents to run and in what order,
+    dynamically populating the graph with nodes for visualization.
+    """
+    store = _require_agent_store()
+    result = await _start_issue_conductor_graph(issue_id, store=store)
+    return result["graph"]
 
 
 def _handle_conductor_loop_done(task, *, issue_id: str, store, recover_fn) -> None:
@@ -6234,7 +6299,10 @@ async def codex_issue_reset(issue_id: str):
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
 
-    # 7. Create a fresh worktree for the upcoming conductor run
+    # 7. Create a fresh worktree for the upcoming conductor run.
+    # A failed worktree means every dispatched subagent aborts with "no worktree
+    # path" and the run looks stuck, so surface it loudly as a 500 (run_project
+    # is guaranteed non-None here — used unguarded above).
     try:
         branch, wt_path, base = await worktree_manager.prepare_issue_worktree(run_project, issue)
         issue.git_branch = branch
@@ -6450,6 +6518,604 @@ async def codex_issue_conductor_phase_estimates(issue_id: str):
             phase: estimate.to_dict()
             for phase, estimate in estimates.items()
         },
+    }
+
+
+def _self_improvement_proposal_to_dict(proposal) -> dict:
+    try:
+        evidence = json.loads(proposal.evidence_json or "[]")
+    except json.JSONDecodeError:
+        evidence = []
+    if not isinstance(evidence, list):
+        evidence = []
+    return {
+        "id": proposal.id,
+        "project_id": proposal.project_id,
+        "issue_id": proposal.issue_id,
+        "target_kind": proposal.target_kind,
+        "title": proposal.title,
+        "recommendation": proposal.recommendation,
+        "evidence": evidence,
+        "severity": proposal.severity,
+        "confidence": proposal.confidence,
+        "status": proposal.status,
+        "fingerprint": proposal.fingerprint,
+        "created_at": proposal.created_at.isoformat() if proposal.created_at else None,
+        "updated_at": proposal.updated_at.isoformat() if proposal.updated_at else None,
+    }
+
+
+def _self_improvement_application_event_to_dict(event) -> dict:
+    try:
+        result = json.loads(event.result_json or "{}")
+    except json.JSONDecodeError:
+        result = {}
+    if not isinstance(result, dict):
+        result = {}
+    return {
+        "id": event.id,
+        "proposal_id": event.proposal_id,
+        "project_id": event.project_id,
+        "issue_id": event.issue_id,
+        "target_kind": event.target_kind,
+        "action": event.action,
+        "status": event.status,
+        "path": event.path,
+        "content_sha256": event.content_sha256,
+        "result": result,
+        "error": event.error,
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+    }
+
+
+def _codex_issue_to_dict(issue: CodexIssue) -> dict:
+    if hasattr(issue, "model_dump"):
+        return issue.model_dump(mode="json")
+    return issue.dict()
+
+
+def _self_improvement_proposal_evidence_lines(proposal) -> list[str]:
+    try:
+        evidence = json.loads(proposal.evidence_json or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(evidence, list):
+        return []
+    lines: list[str] = []
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "evidence")
+        pointer = item.get("path") or item.get("id") or item.get("summary") or item.get("value")
+        if pointer is None:
+            pointer = json.dumps(item, sort_keys=True)
+        lines.append(f"- {kind}: {pointer}")
+    return lines
+
+
+def _build_self_improvement_activation_issue_description(*, proposal, candidate: dict) -> str:
+    candidate_body = str(candidate.get("body") or "").strip()
+    lines = [
+        candidate_body,
+        "",
+        "---",
+        "",
+        "Self-improvement activation:",
+        f"- Proposal ID: `{proposal.id}`",
+        f"- Target kind: `{proposal.target_kind}`",
+        f"- Source issue ID: `{proposal.issue_id}`",
+        f"- Severity: `{proposal.severity}`",
+        f"- Confidence: `{proposal.confidence:.2f}`",
+    ]
+    evidence_lines = _self_improvement_proposal_evidence_lines(proposal)
+    if evidence_lines:
+        lines.extend(["", "Evidence:", *evidence_lines])
+    return "\n".join(lines).strip()
+
+
+def _open_pr_task_candidate_from_apply_plan(proposal) -> dict:
+    from app.application.self_improvement_apply_service import build_self_improvement_apply_plan
+
+    plan = build_self_improvement_apply_plan(proposal)
+    candidates = plan.get("candidate_changes")
+    if not isinstance(candidates, list):
+        raise ValueError("Self-improvement apply plan does not include candidate changes")
+    open_pr_candidates = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and candidate.get("kind") == "open_pr_task"
+    ]
+    if len(open_pr_candidates) != 1:
+        raise ValueError("Self-improvement apply plan must contain exactly one open_pr_task candidate")
+    title = open_pr_candidates[0].get("title")
+    body = open_pr_candidates[0].get("body")
+    if not isinstance(title, str) or not title.strip() or not isinstance(body, str):
+        raise ValueError("Self-improvement open_pr_task candidate is invalid")
+    return open_pr_candidates[0]
+
+
+async def _load_existing_self_improvement_activation(*, project_id: str, proposal_id: str):
+    events = await codex_store.list_self_improvement_application_events(
+        project_id=project_id,
+        proposal_id=proposal_id,
+        limit=100,
+    )
+    for event in events:
+        if event.action != "open_pr_task" or event.status != "succeeded":
+            continue
+        try:
+            result = json.loads(event.result_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(result, dict):
+            continue
+        issue_id = result.get("issue_id")
+        if not isinstance(issue_id, str) or not issue_id:
+            continue
+        issue = await codex_store.load_codex_issue(issue_id)
+        if issue is not None and issue.project_id == project_id:
+            return issue, event
+    return None
+
+
+async def _record_self_improvement_activation_failure(*, proposal, error: str) -> None:
+    try:
+        await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="open_pr_task",
+            status="failed",
+            error=error,
+        )
+    except Exception:  # noqa: BLE001 - best-effort audit recording after activation failure
+        logger.warning(
+            "failed to record self-improvement activation failure event for proposal %s",
+            proposal.id,
+            exc_info=True,
+        )
+
+
+def _self_improvement_conductor_event_result(issue_id: str, start_result: dict) -> dict:
+    graph = start_result.get("graph")
+    graph_id = graph.get("id") if isinstance(graph, dict) else None
+    graph_status = graph.get("status") if isinstance(graph, dict) else None
+    return {
+        "issue_id": issue_id,
+        "graph_id": graph_id,
+        "graph_status": graph_status,
+        "started": bool(start_result.get("started")),
+        "already_running": bool(start_result.get("already_running")),
+    }
+
+
+async def _start_self_improvement_activation_conductor(*, proposal, issue: CodexIssue) -> dict:
+    try:
+        start_result = await _start_issue_conductor_graph(issue.id, store=codex_store)
+    except Exception as exc:  # noqa: BLE001 - transport boundary records safe failed event
+        error = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        error_text = str(error or exc.__class__.__name__)
+        await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="start_conductor",
+            status="failed",
+            path=f"codex_issues/{issue.id}",
+            error=error_text,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to start self-improvement conductor: {error_text}",
+        ) from exc
+
+    await _record_self_improvement_application_event(
+        proposal=proposal,
+        action="start_conductor",
+        status="succeeded",
+        path=f"codex_issues/{issue.id}",
+        result=_self_improvement_conductor_event_result(issue.id, start_result),
+    )
+    return start_result
+
+
+async def _record_self_improvement_application_event(
+    *,
+    proposal,
+    action: str,
+    status: str,
+    path: str | None = None,
+    content_sha256: str | None = None,
+    result: dict | None = None,
+    error: str | None = None,
+) -> SelfImprovementApplicationEvent:
+    event = SelfImprovementApplicationEvent(
+        id=uuid4().hex,
+        proposal_id=proposal.id,
+        project_id=proposal.project_id,
+        issue_id=proposal.issue_id,
+        target_kind=proposal.target_kind,
+        action=action,
+        status=status,
+        path=path,
+        content_sha256=content_sha256,
+        result_json=json.dumps(result or {}, sort_keys=True),
+        error=error,
+        created_at=datetime.now(),
+    )
+    await codex_store.save_self_improvement_application_event(event)
+    return event
+
+
+class SelfImprovementProposalStatusUpdateRequest(BaseModel):
+    status: Literal["proposed", "accepted", "rejected", "applied"]
+
+
+class SelfImprovementProposalApplyRequest(BaseModel):
+    content_sha256: str = Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")
+
+
+class SelfImprovementProposalActivateTaskRequest(BaseModel):
+    start_conductor: bool = False
+
+
+_SELF_IMPROVEMENT_PROPOSAL_STATUS_TRANSITIONS = {
+    "proposed": {"accepted", "rejected"},
+    "accepted": {"applied"},
+    "rejected": set(),
+    "applied": set(),
+}
+
+
+def _is_self_improvement_proposal_status_transition_allowed(current: str, requested: str) -> bool:
+    if current == requested:
+        return True
+    return requested in _SELF_IMPROVEMENT_PROPOSAL_STATUS_TRANSITIONS.get(current, set())
+
+
+@router.get("/codex/projects/{project_id}/self-improvement-proposals")
+async def codex_project_self_improvement_proposals(
+    project_id: str,
+    issue_id: str | None = None,
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposals = await codex_store.list_self_improvement_proposals(
+        project_id=project_id,
+        issue_id=issue_id,
+        status=status,
+        limit=limit,
+    )
+    return {"proposals": [_self_improvement_proposal_to_dict(proposal) for proposal in proposals]}
+
+
+@router.patch("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}")
+async def codex_update_project_self_improvement_proposal_status(
+    project_id: str,
+    proposal_id: str,
+    request: SelfImprovementProposalStatusUpdateRequest,
+):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    if not _is_self_improvement_proposal_status_transition_allowed(proposal.status, request.status):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Invalid self-improvement proposal status transition: "
+                f"{proposal.status} -> {request.status}"
+            ),
+        )
+    if proposal.status == request.status:
+        return _self_improvement_proposal_to_dict(proposal)
+    updated = await codex_store.update_self_improvement_proposal_status(proposal_id, request.status)
+    if updated is None or updated.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    return _self_improvement_proposal_to_dict(updated)
+
+
+@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply-plan")
+async def codex_project_self_improvement_proposal_apply_plan(project_id: str, proposal_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    if proposal.status != "accepted":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Self-improvement proposal must be accepted before an apply plan "
+                f"can be generated; current status is {proposal.status}"
+            ),
+        )
+    from app.application.self_improvement_apply_service import build_self_improvement_apply_plan
+
+    return {
+        "proposal": _self_improvement_proposal_to_dict(proposal),
+        "plan": build_self_improvement_apply_plan(proposal),
+    }
+
+
+async def activate_self_improvement_proposal_task(
+    project_id: str,
+    proposal_id: str,
+    *,
+    start_conductor: bool = False,
+) -> dict[str, object]:
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    if proposal.status != "accepted":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Self-improvement proposal must be accepted before a task can be activated; "
+                f"current status is {proposal.status}"
+            ),
+        )
+    if proposal.target_kind == "project_memory":
+        raise HTTPException(
+            status_code=409,
+            detail="project_memory proposals must use the reviewed project-memory apply endpoint",
+        )
+
+    source_issue = await codex_store.load_codex_issue(proposal.issue_id)
+    if source_issue is None or source_issue.project_id != project_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Self-improvement proposal source issue is unavailable for this project",
+        )
+
+    existing = await _load_existing_self_improvement_activation(project_id=project_id, proposal_id=proposal_id)
+    if existing is not None:
+        existing_issue, existing_event = existing
+        activation = {
+            "issue": _codex_issue_to_dict(existing_issue),
+            "application": _self_improvement_application_event_to_dict(existing_event),
+            "already_created": True,
+        }
+        if start_conductor:
+            activation["conductor"] = await _start_self_improvement_activation_conductor(
+                proposal=proposal,
+                issue=existing_issue,
+            )
+        return {
+            "proposal": _self_improvement_proposal_to_dict(proposal),
+            "activation": activation,
+        }
+
+    try:
+        candidate = _open_pr_task_candidate_from_apply_plan(proposal)
+        now = datetime.now()
+        issue = CodexIssue(
+            id=str(uuid4()),
+            session_id=source_issue.session_id,
+            project_id=project.id,
+            title=str(candidate["title"]).strip(),
+            description=_build_self_improvement_activation_issue_description(
+                proposal=proposal,
+                candidate=candidate,
+            ),
+            current_phase="requirements",
+            status="open",
+            executor=source_issue.executor,
+            provider=source_issue.provider,
+            model=source_issue.model,
+            created_at=now,
+            updated_at=now,
+        )
+        branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+        issue.git_branch = branch
+        issue.git_worktree_path = worktree_path
+        issue.git_base_branch = base
+        await codex_store.save_codex_issue(issue)
+        await codex_store.append_project_audit(
+            project_id=project.id,
+            issue_id=issue.id,
+            event="created",
+            base_branch=base,
+        )
+        await event_bus.append({
+            "type": "issue_created",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "issue": _codex_issue_to_dict(issue),
+        })
+        event = await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="open_pr_task",
+            status="succeeded",
+            path=f"codex_issues/{issue.id}",
+            result={
+                "issue_id": issue.id,
+                "issue_title": issue.title,
+                "git_branch": issue.git_branch,
+                "git_base_branch": issue.git_base_branch,
+                "git_worktree_path": issue.git_worktree_path,
+            },
+        )
+    except (GitError, WorktreeError, ValueError) as exc:
+        error = str(exc)
+        await _record_self_improvement_activation_failure(proposal=proposal, error=error)
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to activate self-improvement proposal task: {error}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - store failures lack typed errors
+        error = str(exc) or exc.__class__.__name__
+        await _record_self_improvement_activation_failure(proposal=proposal, error=error)
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to activate self-improvement proposal task: {error}",
+        ) from exc
+
+    activation = {
+        "issue": _codex_issue_to_dict(issue),
+        "application": _self_improvement_application_event_to_dict(event),
+        "already_created": False,
+    }
+    if start_conductor:
+        activation["conductor"] = await _start_self_improvement_activation_conductor(
+            proposal=proposal,
+            issue=issue,
+        )
+
+    return {
+        "proposal": _self_improvement_proposal_to_dict(proposal),
+        "activation": activation,
+    }
+
+
+@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/activate-task")
+async def codex_project_self_improvement_proposal_activate_task(
+    project_id: str,
+    proposal_id: str,
+    request: SelfImprovementProposalActivateTaskRequest | None = Body(default=None),
+):
+    start_conductor = bool(request.start_conductor) if request is not None else False
+    return await activate_self_improvement_proposal_task(
+        project_id,
+        proposal_id,
+        start_conductor=start_conductor,
+    )
+
+
+@router.get("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/applications")
+async def codex_project_self_improvement_proposal_applications(
+    project_id: str,
+    proposal_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    events = await codex_store.list_self_improvement_application_events(
+        project_id=project_id,
+        proposal_id=proposal_id,
+        limit=limit,
+    )
+    return {"applications": [_self_improvement_application_event_to_dict(event) for event in events]}
+
+
+@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply")
+async def codex_project_self_improvement_proposal_apply(
+    project_id: str,
+    proposal_id: str,
+    request: SelfImprovementProposalApplyRequest,
+):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+
+    from app.application.self_improvement_apply_service import (
+        SelfImprovementApplyError,
+        apply_project_memory_proposal,
+    )
+
+    try:
+        result = apply_project_memory_proposal(
+            project_repo_path=project.repo_path,
+            proposal=proposal,
+            reviewed_content_sha256=request.content_sha256,
+        )
+    except SelfImprovementApplyError as exc:
+        await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="apply",
+            status="failed",
+            content_sha256=request.content_sha256,
+            error=exc.message,
+        )
+        status_code = 500 if exc.code in {"invalid_plan", "repo_unavailable"} else 409
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
+
+    updated = await codex_store.update_self_improvement_proposal_status(proposal_id, "applied")
+    if updated is None or updated.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    await _record_self_improvement_application_event(
+        proposal=updated,
+        action="apply",
+        status="succeeded",
+        path=result.path,
+        content_sha256=result.content_sha256,
+        result=result.to_dict(),
+    )
+    return {
+        "proposal": _self_improvement_proposal_to_dict(updated),
+        "application": result.to_dict(),
+    }
+
+
+@router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/rollback")
+async def codex_project_self_improvement_proposal_rollback(project_id: str, proposal_id: str):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposal = await codex_store.load_self_improvement_proposal(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+
+    from app.application.self_improvement_apply_service import (
+        SelfImprovementApplyError,
+        rollback_project_memory_proposal,
+    )
+
+    try:
+        result = rollback_project_memory_proposal(
+            project_repo_path=project.repo_path,
+            proposal=proposal,
+        )
+    except SelfImprovementApplyError as exc:
+        await _record_self_improvement_application_event(
+            proposal=proposal,
+            action="rollback",
+            status="failed",
+            error=exc.message,
+        )
+        status_code = 500 if exc.code in {"invalid_plan", "repo_unavailable"} else 409
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
+
+    updated = await codex_store.update_self_improvement_proposal_status(proposal_id, "accepted")
+    if updated is None or updated.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Self-improvement proposal not found")
+    await _record_self_improvement_application_event(
+        proposal=updated,
+        action="rollback",
+        status="succeeded",
+        path=result.path,
+        content_sha256=result.content_sha256,
+        result=result.to_dict(),
+    )
+    return {
+        "proposal": _self_improvement_proposal_to_dict(updated),
+        "rollback": result.to_dict(),
     }
 
 

@@ -139,6 +139,10 @@ Initial extraction rules:
   proposal.
 - Capability issue without benchmark/evaluation evidence creates a
   `benchmark_eval` proposal.
+- Benchmark/evaluation evidence for that rule must come from task payload/result
+  artifacts such as benchmark run metadata, fixture ids, pass@k output, or
+  calibration artifacts; a capability issue title that names SWE-bench is not
+  itself evidence that an eval ran.
 - Clean trivial completions can produce no proposal.
 
 ### Completion Hook

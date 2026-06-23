@@ -324,6 +324,10 @@ class ProjectMemoryService:
             blocks.pop(0)
         return "\n\n".join(blocks).strip() + "\n" if blocks else ""
 
+    def trim_to_cap(self, content: str) -> str:
+        """Return project-memory content trimmed to the prompt budget cap."""
+        return self._trim_to_cap(content)
+
     def needs_distillation(self, content: str) -> bool:
         """Heuristic: kick off an LLM distillation once we've accumulated
         more than DISTILL_TRIGGER_BLOCKS raw issue blocks (excluding the

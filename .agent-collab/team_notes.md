@@ -280,3 +280,20 @@ _intent: feature · graph status: done_
 - `cd backend && python3 -m pytest tests/test_codex_health_cli_endpoint.py -v`
 **Actually run by QA:**
 - `cd backend && python3 -m pytest tests/test_codex_health_cli_endpoint.py -v → exit 0`
+
+
+<!-- issue:a39227b6-4144-4769-bac0-279945541d8a -->
+## 2026-06-06 18:01 — 设置左侧偏好配置 宽度调整
+_intent: feature · graph status: done_
+
+**Files touched:**
+- `frontend/src/app/globals.css`
+- `frontend/src/features/settings/SettingsPage.tsx`
+
+**QA verdict:** `failed`
+**Verification commands worth keeping:**
+- `cd frontend && npm install && npm run build && npm run lint`
+- `In browser: navigate to Settings page and confirm sidebar width reduced from 288px to 240px`
+**Actually run by QA:**
+- `cd frontend && npm install && npm run build && npm run lint → exit 0`
+- `In browser: navigate to Settings page and confirm sidebar width reduced from 288px to 240px → exit 127`

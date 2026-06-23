@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend package overview and cross-cutting conductor/store conventions."}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Verification checklist and conductor-specific test expectations."}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Validate any durable evidence/store changes follow project database rules."}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "Ensure background-loop policy failures remain best-effort and observable."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Review consistency across policy, event, store, and proposal layers."}
+{"file": ".trellis/tasks/06-08-coordinator-policy-intelligence/research/current-conductor-policy-baseline.md", "reason": "Check implementation stays aligned with scoped opportunity."}

@@ -528,52 +528,16 @@ datetime-local since/until are minute-precision but created_at is microsecond IS
 - None - task complete
 
 
-## Session 16: Coordinator source-informed upgrade
-
-**Date**: 2026-06-06
-**Task**: Coordinator source-informed upgrade
-**Package**: vibe-kanban
-**Branch**: `main`
-
-### Summary
-
-Studied local Claude Code and Codex CLI sources, upgraded ProjectConductor prompt behavior, fixed project memory injection, added regression tests, and captured conductor prompt rules in backend specs.
-
-### Main Changes
-
-(Add details)
-
-### Git Commits
-
-| Hash | Message |
-|------|---------|
-| `a677095` | (see git log) |
-| `6c426cb` | (see git log) |
-| `8800780` | (see git log) |
-
-### Testing
-
-- [OK] (Add test results)
-
-### Status
-
-[OK] **Completed**
-
-### Next Steps
-
-- None - task complete
-
-
-## Session 17: Conductor policy and decision explanation
+## Session 16: Project review background loop
 
 **Date**: 2026-06-08
-**Task**: Conductor policy and decision explanation
+**Task**: Project review background loop
 **Package**: ccgui
-**Branch**: `main`
+**Branch**: `codex/archive-project-review-background-loop`
 
 ### Summary
 
-Added deterministic Conductor orchestration policy, exposed it in the issue detail decision panel, hardened browser-observed runtime failures, tightened parallel dispatch result safety, improved the issue command timeline, and captured runtime contracts in backend specs.
+Added a cancellation-safe background loop for scheduled project reviews, wired it into FastAPI lifespan, centralized cadence/limit knobs, updated backend specs, verified locally and merged PR #7.
 
 ### Main Changes
 
@@ -583,12 +547,7 @@ Added deterministic Conductor orchestration policy, exposed it in the issue deta
 
 | Hash | Message |
 |------|---------|
-| `63f787e` | (see git log) |
-| `8b2c2be` | (see git log) |
-| `a198f2c` | (see git log) |
-| `baf18eb` | (see git log) |
-| `a61163d` | (see git log) |
-| `468fc73` | (see git log) |
+| `3cc5130` | (see git log) |
 
 ### Testing
 
@@ -603,16 +562,16 @@ Added deterministic Conductor orchestration policy, exposed it in the issue deta
 - None - task complete
 
 
-## Session 18: 原型设计工具 + 任务批量收尾
+## Session 17: Project review scheduler status
 
-**Date**: 2026-06-23
-**Task**: 原型设计工具 + 任务批量收尾
+**Date**: 2026-06-08
+**Task**: Project review scheduler status
 **Package**: ccgui
-**Branch**: `feat/project-remote-update-detection`
+**Branch**: `codex/archive-project-review-scheduler-status`
 
 ### Summary
 
-新增类 Claude Design 的单文件 HTML 原型设计工具(Project 下 SSE 流式生成 + iframe 沙箱预览 + 版本化迭代),后端 prototype_service + 6 端点 + 2 表,前端 features/prototype,20 测试通过 tsc 绿;归档全部 6 个 in_progress/completed 任务。
+Added safe project review scheduler operational status, exposed it through diagnostics, documented backend contract, verified locally, and merged PR #9.
 
 ### Main Changes
 
@@ -622,7 +581,521 @@ Added deterministic Conductor orchestration policy, exposed it in the issue deta
 
 | Hash | Message |
 |------|---------|
-| `46e70aa` | (see git log) |
+| `ad2fef8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 18: GitHub PR follow-up diagnostics
+
+**Date**: 2026-06-08
+**Task**: GitHub PR follow-up diagnostics
+**Package**: ccgui
+**Branch**: `codex/archive-github-pr-followup-diagnostics`
+
+### Summary
+
+Added a safe in-memory GitHub PR follow-up sweep status snapshot, exposed it in diagnostics, covered success/failure transitions with backend tests, and updated the backend quality spec. PR #11 merged with CI green.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f9aa0f9` | (see git log) |
+| `90f613b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 19: Diagnostics supervisor health
+
+**Date**: 2026-06-08
+**Task**: Diagnostics supervisor health
+**Package**: ccgui
+**Branch**: `codex/archive-diagnostics-supervisor-health`
+
+### Summary
+
+Added diagnostics health derivation so GitHub PR follow-up and project review scheduler snapshots degrade global diagnostics when they report last_error or running=true. PR #13 merged with CI green.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e6955fb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 20: Project review scheduler stale health
+
+**Date**: 2026-06-08
+**Task**: Project review scheduler stale health
+**Package**: ccgui
+**Branch**: `codex/archive-project-review-scheduler-stale-health`
+
+### Summary
+
+Merged PR #15 for read-only project review scheduler stale diagnostics. Scheduler health now degrades when last_completed_at is older than interval_s * 2 while preserving last_error and running precedence; backend diagnostics tests and quality gates passed before merge.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6d42404` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 21: Conductor PR follow-up sweep
+
+**Date**: 2026-06-08
+**Task**: Conductor PR follow-up sweep
+**Package**: ccgui
+**Branch**: `codex/conductor-pr-follow-up-sweep-main`
+
+### Summary
+
+Verified the already-merged scheduled review PR follow-up sweep: ProjectConductor scheduled reviews run sweep_project_github_prs with auto_merge=True, include the summary in result_json and hot memory, and report sweep failures best-effort without failing the conductor task. Archived the completed Trellis task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c5293f0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 22: Archive completed autonomy pipeline tasks
+
+**Date**: 2026-06-08
+**Task**: Archive completed autonomy pipeline tasks
+**Package**: ccgui
+**Branch**: `codex/archive-completed-autonomy-tasks`
+
+### Summary
+
+Verified and archived four already-merged Moonshot autonomy slices: conductor policy intelligence, GitHub PR follow-up automation, GitHub PR auto-merge gates, and project review scheduler tick. Focused tests for conductor policy/self-improvement, PR follow-up/auto-merge, and project review scheduler passed; full backend suite passed with existing aiosqlite event-loop warnings.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `253d2df` | (see git log) |
+| `2950cbc` | (see git log) |
+| `44a2db7` | (see git log) |
+| `57e5414` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 23: Workflow failed node auto retry
+
+**Date**: 2026-06-08
+**Task**: Workflow failed node auto retry
+**Package**: ccgui
+**Branch**: `codex/archive-workflow-failed-node-auto-retry`
+
+### Summary
+
+Merged PR #19 adding bounded automatic retry for failed workflow-backed tasks. Failed nodes with retry budget create a fresh retry task on the same node, emit retry observability events, and fall back to existing failed-node behavior when exhausted or retry dispatch fails. Focused scheduler tests and the full backend suite passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `530776d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 24: Implementation diff completion guard
+
+**Date**: 2026-06-08
+**Task**: Implementation diff completion guard
+**Package**: ccgui
+**Branch**: `codex/archive-implementation-diff-guard`
+
+### Summary
+
+Added scheduler-level diff completion guard for workflow-backed Engineer nodes. A deterministic Engineer claim-vs-empty-git-diff contradiction is now persisted as a failed task, emits workflow_node_diff_guard_failed, and reuses workflow node auto-retry before review/QA. Verified with focused scheduler/reconciliation tests, full backend pytest, import smoke, py_compile, and diff check.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ac5c0ca` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 25: Self-improvement proposal review API
+
+**Date**: 2026-06-08
+**Task**: Self-improvement proposal review API
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-proposal-review-api`
+
+### Summary
+
+Added a status-only review API for self-improvement proposals, including sync/async store load and status update methods, project-scoped PATCH transition handling, backend contract docs, and tests. PR #23 merged after backend and frontend CI passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `def982b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 26: Self-improvement apply plan API
+
+**Date**: 2026-06-08
+**Task**: Self-improvement apply plan API
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-apply-plan`
+
+### Summary
+
+Added a non-mutating apply-plan endpoint for accepted self-improvement proposals. The API returns dry-run project-memory append candidates or reviewed PR/task candidates for other target kinds, with tests and backend contract updates. PR #25 merged after CI passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7695be6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 27: Reviewed self-improvement memory apply
+
+**Date**: 2026-06-08
+**Task**: Reviewed self-improvement memory apply
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-apply-execute`
+
+### Summary
+
+Added a hash-gated reviewed apply endpoint for accepted project_memory self-improvement proposals, keeping apply-plan dry-run-only while allowing reviewed team-notes application with tests and backend spec coverage.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `42c1716` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 28: Self-improvement application audit rollback
+
+**Date**: 2026-06-09
+**Task**: Self-improvement application audit rollback
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-apply-audit`
+
+### Summary
+
+Added durable self-improvement application events, applications listing, reviewed project-memory apply audit recording, rollback endpoint, rollback service tests/API tests, and backend database spec contracts.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6720596` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 29: Benchmark eval self-improvement proposals
+
+**Date**: 2026-06-09
+**Task**: Benchmark eval self-improvement proposals
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-benchmark-eval`
+
+### Summary
+
+Added deterministic benchmark_eval self-improvement proposal extraction for completed capability issues without benchmark/eval evidence, locked non-memory apply-plan behavior to open_pr_task, updated backend/design specs, and merged PR #31 after CI passed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `509aa0e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 30: Activate self-improvement proposal tasks
+
+**Date**: 2026-06-09
+**Task**: Activate self-improvement proposal tasks
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-pr-task-activation`
+
+### Summary
+
+Added the reviewed activate-task API for accepted non-memory self-improvement proposals, with idempotent Codex issue/worktree creation, open_pr_task application events, failure audit coverage, backend ledger spec updates, CI-green PR #33, and task archival.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e39c9dc` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 31: Auto-start self-improvement activations
+
+**Date**: 2026-06-09
+**Task**: Auto-start self-improvement activations
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-auto-start`
+
+### Summary
+
+Added opt-in conductor startup for accepted non-memory self-improvement activation, reused the existing issue graph auto-start registry path, recorded start_conductor audit events, updated backend ledger specs, and merged PR #35 after local and CI verification.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6f0f178` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 32: Schedule self-improvement proposal activation
+
+**Date**: 2026-06-09
+**Task**: Schedule self-improvement proposal activation
+**Package**: ccgui
+**Branch**: `codex/archive-self-improvement-proposal-scheduler`
+
+### Summary
+
+Implemented and merged PR #37: a backend scheduler now scans accepted non-memory self-improvement proposals, reuses the reviewed activation path with start_conductor=true, reports diagnostics/status, and is covered by focused/full backend verification.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a686186` | (see git log) |
 
 ### Testing
 

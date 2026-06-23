@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, DownloadCloud, GitBranch as GitBranchIcon, Plus, RefreshCw, Trash2, Wrench } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronLeft, DownloadCloud, GitBranch as GitBranchIcon, Plus, RefreshCw, Trash2, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,6 +40,8 @@ function SetupScriptCard({
   const { addToast } = useToast();
   const [draft, setDraft] = useState(project.setup_script ?? "");
   const [saving, setSaving] = useState(false);
+  // Setup script is an advanced/occasional field — collapse it by default.
+  const [open, setOpen] = useState(false);
   // Reset the draft when the user switches between projects.
   useEffect(() => {
     setDraft(project.setup_script ?? "");
@@ -64,23 +66,36 @@ function SetupScriptCard({
   return (
     <Card className="enterprise-card rounded-2xl overflow-hidden">
       <CardHeader>
-        <CardTitle className="text-base">{t("projects.setupScript")}</CardTitle>
-        <CardDescription>{t("projects.setupScriptHelp")}</CardDescription>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={open}
+        >
+          <CardTitle className="text-base">{t("projects.setupScript")}</CardTitle>
+          <ChevronDown
+            size={16}
+            className={cn("shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")}
+          />
+        </button>
+        {open && <CardDescription className="mt-1">{t("projects.setupScriptHelp")}</CardDescription>}
       </CardHeader>
-      <CardContent className="space-y-2">
-        <Textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={t("projects.setupScriptPlaceholder")}
-          rows={4}
-          className="font-mono text-xs"
-        />
-        <div className="flex justify-end">
-          <Button size="sm" onClick={save} disabled={!dirty || saving}>
-            {saving ? t("projects.savingSetup") : t("projects.saveSetup")}
-          </Button>
-        </div>
-      </CardContent>
+      {open && (
+        <CardContent className="space-y-2">
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={t("projects.setupScriptPlaceholder")}
+            rows={4}
+            className="font-mono text-xs"
+          />
+          <div className="flex justify-end">
+            <Button size="sm" onClick={save} disabled={!dirty || saving}>
+              {saving ? t("projects.savingSetup") : t("projects.saveSetup")}
+            </Button>
+          </div>
+        </CardContent>
+      )}
     </Card>
   );
 }
@@ -177,6 +192,7 @@ export function ProjectsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchesOpen, setBranchesOpen] = useState(true);
   const [stats, setStats] = useState<ProjectStats | null>(null);
   const [audit, setAudit] = useState<ProjectAuditEntry[]>([]);
   // Remote-update detection for the selected project. `null` status = not yet
@@ -397,29 +413,22 @@ export function ProjectsPage() {
 
   return (
     <PageFrame
-      eyebrow={t("projects.title")}
-      title={t("projects.title")}
-      description={t("projects.listHeading")}
-      actions={(
-        <>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              const pid = selectedProjectId();
-              if (pid) router.push(`/projects/${pid}`);
-              else router.push("/projects");
-            }}
-            aria-label={t("projects.backToWorkbench")}
-          >
-            <ChevronLeft size={16} className="mr-1" />
-            {t("projects.backToWorkbench")}
-          </Button>
-          <Button onClick={() => setCreateOpen(true)} size="sm">
-            <Plus size={16} className="mr-1" />
-            {t("projects.create")}
-          </Button>
-        </>
+      compact
+      title={t("projects.configTitle")}
+      leading={(
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => {
+            const pid = selectedProjectId();
+            if (pid) router.push(`/projects/${pid}`);
+            else router.push("/projects");
+          }}
+          aria-label={t("projects.backToWorkbench")}
+          title={t("projects.backToWorkbench")}
+        >
+          <ChevronLeft size={16} />
+        </Button>
       )}
       contentClassName="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6"
     >
@@ -427,6 +436,10 @@ export function ProjectsPage() {
           <h2 className="text-xs uppercase tracking-wider text-muted-foreground px-2">
             {t("projects.listHeading")}
           </h2>
+          <Button onClick={() => setCreateOpen(true)} size="sm" className="w-full">
+            <Plus size={16} className="mr-1" />
+            {t("projects.create")}
+          </Button>
           {projects && projects.length > 3 && (
             <input
               type="search"
@@ -446,17 +459,29 @@ export function ProjectsPage() {
           ) : (
             <ul className="space-y-1">
               {visibleProjects.map((p) => (
-                <li key={p.id}>
+                <li key={p.id} className="group relative">
                   <button
                     type="button"
                     onClick={() => setActiveId(p.id)}
                     className={cn(
-                      "w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-surface-hover transition",
+                      "w-full text-left pl-3 pr-9 py-2 rounded-xl text-sm hover:bg-surface-hover transition",
                       activeId === p.id && "bg-brand/10 text-brand font-medium",
                     )}
                   >
                     <div className="truncate">{p.name}</div>
                     <div className="text-xs text-muted-foreground truncate">{p.repo_path}</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPendingDelete(p);
+                    }}
+                    aria-label={t("projects.delete")}
+                    title={t("projects.delete")}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-error/10 hover:text-error transition"
+                  >
+                    <Trash2 size={14} />
                   </button>
                 </li>
               ))}
@@ -470,13 +495,10 @@ export function ProjectsPage() {
               <Card className="enterprise-card rounded-2xl overflow-hidden">
                 <CardHeader className="flex flex-row items-start justify-between space-y-0">
                   <div>
-                    <CardTitle>{activeProject.name}</CardTitle>
+                    <CardTitle className="text-brand">{activeProject.name}</CardTitle>
                     <CardDescription className="font-mono text-xs mt-1">{activeProject.repo_path}</CardDescription>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" onClick={() => handleSelectAndEnter(activeProject)}>
-                      {t("projects.enter")}
-                    </Button>
                     <Button
                       size="sm"
                       variant="outline"
@@ -520,13 +542,9 @@ export function ProjectsPage() {
                       <Wrench size={14} className="mr-1" />
                       {t("projects.repair")}
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setPendingDelete(activeProject)}
-                      aria-label={t("projects.delete")}
-                    >
-                      <Trash2 size={16} />
+                    <Button size="sm" onClick={() => handleSelectAndEnter(activeProject)}>
+                      {t("projects.enter")}
+                      <ArrowRight size={16} className="ml-1" />
                     </Button>
                   </div>
                 </CardHeader>
@@ -564,6 +582,27 @@ export function ProjectsPage() {
                       </span>
                     </div>
                   )}
+                  <div className="space-y-2 pt-3 border-t border-border-subtle">
+                    <button
+                      type="button"
+                      onClick={() => setBranchesOpen((v) => !v)}
+                      className="flex w-full items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground hover:text-foreground transition"
+                      aria-expanded={branchesOpen}
+                    >
+                      <GitBranchIcon size={14} />
+                      {t("projects.branches")}
+                      <ChevronDown
+                        size={14}
+                        className={cn("ml-auto transition-transform", !branchesOpen && "-rotate-90")}
+                      />
+                    </button>
+                    {branchesOpen &&
+                      (branchesLoading ? (
+                        <Skeleton className="h-32 w-full" />
+                      ) : (
+                        <BranchListView branches={branches} defaultBranch={activeProject.default_branch} />
+                      ))}
+                  </div>
                 </CardContent>
               </Card>
               <SetupScriptCard

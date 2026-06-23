@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 18
-- **Last Active**: 2026-06-23
+- **Total Sessions**: 32
+- **Last Active**: 2026-06-09
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~637 | Active |
+| `journal-1.md` | ~1110 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,9 +29,23 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
-| 18 | 2026-06-23 | 原型设计工具 + 任务批量收尾 | `46e70aa` | `feat/project-remote-update-detection` |
-| 17 | 2026-06-08 | Conductor policy and decision explanation | `63f787e`, `8b2c2be`, `a198f2c`, `baf18eb`, `a61163d`, `468fc73` | `main` |
-| 16 | 2026-06-06 | Coordinator source-informed upgrade | `a677095`, `6c426cb`, `8800780` | `main` |
+| 32 | 2026-06-09 | Schedule self-improvement proposal activation | `a686186` | `codex/archive-self-improvement-proposal-scheduler` |
+| 31 | 2026-06-09 | Auto-start self-improvement activations | `6f0f178` | `codex/archive-self-improvement-auto-start` |
+| 30 | 2026-06-09 | Activate self-improvement proposal tasks | `e39c9dc` | `codex/archive-self-improvement-pr-task-activation` |
+| 29 | 2026-06-09 | Benchmark eval self-improvement proposals | `509aa0e` | `codex/archive-self-improvement-benchmark-eval` |
+| 28 | 2026-06-09 | Self-improvement application audit rollback | `6720596` | `codex/archive-self-improvement-apply-audit` |
+| 27 | 2026-06-08 | Reviewed self-improvement memory apply | `42c1716` | `codex/archive-self-improvement-apply-execute` |
+| 26 | 2026-06-08 | Self-improvement apply plan API | `7695be6` | `codex/archive-self-improvement-apply-plan` |
+| 25 | 2026-06-08 | Self-improvement proposal review API | `def982b` | `codex/archive-self-improvement-proposal-review-api` |
+| 24 | 2026-06-08 | Implementation diff completion guard | `ac5c0ca` | `codex/archive-implementation-diff-guard` |
+| 23 | 2026-06-08 | Workflow failed node auto retry | `530776d` | `codex/archive-workflow-failed-node-auto-retry` |
+| 22 | 2026-06-08 | Archive completed autonomy pipeline tasks | `253d2df`, `2950cbc`, `44a2db7`, `57e5414` | `codex/archive-completed-autonomy-tasks` |
+| 21 | 2026-06-08 | Conductor PR follow-up sweep | `c5293f0` | `codex/conductor-pr-follow-up-sweep-main` |
+| 20 | 2026-06-08 | Project review scheduler stale health | `6d42404` | `codex/archive-project-review-scheduler-stale-health` |
+| 19 | 2026-06-08 | Diagnostics supervisor health | `e6955fb` | `codex/archive-diagnostics-supervisor-health` |
+| 18 | 2026-06-08 | GitHub PR follow-up diagnostics | `f9aa0f9`, `90f613b` | `codex/archive-github-pr-followup-diagnostics` |
+| 17 | 2026-06-08 | Project review scheduler status | `ad2fef8` | `codex/archive-project-review-scheduler-status` |
+| 16 | 2026-06-08 | Project review background loop | `3cc5130` | `codex/archive-project-review-background-loop` |
 | 15 | 2026-06-03 | Fix audit log time-filter boundary minute exclusion | `6376dc9` | `main` |
 | 14 | 2026-06-01 | Unified audit logging: audit_log table + 6 choke-point instrumentation + read API + global viewer | `2522c22` | `main` |
 | 13 | 2026-05-31 | Reliability hardening: swarm worktree terminal cleanup + regression pins | `8ad2f60` | `main` |
