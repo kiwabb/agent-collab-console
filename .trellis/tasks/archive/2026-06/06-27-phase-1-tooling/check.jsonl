@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Code Review Checklist: scope-limited / 工具门在 CI 真的跑 / drive-by 禁令"}
+{"file": "REFACTORING_PLAN.md", "reason": "Phase 1 AC1-AC9 + 附录 A 测量命令验证"}
+{"file": "CLAUDE.md", "reason": "Commands 段: 跑 pytest -v / npm test / npm run build && npm run lint 验证零行为变化"}
+{"file": ".trellis/tasks/06-27-refactor-backend-frontend-to-standard/prd.md", "reason": "父任务 DoD + Phase 1 PR 粒度 + WIP 文件域隔离"}

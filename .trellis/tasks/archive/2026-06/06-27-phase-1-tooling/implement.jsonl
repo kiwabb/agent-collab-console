@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "质量门顺序与 forbidden/required patterns; drive-by 禁令"}
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Stack 与 cross-cutting conventions (timeouts.py 是唯一 os.getenv 处等)"}
+{"file": "REFACTORING_PLAN.md", "reason": "Phase 1 详细方案: pyproject.toml 字段 / tsconfig 收紧项 / CI step 列表"}
+{"file": "CLAUDE.md", "reason": "现有 Commands (pytest -v / npm test / npm run build) 与 Stack"}
+{"file": "backend/pytest.ini", "reason": "迁入 pyproject.toml 前需要读懂其配置 (asyncio_mode, addopts, markers)"}
+{"file": "backend/requirements.txt", "reason": "依赖基线,避免重复声明或漏依赖"}
+{"file": "frontend/next.config.ts", "reason": "需要移除 eslint.ignoreDuringBuilds; tsconfig 全开后影响 next build"}
+{"file": "frontend/tsconfig.json", "reason": "需要收紧的 strict 全集: noUncheckedIndexedAccess / verbatimModuleSyntax / target ES2022 / allowJs false"}
+{"file": "frontend/package.json", "reason": "加 prettier / prettier-plugin-tailwindcss 到 devDependencies; npm scripts 加 format / format:check"}
+{"file": ".github/workflows/ci.yml", "reason": "现有 CI 结构, 在其上增 step 不破坏既有"}
+{"file": ".trellis/tasks/06-27-refactor-backend-frontend-to-standard/prd.md", "reason": "父任务 DoD + Out of Scope 防止越界"}
