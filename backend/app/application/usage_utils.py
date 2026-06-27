@@ -3,9 +3,10 @@ from __future__ import annotations
 """Shared utilities for extracting and pricing token usage."""
 
 import os  # noqa: E402
+from typing import Any, cast
 
 
-def extract_usage(obj) -> dict | None:
+def extract_usage(obj: Any) -> dict[str, Any] | None:
     """Pull the usage dict out of a Codex / Claude stream event payload.
 
     Codex app server emits shapes like:
@@ -15,13 +16,13 @@ def extract_usage(obj) -> dict | None:
     if not isinstance(obj, dict):
         return None
     if isinstance(obj.get("usage"), dict):
-        return obj["usage"]
+        return cast(dict[str, Any], obj["usage"])
     msg = obj.get("message")
     if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
-        return msg["usage"]
+        return cast(dict[str, Any], msg["usage"])
     event = obj.get("event")
     if isinstance(event, dict) and isinstance(event.get("usage"), dict):
-        return event["usage"]
+        return cast(dict[str, Any], event["usage"])
     return None
 
 

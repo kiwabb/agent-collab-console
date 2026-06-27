@@ -41,7 +41,7 @@ CLARIFICATION_PROMPT_INSTRUCTION = (
 def question_text(task) -> str | None:
     """Extract the question text from a task whose review_comment is in
     [CLARIFY] format. Returns None when the task isn't currently asking."""
-    rc = getattr(task, "review_comment", None)
+    rc = getattr(task, "review_comment", None)  # type: ignore[arg-type]
     if not rc:
         return None
     if not rc.startswith(CLARIFY_PREFIX):

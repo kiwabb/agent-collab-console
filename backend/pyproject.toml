@@ -46,6 +46,7 @@ ignore = [
     "E501",  # line length (handled by formatter)
     "B008",  # do not perform function calls in argument defaults (FastAPI patterns)
     "RUF012",  # mutable class attributes annotated with ClassVar (Pydantic)
+    "ERA001",  # commented-out code (allowed for migration notes)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -90,7 +91,17 @@ check_untyped_defs = false
 # 0 errors under the same flags.
 [[tool.mypy.overrides]]
 module = [
+    "app.adapters.audit_log_query",
+    "app.application.command_safety",
+    "app.application.conductor_policy",
     "app.application.conductor_state_machine",
+    "app.application.embedding_service",
+    "app.application.intent_classifier",
+    "app.application.issue_artifact_documents",
+    "app.application.phase_duration_estimator",
+    "app.application.task_activity",
+    "app.application.timeouts",
+    "app.application.tolerant_json",
     "app.interfaces.common",
 ]
 disallow_untyped_defs = true
