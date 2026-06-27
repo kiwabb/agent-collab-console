@@ -142,7 +142,7 @@ class EventBus:
     async def _broadcast_to_ws(self, event: dict[str, Any], envelope: dict[str, Any] | None = None):
         """Broadcast events to WebSocket subscribers via JSON Patch."""
         try:
-            from app.interfaces.codex_ws import (
+            from app.interfaces.codex_ws import (  # noqa: E402, E501, RUF100
                 message_stream_manager,
                 raw_log_stream_manager,
                 stream_manager,

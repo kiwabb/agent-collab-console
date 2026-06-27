@@ -435,7 +435,7 @@ class BaseProcessRuntime:
             await self.log_store.append_log_event(event)
 
         try:
-            from app.interfaces.codex_ws import stream_manager
+            from app.interfaces.codex_ws import stream_manager  # noqa: E402, I001, RUF100
 
             stream_manager.buffer_pending(
                 workspace_id,
@@ -892,7 +892,7 @@ class BaseProcessRuntime:
                     }
                 )
             try:
-                from app.interfaces.codex_ws import stream_manager
+                from app.interfaces.codex_ws import stream_manager  # noqa: E402, I001, RUF100
 
                 stream_manager.buffer_pending(
                     task.session_id,
