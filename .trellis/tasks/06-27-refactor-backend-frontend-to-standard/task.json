@@ -1,0 +1,33 @@
+{
+  "id": "refactor-backend-frontend-to-standard",
+  "name": "refactor-backend-frontend-to-standard",
+  "title": "refactor-backend-frontend-to-standard",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": "ccgui",
+  "priority": "P2",
+  "creator": "jackmouse",
+  "assignee": "jackmouse",
+  "createdAt": "2026-06-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "06-27-phase-0-hygiene",
+    "06-27-phase-1-tooling",
+    "06-27-phase-2-conventions",
+    "06-27-phase-3-backend-structural",
+    "06-27-phase-4-frontend-structural",
+    "06-27-phase-5-burn-down"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

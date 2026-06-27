@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 32
-- **Last Active**: 2026-06-09
+- **Total Sessions**: 33
+- **Last Active**: 2026-06-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1110 | Active |
+| `journal-1.md` | ~1149 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 33 | 2026-06-27 | refactor: align backend + frontend to industry-standard conventions | `b2ffecee`, `4ba1697d`, `99305418`, `f4ec0af1`, `bfd1beab`, `7de9614f` | `main` |
 | 32 | 2026-06-09 | Schedule self-improvement proposal activation | `a686186` | `codex/archive-self-improvement-proposal-scheduler` |
 | 31 | 2026-06-09 | Auto-start self-improvement activations | `6f0f178` | `codex/archive-self-improvement-auto-start` |
 | 30 | 2026-06-09 | Activate self-improvement proposal tasks | `e39c9dc` | `codex/archive-self-improvement-pr-task-activation` |

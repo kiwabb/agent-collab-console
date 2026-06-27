@@ -1108,3 +1108,42 @@ Implemented and merged PR #37: a backend scheduler now scans accepted non-memory
 ### Next Steps
 
 - None - task complete
+
+
+## Session 33: refactor: align backend + frontend to industry-standard conventions
+
+**Date**: 2026-06-27
+**Task**: refactor: align backend + frontend to industry-standard conventions
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Five-phase refactor (06-27-refactor-backend-frontend-to-standard), 1 PR per phase, zero behavior change. Phase 0: drop 13 one-off scripts + stray dev artifacts. Phase 1: add backend pyproject.toml + ruff + mypy + Prettier, tighten tsconfig (noUncheckedIndexedAccess left OFF for Phase 5 burn-down), enable CI gates (ruff hard, others baseline). Phase 2: from __future__ import annotations on all 94 backend/app modules. Phase 3: extract conductor_state_machine.py and interfaces/common.py as testable units (api.py 7908 -> 7888, conductor_main_loop.py 1517 -> 1486). Phase 4: split i18n.ts 3606 -> 14-line re-export shim + 1774/1775-line zh-CN/en-US locale files. Phase 5: scripts/mypy_burndown.sh scaffold, graduate 2 Phase 3/4 modules to mypy strict (0 errors), promote ruff check to hard gate. All 6 work commits verified: pytest 899 passed, mypy baseline 485 -> 484, tsc 0 non-WIP errors. Work-isolated from WIP 06-27-audit-* per file-domain rule. Deferred to follow-up PRs (per commit message): 184 routes -> per-domain routers, async_sqlite_store 3941 lines split, 67 os.getenv -> timeouts.py accessors, frontend lib/api.ts 2061 / lib/types.ts 999 per-domain split, large component hook extraction, mypy 484-baseline burn-down, tsconfig noUncheckedIndexedAccess.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b2ffecee` | (see git log) |
+| `4ba1697d` | (see git log) |
+| `99305418` | (see git log) |
+| `f4ec0af1` | (see git log) |
+| `bfd1beab` | (see git log) |
+| `7de9614f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
