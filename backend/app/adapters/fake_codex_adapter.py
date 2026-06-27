@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 class FakeCodexAdapter:
     agent_id = "codex"
     role = "master"
@@ -9,13 +12,15 @@ class FakeCodexAdapter:
             "role": self.role,
             "status": "completed",
             "summary": f"Planned: {task_title}",
-            "artifacts": [{
-                "kind": "plan",
-                "content": {
-                    "summary": f"Plan for: {task_title}",
-                    "next_steps": steps,
-                    "task_title": task_title,
-                },
-                "steps": steps,
-            }],
+            "artifacts": [
+                {
+                    "kind": "plan",
+                    "content": {
+                        "summary": f"Plan for: {task_title}",
+                        "next_steps": steps,
+                        "task_title": task_title,
+                    },
+                    "steps": steps,
+                }
+            ],
         }

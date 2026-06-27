@@ -12,7 +12,7 @@ def format_qa_failure_narrative(
     Falls back to a static string when plan is None or unreadable.
     """
     if not plan:
-        return "QA 验证失败（报告不可读）"
+        return "QA 验证失败（报告不可读）"  # noqa: RUF001
 
     status = plan.get("status", "failed")
     bugs = plan.get("bugs_found") or []
@@ -22,22 +22,22 @@ def format_qa_failure_narrative(
     recommendation = plan.get("final_recommendation") or ""
 
     def bullets(items: list) -> list[str]:
-        return [f"  - {x}" for x in items] if items else ["  （无）"]
+        return [f"  - {x}" for x in items] if items else ["  （无）"]  # noqa: RUF001
 
     lines: list[str] = [
         f"QA 验证标记为 **{status}**。请在下次 QA 前修复以下每一项问题。",
         "",
     ]
     if recommendation:
-        lines += [f"最终建议：{recommendation}", ""]
-    lines.append("发现的缺陷：")
+        lines += [f"最终建议：{recommendation}", ""]  # noqa: RUF001
+    lines.append("发现的缺陷：")  # noqa: RUF001
     lines.extend(bullets(bugs))
-    lines += ["", "测试空白 / 框架注记："]
+    lines += ["", "测试空白 / 框架注记："]  # noqa: RUF001
     lines.extend(bullets(gaps))
-    lines += ["", "风险："]
+    lines += ["", "风险："]  # noqa: RUF001
     lines.extend(bullets(risks))
-    lines += ["", "QA 实际执行的命令（含退出码）："]
+    lines += ["", "QA 实际执行的命令（含退出码）："]  # noqa: RUF001
     lines.extend(bullets(commands))
     if qa_report_relpath:
-        lines += ["", f"完整 QA 报告：{qa_report_relpath}"]
+        lines += ["", f"完整 QA 报告：{qa_report_relpath}"]  # noqa: RUF001
     return "\n".join(lines)

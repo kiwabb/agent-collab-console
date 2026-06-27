@@ -6,7 +6,8 @@ verification runner (`qa_workflow.py`) and the project dev-server runner
 commands — these patterns catch the obvious destructive / privilege-escalating
 shapes before we ever spawn a subprocess.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import re
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Tolerant JSON loader for role-agent outputs.
 
 Models like MiniMax-M2.7 sometimes drift on strict-JSON prompts and emit:
@@ -12,12 +14,9 @@ brace-balancing (string-literal aware), then runs a small set of regex-based
 repairs, then attempts json.loads. If everything fails it raises the original
 JSONDecodeError so callers can surface the parse error.
 """
-
-from __future__ import annotations
-
-import json
-import re
-from typing import Any
+import json  # noqa: E402
+import re  # noqa: E402
+from typing import Any  # noqa: E402
 
 
 def _extract_first_json_object(text: str) -> str | None:
@@ -138,21 +137,23 @@ def tolerant_json_loads(s: str) -> Any:
     # quotes on values, comma/brace mix-ups, etc.) than my regex set.
     try:
         from json_repair import repair_json
+
         # repair_json returns a JSON string with `return_objects=False` (default);
         # easier to just round-trip via json.loads on it.
         repaired_str = repair_json(candidate, return_objects=False)
         if repaired_str:
             return json.loads(repaired_str)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         pass
 
     # Last resort: json-repair on the full (un-extracted) stripped text.
     try:
         from json_repair import repair_json
+
         repaired_str = repair_json(stripped, return_objects=False)
         if repaired_str:
             return json.loads(repaired_str)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         pass
 
     # Surface the *original* strict error for the most informative location info.

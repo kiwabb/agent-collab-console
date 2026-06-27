@@ -6,32 +6,68 @@ ONLY when an action verb is present AND no question marker is present —
 otherwise we default to chat, which is the safer fallback (chat does not
 mutate task.result or persist artifacts).
 """
+
 from __future__ import annotations
 
 from typing import Literal
 
 # Action verbs that imply the user wants to modify the artifact.
 REFINE_TOKENS_CN: tuple[str, ...] = (
-    "改", "修改", "修正", "改进", "调整",
-    "加", "添加", "增加", "新增",
-    "删", "删除", "移除",
-    "更新", "替换", "重写", "重做", "重构", "优化",
+    "改",
+    "修改",
+    "修正",
+    "改进",
+    "调整",
+    "加",
+    "添加",
+    "增加",
+    "新增",
+    "删",
+    "删除",
+    "移除",
+    "更新",
+    "替换",
+    "重写",
+    "重做",
+    "重构",
+    "优化",
 )
 
 REFINE_TOKENS_EN: tuple[str, ...] = (
-    "change", "update", "modify", "add", "remove", "delete",
-    "rewrite", "refactor", "improve",
+    "change",
+    "update",
+    "modify",
+    "add",
+    "remove",
+    "delete",
+    "rewrite",
+    "refactor",
+    "improve",
 )
 
 # Question / discussion / courtesy markers that imply a chat turn.
 CHAT_TOKENS_CN: tuple[str, ...] = (
-    "问", "请问", "是否", "能否",
-    "怎么", "如何", "为什么", "什么", "哪",
-    "解释", "说明", "讲", "麻烦",
+    "问",
+    "请问",
+    "是否",
+    "能否",
+    "怎么",
+    "如何",
+    "为什么",
+    "什么",
+    "哪",
+    "解释",
+    "说明",
+    "讲",
+    "麻烦",
 )
 
 CHAT_TOKENS_EN: tuple[str, ...] = (
-    "what", "why", "how", "explain", "?",
+    "what",
+    "why",
+    "how",
+    "explain",
+    "?",
 )
 
 

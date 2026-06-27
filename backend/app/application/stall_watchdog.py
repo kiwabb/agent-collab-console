@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Stall watchdog — nudges agents that have been silent past the threshold.
 
 How it works:
@@ -20,21 +22,19 @@ Environment knobs (all optional):
     CODEX_STALL_INTERVAL_S=30            (default: 30s scan cadence)
     CODEX_STALL_COOLDOWN_S=300           (default: 300s between nudges per task)
 """
-from __future__ import annotations
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+from datetime import datetime  # noqa: E402
 
-import asyncio
-import logging
-import os
-from datetime import datetime
-
-from app.application import task_activity, timeouts
+from app.application import task_activity, timeouts  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 NUDGE_PROMPT = (
-    "[WATCHDOG] 你刚才超过 {silence_s:.0f} 秒没有输出任何内容。请总结一下当前正在做的事情，"
-    "然后**直接给出最终结果**（按照原本的产物 schema），不要再做更多调研——你已经收集到的信息足够了。"
-    "如果某些细节不确定，按合理默认值填，并在 risks 字段简短说明。"
+    "[WATCHDOG] 你刚才超过 {silence_s:.0f} 秒没有输出任何内容。请总结一下当前正在做的事情，"  # noqa: RUF001
+    "然后**直接给出最终结果**（按照原本的产物 schema），不要再做更多调研——你已经收集到的信息足够了。"  # noqa: RUF001
+    "如果某些细节不确定，按合理默认值填，并在 risks 字段简短说明。"  # noqa: RUF001
 )
 
 
@@ -52,8 +52,9 @@ async def _emit_stall_event(event_type: str, **fields) -> None:
     countable per role/executor instead of grep-only. Best-effort."""
     try:
         from app.application.event_bus import event_bus
+
         await event_bus.append({"type": event_type, **fields})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("stall event %s emit failed: %s", event_type, exc)
 
 
@@ -103,7 +104,10 @@ async def _scan_once(store, process_manager, run_task_with_user_content) -> None
         executor = _field(task, "executor", "?")
         logger.warning(
             "watchdog: task %s (%s/%s) silent for %.0fs — terminating + nudging",
-            task_id, role, executor, silence_s,
+            task_id,
+            role,
+            executor,
+            silence_s,
         )
         await _emit_stall_event(
             "stall_detected",
@@ -199,7 +203,7 @@ async def _recover_nudge_result(store, process_manager, task_id: str) -> bool:
         task.status = "failed"
         await store.save_codex_task(task)
         return False
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.warning("watchdog: nudge result recovery failed for %s: %s", task_id, exc)
         return False
 
@@ -213,7 +217,8 @@ async def run(store, get_process_manager, run_task_with_user_content) -> None:
     threshold = timeouts.stall_threshold_s()
     logger.info(
         "stall watchdog started: scan every %ds, stall threshold %ds",
-        interval, threshold,
+        interval,
+        threshold,
     )
     try:
         while True:

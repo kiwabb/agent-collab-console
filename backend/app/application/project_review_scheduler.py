@@ -90,7 +90,9 @@ class ProjectReviewSchedulerStatus:
             "running": self.running,
             "tick_count": self.tick_count,
             "last_started_at": self.last_started_at.isoformat() if self.last_started_at else None,
-            "last_completed_at": self.last_completed_at.isoformat() if self.last_completed_at else None,
+            "last_completed_at": self.last_completed_at.isoformat()
+            if self.last_completed_at
+            else None,
             "last_error": self.last_error,
             "last_summary_counts": dict(self.last_summary_counts),
         }
@@ -180,7 +182,7 @@ async def run_project_review_tick(
                 event_bus=event_bus,
             )
             result = await conductor.handle_task(task)
-        except Exception as exc:  # noqa: BLE001 - one project must not stop the scheduler tick.
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.exception(
                 "project review tick failed project_id=%s task_id=%s",
                 project.id,
@@ -228,7 +230,7 @@ async def run_project_review_scheduler_loop(
             except asyncio.CancelledError:
                 _scheduler_status.mark_cancelled()
                 raise
-            except Exception as exc:  # noqa: BLE001 - supervisor loop survives a failed scan.
+            except Exception as exc:  # noqa: BLE001, RUF100
                 _scheduler_status.mark_failed(exc)
                 logger.exception("project review scheduler tick failed")
             else:

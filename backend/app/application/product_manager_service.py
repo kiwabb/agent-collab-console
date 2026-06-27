@@ -165,7 +165,7 @@ class ProductManagerService:
         workspace_path: str,
         prompt: str,
     ) -> Path:
-        issue_root = self.documents.ensure_issue_root(workspace_path, issue_id)
+        issue_root = self.documents.ensure_issue_root(workspace_path, issue_id)  # noqa: F841
         requirement_path = self.documents.requirement_path(workspace_path, issue_id)
         content = (
             "# Requirement\n\n"
@@ -185,10 +185,16 @@ class ProductManagerService:
     ) -> str:
         if not workspace_path or not issue_id:
             return "bugfix" if self._is_bugfix_prompt(prompt) else "new_requirement"
-        return self.route_requirement(prompt=prompt, workspace_path=workspace_path, issue_id=issue_id).name
+        return self.route_requirement(
+            prompt=prompt, workspace_path=workspace_path, issue_id=issue_id
+        ).name
 
-    def route_requirement(self, *, prompt: str, workspace_path: str, issue_id: str) -> RequirementRoute:
-        return self.router.route_requirement(prompt=prompt, workspace_path=workspace_path, issue_id=issue_id)
+    def route_requirement(
+        self, *, prompt: str, workspace_path: str, issue_id: str
+    ) -> RequirementRoute:
+        return self.router.route_requirement(
+            prompt=prompt, workspace_path=workspace_path, issue_id=issue_id
+        )
 
     def merge_with_existing_prd(self, *, existing_prd_path: Path, new_payload: dict) -> dict:
         existing = json.loads(existing_prd_path.read_text(encoding="utf-8"))
@@ -206,9 +212,13 @@ class ProductManagerService:
         )
         return bugfix_path
 
-    def persist_prd_from_result(self, task, workspace_title: str | None = None) -> ProductRequirementDocument:
+    def persist_prd_from_result(
+        self, task, workspace_title: str | None = None
+    ) -> ProductRequirementDocument:
         if not task.workspace_path:
-            raise ProductManagerArtifactError("Task workspace_path is required for ProductManager artifacts")
+            raise ProductManagerArtifactError(
+                "Task workspace_path is required for ProductManager artifacts"
+            )
         if not task.result or not task.result.strip():
             raise ProductManagerArtifactError("ProductManager task result is empty")
 
@@ -244,13 +254,16 @@ class ProductManagerService:
                 risks=[],
             )
             # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
-            object.__setattr__(bugfix_payload, "written_files", [
-                {"name": "pm/bugfix.md", "path": str(bugfix_md_path), "kind": "product"}
-            ])
+            object.__setattr__(
+                bugfix_payload,
+                "written_files",
+                [{"name": "pm/bugfix.md", "path": str(bugfix_md_path), "kind": "product"}],
+            )
             return bugfix_payload
 
         try:
             from app.application.tolerant_json import tolerant_json_loads
+
             payload = tolerant_json_loads(task.result)
             prd = ProductRequirementDocument.model_validate(payload)
             if not prd.plan_summary:
@@ -270,21 +283,28 @@ class ProductManagerService:
             self.documents.ensure_issue_root(task.workspace_path, canonical_issue_id)
 
             if route.name == "requirement_update" and prd_json_path.exists():
-                payload = self.merge_with_existing_prd(existing_prd_path=prd_json_path, new_payload=payload)
+                payload = self.merge_with_existing_prd(
+                    existing_prd_path=prd_json_path, new_payload=payload
+                )
                 prd = ProductRequirementDocument.model_validate(payload)
 
             prd_json_path.write_text(prd.model_dump_json(indent=2), encoding="utf-8")
             prd_md_path.write_text(self.render_markdown(prd), encoding="utf-8")
             task.result = self.build_summary(prd, prd_json_path, prd_md_path)
             # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
-            object.__setattr__(prd, "written_files", [
-                {"name": "pm/prd.json", "path": str(prd_json_path), "kind": "product"},
-                {"name": "pm/prd.md", "path": str(prd_md_path), "kind": "product"},
-            ])
+            object.__setattr__(
+                prd,
+                "written_files",
+                [
+                    {"name": "pm/prd.json", "path": str(prd_json_path), "kind": "product"},
+                    {"name": "pm/prd.md", "path": str(prd_md_path), "kind": "product"},
+                ],
+            )
             return prd
         except (json.JSONDecodeError, ValidationError) as exc:
             # LLM returned invalid JSON or content that doesn't match the PRD schema
             import logging
+
             logger = logging.getLogger(__name__)
 
             self.documents.ensure_issue_root(task.workspace_path, canonical_issue_id)
@@ -298,70 +318,82 @@ class ProductManagerService:
             prd_md_path.write_text(task.result or "(empty response)", encoding="utf-8")
 
             error_details_parts = [
-                f"ProductManager 返回了无效的 PRD 格式",
-                f"",
+                f"ProductManager 返回了无效的 PRD 格式",  # noqa: F541
+                f"",  # noqa: F541
                 f"错误类型: {type(exc).__name__}",
-                f"错误详情: {str(exc)}",
+                f"错误详情: {str(exc)}",  # noqa: RUF010
             ]
 
             if isinstance(exc, ValidationError):
                 field_errors = []
                 for err in exc.errors():
-                    loc = ".".join(str(l) for l in err.get("loc", []))
+                    loc = ".".join(str(l) for l in err.get("loc", []))  # noqa: E741
                     msg = err.get("msg", "")
                     input_type = err.get("type", "")
                     field_errors.append(f"  - {loc}: {msg} (input_type={input_type})")
                 if field_errors:
-                    error_details_parts.extend([
-                        "",
-                        f"字段验证错误 ({len(field_errors)} 个):",
-                        *field_errors,
-                    ])
+                    error_details_parts.extend(
+                        [
+                            "",
+                            f"字段验证错误 ({len(field_errors)} 个):",
+                            *field_errors,
+                        ]
+                    )
             elif isinstance(exc, json.JSONDecodeError):
-                error_details_parts.extend([
-                    "",
-                    f"JSON 解析失败位置: 第 {exc.lineno} 行, 第 {exc.colno} 列 (字符位置 {exc.pos})",
-                ])
+                error_details_parts.extend(
+                    [
+                        "",
+                        f"JSON 解析失败位置: 第 {exc.lineno} 行, 第 {exc.colno} 列 (字符位置 {exc.pos})",
+                    ]
+                )
                 # Show context around the error position
                 if task.result:
                     start = max(0, exc.pos - 50)
                     end = min(len(task.result), exc.pos + 50)
                     context = task.result[start:end]
-                    error_details_parts.extend([
-                        f"错误上下文 (字符 {start}-{end}):",
-                        f"  {repr(context)}",
-                    ])
+                    error_details_parts.extend(
+                        [
+                            f"错误上下文 (字符 {start}-{end}):",
+                            f"  {repr(context)}",  # noqa: RUF010
+                        ]
+                    )
 
-            error_details_parts.extend([
-                "",
-                f"原始输出已保存到: {prd_md_path}",
-                "",
-                f"可能的原因：",
-                f"1. LLM 返回了空响应（检查 API 配置和额度）",
-                f"2. LLM 返回了非 JSON 格式的文本",
-                f"3. LLM 返回的 JSON 格式不正确或缺少必需字段",
-                f"4. Prompt 可能需要调整以确保返回正确的 JSON 格式",
-            ])
+            error_details_parts.extend(
+                [
+                    "",
+                    f"原始输出已保存到: {prd_md_path}",
+                    "",
+                    f"可能的原因：",  # noqa: F541, RUF001
+                    f"1. LLM 返回了空响应（检查 API 配置和额度）",  # noqa: F541, RUF001
+                    f"2. LLM 返回了非 JSON 格式的文本",  # noqa: F541
+                    f"3. LLM 返回的 JSON 格式不正确或缺少必需字段",  # noqa: F541
+                    f"4. Prompt 可能需要调整以确保返回正确的 JSON 格式",  # noqa: F541
+                ]
+            )
 
             error_details = "\n".join(error_details_parts)
 
             raise ProductManagerArtifactError(error_details) from exc
 
     def _validate_prd_content(self, prd: ProductRequirementDocument) -> None:
-        has_structured_content = any([
-            bool(prd.plan_summary),
-            bool(prd.product_goals),
-            bool(prd.user_stories),
-            bool(prd.requirement_pool),
-            bool(prd.acceptance_criteria),
-            bool(prd.requirement_analysis.strip()),
-        ])
+        has_structured_content = any(
+            [
+                bool(prd.plan_summary),
+                bool(prd.product_goals),
+                bool(prd.user_stories),
+                bool(prd.requirement_pool),
+                bool(prd.acceptance_criteria),
+                bool(prd.requirement_analysis.strip()),
+            ]
+        )
         if not has_structured_content:
             raise ProductManagerArtifactError(
                 "ProductManager output is too sparse: PRD must include analysis, goals, stories, requirements, or acceptance criteria"
             )
 
-    def build_summary(self, prd: ProductRequirementDocument, prd_json_path: Path, prd_md_path: Path) -> str:
+    def build_summary(
+        self, prd: ProductRequirementDocument, prd_json_path: Path, prd_md_path: Path
+    ) -> str:
         return (
             f"PRD generated for {prd.issue_title}. "
             f"Files: {prd_json_path.name}, {prd_md_path.name}. "
@@ -382,16 +414,25 @@ class ProductManagerService:
             "## Plan Summary",
         ]
         lines.extend([f"- {item}" for item in prd.plan_summary] or ["- None"])
-        lines.extend([
-            "",
-            "## Product Goals",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Product Goals",
+            ]
+        )
         lines.extend([f"- {item}" for item in prd.product_goals] or ["- None"])
         lines.extend(["", "## User Stories"])
         lines.extend([f"- {item}" for item in prd.user_stories] or ["- None"])
-        lines.extend(["", "## Requirement Analysis", prd.requirement_analysis, "", "## Requirement Pool"])
+        lines.extend(
+            ["", "## Requirement Analysis", prd.requirement_analysis, "", "## Requirement Pool"]
+        )
         if prd.requirement_pool:
-            lines.extend([f"- {item.priority} | {item.title}: {item.description}" for item in prd.requirement_pool])
+            lines.extend(
+                [
+                    f"- {item.priority} | {item.title}: {item.description}"
+                    for item in prd.requirement_pool
+                ]
+            )
         else:
             lines.append("- None")
         lines.extend(["", "## Acceptance Criteria"])
@@ -436,7 +477,9 @@ class ProductManagerService:
         try:
             payload = json.loads(task.result)
         except json.JSONDecodeError as exc:
-            raise ProductManagerArtifactError(f"ProductManager output is not valid JSON: {exc}") from exc
+            raise ProductManagerArtifactError(
+                f"ProductManager output is not valid JSON: {exc}"
+            ) from exc
         payload = self._normalize_payload_keys(payload, self.BUGFIX_KEY_ALIASES)
 
         payload.setdefault("project_name", "workspace-project")
@@ -447,7 +490,9 @@ class ProductManagerService:
         try:
             return BugfixRequirementDocument.model_validate(payload)
         except ValidationError as exc:
-            raise ProductManagerArtifactError(f"ProductManager bugfix output does not match schema: {exc}") from exc
+            raise ProductManagerArtifactError(
+                f"ProductManager bugfix output does not match schema: {exc}"
+            ) from exc
 
     def _route_stage_name(self, route: RequirementRoute) -> str:
         if route.name == "bugfix":

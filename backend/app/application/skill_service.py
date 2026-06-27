@@ -4,6 +4,7 @@ Skills are pointers to externally-hosted markdown playbooks. We persist only
 metadata (name/link/description/category/tags) — never the body. The frontend
 fetches `link` via the proxy endpoint to preview the markdown live.
 """
+
 from __future__ import annotations
 
 import io
@@ -76,15 +77,11 @@ def _parse_frontmatter(text: str) -> dict[str, Any]:
         if not value:
             pending_list = []
             data[key] = pending_list
-            pending_key = key
+            pending_key = key  # noqa: F841
             continue
         if value.startswith("[") and value.endswith("]"):
             inner = value[1:-1].strip()
-            items = [
-                p.strip().strip("'").strip('"')
-                for p in inner.split(",")
-                if p.strip()
-            ]
+            items = [p.strip().strip("'").strip('"') for p in inner.split(",") if p.strip()]
             data[key] = items
         else:
             data[key] = value.strip("'").strip('"')
@@ -180,8 +177,12 @@ class SkillService:
             id=existing.id,
             name=(name.strip() if name is not None else existing.name),
             link=(link.strip() if link is not None else existing.link),
-            description=(description.strip() if description else None) if description is not None else existing.description,
-            category=(category.strip() if category else None) if category is not None else existing.category,
+            description=(description.strip() if description else None)
+            if description is not None
+            else existing.description,
+            category=(category.strip() if category else None)
+            if category is not None
+            else existing.category,
             tags=tags if tags is not None else existing.tags,
             created_at=existing.created_at,
             updated_at=datetime.now(),
@@ -254,12 +255,14 @@ class SkillService:
         created: list[Skill] = []
         skipped: list[dict[str, str]] = []
         for row_idx, row in enumerate(rows, start=2):
+
             def cell(field: str) -> str:
                 idx = col_map.get(field)
-                if idx is None or idx >= len(row):
+                if idx is None or idx >= len(row):  # noqa: B023
                     return ""
-                v = row[idx]
+                v = row[idx]  # noqa: B023
                 return "" if v is None else str(v).strip()
+
             name = cell("name")
             link = cell("link")
             if not name and not link:
@@ -270,7 +273,9 @@ class SkillService:
             if not name:
                 name = _derive_name_from_url(link)
             if not name:
-                skipped.append({"row": str(row_idx), "reason": "missing name and link could not be parsed"})
+                skipped.append(
+                    {"row": str(row_idx), "reason": "missing name and link could not be parsed"}
+                )
                 continue
             tags = _to_str_list(cell("tags"))
             skill = await self.create(

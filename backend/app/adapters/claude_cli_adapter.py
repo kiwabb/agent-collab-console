@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import subprocess
 
@@ -16,7 +18,10 @@ class ClaudeCliAdapter:
             data = json.loads(text)
             return {
                 "summary": data.get("summary", fallback),
-                "artifacts": data.get("artifacts", [{"kind": "execution_result", "content": data.get("summary", fallback)}]),
+                "artifacts": data.get(
+                    "artifacts",
+                    [{"kind": "execution_result", "content": data.get("summary", fallback)}],
+                ),
                 "status": data.get("status", "completed"),
             }
         except (json.JSONDecodeError, TypeError):

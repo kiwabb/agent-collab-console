@@ -4,6 +4,7 @@ All tasks under one issue share the issue's worktree (PM, architect, engineer,
 qa run sequentially and need to see each other's artifacts). Standalone chat
 tasks (no issue_id) also get a worktree, scoped to the task itself.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -83,7 +84,11 @@ class WorktreeManager:
         lock = await self._lock_for(f"issue:{issue.id}")
         async with lock:
             if issue.git_worktree_path and issue.git_branch:
-                return issue.git_branch, issue.git_worktree_path, issue.git_base_branch or project.default_branch
+                return (
+                    issue.git_branch,
+                    issue.git_worktree_path,
+                    issue.git_base_branch or project.default_branch,
+                )
             branch = _issue_branch_name(issue)
             base = base_branch or project.default_branch
             worktree = _worktree_path(project, "issue", issue.id)
@@ -121,7 +126,7 @@ class WorktreeManager:
         async with lock:
             if issue.git_worktree_path:
                 await self._cleanup_path(project.repo_path, issue.git_worktree_path)
-            try:
+            try:  # noqa: SIM105
                 await self.git.prune_worktrees(project.repo_path)
             except GitError:
                 pass
@@ -132,7 +137,7 @@ class WorktreeManager:
             }
             for branch in candidate_branches:
                 await self.git.delete_branch(project.repo_path, branch)
-            try:
+            try:  # noqa: SIM105
                 await self.git.prune_worktrees(project.repo_path)
             except GitError:
                 pass
@@ -203,8 +208,7 @@ class WorktreeManager:
             if not status.strip():
                 return None
             commit_message = (
-                message
-                or f"chore: flush upstream artifacts before swarm fan-out ({issue.id[:8]})"
+                message or f"chore: flush upstream artifacts before swarm fan-out ({issue.id[:8]})"
             )
             return await self.git.commit_all(issue.git_worktree_path, commit_message)
 
@@ -226,9 +230,7 @@ class WorktreeManager:
         the same agent_key (idempotent on an existing worktree).
         """
         if not issue.git_branch:
-            raise WorktreeError(
-                "issue has no git branch; prepare_issue_worktree must run first"
-            )
+            raise WorktreeError("issue has no git branch; prepare_issue_worktree must run first")
         lock = await self._lock_for(f"swarm:{issue.id}:{agent_key}")
         async with lock:
             branch = _agent_branch_name(issue, agent_key)
@@ -330,7 +332,7 @@ class WorktreeManager:
                 await self.git.delete_branch(repo_path, branch)
 
             # 4) Drop any stale worktree metadata left behind.
-            try:
+            try:  # noqa: SIM105
                 await self.git.prune_worktrees(repo_path)
             except GitError:
                 pass
@@ -505,13 +507,15 @@ class WorktreeManager:
                         message=f"merge swarm agent {agent_key}: {issue.title}",
                         target_worktree_path=issue.git_worktree_path,
                     )
-                    merged.append({
-                        "agent_key": agent_key,
-                        "role": role,
-                        "branch": branch,
-                        "sha": sha,
-                        "behind_at_merge": behind,
-                    })
+                    merged.append(
+                        {
+                            "agent_key": agent_key,
+                            "role": role,
+                            "branch": branch,
+                            "sha": sha,
+                            "behind_at_merge": behind,
+                        }
+                    )
                     # Merged successfully → its worktree+branch are no longer needed.
                     await self.cleanup_agent_worktree(project, issue, agent_key)
                 except GitError:
@@ -520,9 +524,7 @@ class WorktreeManager:
                     # empty merge (e.g. "nothing to commit" from a branch with no
                     # mergeable content that the pre-check above didn't catch),
                     # not a conflict — treat it as a no-op (cleanup + continue).
-                    detail = await self._collect_conflict(
-                        project, issue, branch, worktree_path
-                    )
+                    detail = await self._collect_conflict(project, issue, branch, worktree_path)
                     if not detail["files"]:
                         noop.append({"agent_key": agent_key, "role": role, "branch": branch})
                         await self.cleanup_agent_worktree(project, issue, agent_key)
@@ -554,7 +556,11 @@ class WorktreeManager:
         lock = await self._lock_for(f"chat:{task.id}")
         async with lock:
             if task.git_worktree_path and task.git_branch:
-                return task.git_branch, task.git_worktree_path, task.git_base_branch or project.default_branch
+                return (
+                    task.git_branch,
+                    task.git_worktree_path,
+                    task.git_base_branch or project.default_branch,
+                )
             branch = _chat_branch_name(task)
             base = project.default_branch
             worktree = _worktree_path(project, "chat", task.id)
@@ -587,7 +593,7 @@ class WorktreeManager:
     # ---- Shared helpers ----
 
     async def _cleanup_path(self, repo_path: str, worktree_path: str) -> None:
-        try:
+        try:  # noqa: SIM105
             await self.git.remove_worktree(repo_path, worktree_path)
         except GitError:
             pass
@@ -597,6 +603,7 @@ class WorktreeManager:
 
     async def _run_setup(self, script: str, cwd: Path) -> None:
         import os
+
         # Inherit a curated slice of the parent process env so commands like
         # `npm install` (needs PATH, HOME, possibly NPM_TOKEN, etc.) can find
         # their tools. The intentional drop list keeps Python/codex internals
@@ -615,15 +622,16 @@ class WorktreeManager:
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600.0)
-        except asyncio.TimeoutError as exc:
+        except asyncio.TimeoutError as exc:  # noqa: UP041
             proc.kill()
             await proc.wait()
             raise WorktreeError("setup_script timed out after 600s") from exc
         if proc.returncode != 0:
             # Show the tail of stderr (then stdout) so the toast has the actual
             # error rather than the first lines of an autoreloader banner.
-            combined = stderr.decode("utf-8", errors="replace").strip() or stdout.decode("utf-8", errors="replace").strip()
-            tail = "\n".join(combined.splitlines()[-30:])
-            raise WorktreeError(
-                f"setup_script failed (rc={proc.returncode}):\n{tail}"
+            combined = (
+                stderr.decode("utf-8", errors="replace").strip()
+                or stdout.decode("utf-8", errors="replace").strip()
             )
+            tail = "\n".join(combined.splitlines()[-30:])
+            raise WorktreeError(f"setup_script failed (rc={proc.returncode}):\n{tail}")

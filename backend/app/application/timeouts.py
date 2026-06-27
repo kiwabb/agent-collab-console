@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Single source of truth for orchestration timeout knobs.
 
 The conductor / executor stack has several overlapping timeout layers. Before
@@ -56,10 +58,8 @@ There are also two non-ladder knobs documented here for discoverability:
 Env-var names and defaults are unchanged from the pre-refactor call sites, so
 this module is behaviour-preserving on its own.
 """
-from __future__ import annotations
-
-import logging
-import os
+import logging  # noqa: E402
+import os  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -372,19 +372,13 @@ def check_invariants() -> list[str]:
         )
     ratio = budget_soft_warn_ratio()
     if not (0 < ratio <= 1):
-        violations.append(
-            f"BUDGET_SOFT_WARN_RATIO ({ratio}) must be in (0, 1]."
-        )
+        violations.append(f"BUDGET_SOFT_WARN_RATIO ({ratio}) must be in (0, 1].")
     budget = default_issue_budget_usd()
     if budget < 0:
-        violations.append(
-            f"DEFAULT_ISSUE_BUDGET_USD ({budget}) must be >= 0 (0 == no ceiling)."
-        )
+        violations.append(f"DEFAULT_ISSUE_BUDGET_USD ({budget}) must be >= 0 (0 == no ceiling).")
     est_agent = est_cost_per_agent_usd()
     if est_agent <= 0:
-        violations.append(
-            f"EST_COST_PER_AGENT_USD ({est_agent}) must be > 0."
-        )
+        violations.append(f"EST_COST_PER_AGENT_USD ({est_agent}) must be > 0.")
     for name, value in (
         ("CONDUCTOR_RECOVERY_INTERVAL_S", recovery_interval_s()),
         ("CODEX_STALL_THRESHOLD_S", stall_threshold_s()),

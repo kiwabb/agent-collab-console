@@ -15,7 +15,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable  # noqa: UP035
 
 import httpx
 
@@ -63,7 +63,7 @@ def _audit_autoplan(
             payload=body,
             error=error,
         )
-    except Exception:  # noqa: BLE001 — audit must never break auto-plan
+    except Exception:  # noqa: BLE001, RUF100
         pass
 
 
@@ -167,7 +167,7 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
     timeout_s = float(os.getenv("WORKFLOW_ORCHESTRATOR_TIMEOUT", "28"))
     # 8192 leaves comfortable headroom for: a) the DAG JSON itself, b) the
     # chain-of-thought / preamble some models (notably MiniMax) emit before
-    # the actual JSON, and c) Chinese-language rationale (≈2× the token
+    # the actual JSON, and c) Chinese-language rationale (≈2× the token  # noqa: RUF003
     # density of English). Streaming means we don't pay the round-trip for
     # unused budget — tokens flow as they're generated and the bound only
     # matters as an upper cap.
@@ -182,7 +182,9 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                 return None
             model = _resolve_model(executor, preferred_model_id)
             if not model:
-                logger.info("Auto-plan: executor %s has no resolvable model; falling back", executor.id)
+                logger.info(
+                    "Auto-plan: executor %s has no resolvable model; falling back", executor.id
+                )
                 return None
 
             url = f"{executor.api_endpoint.rstrip('/')}/v1/messages"
@@ -248,9 +250,7 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
             # Anthropic shape: { "content": [ { "type": "text", "text": "..." }, ... ], ... }
             parts = data.get("content") or []
             text = "".join(
-                p.get("text", "")
-                for p in parts
-                if isinstance(p, dict) and p.get("type") == "text"
+                p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text"
             )
             if not text:
                 return None
@@ -265,7 +265,7 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
         except httpx.TimeoutException:
             logger.warning("Auto-plan: LLM request timed out after %ss", timeout_s)
             return None
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("Auto-plan: LLM runner error: %s", exc)
             return None
 
@@ -280,6 +280,7 @@ class StreamingPlanContext:
     """The resolved executor + model the streaming endpoint chose. Useful for
     emitting a `meta` event up front so the UI can show which LLM is talking.
     """
+
     executor_id: str
     executor_label: str
     model: str
@@ -354,13 +355,11 @@ async def stream_llm(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[st
     # our own would produce "{{". Callers must handle the case where the
     # accumulated stream may or may not start with "{" (see `_extract_first_json_object`
     # in the SSE endpoint — it prepends "{" if missing).
-    async with _llm_http_client(ctx.timeout_s) as client:
+    async with _llm_http_client(ctx.timeout_s) as client:  # noqa: SIM117
         async with client.stream("POST", url, headers=headers, json=payload) as response:
             if response.status_code != 200:
                 body = await response.aread()
-                raise RuntimeError(
-                    f"LLM stream HTTP {response.status_code}: {body[:300]!r}"
-                )
+                raise RuntimeError(f"LLM stream HTTP {response.status_code}: {body[:300]!r}")
             async for line in response.aiter_lines():
                 if not line:
                     continue
@@ -477,13 +476,11 @@ async def call_llm_with_tools_streaming(
         for (index, kind), chunk in items:
             await emit_delta(index, kind, chunk)
 
-    async with _llm_http_client(ctx.timeout_s) as client:
+    async with _llm_http_client(ctx.timeout_s) as client:  # noqa: SIM117
         async with client.stream("POST", url, headers=headers, json=payload) as response:
             if response.status_code != 200:
                 body = await response.aread()
-                raise RuntimeError(
-                    f"LLM tools stream HTTP {response.status_code}: {body[:300]!r}"
-                )
+                raise RuntimeError(f"LLM tools stream HTTP {response.status_code}: {body[:300]!r}")
             async for line in response.aiter_lines():
                 if not line:
                     await flush_pending()
@@ -533,13 +530,17 @@ async def call_llm_with_tools_streaming(
                         if chunk:
                             block["type"] = "text"
                             block["text"] = str(block.get("text") or "") + chunk
-                            pending_chunks[(index, "text")] = pending_chunks.get((index, "text"), "") + chunk
+                            pending_chunks[(index, "text")] = (
+                                pending_chunks.get((index, "text"), "") + chunk
+                            )
                     elif delta_type == "input_json_delta":
                         chunk = str(delta.get("partial_json") or "")
                         if chunk:
                             block["type"] = "tool_use"
                             block["input_json"] = str(block.get("input_json") or "") + chunk
-                            pending_chunks[(index, "tool_input_json")] = pending_chunks.get((index, "tool_input_json"), "") + chunk
+                            pending_chunks[(index, "tool_input_json")] = (
+                                pending_chunks.get((index, "tool_input_json"), "") + chunk
+                            )
                     await flush_pending()
                 elif etype == "message_delta":
                     delta = event.get("delta") or {}
@@ -638,7 +639,9 @@ def _anthropic_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[s
                             "type": "function",
                             "function": {
                                 "name": str(block.get("name") or ""),
-                                "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+                                "arguments": json.dumps(
+                                    block.get("input") or {}, ensure_ascii=False
+                                ),
                             },
                         }
                     )
@@ -649,11 +652,17 @@ def _anthropic_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[s
             out.append(assistant_msg)
         else:
             # user turn: may carry tool_result blocks -> one OpenAI "tool" msg each.
-            tool_results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+            tool_results = [
+                b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"
+            ]
             if tool_results:
                 for block in tool_results:
                     raw = block.get("content")
-                    text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, default=str)
+                    text = (
+                        raw
+                        if isinstance(raw, str)
+                        else json.dumps(raw, ensure_ascii=False, default=str)
+                    )
                     out.append(
                         {
                             "role": "tool",
@@ -662,12 +671,18 @@ def _anthropic_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[s
                         }
                     )
             else:
-                text_parts = [str(b.get("text") or "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                text_parts = [
+                    str(b.get("text") or "")
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ]
                 out.append({"role": "user", "content": "".join(text_parts)})
     return out
 
 
-def _openai_choice_to_anthropic(message: dict[str, Any], finish_reason: str | None, usage: dict[str, Any] | None) -> dict[str, Any]:
+def _openai_choice_to_anthropic(
+    message: dict[str, Any], finish_reason: str | None, usage: dict[str, Any] | None
+) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
     text = message.get("content")
     if isinstance(text, str) and text:
@@ -694,7 +709,12 @@ def _openai_choice_to_anthropic(message: dict[str, Any], finish_reason: str | No
             "input_tokens": usage.get("prompt_tokens", 0),
             "output_tokens": usage.get("completion_tokens", 0),
         }
-    return {"role": "assistant", "content": content, "stop_reason": stop_reason, "usage": anthropic_usage}
+    return {
+        "role": "assistant",
+        "content": content,
+        "stop_reason": stop_reason,
+        "usage": anthropic_usage,
+    }
 
 
 async def call_openai_with_tools(
@@ -723,7 +743,9 @@ async def call_openai_with_tools(
             json=payload,
         )
     if response.status_code != 200:
-        raise RuntimeError(f"OpenAI tools {_sanitize_http_error(response.status_code, response.text)}")
+        raise RuntimeError(
+            f"OpenAI tools {_sanitize_http_error(response.status_code, response.text)}"
+        )
     data = response.json()
     choice = (data.get("choices") or [{}])[0]
     return _openai_choice_to_anthropic(
@@ -776,11 +798,13 @@ async def call_openai_with_tools_streaming(
         if hasattr(result, "__await__"):
             await result
 
-    async with _llm_http_client(ctx.timeout_s) as client:
+    async with _llm_http_client(ctx.timeout_s) as client:  # noqa: SIM117
         async with client.stream("POST", url, headers=headers, json=payload) as response:
             if response.status_code != 200:
                 body = await response.aread()
-                raise RuntimeError(f"OpenAI tools stream HTTP {response.status_code}: {body[:300]!r}")
+                raise RuntimeError(
+                    f"OpenAI tools stream HTTP {response.status_code}: {body[:300]!r}"
+                )
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue

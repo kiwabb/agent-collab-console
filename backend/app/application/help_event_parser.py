@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 def parse_help_request_event(payload: dict, *, executor: str) -> dict | None:
     payload = dict(payload)
     if payload.get("type") == "request_help":

@@ -1,5 +1,6 @@
 """Recover Conductor tasks whose in-memory runner disappeared."""
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 import os
@@ -196,7 +197,7 @@ async def _try_relaunch(
     task_dispatcher_fn=None,
 ) -> None:
     """Relaunch the conductor loop for a stalled task's issue."""
-    import asyncio
+    import asyncio  # noqa: F401, I001
     from app.application.conductor_main_loop import run_issue_conductor_loop
 
     issue_id = conductor_task.issue_id
@@ -226,7 +227,8 @@ async def _try_relaunch(
     if str(issue.status).lower() in terminal_statuses:
         logger.info(
             "conductor relaunch skipped: issue %s is in terminal status %s",
-            issue_id, issue.status,
+            issue_id,
+            issue.status,
         )
         return
 
@@ -243,7 +245,8 @@ async def _try_relaunch(
         ):
             logger.info(
                 "conductor relaunch skipped: active conductor %s already running for issue %s",
-                latest.id, issue_id,
+                latest.id,
+                issue_id,
             )
             return
 
@@ -261,7 +264,10 @@ async def _try_relaunch(
         logger.error(
             "conductor relaunch circuit breaker tripped for issue %s: %d relaunches done "
             "(max %d) across %d orphan stalls — giving up",
-            issue_id, relaunches_done, max_relaunches, orphan_stalls,
+            issue_id,
+            relaunches_done,
+            max_relaunches,
+            orphan_stalls,
         )
         payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
         conductor_task.payload = {
@@ -274,9 +280,12 @@ async def _try_relaunch(
         await _maybe_await(store.save_conductor_task(conductor_task))
         try:
             await _seal_graph_and_issue_status(
-                store=store, issue=issue, event_bus=event_bus, result_status="failed",
+                store=store,
+                issue=issue,
+                event_bus=event_bus,
+                result_status="failed",
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("relaunch-exhausted issue seal failed for %s: %s", issue_id, exc)
         await _append_event(
             event_bus,
@@ -301,8 +310,9 @@ async def _try_relaunch(
         return
 
     # Create a fresh empty WorkflowGraph for the new run
-    from app.domain.models import WorkflowGraph
+    from app.domain.models import WorkflowGraph  # noqa: I001
     from uuid import uuid4
+
     now = datetime.now()
     graph = WorkflowGraph(
         id=str(uuid4()),
@@ -326,7 +336,8 @@ async def _try_relaunch(
         if exc:
             logger.error(
                 "relaunched conductor loop crashed for issue %s: %s",
-                issue_id, exc,
+                issue_id,
+                exc,
             )
 
     handle = await ConductorSessionRegistry.instance().try_start(
@@ -418,7 +429,7 @@ async def run_watchdog(store, *, event_bus=None, task_dispatcher_fn=None) -> Non
                 )
                 if recovered:
                     logger.info("Recovered and relaunched %d orphan conductor task(s)", recovered)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001, RUF100
                 logger.exception("conductor recovery scan crashed: %s", exc)
             await asyncio.sleep(interval)
     except asyncio.CancelledError:

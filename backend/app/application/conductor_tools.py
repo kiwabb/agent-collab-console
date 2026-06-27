@@ -1,11 +1,12 @@
 """Tool registry for the ProjectConductor loop."""
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable  # noqa: UP035
 from uuid import uuid4
 
 from app.application.project_conductor import ProjectConductor
@@ -53,6 +54,7 @@ def build_conductor_tools(
         if worktree_manager is not None:
             return worktree_manager
         from app.bootstrap import worktree_manager as _wm
+
         return _wm
 
     async def retrieve_cold_memory(tool_input: dict[str, Any]) -> dict[str, Any]:
@@ -69,23 +71,28 @@ def build_conductor_tools(
             return None
         try:
             graph = await store.load_workflow_graph_for_issue(issue_id)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             graph = None
         if graph is None:
             return None
         same_role = sum(
-            1 for n in (graph.nodes or [])
+            1
+            for n in (graph.nodes or [])
             if n.node_key == role or n.node_key.startswith(f"{role}#")
         )
         max_dispatches = _max_dispatches_per_role()
         if same_role < max_dispatches:
             return None
-        await _emit(event_bus, "conductor_tool", {
-            "tool": tool,
-            "role": role,
-            "status": "retries_exhausted",
-            "dispatches": same_role,
-        })
+        await _emit(
+            event_bus,
+            "conductor_tool",
+            {
+                "tool": tool,
+                "role": role,
+                "status": "retries_exhausted",
+                "dispatches": same_role,
+            },
+        )
         return {
             "status": "retries_exhausted",
             "role": role,
@@ -115,7 +122,7 @@ def build_conductor_tools(
         issue worktree) and dispatch_batch (parallel path, agent_worktree_path
         set → isolated per-agent worktree). Returns the subagent result dict or a
         structured status/error dict (role_busy / timeout / value error)."""
-        from datetime import datetime
+        from datetime import datetime  # noqa: I001
         from app.application import task_activity, timeouts
         from app.application.role_concurrency import RoleConcurrencyLimiter
         from app.application.task_completion_registry import TaskCompletionRegistry
@@ -135,12 +142,16 @@ def build_conductor_tools(
         async with limiter.slot(slot_role, timeout=slot_wait) as acquired:
             if not acquired:
                 limit = timeouts.max_concurrent_instances_per_role()
-                await _emit(event_bus, "conductor_tool", {
-                    "tool": tool,
-                    "role": role,
-                    "status": "role_busy",
-                    "limit": limit,
-                })
+                await _emit(
+                    event_bus,
+                    "conductor_tool",
+                    {
+                        "tool": tool,
+                        "role": role,
+                        "status": "role_busy",
+                        "limit": limit,
+                    },
+                )
                 return {
                     "status": "role_busy",
                     "role": role,
@@ -160,7 +171,7 @@ def build_conductor_tools(
                 # fail-fast) can't signal before we're listening. This closes the
                 # signal-before-register race that stalled dispatch until
                 # hard_timeout (and leaked agent worktrees in dispatch_batch).
-                task_id, node_id = await dispatch_role(
+                task_id, node_id = await dispatch_role(  # noqa: RUF059
                     issue=issue,
                     role=role,
                     prompt_override=prompt_override,
@@ -181,12 +192,16 @@ def build_conductor_tools(
             registry.register(task_id)
             await _notify_status(on_status, "awaiting_subagent", detail)
 
-            await _emit(event_bus, "conductor_tool", {
-                "tool": tool,
-                "role": role,
-                "task_id": task_id,
-                "status": "dispatched",
-            })
+            await _emit(
+                event_bus,
+                "conductor_tool",
+                {
+                    "tool": tool,
+                    "role": role,
+                    "task_id": task_id,
+                    "status": "dispatched",
+                },
+            )
 
             # Activity-aware wait: a slow-but-progressing subagent (e.g. a thorough
             # gpt-5.5 QA pass that streams for >900s) must NOT be abandoned and
@@ -298,12 +313,14 @@ def build_conductor_tools(
             n = seen_keys.get(base_key, 0)
             seen_keys[base_key] = n + 1
             agent_key = base_key if n == 0 else f"{base_key}-{n + 1}"
-            specs.append({
-                "agent_key": agent_key,
-                "role": role,
-                "prompt": raw.get("prompt") or None,
-                "prev_node_key": raw.get("prev_node_key") or None,
-            })
+            specs.append(
+                {
+                    "agent_key": agent_key,
+                    "role": role,
+                    "prompt": raw.get("prompt") or None,
+                    "prev_node_key": raw.get("prev_node_key") or None,
+                }
+            )
 
         # Budget-aware concurrency (PR3): the configured fan-out cap is the upper
         # bound, but a tight remaining budget dynamically downscales the EFFECTIVE
@@ -323,7 +340,7 @@ def build_conductor_tools(
                 soft_warn=budget_status.soft_warn,
                 over_budget=budget_status.over_budget,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             cap = configured_cap
         sem = asyncio.Semaphore(cap)
 
@@ -339,25 +356,33 @@ def build_conductor_tools(
         try:
             flushed = await wm.commit_issue_worktree(issue)
             if flushed:
-                await _emit(event_bus, "conductor_tool", {
-                    "tool": "dispatch_batch",
-                    "status": "upstream_flushed",
-                    "sha": flushed,
-                })
-        except Exception:  # noqa: BLE001
+                await _emit(
+                    event_bus,
+                    "conductor_tool",
+                    {
+                        "tool": "dispatch_batch",
+                        "status": "upstream_flushed",
+                        "sha": flushed,
+                    },
+                )
+        except Exception:  # noqa: BLE001, RUF100
             # Best-effort: a flush failure shouldn't block fan-out, but agents
             # may not see the freshest uncommitted upstream state.
             pass
 
-        await _emit(event_bus, "conductor_tool", {
-            "tool": "dispatch_batch",
-            "status": "batch_started",
-            "batch_key": batch_key,
-            "agent_count": len(specs),
-            "concurrency_cap": cap,
-            "configured_cap": configured_cap,
-            "roles": [s["role"] for s in specs],
-        })
+        await _emit(
+            event_bus,
+            "conductor_tool",
+            {
+                "tool": "dispatch_batch",
+                "status": "batch_started",
+                "batch_key": batch_key,
+                "agent_count": len(specs),
+                "concurrency_cap": cap,
+                "configured_cap": configured_cap,
+                "roles": [s["role"] for s in specs],
+            },
+        )
 
         async def _run_one(spec: dict[str, Any]) -> dict[str, Any]:
             agent_key = spec["agent_key"]
@@ -398,7 +423,7 @@ def build_conductor_tools(
                         "worktree_path": worktree_path,
                         **result,
                     }
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001, RUF100
                     cleanup_on_exit = True
                     return {
                         "agent_key": agent_key,
@@ -409,42 +434,47 @@ def build_conductor_tools(
                     }
                 finally:
                     if cleanup_on_exit:
-                        try:
+                        try:  # noqa: SIM105
                             await wm.cleanup_agent_worktree(project, issue, agent_key)
-                        except Exception:  # noqa: BLE001
+                        except Exception:  # noqa: BLE001, RUF100
                             pass
 
         # return_exceptions=True → partial join: a crashing coroutine does not
         # propagate and kill its siblings (research §3 asyncio pitfall). _run_one
         # already converts in-band failures to result dicts, so this is a final
         # safety net for anything that escapes it.
-        gathered = await asyncio.gather(
-            *(_run_one(spec) for spec in specs), return_exceptions=True
-        )
+        gathered = await asyncio.gather(*(_run_one(spec) for spec in specs), return_exceptions=True)
 
         results: list[dict[str, Any]] = []
-        for spec, item in zip(specs, gathered):
+        for spec, item in zip(specs, gathered):  # noqa: B905
             if isinstance(item, BaseException):
-                results.append({
-                    "agent_key": spec["agent_key"],
-                    "role": spec["role"],
-                    "error": f"{type(item).__name__}: {item}",
-                })
+                results.append(
+                    {
+                        "agent_key": spec["agent_key"],
+                        "role": spec["role"],
+                        "error": f"{type(item).__name__}: {item}",
+                    }
+                )
             else:
                 results.append(item)
 
         succeeded = [
-            r for r in results
+            r
+            for r in results
             if "error" not in r and _is_successful_subagent_status(r.get("status"))
         ]
         failed = [r for r in results if r not in succeeded]
 
-        await _emit(event_bus, "conductor_tool", {
-            "tool": "dispatch_batch",
-            "status": "batch_complete",
-            "succeeded": len(succeeded),
-            "failed": len(failed),
-        })
+        await _emit(
+            event_bus,
+            "conductor_tool",
+            {
+                "tool": "dispatch_batch",
+                "status": "batch_complete",
+                "succeeded": len(succeeded),
+                "failed": len(failed),
+            },
+        )
 
         # Join / reconcile (PR3): sequentially squash-merge the successful agents'
         # branches back into the issue branch. Lineage is passed in-memory (branch
@@ -463,14 +493,18 @@ def build_conductor_tools(
 
         merge_summary: dict[str, Any] = {"merged": [], "conflict": None, "skipped": [], "noop": []}
         if merge_candidates:
-            await _emit(event_bus, "conductor_tool", {
-                "tool": "dispatch_batch",
-                "status": "merge_started",
-                "candidate_count": len(merge_candidates),
-            })
+            await _emit(
+                event_bus,
+                "conductor_tool",
+                {
+                    "tool": "dispatch_batch",
+                    "status": "merge_started",
+                    "candidate_count": len(merge_candidates),
+                },
+            )
             try:
                 merge_summary = await wm.merge_agent_worktrees(project, issue, merge_candidates)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001, RUF100
                 merge_summary = {
                     "merged": [],
                     "conflict": None,
@@ -478,17 +512,23 @@ def build_conductor_tools(
                     "noop": [],
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            await _emit(event_bus, "conductor_tool", {
-                "tool": "dispatch_batch",
-                "status": "merge_complete",
-                "merged": len(merge_summary.get("merged") or []),
-                "conflict": bool(merge_summary.get("conflict")),
-                "skipped": len(merge_summary.get("skipped") or []),
-                "noop": len(merge_summary.get("noop") or []),
-            })
+            await _emit(
+                event_bus,
+                "conductor_tool",
+                {
+                    "tool": "dispatch_batch",
+                    "status": "merge_complete",
+                    "merged": len(merge_summary.get("merged") or []),
+                    "conflict": bool(merge_summary.get("conflict")),
+                    "skipped": len(merge_summary.get("skipped") or []),
+                    "noop": len(merge_summary.get("noop") or []),
+                },
+            )
 
         conflict = merge_summary.get("conflict")
-        merge_status = "conflict" if conflict else ("merged" if merge_summary.get("merged") else "noop")
+        merge_status = (
+            "conflict" if conflict else ("merged" if merge_summary.get("merged") else "noop")
+        )
 
         out: dict[str, Any] = {
             "status": "batch_complete",
@@ -552,7 +592,11 @@ def build_conductor_tools(
         return payload
 
     async def request_user_clarification(tool_input: dict[str, Any]) -> dict[str, Any]:
-        await _notify_status(on_status, "awaiting_user_clarification", str(tool_input.get("question") or "").strip() or None)
+        await _notify_status(
+            on_status,
+            "awaiting_user_clarification",
+            str(tool_input.get("question") or "").strip() or None,
+        )
         payload = {
             "project_id": project_id,
             "question": tool_input.get("question"),
@@ -603,7 +647,9 @@ async def _emit(event_bus, event_type: str, payload: dict[str, Any]) -> None:
         await result
 
 
-async def _notify_status(callback: ToolStatusCallback | None, phase: str, detail: str | None) -> None:
+async def _notify_status(
+    callback: ToolStatusCallback | None, phase: str, detail: str | None
+) -> None:
     if callback is None:
         return
     result = callback(phase, detail)
@@ -626,9 +672,18 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "dispatch_subagent",
             "Dispatch a workflow sub-agent by role. Waits for completion and returns the result. Available roles: product_manager, architect, engineer, qa. You can also use specialist role keys from the agent catalog.",
             {
-                "role": {"type": "string", "description": "Role to dispatch: product_manager, architect, engineer, qa, or a specialist role_key"},
-                "prompt": {"type": "string", "description": "Optional focused instruction for this agent run"},
-                "prev_node_key": {"type": "string", "description": "node_key of the previously dispatched node, for graph edge visualization"},
+                "role": {
+                    "type": "string",
+                    "description": "Role to dispatch: product_manager, architect, engineer, qa, or a specialist role_key",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Optional focused instruction for this agent run",
+                },
+                "prev_node_key": {
+                    "type": "string",
+                    "description": "node_key of the previously dispatched node, for graph edge visualization",
+                },
             },
             ["role"],
         ),
@@ -658,9 +713,18 @@ def _tool_definitions() -> list[dict[str, Any]]:
                     "items": {
                         "type": "object",
                         "properties": {
-                            "role": {"type": "string", "description": "Role to dispatch: product_manager, architect, engineer, qa, or a specialist role_key"},
-                            "prompt": {"type": "string", "description": "Optional focused instruction for this agent run"},
-                            "prev_node_key": {"type": "string", "description": "node_key of a previously dispatched node, for graph edge visualization"},
+                            "role": {
+                                "type": "string",
+                                "description": "Role to dispatch: product_manager, architect, engineer, qa, or a specialist role_key",
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Optional focused instruction for this agent run",
+                            },
+                            "prev_node_key": {
+                                "type": "string",
+                                "description": "node_key of a previously dispatched node, for graph edge visualization",
+                            },
                         },
                         "required": ["role"],
                     },
@@ -706,7 +770,9 @@ def _tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
-def _tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+def _tool(
+    name: str, description: str, properties: dict[str, Any], required: list[str]
+) -> dict[str, Any]:
     return {
         "name": name,
         "description": description,

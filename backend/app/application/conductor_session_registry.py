@@ -6,12 +6,13 @@ relaunch) through `try_start` makes "one issue = one session" an enforced
 invariant and gives the recovery watchdog a reliable liveness signal so it
 never relaunches a conductor that is still running in this process.
 """
+
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field  # noqa: F401
 from datetime import datetime
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable  # noqa: UP035
 
 
 @dataclass
@@ -25,14 +26,14 @@ class ConductorSessionHandle:
 class ConductorSessionRegistry:
     """Singleton mapping issue_id -> the live conductor-loop asyncio task."""
 
-    _instance: "ConductorSessionRegistry | None" = None
+    _instance: "ConductorSessionRegistry | None" = None  # noqa: UP037
 
     def __init__(self) -> None:
         self._sessions: dict[str, ConductorSessionHandle] = {}
         self._lock = asyncio.Lock()
 
     @classmethod
-    def instance(cls) -> "ConductorSessionRegistry":
+    def instance(cls) -> "ConductorSessionRegistry":  # noqa: UP037
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -54,16 +55,10 @@ class ConductorSessionRegistry:
             existing = self._sessions.get(issue_id)
             if existing is not None and not existing.task.done():
                 return None
-            task = asyncio.create_task(
-                coro_factory(), name=name or f"conductor-{issue_id[:8]}"
-            )
-            handle = ConductorSessionHandle(
-                issue_id=issue_id, task=task, started_at=datetime.now()
-            )
+            task = asyncio.create_task(coro_factory(), name=name or f"conductor-{issue_id[:8]}")
+            handle = ConductorSessionHandle(issue_id=issue_id, task=task, started_at=datetime.now())
             self._sessions[issue_id] = handle
-            task.add_done_callback(
-                lambda t, iid=issue_id: self._on_done(iid, t)
-            )
+            task.add_done_callback(lambda t, iid=issue_id: self._on_done(iid, t))
             return handle
 
     def _on_done(self, issue_id: str, task: asyncio.Task) -> None:

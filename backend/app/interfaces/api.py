@@ -1,12 +1,14 @@
-from datetime import datetime, timezone
+from __future__ import annotations  # noqa: I001
+
+from datetime import datetime, timezone  # noqa: I001, RUF100
 from uuid import uuid4
 from pathlib import Path
 import logging
 import shutil
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File, Query, Body
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File, Query, Body  # noqa: F401
+from fastapi.responses import JSONResponse, PlainTextResponse  # noqa: F401
 import json
 import os
 
@@ -14,14 +16,46 @@ from pydantic import BaseModel, Field
 from typing import Literal
 import subprocess
 
-from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service, skill_service, prototype_service
-from app.domain.models import CodexIssue, ConductorTask, Project, Prototype, PrototypeVersion, SelfImprovementApplicationEvent
+from app.bootstrap import (
+    session_service,
+    orchestration_service,
+    approval_service,
+    codex_store,
+    get_codex_process_manager,
+    check_codex_available,
+    event_bus,
+    MockCodexProcessManager,
+    get_help_orchestrator,
+    project_service,
+    worktree_manager,
+    git_service,
+    skill_service,
+    prototype_service,
+)
+from app.domain.models import (
+    CodexIssue,
+    ConductorTask,
+    Project,
+    Prototype,
+    PrototypeVersion,
+    SelfImprovementApplicationEvent,
+)
 from app.application.codex_task_runner import CodexTaskRunner
-from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
+from app.application.product_manager_service import (
+    ProductManagerArtifactError,  # noqa: F401
+    ProductManagerService,
+)  # noqa: F401, RUF100
 from app.application.phase_duration_estimator import get_phase_duration_estimator
 from app.application.role_workflow_service import RoleWorkflowService
-from app.application.process_runtime_common import is_agent_message_item_type, is_unusable_result_text
-from app.application.github_pr_followup import GitHubPRFollowupError, refresh_issue_github_pr, sweep_project_github_prs
+from app.application.process_runtime_common import (
+    is_agent_message_item_type,
+    is_unusable_result_text,
+)
+from app.application.github_pr_followup import (
+    GitHubPRFollowupError,
+    refresh_issue_github_pr,
+    sweep_project_github_prs,
+)
 from app.application.project_service import ProjectError
 from app.application.project_run_manager import ProjectRunError, project_run_manager
 from app.application.prototype_service import PrototypeError
@@ -34,25 +68,31 @@ logger = logging.getLogger(__name__)
 
 # --- Custom Exception Classes ---
 
+
 class APIError(Exception):
     """Base API error with status_code and message."""
+
     def __init__(self, status_code: int, message: str, detail: str | None = None):
         self.status_code = status_code
         self.message = message
         self.detail = detail or message
 
+
 class NotFoundError(APIError):
     def __init__(self, resource: str, identifier: str):
         super().__init__(404, f"{resource} '{identifier}' not found")
+
 
 class ValidationError(APIError):
     def __init__(self, message: str, field: str | None = None):
         detail = f"Validation error: {message}" if field else message
         super().__init__(400, message, detail)
 
+
 class ConflictError(APIError):
     def __init__(self, message: str):
         super().__init__(409, message)
+
 
 class RateLimitError(APIError):
     def __init__(self, message: str, retry_after: int = 60):
@@ -120,20 +160,24 @@ async def _resolve_runtime_config(
             model,
         )
     except RuntimeCatalogValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))  # noqa: B904
 
 
 async def _resolve_task_runtime_config(task) -> tuple[str, str, str, dict[str, str] | None, str]:
     return await _resolve_runtime_config(task.executor, task.provider, task.model)
 
 
-from app.application.task_serialization import serialize_task_payload as _serialize_task_payload
+from app.application.task_serialization import (  # noqa: E402
+    serialize_task_payload as _serialize_task_payload,
+)
 
 
 async def _list_task_messages(task_id: str, execution_process_id: str | None = None):
     if execution_process_id:
         try:
-            return await codex_store.list_codex_task_messages(task_id, execution_process_id=execution_process_id)
+            return await codex_store.list_codex_task_messages(
+                task_id, execution_process_id=execution_process_id
+            )
         except TypeError:
             pass
     return await codex_store.list_codex_task_messages(task_id)
@@ -156,8 +200,12 @@ async def _load_task_logs(
                 reverse=reverse,
             )
         except TypeError:
-            return await codex_store.load_log_events(session_id, task_id=task_id, limit=limit, reverse=reverse)
-    return await codex_store.load_log_events(session_id, task_id=task_id, limit=limit, reverse=reverse)
+            return await codex_store.load_log_events(
+                session_id, task_id=task_id, limit=limit, reverse=reverse
+            )
+    return await codex_store.load_log_events(
+        session_id, task_id=task_id, limit=limit, reverse=reverse
+    )
 
 
 async def _load_execution_process(process_id: str):
@@ -178,8 +226,10 @@ async def _extract_task_result_from_logs(
         return None
     # Optimization: Search backwards through the last 500 logs first (where the result usually is)
     # for faster response times on large turns.
-    logs = await _load_task_logs(session_id, task_id, execution_process_id=execution_process_id, limit=500, reverse=True)
-    
+    logs = await _load_task_logs(
+        session_id, task_id, execution_process_id=execution_process_id, limit=500, reverse=True
+    )
+
     def find_result(log_list):
         for log in log_list:
             if log.stream != "stdout":
@@ -214,10 +264,11 @@ async def _extract_task_result_from_logs(
     result_text, is_final = find_result(logs)
     if is_final:
         return result_text
-        
     # If not found or not final, try a deeper search (forward search up to 5000)
     if result_text is None:
-        deep_logs = await _load_task_logs(session_id, task_id, execution_process_id=execution_process_id, limit=5000)
+        deep_logs = await _load_task_logs(
+            session_id, task_id, execution_process_id=execution_process_id, limit=5000
+        )
         deep_logs.reverse()
         deep_result, _ = find_result(deep_logs)
         if deep_result:
@@ -232,8 +283,9 @@ async def _extract_task_result_from_logs(
     # fallback when structured result extraction fails.
     if not logs:
         # Load again without reverse for raw stdout fallback if needed
-        logs = await _load_task_logs(session_id, task_id, execution_process_id=execution_process_id, limit=10)
-        
+        logs = await _load_task_logs(
+            session_id, task_id, execution_process_id=execution_process_id, limit=10
+        )
     for log in logs:
         if log.stream == "stdout" and log.content:
             candidate = log.content.strip()
@@ -271,7 +323,9 @@ async def _refresh_task_result(task):
         # shouldn't roll back the run. Log to the project audit + tag the
         # task result so the issue UI can render a warning chip.
         try:
-            artifact = await role_workflow_service.persist_result(task, workspace_title=workspace_title)
+            artifact = await role_workflow_service.persist_result(
+                task, workspace_title=workspace_title
+            )
             task._subagent_doc = artifact
             if task.project_id and task.issue_id and getattr(task, "workflow_node_id", None):
                 try:
@@ -280,7 +334,11 @@ async def _refresh_task_result(task):
 
                     graph = await codex_store.load_workflow_graph_for_issue(task.issue_id)
                     node = next(
-                        (n for n in (graph.nodes if graph is not None else []) if n.id == task.workflow_node_id),
+                        (
+                            n
+                            for n in (graph.nodes if graph is not None else [])
+                            if n.id == task.workflow_node_id
+                        ),
                         None,
                     )
                     if node is not None:
@@ -294,10 +352,16 @@ async def _refresh_task_result(task):
                             project_id=task.project_id,
                             issue_id=task.issue_id,
                         )
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("ProjectConductor notify_subagent_complete failed for task %s: %s", task.id, exc)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("persist_result failed for task %s (role=%s)", task.id, getattr(task, "role", None))
+                except Exception as exc:  # noqa: BLE001, RUF100
+                    logger.debug(
+                        "ProjectConductor notify_subagent_complete failed for task %s: %s",
+                        task.id,
+                        exc,
+                    )
+        except Exception as exc:  # noqa: BLE001, RUF100
+            logger.exception(
+                "persist_result failed for task %s (role=%s)", task.id, getattr(task, "role", None)
+            )
             # GAP E: surface the schema/persist failure to the Conductor instead of
             # silently leaving a `done` task with an empty artifact. This marker is
             # read in WorkflowScheduler.on_task_completed, which then signals the
@@ -308,42 +372,53 @@ async def _refresh_task_result(task):
                 "message": str(exc)[:800],
                 "role": getattr(task, "role", None),
             }
-            try:
+            try:  # noqa: SIM105
                 await codex_store.append_project_audit(
                     project_id=getattr(task, "project_id", None),
                     issue_id=task.issue_id,
                     event=f"persist_failed:{type(exc).__name__}",
                     base_branch=None,
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, RUF100
                 pass
             return None
 
         # Automated Code Review Logic
-        if task.role == "architect" and getattr(task, "task_kind", "normal") == "review" and task.parent_task_id:
+        if (
+            task.role == "architect"
+            and getattr(task, "task_kind", "normal") == "review"
+            and task.parent_task_id
+        ):
             from app.application.architect_workflow import ReviewReportDocument
+
             if isinstance(artifact, ReviewReportDocument):
                 await _apply_automated_review_to_parent(task.parent_task_id, artifact)
 
         # QA verdict bridge: push failure reason to the WebSocket so the UI can
         # render the review_comment banner without polling.
         if task.role == "qa" and task.status in {"failed"} and task.review_comment:
-            await event_bus.append({
-                "type": "task_status",
-                "task_id": task.id,
-                "issue_id": task.issue_id,
-                "session_id": task.session_id,
-                "status": task.status,
-                "review_comment": task.review_comment,
-            })
-            try:
-                from app.interfaces.codex_ws import stream_manager
-                stream_manager.buffer_pending(task.session_id, {
+            await event_bus.append(
+                {
                     "type": "task_status",
                     "task_id": task.id,
+                    "issue_id": task.issue_id,
+                    "session_id": task.session_id,
                     "status": task.status,
                     "review_comment": task.review_comment,
-                })
+                }
+            )
+            try:
+                from app.interfaces.codex_ws import stream_manager
+
+                stream_manager.buffer_pending(
+                    task.session_id,
+                    {
+                        "type": "task_status",
+                        "task_id": task.id,
+                        "status": task.status,
+                        "review_comment": task.review_comment,
+                    },
+                )
             except Exception:
                 pass
 
@@ -358,18 +433,25 @@ async def _latest_assistant_message_content(task_id: str) -> str | None:
 
 async def _build_execution_process_payload(process):
     task = await codex_store.load_codex_task(process.task_id) if codex_store is not None else None
-    messages = await codex_store.list_codex_task_messages(
-        process.task_id,
-        execution_process_id=process.id,
-    ) if codex_store is not None else []
-    logs = await codex_store.load_log_events(
-        process.session_id,
-        task_id=process.task_id,
-        execution_process_id=process.id,
-        limit=1000,
-    ) if codex_store is not None else []
+    messages = (
+        await codex_store.list_codex_task_messages(
+            process.task_id,
+            execution_process_id=process.id,
+        )
+        if codex_store is not None
+        else []
+    )
+    logs = (
+        await codex_store.load_log_events(
+            process.session_id,
+            task_id=process.task_id,
+            execution_process_id=process.id,
+            limit=1000,
+        )
+        if codex_store is not None
+        else []
+    )
     return build_execution_process_view(process, task, messages, logs)
-
 
 
 def _is_task_running(status: str | None) -> bool:
@@ -416,7 +498,7 @@ def _delete_issue_artifact_root(workspace_path: str | None, issue_id: str):
     issue_root = Path(workspace_path) / "issues" / issue_id
     if not issue_root.exists():
         return
-    try:
+    try:  # noqa: SIM105
         shutil.rmtree(issue_root)
     except Exception:
         pass
@@ -434,7 +516,7 @@ async def _cleanup_session_worktrees(session_id: str, project_id: str | None) ->
         issue = await codex_store.load_codex_issue(issue_dict["id"])
         if issue is None:
             continue
-        try:
+        try:  # noqa: SIM105
             await worktree_manager.cleanup_issue_worktree(project, issue)
         except Exception:
             pass
@@ -445,7 +527,7 @@ async def _cleanup_session_worktrees(session_id: str, project_id: str | None) ->
         task = await codex_store.load_codex_task(task_dict["id"])
         if task is None:
             continue
-        try:
+        try:  # noqa: SIM105
             await worktree_manager.cleanup_chat_task_worktree(project, task)
         except Exception:
             pass
@@ -462,15 +544,17 @@ async def _delete_task_cascade(task_id: str, *, delete_workspace: bool = True):
     if delete_workspace and task.issue_id is None and task.git_worktree_path and task.project_id:
         project = await codex_store.load_project(task.project_id)
         if project is not None:
-            try:
+            try:  # noqa: SIM105
                 await worktree_manager.cleanup_chat_task_worktree(project, task)
             except Exception:
                 pass
     await codex_store.delete_codex_task(task_id)
-    await event_bus.append({
-        "type": "task_deleted",
-        "task_id": task_id,
-    })
+    await event_bus.append(
+        {
+            "type": "task_deleted",
+            "task_id": task_id,
+        }
+    )
     return task
 
 
@@ -537,7 +621,8 @@ async def diagnostics():
         issues = await codex_store.list_codex_issues()
         processes = await codex_store.list_execution_processes()
         running_processes = [
-            process for process in processes
+            process
+            for process in processes
             if str(getattr(process, "status", "")).lower() in {"running", "responding"}
         ]
         database = {
@@ -548,7 +633,7 @@ async def diagnostics():
             "execution_processes_running": len(running_processes),
         }
         checks.append({"name": "database", "status": "ok"})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         database = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         checks.append({"name": "database", "status": "error", "detail": database["error"]})
 
@@ -566,7 +651,9 @@ async def diagnostics():
                     "enabled": executor.enabled,
                     "executor_type": executor.executor_type,
                     "providers_total": len(executor.providers),
-                    "providers_enabled": len([provider for provider in executor.providers if provider.enabled]),
+                    "providers_enabled": len(
+                        [provider for provider in executor.providers if provider.enabled]
+                    ),
                     "default_provider_id": executor.default_provider_id,
                     "default_model": executor.default_model,
                     "api_endpoint_configured": bool(executor.api_endpoint),
@@ -575,40 +662,51 @@ async def diagnostics():
                 for executor in catalog.executors
             ],
         }
-        checks.append({
-            "name": "runtime_catalog",
-            "status": "ok" if enabled_executors else "degraded",
-            "detail": None if enabled_executors else "No enabled executors configured",
-        })
-    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            {
+                "name": "runtime_catalog",
+                "status": "ok" if enabled_executors else "degraded",
+                "detail": None if enabled_executors else "No enabled executors configured",
+            }
+        )
+    except Exception as exc:  # noqa: BLE001, RUF100
         runtime_catalog = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
-        checks.append({"name": "runtime_catalog", "status": "error", "detail": runtime_catalog["error"]})
+        checks.append(
+            {"name": "runtime_catalog", "status": "error", "detail": runtime_catalog["error"]}
+        )
 
     from app.application.github_pr_followup import get_github_pr_followup_status
     from app.application.project_review_scheduler import get_project_review_scheduler_status
     from app.application.self_improvement_proposal_scheduler import (
         get_self_improvement_proposal_scheduler_status,
     )
+
     github_pr_followup = get_github_pr_followup_status()
-    checks.append(_supervisor_status_check(
-        "github_pr_followup",
-        github_pr_followup,
-        running_detail="GitHub PR follow-up sweep is running",
-    ))
+    checks.append(
+        _supervisor_status_check(
+            "github_pr_followup",
+            github_pr_followup,
+            running_detail="GitHub PR follow-up sweep is running",
+        )
+    )
     project_review_scheduler = get_project_review_scheduler_status()
-    checks.append(_supervisor_status_check(
-        "project_review_scheduler",
-        project_review_scheduler,
-        running_detail="Project review scheduler is running",
-        stale_detail="Project review scheduler has not completed recently",
-    ))
+    checks.append(
+        _supervisor_status_check(
+            "project_review_scheduler",
+            project_review_scheduler,
+            running_detail="Project review scheduler is running",
+            stale_detail="Project review scheduler has not completed recently",
+        )
+    )
     self_improvement_proposal_scheduler = get_self_improvement_proposal_scheduler_status()
-    checks.append(_supervisor_status_check(
-        "self_improvement_proposal_scheduler",
-        self_improvement_proposal_scheduler,
-        running_detail="Self-improvement proposal scheduler is running",
-        stale_detail="Self-improvement proposal scheduler has not completed recently",
-    ))
+    checks.append(
+        _supervisor_status_check(
+            "self_improvement_proposal_scheduler",
+            self_improvement_proposal_scheduler,
+            running_detail="Self-improvement proposal scheduler is running",
+            stale_detail="Self-improvement proposal scheduler has not completed recently",
+        )
+    )
 
     config = {
         "real_cli_enabled": os.getenv("REAL_CLI", "true").lower() == "true",
@@ -632,11 +730,13 @@ async def diagnostics():
         ),
         "raw_log_stream_processes": len(getattr(raw_log_stream_manager, "_subscribers", {})),
         "raw_log_stream_subscribers": sum(
-            len(subscribers) for subscribers in getattr(raw_log_stream_manager, "_subscribers", {}).values()
+            len(subscribers)
+            for subscribers in getattr(raw_log_stream_manager, "_subscribers", {}).values()
         ),
         "message_stream_processes": len(getattr(message_stream_manager, "_subscribers", {})),
         "message_stream_subscribers": sum(
-            len(subscribers) for subscribers in getattr(message_stream_manager, "_subscribers", {}).values()
+            len(subscribers)
+            for subscribers in getattr(message_stream_manager, "_subscribers", {}).values()
         ),
         "global_event_subscribers": len(getattr(event_bus, "subscribers", [])),
         "global_event_buffer_size": len(getattr(event_bus, "events", [])),
@@ -644,7 +744,7 @@ async def diagnostics():
     }
 
     status = "ok"
-    if any(check["status"] == "error" for check in checks):
+    if any(check["status"] == "error" for check in checks):  # noqa: SIM114
         status = "degraded"
     elif any(check["status"] == "degraded" for check in checks):
         status = "degraded"
@@ -676,7 +776,7 @@ async def select_directory():
             ["osascript", "-e", 'POSIX path of (choose folder with prompt "Select Directory")'],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
         path = result.stdout.strip()
         return {"path": path}
@@ -685,10 +785,10 @@ async def select_directory():
         if "User canceled" in e.stderr:
             return {"path": None}
         logger.error(f"osascript failed: {e.stderr}")
-        raise HTTPException(status_code=500, detail=f"Failed to open directory picker: {e.stderr}")
+        raise HTTPException(status_code=500, detail=f"Failed to open directory picker: {e.stderr}")  # noqa: B904
     except Exception as e:
         logger.error(f"Unexpected error in select_directory: {e}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")  # noqa: B904
 
 
 class CreateSessionRequest(BaseModel):
@@ -716,7 +816,7 @@ async def get_session(session_id: str):
     try:
         return await session_service.get_session(session_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")  # noqa: B904
 
 
 @router.get("/sessions/{session_id}/tasks")
@@ -725,7 +825,7 @@ async def get_session_tasks(session_id: str):
         session = await session_service.get_session(session_id)
         return session.tasks
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")  # noqa: B904
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -733,7 +833,7 @@ async def get_session_messages(session_id: str):
     try:
         return (await session_service.get_session(session_id)).messages
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")  # noqa: B904
 
 
 @router.get("/sessions/{session_id}/artifacts")
@@ -741,7 +841,7 @@ async def get_session_artifacts(session_id: str):
     try:
         return (await session_service.get_session(session_id)).artifacts
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")  # noqa: B904
 
 
 @router.get("/sessions/{session_id}/runs")
@@ -749,7 +849,7 @@ async def get_session_runs(session_id: str):
     try:
         return (await session_service.get_session(session_id)).runs
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")  # noqa: B904
 
 
 @router.get("/tasks/{task_id}")
@@ -764,15 +864,15 @@ async def get_task(task_id: str):
 @router.post("/sessions/{session_id}/tasks", status_code=201)
 async def create_task(session_id: str, request: CreateTaskRequest):
     try:
-        session = await session_service.get_session(session_id)
+        session = await session_service.get_session(session_id)  # noqa: F841
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")  # noqa: B904
 
     try:
         task = await orchestration_service.plan_task(session_id, request.title, request.assignee)
     except Exception as e:
         logger.error("Failed to create task in session %s: %s", session_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to create task: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create task: {e}")  # noqa: B904
     return task
 
 
@@ -782,10 +882,10 @@ async def run_task(task_id: str):
         result = await orchestration_service.run_task(task_id)
         return result
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")  # noqa: B904
     except Exception as e:
         logger.error("Failed to run task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to run task: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to run task: {e}")  # noqa: B904
 
 
 @router.post("/tasks/{task_id}/retry")
@@ -794,12 +894,12 @@ async def retry_task(task_id: str):
         result = await orchestration_service.retry_task(task_id)
         return result
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")  # noqa: B904
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))  # noqa: B904
     except Exception as e:
         logger.error("Failed to retry task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to retry task: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retry task: {e}")  # noqa: B904
 
 
 @router.post("/tasks/{task_id}/approval")
@@ -812,7 +912,7 @@ async def request_approval(task_id: str):
                     approval = await approval_service.request_submission(session.id, task_id)
                 except Exception as e:
                     logger.error("Failed to request approval for task %s: %s", task_id, e)
-                    raise HTTPException(status_code=500, detail=f"Failed to request approval: {e}")
+                    raise HTTPException(status_code=500, detail=f"Failed to request approval: {e}")  # noqa: B904
                 return approval
     raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
 
@@ -822,7 +922,7 @@ async def get_approval(approval_id: str):
     try:
         return approval_service.approvals[approval_id]
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")  # noqa: B904
 
 
 @router.post("/approvals/{approval_id}/approve")
@@ -830,10 +930,10 @@ async def approve_approval(approval_id: str):
     try:
         return await approval_service.approve(approval_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")  # noqa: B904
     except Exception as e:
         logger.error("Failed to approve approval %s: %s", approval_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to approve: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to approve: {e}")  # noqa: B904
 
 
 @router.post("/approvals/{approval_id}/reject")
@@ -841,10 +941,10 @@ async def reject_approval(approval_id: str):
     try:
         return await approval_service.reject(approval_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")  # noqa: B904
     except Exception as e:
         logger.error("Failed to reject approval %s: %s", approval_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to reject: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reject: {e}")  # noqa: B904
 
 
 # --- Projects ---
@@ -878,7 +978,9 @@ async def _ensure_project_repo_ready(project: Project) -> None:
     if not repo.is_dir():
         raise HTTPException(status_code=409, detail=f"Project repo path is not a directory: {repo}")
     if not await git_service.is_git_repo(repo):
-        raise HTTPException(status_code=409, detail=f"Project repo path is not a git repository: {repo}")
+        raise HTTPException(
+            status_code=409, detail=f"Project repo path is not a git repository: {repo}"
+        )
 
 
 async def _load_issue_project_for_run(issue: CodexIssue) -> Project:
@@ -909,13 +1011,17 @@ async def create_project(request: CreateProjectRequest):
     try:
         if request.source == "local":
             if not request.repo_path:
-                raise HTTPException(status_code=400, detail="repo_path is required for source=local")
+                raise HTTPException(
+                    status_code=400, detail="repo_path is required for source=local"
+                )
             return await svc.create_from_local(request.name, request.repo_path)
         if not request.origin_url or not request.dest_parent:
-            raise HTTPException(status_code=400, detail="origin_url and dest_parent are required for source=clone")
+            raise HTTPException(
+                status_code=400, detail="origin_url and dest_parent are required for source=clone"
+            )
         return await svc.create_from_clone(request.name, request.origin_url, request.dest_parent)
     except ProjectError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))  # noqa: B904
 
 
 @router.get("/projects/{project_id}")
@@ -924,7 +1030,7 @@ async def get_project(project_id: str):
     try:
         return await svc.get(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
 
 
 @router.patch("/projects/{project_id}")
@@ -939,7 +1045,7 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
             run_command=request.run_command,
         )
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
 
 
 @router.delete("/projects/{project_id}")
@@ -956,7 +1062,7 @@ async def delete_project(project_id: str, force: bool = False):
     try:
         await svc.get(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     related_sessions = await codex_store.list_codex_sessions(project_id=project_id)
     if related_sessions and not force:
         raise HTTPException(
@@ -968,7 +1074,7 @@ async def delete_project(project_id: str, force: bool = False):
         )
     project = await svc.get(project_id)
     for ws in related_sessions:
-        try:
+        try:  # noqa: SIM105
             await _cleanup_session_worktrees(ws["id"], project_id)
         except Exception:
             pass
@@ -977,7 +1083,7 @@ async def delete_project(project_id: str, force: bool = False):
     # filesystem doesn't accumulate empty bookkeeping dirs.
     worktree_parent = Path(project.repo_path).parent / f"{project.name}-worktrees"
     if worktree_parent.exists() and not any(worktree_parent.iterdir()):
-        try:
+        try:  # noqa: SIM105
             worktree_parent.rmdir()
         except OSError:
             pass
@@ -1045,7 +1151,7 @@ async def create_project_prototype(project_id: str, request: CreatePrototypeRequ
     except PrototypeError as exc:
         # 404 (project missing) vs 400 (validation) — message prefix decides.
         status = 404 if "project not found" in str(exc) else 400
-        raise HTTPException(status_code=status, detail=str(exc))
+        raise HTTPException(status_code=status, detail=str(exc))  # noqa: B904
     return _prototype_to_dict(prototype)
 
 
@@ -1055,7 +1161,7 @@ async def get_prototype(prototype_id: str):
     try:
         detail = await svc.get_with_versions(prototype_id)
     except PrototypeError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     return {
         "prototype": _prototype_to_dict(detail["prototype"]),
         "versions": [_prototype_version_meta_to_dict(v) for v in detail["versions"]],
@@ -1068,7 +1174,7 @@ async def delete_prototype(prototype_id: str):
     try:
         await svc.delete(prototype_id)
     except PrototypeError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     return {"deleted": prototype_id}
 
 
@@ -1079,7 +1185,7 @@ async def get_prototype_version_html(prototype_id: str, version_no: int):
     try:
         html = await svc.get_version_html(prototype_id, version_no)
     except PrototypeError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     return {"html": html, "version_no": version_no}
 
 
@@ -1098,7 +1204,7 @@ async def stream_prototype(
     try:
         await svc.get(prototype_id)
     except PrototypeError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
 
     from fastapi.responses import StreamingResponse
 
@@ -1160,9 +1266,9 @@ async def get_project_branches(project_id: str):
     try:
         return await svc.list_branches(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     except GitError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))  # noqa: B904
 
 
 @router.get("/projects/{project_id}/stats")
@@ -1179,7 +1285,7 @@ async def get_project_stats(project_id: str):
     try:
         await svc.get(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     workspaces = await codex_store.list_codex_sessions(project_id=project_id)
     issues = await codex_store.list_codex_issues(project_id=project_id)
     counts = {"open": 0, "merged": 0, "abandoned": 0}
@@ -1213,7 +1319,7 @@ async def get_project_remote_status(project_id: str, fetch: bool = True):
     try:
         return await svc.remote_status(project_id, do_fetch=fetch)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
 
 
 @router.post("/projects/{project_id}/pull")
@@ -1227,9 +1333,9 @@ async def pull_project(project_id: str):
     try:
         result = await svc.fast_forward_pull(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     except GitError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))  # noqa: B904
     if not result.get("success"):
         raise HTTPException(status_code=409, detail=result)
     return result
@@ -1249,7 +1355,7 @@ async def start_project_run(project_id: str):
     try:
         project = await svc.get(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     command = (project.run_command or "").strip()
     if not command:
         raise HTTPException(status_code=409, detail={"reason": "no_run_command"})
@@ -1259,7 +1365,7 @@ async def start_project_run(project_id: str):
         detail: dict = {"reason": exc.reason}
         if exc.pattern is not None:
             detail["pattern"] = exc.pattern
-        raise HTTPException(status_code=409, detail=detail)
+        raise HTTPException(status_code=409, detail=detail)  # noqa: B904
 
 
 @router.post("/projects/{project_id}/run/stop")
@@ -1269,7 +1375,7 @@ async def stop_project_run(project_id: str):
     try:
         await svc.get(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     return await project_run_manager.stop(project_id)
 
 
@@ -1279,7 +1385,7 @@ async def get_project_run_status(project_id: str):
     try:
         await svc.get(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     return project_run_manager.status(project_id)
 
 
@@ -1289,11 +1395,12 @@ async def get_project_run_logs(project_id: str, after: int = 0):
     try:
         await svc.get(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     return project_run_manager.get_logs(project_id, after)
 
 
 # --- Skills library ---
+
 
 class CreateSkillRequest(BaseModel):
     name: str = Field(..., min_length=1)
@@ -1340,7 +1447,7 @@ async def create_skill_category(request: SkillCategoryRequest):
     try:
         name = await svc.add_category(request.name)
     except SkillError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))  # noqa: B904
     return {"name": name}
 
 
@@ -1350,7 +1457,7 @@ async def delete_skill_category(name: str, force: bool = False):
     try:
         await svc.delete_category(name, force=force)
     except SkillError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))  # noqa: B904
     return {"ok": True}
 
 
@@ -1363,6 +1470,7 @@ def _rewrite_to_raw(url: str) -> str:
     README via the special `HEAD` ref, which GitHub maps to the default branch.
     """
     import re
+
     url = url.rstrip("/")
     # GitHub blob view → raw
     m = re.match(r"^https?://github\.com/([^/]+)/([^/]+)/blob/(.+)$", url)
@@ -1411,15 +1519,18 @@ async def proxy_skill_link(url: str):
         raise HTTPException(status_code=400, detail="url must be an absolute http(s) URL")
     target = _validate_skill_proxy_url(_rewrite_to_raw(url))
     import httpx
+
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
             resp = await client.get(target, headers={"User-Agent": "agent-collab-console/skills"})
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"upstream fetch failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"upstream fetch failed: {exc}")  # noqa: B904
     if 300 <= resp.status_code < 400:
         raise HTTPException(status_code=400, detail="skill proxy redirects are not allowed")
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=f"upstream returned {resp.status_code}")
+        raise HTTPException(
+            status_code=resp.status_code, detail=f"upstream returned {resp.status_code}"
+        )
     ctype = (resp.headers.get("content-type") or "").lower()
     # If upstream gave us an HTML page (user pasted a non-raw link we couldn't
     # rewrite), refuse loudly instead of dumping HTML tags into the preview.
@@ -1482,6 +1593,7 @@ async def translate_skill_content(request: SkillTranslateRequest):
         "messages": [{"role": "user", "content": text}],
     }
     import httpx
+
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
@@ -1494,7 +1606,7 @@ async def translate_skill_content(request: SkillTranslateRequest):
                 json=payload,
             )
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}")  # noqa: B904
     if resp.status_code != 200:
         raise HTTPException(
             status_code=502,
@@ -1503,13 +1615,16 @@ async def translate_skill_content(request: SkillTranslateRequest):
     data = resp.json()
     parts = data.get("content") or []
     translated = "".join(
-        p.get("text", "")
-        for p in parts
-        if isinstance(p, dict) and p.get("type") == "text"
+        p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text"
     ).strip()
     if not translated:
         raise HTTPException(status_code=502, detail="LLM returned empty content")
-    return {"translated": translated, "target": request.target, "truncated": truncated, "model": model}
+    return {
+        "translated": translated,
+        "target": request.target,
+        "truncated": truncated,
+        "model": model,
+    }
 
 
 @router.post("/skills", status_code=201)
@@ -1525,7 +1640,7 @@ async def create_skill(request: CreateSkillRequest):
         )
         return skill.model_dump(mode="json")
     except SkillError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))  # noqa: B904
 
 
 @router.get("/skills/{skill_id}")
@@ -1551,7 +1666,7 @@ async def update_skill(skill_id: str, request: UpdateSkillRequest):
         )
         return skill.model_dump(mode="json")
     except SkillError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
 
 
 @router.delete("/skills/{skill_id}")
@@ -1580,7 +1695,7 @@ async def import_skills_excel(file: UploadFile = File(...)):
     try:
         result = await svc.import_excel(await file.read())
     except SkillError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))  # noqa: B904
     return {
         "created": [s.model_dump(mode="json") for s in result["created"]],
         "skipped": result["skipped"],
@@ -1625,7 +1740,7 @@ async def get_codex_stats():
             tasks_failed += 1
         # Track most recent activity timestamp
         updated_at = issue.get("updated_at") or issue.get("created_at")
-        if updated_at:
+        if updated_at:  # noqa: SIM102
             if last_activity_at is None or updated_at > last_activity_at:
                 last_activity_at = updated_at
 
@@ -1637,7 +1752,7 @@ async def get_codex_stats():
         if pm is not None:
             # Claude executor is available if any process slots are free
             # We check the process count vs max - simplified check
-            claude_available = hasattr(pm, '_processes') or hasattr(pm, 'max_processes')
+            claude_available = hasattr(pm, "_processes") or hasattr(pm, "max_processes")
     except Exception:
         pass
 
@@ -1676,6 +1791,7 @@ async def get_issue_checklist(issue_id: str):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     import json as _json
     from pathlib import Path
+
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail="Issue not found")
@@ -1739,9 +1855,7 @@ async def get_issue_checklist(issue_id: str):
     return {
         "criteria": out,
         "qa_status": qa_status,
-        "engineer_status": (
-            (prd.get("status") if isinstance(prd, dict) else None) or None
-        ),
+        "engineer_status": ((prd.get("status") if isinstance(prd, dict) else None) or None),
     }
 
 
@@ -1788,9 +1902,7 @@ async def get_issue_pipeline_stages(issue_id: str):
                 nodes_by_role.setdefault(role, []).append(n)
 
     worktree = issue.git_worktree_path
-    issue_root: Path | None = (
-        Path(worktree) / "issues" / issue_id if worktree else None
-    )
+    issue_root: Path | None = Path(worktree) / "issues" / issue_id if worktree else None
 
     def _read_json(rel: str):
         if not issue_root:
@@ -1825,20 +1937,20 @@ async def get_issue_pipeline_stages(issue_id: str):
                 text,
                 _re.IGNORECASE,
             )
-            m_add = _re.search(r"\+(\d+)\s*(?:[-−]|/)", text)
-            m_rm = _re.search(r"[-−](\d+)\b", text)
+            m_add = _re.search(r"\+(\d+)\s*(?:[-−]|/)", text)  # noqa: RUF001
+            m_rm = _re.search(r"[-−](\d+)\b", text)  # noqa: RUF001
             if m_files:
-                try:
+                try:  # noqa: SIM105
                     files_changed = max(files_changed, int(m_files.group(1)))
                 except ValueError:
                     pass
             if m_add:
-                try:
+                try:  # noqa: SIM105
                     added = max(added, int(m_add.group(1)))
                 except ValueError:
                     pass
             if m_rm:
-                try:
+                try:  # noqa: SIM105
                     removed = max(removed, int(m_rm.group(1)))
                 except ValueError:
                     pass
@@ -1847,7 +1959,7 @@ async def get_issue_pipeline_stages(issue_id: str):
             if files_changed:
                 parts.append(f"{files_changed} files")
             if added or removed:
-                parts.append(f"+{added} −{removed}")
+                parts.append(f"+{added} −{removed}")  # noqa: RUF001
             summary = "代码实现 · " + " · ".join(parts)
         else:
             summary = "代码实现"
@@ -1858,27 +1970,11 @@ async def get_issue_pipeline_stages(issue_id: str):
             prd = _read_json("pm/prd.json") or {}
             criteria = prd.get("acceptance_criteria") or []
             goals = prd.get("goals") or []
-            reqs = (
-                prd.get("requirements")
-                or prd.get("functional_requirements")
-                or []
-            )
-            n_c = (
-                len([c for c in criteria if c])
-                if isinstance(criteria, list)
-                else 0
-            )
-            n_g = (
-                len([g for g in goals if g])
-                if isinstance(goals, list)
-                else 0
-            )
-            n_r = (
-                len([r for r in reqs if r]) if isinstance(reqs, list) else 0
-            )
-            summary = (
-                f"需求分解 · {n_c} acceptance criteria" if n_c else "需求分解"
-            )
+            reqs = prd.get("requirements") or prd.get("functional_requirements") or []
+            n_c = len([c for c in criteria if c]) if isinstance(criteria, list) else 0
+            n_g = len([g for g in goals if g]) if isinstance(goals, list) else 0
+            n_r = len([r for r in reqs if r]) if isinstance(reqs, list) else 0
+            summary = f"需求分解 · {n_c} acceptance criteria" if n_c else "需求分解"
             parts: list[str] = []
             if n_g:
                 parts.append(f"{n_g} goals")
@@ -1888,18 +1984,12 @@ async def get_issue_pipeline_stages(issue_id: str):
         if role_key == "architect":
             design = _read_json("architect/system_design.json") or {}
             comps = design.get("components") or []
-            sch = (
-                design.get("schemas")
-                or design.get("data_models")
-                or []
-            )
+            sch = design.get("schemas") or design.get("data_models") or []
             mig = design.get("migrations") or []
             n_c = len(comps) if isinstance(comps, list) else 0
             n_s = len(sch) if isinstance(sch, list) else 0
             n_m = len(mig) if isinstance(mig, list) else 0
-            summary = (
-                f"系统设计 · {n_c} component" if n_c else "系统设计"
-            )
+            summary = f"系统设计 · {n_c} component" if n_c else "系统设计"
             parts: list[str] = []
             if n_s:
                 parts.append(f"{n_s} schemas")
@@ -1911,34 +2001,18 @@ async def get_issue_pipeline_stages(issue_id: str):
         if role_key == "qa":
             qa = _read_json("qa/qa_plan.json") or {}
             status_lbl = (qa.get("status") or "").lower()
-            cmds = (
-                qa.get("recommended_commands")
-                or qa.get("commands")
-                or []
-            )
+            cmds = qa.get("recommended_commands") or qa.get("commands") or []
             n_cmds = len(cmds) if isinstance(cmds, list) else 0
             passed = qa.get("passed") or 0
             failed = qa.get("failed") or 0
-            results = (
-                qa.get("results")
-                if isinstance(qa.get("results"), dict)
-                else None
-            )
+            results = qa.get("results") if isinstance(qa.get("results"), dict) else None
             if results:
                 passed = results.get("passed") or passed
                 failed = results.get("failed") or failed
             if status_lbl in ("passed", "ok", "done"):
-                summary = (
-                    f"验证通过 · {n_cmds} cmd · {failed} failed"
-                    if n_cmds
-                    else "验证通过"
-                )
+                summary = f"验证通过 · {n_cmds} cmd · {failed} failed" if n_cmds else "验证通过"
             elif status_lbl in ("failed", "error"):
-                summary = (
-                    f"验证失败 · {n_cmds} cmd · {failed} failed"
-                    if n_cmds
-                    else "验证失败"
-                )
+                summary = f"验证失败 · {n_cmds} cmd · {failed} failed" if n_cmds else "验证失败"
             else:
                 summary = "验证"
             foot_parts: list[str] = []
@@ -1947,11 +2021,7 @@ async def get_issue_pipeline_stages(issue_id: str):
                 first_text = (
                     first
                     if isinstance(first, str)
-                    else (
-                        first.get("cmd")
-                        or first.get("command")
-                        or ""
-                    )
+                    else (first.get("cmd") or first.get("command") or "")
                 )
                 if first_text:
                     foot_parts.append(first_text.split()[0])
@@ -1991,14 +2061,8 @@ async def get_issue_pipeline_stages(issue_id: str):
             starts = [n.started_at for n in role_nodes if n.started_at]
             completes = [n.completed_at for n in role_nodes if n.completed_at]
             started_at = min(starts).isoformat() if starts else None
-            completed_at = (
-                max(completes).isoformat()
-                if completes and status == "done"
-                else None
-            )
-            primary_task_id = next(
-                (n.task_id for n in role_nodes if n.task_id), None
-            )
+            completed_at = max(completes).isoformat() if completes and status == "done" else None
+            primary_task_id = next((n.task_id for n in role_nodes if n.task_id), None)
         else:
             status = "pending"
             started_at = None
@@ -2035,9 +2099,7 @@ async def get_issue_pipeline_stages(issue_id: str):
     completed_at_all = None
     total_duration = None
     if stages and all(s["status"] == "done" for s in stages):
-        completes_all = [
-            s["completed_at"] for s in stages if s.get("completed_at")
-        ]
+        completes_all = [s["completed_at"] for s in stages if s.get("completed_at")]
         if completes_all:
             completed_at_all = max(completes_all)
     if started_at_all and completed_at_all:
@@ -2070,7 +2132,7 @@ async def get_issue_activity(issue_id: str, limit: int = 50):
     """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt  # noqa: F401
 
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
@@ -2122,18 +2184,14 @@ async def get_issue_activity(issue_id: str, limit: int = 50):
                     "timestamp": t["updated_at"],
                     "actor": actor,
                     "role": role,
-                    "text": (
-                        f"{actor} 完成" if status == "done" else f"{actor} 失败"
-                    ),
+                    "text": (f"{actor} 完成" if status == "done" else f"{actor} 失败"),
                     "aux": t.get("title"),
                 }
             )
 
     if issue.project_id:
         try:
-            audit = await codex_store.list_project_audit(
-                issue.project_id, limit=200
-            )
+            audit = await codex_store.list_project_audit(issue.project_id, limit=200)
         except Exception:
             audit = []
         for a in audit:
@@ -2149,9 +2207,7 @@ async def get_issue_activity(issue_id: str, limit: int = 50):
                     "actor": "git",
                     "role": None,
                     "text": a.get("event") or "",
-                    "aux": a.get("sha")
-                    or a.get("base_branch")
-                    or None,
+                    "aux": a.get("sha") or a.get("base_branch") or None,
                 }
             )
 
@@ -2202,6 +2258,7 @@ async def get_codex_cost_stats(
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     import json as _json
+
     # Pricing knobs — overridable so the UI doesn't lie when you switch model.
     # Defaults track gpt-5-mini-ish: $0.30 / 1M input, $1.20 / 1M output, free cache reads.
     input_per_m = float(os.getenv("COST_USD_PER_M_INPUT", "0.30"))
@@ -2239,9 +2296,7 @@ async def get_codex_cost_stats(
                     )
                 )
         else:
-            rows = await codex_store.load_log_events(
-                session_id=sid, limit=limit_per_scope
-            )
+            rows = await codex_store.load_log_events(session_id=sid, limit=limit_per_scope)
         for ev in rows:
             content = ev.content or ""
             if "usage" not in content or "input_tokens" not in content:
@@ -2339,7 +2394,7 @@ def _decode_audit_cursor(cursor: str | None) -> tuple[str | None, str | None]:
 
     try:
         raw = _b64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
-    except Exception:  # noqa: BLE001 — any decode failure -> treat as no cursor
+    except Exception:  # noqa: BLE001, RUF100
         return None, None
     created_at, sep, row_id = raw.partition("|")
     if not sep or not row_id:
@@ -2448,9 +2503,11 @@ async def get_project_audit(project_id: str, limit: int = 50, since: str | None 
     try:
         await svc.get(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     return await codex_store.list_project_audit(
-        project_id, limit=max(1, min(limit, 200)), since=since,
+        project_id,
+        limit=max(1, min(limit, 200)),
+        since=since,
     )
 
 
@@ -2468,11 +2525,11 @@ async def repair_project(project_id: str):
     try:
         project = await svc.get(project_id)
     except ProjectError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc))  # noqa: B904
     try:
         await worktree_manager.prune(project)
     except GitError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))  # noqa: B904
     issues = await codex_store.list_codex_issues(project_id=project_id)
     live_issue_ids = {i["id"] for i in issues}
     repaired = 0
@@ -2482,8 +2539,12 @@ async def repair_project(project_id: str):
             continue
         # Reset when EITHER the on-disk worktree is gone, OR the branch ref
         # has been deleted from the repo (covers `git branch -D` mishaps).
-        worktree_missing = bool(issue.git_worktree_path) and not Path(issue.git_worktree_path).exists()
-        branch_missing = bool(issue.git_branch) and not await git_service.branch_exists(project.repo_path, issue.git_branch)
+        worktree_missing = (
+            bool(issue.git_worktree_path) and not Path(issue.git_worktree_path).exists()
+        )
+        branch_missing = bool(issue.git_branch) and not await git_service.branch_exists(
+            project.repo_path, issue.git_branch
+        )
         if not (worktree_missing or branch_missing):
             continue
         issue.git_branch = None
@@ -2505,7 +2566,7 @@ async def repair_project(project_id: str):
             issue_id = entry.name[len("issue-") :]
             if issue_id in live_issue_ids:
                 continue
-            try:
+            try:  # noqa: SIM105
                 await git_service.remove_worktree(project.repo_path, entry)
             except Exception:
                 pass
@@ -2561,7 +2622,7 @@ async def codex_ready():
 async def codex_echo(msg: str = Query(default="")):
     """Echo endpoint that returns the message, its length, and a timestamp."""
     length = len(msg)
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(timezone.utc).isoformat()  # noqa: UP017
     return {"msg": msg, "length": length, "ts": ts}
 
 
@@ -2586,8 +2647,9 @@ async def create_codex_workspace(request: CreateCodexSessionRequest):
     project = await codex_store.load_project(request.project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{request.project_id}' not found")
-    from datetime import datetime
+    from datetime import datetime  # noqa: I001
     from app.domain.models import CodexWorkspace
+
     workspace_id = str(uuid4())
     resolved_cwd = request.cwd or project.repo_path
     workspace = CodexWorkspace(
@@ -2604,11 +2666,18 @@ async def create_codex_workspace(request: CreateCodexSessionRequest):
     logger.info(f"Creating workspace: {workspace_id} for project {request.project_id}")
     await codex_store.save_codex_workspace(workspace)
     # Broadcast new workspace
-    await event_bus.append({
-        "type": "session_created",
-        "session_id": workspace.id,
-        "session": {"id": workspace.id, "title": workspace.title, "project_id": workspace.project_id, "status": workspace.status}
-    })
+    await event_bus.append(
+        {
+            "type": "session_created",
+            "session_id": workspace.id,
+            "session": {
+                "id": workspace.id,
+                "title": workspace.title,
+                "project_id": workspace.project_id,
+                "status": workspace.status,
+            },
+        }
+    )
     logger.info(f"Workspace created and broadcasted: {workspace_id}")
     return workspace
 
@@ -2644,8 +2713,7 @@ async def get_workspace_execution_processes(workspace_id: str):
     processes = await codex_store.list_execution_processes(session_id=workspace_id)
     return {
         "execution_processes": {
-            process.id: await _build_execution_process_payload(process)
-            for process in processes
+            process.id: await _build_execution_process_payload(process) for process in processes
         }
     }
 
@@ -2691,6 +2759,7 @@ class UpdateCodexTaskRequest(BaseModel):
 
 class RunTaskRequest(BaseModel):
     """Optional run-time overrides for task execution."""
+
     executor: str | None = None
     provider: str | None = None
     model: str | None = None
@@ -2719,11 +2788,11 @@ async def update_codex_task(task_id: str, request: UpdateCodexTaskRequest):
     catalog_service = _get_runtime_catalog_service()
     catalog = await catalog_service.load_catalog()
     try:
-        resolved_executor, resolved_provider, resolved_model, _, _ = catalog_service.resolve_effective_config(
-            catalog, new_executor, new_provider, new_model
+        resolved_executor, resolved_provider, resolved_model, _, _ = (
+            catalog_service.resolve_effective_config(catalog, new_executor, new_provider, new_model)
         )
     except RuntimeCatalogValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))  # noqa: B904
 
     task.executor = resolved_executor
     task.provider = resolved_provider
@@ -2758,7 +2827,9 @@ async def request_codex_task_help(task_id: str, request: RequestTaskHelpRequest)
     if task.status == "waiting_for_help":
         raise HTTPException(status_code=409, detail="Task is already waiting for help")
     if request.target_executor == task.executor:
-        raise HTTPException(status_code=400, detail="Target executor must differ from task executor")
+        raise HTTPException(
+            status_code=400, detail="Target executor must differ from task executor"
+        )
 
     if task.status != "running":
         task.status = "running"
@@ -2771,7 +2842,9 @@ async def request_codex_task_help(task_id: str, request: RequestTaskHelpRequest)
         f"Original prompt:\n{task.prompt}\n\n"
         f"Current result:\n{task.result or '(no current result)'}"
     )
-    help_context_summary = request.context_summary or f"Manual help requested from the web UI for task {task.id}."
+    help_context_summary = (
+        request.context_summary or f"Manual help requested from the web UI for task {task.id}."
+    )
 
     try:
         orchestrator = get_help_orchestrator(_refresh_task_result)
@@ -2783,12 +2856,12 @@ async def request_codex_task_help(task_id: str, request: RequestTaskHelpRequest)
             context_summary=help_context_summary,
         )
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e))  # noqa: B904
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")  # noqa: B904
     except Exception as e:
         logger.error("Failed to request help for task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to request help: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to request help: {e}")  # noqa: B904
 
     parent_task = await codex_store.load_codex_task(task.id)
     child_task = await codex_store.load_codex_task(help_request.child_task_id)
@@ -2818,7 +2891,7 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
     if workspace is None:
         raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
 
-    from datetime import datetime
+    from datetime import datetime  # noqa: I001
     from app.domain.models import CodexTask
 
     resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config()
@@ -2853,19 +2926,23 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
         updated_at=datetime.now(),
     )
     try:
-        branch, worktree_path, base = await worktree_manager.prepare_chat_task_worktree(project, task)
+        branch, worktree_path, base = await worktree_manager.prepare_chat_task_worktree(
+            project, task
+        )
     except (GitError, WorktreeError) as exc:
-        raise HTTPException(status_code=500, detail=f"failed to create chat worktree: {exc}")
+        raise HTTPException(status_code=500, detail=f"failed to create chat worktree: {exc}")  # noqa: B904
     task.git_branch = branch
     task.git_worktree_path = worktree_path
     task.git_base_branch = base
     task.workspace_path = worktree_path  # Engineer artifacts / executor cwd resolve to this.
     await codex_store.save_codex_task(task)
     # Broadcast new task with complete data structure
-    await event_bus.append({
-        "type": "task_created",
-        "task": _serialize_task_payload(task),
-    })
+    await event_bus.append(
+        {
+            "type": "task_created",
+            "task": _serialize_task_payload(task),
+        }
+    )
 
     try:
         exec_process = await _get_task_runner().start_task_run(
@@ -2881,10 +2958,10 @@ async def send_workspace_input(workspace_id: str, request: SendInputRequest):
         }
     except ValueError as e:
         logger.warning("Conflict starting task for workspace %s: %s", workspace_id, e)
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e))  # noqa: B904
     except Exception as e:
         logger.error("Failed to start task for workspace %s: %s", workspace_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))  # noqa: B904
 
 
 send_codex_input = send_workspace_input
@@ -2900,12 +2977,13 @@ async def terminate_codex_workspace(workspace_id: str):
     try:
         return await mgr.terminate(workspace_id)
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e))  # noqa: B904
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))  # noqa: B904
 
 
 terminate_codex_session = terminate_codex_workspace
+
 
 @router.delete("/codex/workspaces")
 @router.delete("/codex/sessions")
@@ -2916,7 +2994,7 @@ async def delete_all_codex_workspaces():
     workspaces = await codex_store.list_codex_workspaces()
     mgr = get_codex_process_manager()
     for workspace in workspaces:
-        try:
+        try:  # noqa: SIM105
             mgr.terminate(workspace["id"])
         except KeyError:
             pass
@@ -2949,18 +3027,21 @@ async def update_codex_workspace(workspace_id: str, request: UpdateCodexWorkspac
         settings["plan_first_pm"] = bool(request.plan_first_pm)
         workspace.settings = settings
     from datetime import datetime
+
     workspace.last_active_at = datetime.now()
     await codex_store.save_codex_workspace(workspace)
-    await event_bus.append({
-        "type": "session_updated",
-        "session_id": workspace.id,
-        "session": {
-            "id": workspace.id,
-            "title": workspace.title,
-            "project_id": workspace.project_id,
-            "status": workspace.status,
-        },
-    })
+    await event_bus.append(
+        {
+            "type": "session_updated",
+            "session_id": workspace.id,
+            "session": {
+                "id": workspace.id,
+                "title": workspace.title,
+                "project_id": workspace.project_id,
+                "status": workspace.status,
+            },
+        }
+    )
     return workspace
 
 
@@ -2978,17 +3059,14 @@ async def delete_codex_workspace(workspace_id: str):
         raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
     # Terminate if running first
     mgr = get_codex_process_manager()
-    try:
+    try:  # noqa: SIM105
         mgr.terminate(workspace_id)
     except KeyError:
         pass  # Workspace not running, ok to proceed
     await _cleanup_session_worktrees(workspace_id, workspace.project_id)
     await codex_store.delete_codex_workspace(workspace_id)
     # Broadcast workspace deletion
-    await event_bus.append({
-        "type": "session_deleted",
-        "session_id": workspace_id
-    })
+    await event_bus.append({"type": "session_deleted", "session_id": workspace_id})
     return {"deleted": workspace_id}
 
 
@@ -2998,7 +3076,7 @@ delete_codex_session = delete_codex_workspace
 # --- Codex Tasks ---
 
 
-class CreateTaskRequest(BaseModel):
+class CreateTaskRequest(BaseModel):  # noqa: F811
     session_id: str
     issue_id: str | None = None
     phase: str | None = None
@@ -3076,7 +3154,7 @@ async def create_codex_issue(request: CreateIssueRequest):
             project, issue, base_branch=request.base_branch
         )
     except (GitError, WorktreeError) as exc:
-        raise HTTPException(status_code=500, detail=f"failed to create issue worktree: {exc}")
+        raise HTTPException(status_code=500, detail=f"failed to create issue worktree: {exc}")  # noqa: B904
     issue.git_branch = branch
     issue.git_worktree_path = worktree_path
     issue.git_base_branch = base
@@ -3087,12 +3165,14 @@ async def create_codex_issue(request: CreateIssueRequest):
         event="created",
         base_branch=base,
     )
-    await event_bus.append({
-        "type": "issue_created",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-        "issue": issue.model_dump(mode="json") if hasattr(issue, "model_dump") else None,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_created",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "issue": issue.model_dump(mode="json") if hasattr(issue, "model_dump") else None,
+        }
+    )
     return issue
 
 
@@ -3128,6 +3208,7 @@ async def get_issue_budget(issue_id: str):
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
     from app.application.budget_service import compute_issue_budget_status
+
     status = await compute_issue_budget_status(codex_store, issue)
     return status.to_dict()
 
@@ -3165,12 +3246,14 @@ async def update_codex_issue_phase(issue_id: str, request: UpdateIssuePhaseReque
     issue.current_phase = request.current_phase
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
-    await event_bus.append({
-        "type": "issue_updated",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-        "current_phase": issue.current_phase,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_updated",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "current_phase": issue.current_phase,
+        }
+    )
     return issue
 
 
@@ -3184,12 +3267,14 @@ async def update_codex_issue_pin(issue_id: str, request: UpdateIssuePinRequest):
     issue.is_pinned = request.is_pinned
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
-    await event_bus.append({
-        "type": "issue_updated",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-        "is_pinned": issue.is_pinned,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_updated",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "is_pinned": issue.is_pinned,
+        }
+    )
     return issue
 
 
@@ -3212,13 +3297,15 @@ async def approve_codex_issue_plan(issue_id: str, request: ApprovePlanRequest):
     issue.status = "in_progress"
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
-    await event_bus.append({
-        "type": "issue_updated",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-        "status": issue.status,
-        "review_comment": issue.review_comment,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_updated",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "status": issue.status,
+            "review_comment": issue.review_comment,
+        }
+    )
 
     # In Conductor-driven mode, the Conductor loop is running as a background task.
     # Approving the plan just updates the issue status above — the Conductor observes
@@ -3254,12 +3341,14 @@ async def qa_review_codex_issue(issue_id: str, request: QaReviewRequest):
         issue.status = "awaiting_merge"
         issue.updated_at = datetime.now()
         await codex_store.save_codex_issue(issue)
-        await event_bus.append({
-            "type": "issue_updated",
-            "issue_id": issue.id,
-            "session_id": issue.session_id,
-            "status": issue.status,
-        })
+        await event_bus.append(
+            {
+                "type": "issue_updated",
+                "issue_id": issue.id,
+                "session_id": issue.session_id,
+                "status": issue.status,
+            }
+        )
         return issue
 
     # decision == "reject": route through engineer rework.
@@ -3296,20 +3385,23 @@ async def qa_review_codex_issue(issue_id: str, request: QaReviewRequest):
         completed_at=None,
     )
 
-    await event_bus.append({
-        "type": "issue_updated",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-        "status": issue.status,
-        "review_comment": issue.review_comment,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_updated",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "status": issue.status,
+            "review_comment": issue.review_comment,
+        }
+    )
 
     # Conductor-driven re-dispatch: a fresh engineer task is created with the
     # human feedback in review_comment so REWORK branch picks it up. We use
     # dispatch_role (the same path Conductor's dispatch_subagent tool uses).
     try:
-        from app.application.task_dispatcher import dispatch_role
+        from app.application.task_dispatcher import dispatch_role  # noqa: I001
         from app.application.event_bus import _workflow_task_dispatcher
+
         await dispatch_role(
             issue=issue,
             role="engineer",
@@ -3318,7 +3410,7 @@ async def qa_review_codex_issue(issue_id: str, request: QaReviewRequest):
             event_bus=event_bus,
             prev_node_key="qa",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.warning("qa-review reject re-dispatch failed: %s", exc)
 
     return issue
@@ -3343,6 +3435,7 @@ async def duplicate_codex_issue(issue_id: str, from_current: bool = False):
     if issue is None:
         raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
     import uuid
+
     suffix = " (fork)" if from_current else " (copy)"
     new_issue = CodexIssue(
         id=str(uuid.uuid4()),
@@ -3364,20 +3457,28 @@ async def duplicate_codex_issue(issue_id: str, from_current: bool = False):
                 # so the new worktree inherits the source issue's commits.
                 if from_current and issue.git_branch:
                     new_issue.git_base_branch = issue.git_branch
-                branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(project, new_issue)
+                branch, worktree_path, base = await worktree_manager.prepare_issue_worktree(
+                    project, new_issue
+                )
                 new_issue.git_branch = branch
                 new_issue.git_worktree_path = worktree_path
                 new_issue.git_base_branch = base
             except (GitError, WorktreeError) as exc:
-                raise HTTPException(status_code=500, detail=f"failed to create issue worktree: {exc}")
+                raise HTTPException(  # noqa: B904
+                    status_code=500, detail=f"failed to create issue worktree: {exc}"
+                )  # noqa: B904, RUF100
     await codex_store.save_codex_issue(new_issue)
-    await event_bus.append({
-        "type": "issue_created",
-        "issue_id": new_issue.id,
-        "session_id": new_issue.session_id,
-        "issue": new_issue.model_dump(mode="json") if hasattr(new_issue, "model_dump") else None,
-        "forked_from": issue.id,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_created",
+            "issue_id": new_issue.id,
+            "session_id": new_issue.session_id,
+            "issue": new_issue.model_dump(mode="json")
+            if hasattr(new_issue, "model_dump")
+            else None,
+            "forked_from": issue.id,
+        }
+    )
     return new_issue
 
 
@@ -3405,11 +3506,13 @@ async def get_codex_issue_artifacts(issue_id: str):
     by_name: dict[str, dict] = {row["name"]: row for row in db_rows}
     for row in disk_rows:
         by_name[row["name"]] = row
+
     # Filter framework control files even when they were previously persisted
     # to the artifacts table (legacy rows). Matches the scanner's blocklist.
     def _is_user_artifact(name: str) -> bool:
         base = name.rsplit("/", 1)[-1]
         return not (base.startswith("_") or base.startswith("."))
+
     rows = [r for r in by_name.values() if _is_user_artifact(r["name"])]
 
     MAX_FILE_SIZE = 1024 * 1024
@@ -3424,16 +3527,18 @@ async def get_codex_issue_artifacts(issue_id: str):
                 content = path.read_text(encoding="utf-8", errors="replace")[:MAX_FILE_SIZE]
             except OSError:
                 content = None
-        result.append({
-            "id": row["id"],
-            "issue_id": row["issue_id"],
-            "task_id": row["task_id"],
-            "kind": row["kind"],
-            "name": row["name"],
-            "path": row["path"],
-            "content": content,
-            "created_at": row["created_at"],
-        })
+        result.append(
+            {
+                "id": row["id"],
+                "issue_id": row["issue_id"],
+                "task_id": row["task_id"],
+                "kind": row["kind"],
+                "name": row["name"],
+                "path": row["path"],
+                "content": content,
+                "created_at": row["created_at"],
+            }
+        )
     return result
 
 
@@ -3447,7 +3552,7 @@ async def download_issue_artifacts_zip(issue_id: str):
     """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    from fastapi.responses import Response
+    from fastapi.responses import Response  # noqa: I001
     import io
     import zipfile
     from pathlib import Path
@@ -3593,12 +3698,17 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
             if task is not None and getattr(task, "result", None):
                 ws = await store.load_codex_workspace(task.session_id)
                 try:
-                    await role_workflow_service.persist_result(task, workspace_title=ws.title if ws else None)
-                except Exception as exc:  # noqa: BLE001
+                    await role_workflow_service.persist_result(
+                        task, workspace_title=ws.title if ws else None
+                    )
+                except Exception as exc:  # noqa: BLE001, RUF100
                     import logging
+
                     logging.getLogger(__name__).warning(
                         "Artifacts backfill: persist_result failed for %s task %s: %s",
-                        role, task.id, exc,
+                        role,
+                        task.id,
+                        exc,
                     )
 
     artifact_map: dict[str, dict] = {}
@@ -3641,6 +3751,7 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
                         "path": str(item),
                         "created_at": dt.fromtimestamp(item.stat().st_mtime).isoformat(),
                     }
+
         _walk(root)
 
     for root in issue_roots:
@@ -3648,7 +3759,8 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
 
     # Backfill DB with scanned artifacts
     from app.application import knowledge_index_service as _kidx
-    for artifact_name, artifact_data in artifact_map.items():
+
+    for artifact_name, artifact_data in artifact_map.items():  # noqa: B007
         row = {
             "id": artifact_data["id"],
             "issue_id": issue_id,
@@ -3659,9 +3771,9 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
             "created_at": artifact_data["created_at"],
         }
         await store.save_artifact(row)
-        try:
+        try:  # noqa: SIM105
             await _kidx.index_artifact(store, row)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             pass
 
     return list(artifact_map.values())
@@ -3697,7 +3809,7 @@ async def delete_codex_issue(issue_id: str):
     if issue.project_id:
         project = await codex_store.load_project(issue.project_id)
         if project is not None:
-            try:
+            try:  # noqa: SIM105
                 await worktree_manager.cleanup_issue_worktree(project, issue)
             except Exception:
                 pass
@@ -3709,11 +3821,13 @@ async def delete_codex_issue(issue_id: str):
             issue_id=issue.id,
             event="deleted",
         )
-    await event_bus.append({
-        "type": "issue_deleted",
-        "issue_id": issue_id,
-        "session_id": issue.session_id,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_deleted",
+            "issue_id": issue_id,
+            "session_id": issue.session_id,
+        }
+    )
     return {"deleted": issue_id}
 
 
@@ -3750,7 +3864,7 @@ async def get_codex_issue_diff(issue_id: str, stat_only: bool = False):
         ahead = await git_service.commits_ahead(issue.git_worktree_path, base)
         diff = "" if stat_only else await worktree_manager.issue_diff(project, issue)
     except GitError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))  # noqa: B904
     return {
         "diff": diff,
         "base_branch": issue.git_base_branch,
@@ -3791,11 +3905,13 @@ async def abandon_codex_issue(issue_id: str):
         event="abandoned",
         base_branch=issue.git_base_branch,
     )
-    await event_bus.append({
-        "type": "issue_abandoned",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_abandoned",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+        }
+    )
     return issue
 
 
@@ -3837,6 +3953,7 @@ async def create_github_pr(issue_id: str, request: CreatePRRequest):
         )
 
     import shutil
+
     if not shutil.which("gh"):
         raise HTTPException(
             status_code=412,
@@ -3862,8 +3979,19 @@ async def create_github_pr(issue_id: str, request: CreatePRRequest):
         )
 
     # 2. Open the PR.
-    args = ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
-            "--title", title, "--body", body]
+    args = [
+        "gh",
+        "pr",
+        "create",
+        "--base",
+        base_branch,
+        "--head",
+        head_branch,
+        "--title",
+        title,
+        "--body",
+        body,
+    ]
     if request.draft:
         args.append("--draft")
     create = await _run_subprocess(args, cwd=issue.git_worktree_path, timeout_s=60)
@@ -3884,11 +4012,13 @@ async def create_github_pr(issue_id: str, request: CreatePRRequest):
         event="github_pr_created",
         base_branch=base_branch,
     )
-    await event_bus.append({
-        "type": "issue_pr_created",
-        "issue_id": issue.id,
-        "pr_url": pr_url,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_pr_created",
+            "issue_id": issue.id,
+            "pr_url": pr_url,
+        }
+    )
     return issue
 
 
@@ -3901,6 +4031,7 @@ async def refresh_github_pr(issue_id: str):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     import shutil
+
     if not shutil.which("gh"):
         raise HTTPException(status_code=412, detail="gh CLI is not installed")
     try:
@@ -3926,11 +4057,14 @@ async def refresh_github_pr(issue_id: str):
 
 
 @router.post("/codex/projects/{project_id}/pr/follow-up")
-async def follow_up_project_github_prs(project_id: str, request: ProjectPRFollowupRequest | None = None):
+async def follow_up_project_github_prs(
+    project_id: str, request: ProjectPRFollowupRequest | None = None
+):
     """Refresh all open GitHub PR-backed issues for a project."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     import shutil
+
     if not shutil.which("gh"):
         raise HTTPException(status_code=412, detail="gh CLI is not installed")
     summary = await sweep_project_github_prs(
@@ -4005,6 +4139,7 @@ async def steer_codex_issue(issue_id: str, request: SteerRequest):
     if not issue.git_worktree_path:
         raise HTTPException(status_code=409, detail="Issue has no active worktree")
     from pathlib import Path
+
     steer_path = Path(issue.git_worktree_path) / "issues" / issue.id / "_steer.md"
     steer_path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -4023,12 +4158,14 @@ async def steer_codex_issue(issue_id: str, request: SteerRequest):
     if header.split("\n", 1)[0] not in existing:
         existing = header + existing
     steer_path.write_text(existing.rstrip() + block, encoding="utf-8")
-    await event_bus.append({
-        "type": "issue_steered",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-        "message": msg,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_steered",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "message": msg,
+        }
+    )
     return {"ok": True, "steer_path": str(steer_path)}
 
 
@@ -4058,11 +4195,13 @@ async def restore_codex_issue(issue_id: str):
         event="restored",
         base_branch=issue.git_base_branch,
     )
-    await event_bus.append({
-        "type": "issue_restored",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_restored",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+        }
+    )
     return issue
 
 
@@ -4084,19 +4223,21 @@ async def finalize_abandoned_issue(issue_id: str):
     if issue.project_id:
         project = await codex_store.load_project(issue.project_id)
         if project is not None:
-            try:
+            try:  # noqa: SIM105
                 await worktree_manager.cleanup_issue_worktree(project, issue)
             except Exception:
                 pass
     issue.git_worktree_path = None
     issue.updated_at = datetime.now()
     await codex_store.save_codex_issue(issue)
-    await event_bus.append({
-        "type": "issue_updated",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-        "git_worktree_path": None,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_updated",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "git_worktree_path": None,
+        }
+    )
     return issue
 
 
@@ -4135,7 +4276,7 @@ async def merge_codex_issue(issue_id: str, request: MergeIssueRequest):
     try:
         result = await worktree_manager.merge_issue(project, issue, message=request.message)
     except (GitError, WorktreeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))  # noqa: B904
     # Close the loop: merging is the last user-visible step, so flip the
     # issue's lifecycle status to completed alongside git_merge_status=merged.
     if issue.status != "completed":
@@ -4149,19 +4290,23 @@ async def merge_codex_issue(issue_id: str, request: MergeIssueRequest):
         sha=result["sha"],
         base_branch=result["base_branch"],
     )
-    await event_bus.append({
-        "type": "issue_merged",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-        "sha": result["sha"],
-        "base_branch": result["base_branch"],
-    })
-    await event_bus.append({
-        "type": "issue_updated",
-        "issue_id": issue.id,
-        "session_id": issue.session_id,
-        "status": issue.status,
-    })
+    await event_bus.append(
+        {
+            "type": "issue_merged",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "sha": result["sha"],
+            "base_branch": result["base_branch"],
+        }
+    )
+    await event_bus.append(
+        {
+            "type": "issue_updated",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "status": issue.status,
+        }
+    )
     return {**result, "issue": issue}
 
 
@@ -4182,7 +4327,9 @@ async def create_codex_task(request: CreateTaskRequest):
             raise HTTPException(status_code=409, detail="Issue does not belong to workspace")
     # PR5: phase is now free-form. Default to role_key when caller omits it
     # (the new DAG flow ignores this field anyway).
-    resolved_phase = request.phase or (request.role or (issue.current_phase if request.issue_id is not None else "general"))
+    resolved_phase = request.phase or (
+        request.role or (issue.current_phase if request.issue_id is not None else "general")
+    )
 
     # Resolve and validate executor/provider/model against runtime catalog
     resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(
@@ -4203,8 +4350,9 @@ async def create_codex_task(request: CreateTaskRequest):
         if project is None:
             raise HTTPException(status_code=404, detail=f"Project '{session.project_id}' not found")
 
-    from datetime import datetime
+    from datetime import datetime  # noqa: I001
     from app.domain.models import CodexTask
+
     task_id = str(uuid4())
 
     # Resolve worktree + branch for this task:
@@ -4218,9 +4366,13 @@ async def create_codex_task(request: CreateTaskRequest):
     if issue is not None and project is not None:
         if not issue.git_worktree_path:
             try:
-                branch, wt_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+                branch, wt_path, base = await worktree_manager.prepare_issue_worktree(
+                    project, issue
+                )
             except (GitError, WorktreeError) as exc:
-                raise HTTPException(status_code=500, detail=f"failed to prepare issue worktree: {exc}")
+                raise HTTPException(  # noqa: B904
+                    status_code=500, detail=f"failed to prepare issue worktree: {exc}"
+                )  # noqa: B904, RUF100
             issue.git_branch = branch
             issue.git_worktree_path = wt_path
             issue.git_base_branch = base
@@ -4241,9 +4393,11 @@ async def create_codex_task(request: CreateTaskRequest):
             status="pending",
         )
         try:
-            branch, wt_path, base = await worktree_manager.prepare_chat_task_worktree(project, scratch_task)
+            branch, wt_path, base = await worktree_manager.prepare_chat_task_worktree(
+                project, scratch_task
+            )
         except (GitError, WorktreeError) as exc:
-            raise HTTPException(status_code=500, detail=f"failed to prepare chat worktree: {exc}")
+            raise HTTPException(status_code=500, detail=f"failed to prepare chat worktree: {exc}")  # noqa: B904
         git_branch = branch
         git_base_branch = base
         git_worktree_path = wt_path
@@ -4279,10 +4433,12 @@ async def create_codex_task(request: CreateTaskRequest):
     )
     await codex_store.save_codex_task(task)
     # Broadcast new task with complete data structure
-    await event_bus.append({
-        "type": "task_created",
-        "task": _serialize_task_payload(task),
-    })
+    await event_bus.append(
+        {
+            "type": "task_created",
+            "task": _serialize_task_payload(task),
+        }
+    )
     return task
 
 
@@ -4363,6 +4519,7 @@ async def run_codex_task(task_id: str, request: RunTaskRequest | None = None):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     from datetime import datetime
+
     task = await codex_store.load_codex_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -4370,9 +4527,16 @@ async def run_codex_task(task_id: str, request: RunTaskRequest | None = None):
     # Serial unlock: development tasks with sequence_index > 0 must wait for previous task to be FULLY DONE (and approved)
     if task.sequence_index is not None and task.phase == "development" and task.sequence_index > 0:
         prev_index = task.sequence_index - 1
-        all_tasks = await codex_store.list_codex_tasks(session_id=task.session_id, issue_id=task.issue_id)
+        all_tasks = await codex_store.list_codex_tasks(
+            session_id=task.session_id, issue_id=task.issue_id
+        )
         prev_task = next(
-            (t for t in all_tasks if t.get("sequence_index") == prev_index and t.get("sequence_group") == task.sequence_group),
+            (
+                t
+                for t in all_tasks
+                if t.get("sequence_index") == prev_index
+                and t.get("sequence_group") == task.sequence_group
+            ),
             None,
         )
         # Check for explicit "done" status (not awaiting_review or rework)
@@ -4402,21 +4566,23 @@ async def run_codex_task(task_id: str, request: RunTaskRequest | None = None):
         )
         return exec_process
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e))  # noqa: B904
     except Exception as e:
         task.status = "failed"
         task.updated_at = datetime.now()
         await codex_store.save_codex_task(task)
-        await event_bus.append({
-            "type": "task_status",
-            "task_id": task.id,
-            "issue_id": task.issue_id,
-            "session_id": task.session_id,
-            "status": "failed",
-            "result": str(e),
-            "execution_process_id": task.last_execution_process_id,
-        })
-        raise HTTPException(status_code=500, detail=str(e))
+        await event_bus.append(
+            {
+                "type": "task_status",
+                "task_id": task.id,
+                "issue_id": task.issue_id,
+                "session_id": task.session_id,
+                "status": "failed",
+                "result": str(e),
+                "execution_process_id": task.last_execution_process_id,
+            }
+        )
+        raise HTTPException(status_code=500, detail=str(e))  # noqa: B904
 
 
 @router.post("/codex/tasks/{task_id}/terminate")
@@ -4424,9 +4590,9 @@ async def terminate_codex_task(task_id: str):
     try:
         await get_codex_process_manager().terminate_task(task_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found")  # noqa: B904
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to terminate task: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to terminate task: {e}")  # noqa: B904
     return {"status": "ok"}
 
 
@@ -4441,7 +4607,7 @@ async def _run_task_with_user_content(task_id: str, content: str, kind: str):
     """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    from datetime import datetime
+    from datetime import datetime  # noqa: I001
     from app.domain.models import CodexTaskMessage
 
     task = await codex_store.load_codex_task(task_id)
@@ -4467,25 +4633,27 @@ async def _run_task_with_user_content(task_id: str, content: str, kind: str):
             triggering_message_id=message_id,
         )
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e))  # noqa: B904
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))  # noqa: B904
 
     message.execution_process_id = exec_process.id
     await codex_store.save_codex_task_message(message)
-    await event_bus.append({
-        "type": "message_created",
-        "session_id": task.session_id,
-        "execution_process_id": exec_process.id,
-        "message": {
-            "id": message.id,
-            "task_id": message.task_id,
-            "execution_process_id": message.execution_process_id,
-            "role": message.role,
-            "content": message.content,
-            "created_at": message.created_at.isoformat() if message.created_at else None,
+    await event_bus.append(
+        {
+            "type": "message_created",
+            "session_id": task.session_id,
+            "execution_process_id": exec_process.id,
+            "message": {
+                "id": message.id,
+                "task_id": message.task_id,
+                "execution_process_id": message.execution_process_id,
+                "role": message.role,
+                "content": message.content,
+                "created_at": message.created_at.isoformat() if message.created_at else None,
+            },
         }
-    })
+    )
 
     async def _finalize_completed_task(current_task):
         current_task.status = "done"
@@ -4495,16 +4663,20 @@ async def _run_task_with_user_content(task_id: str, content: str, kind: str):
         if kind != "chat":
             await _refresh_task_result(current_task)
         await codex_store.save_codex_task(current_task)
-        await codex_store.update_execution_process_status(exec_process.id, "Completed", exit_code=0, completed_at=datetime.now())
-        await event_bus.append({
-            "type": "task_status",
-            "task_id": task_id,
-            "issue_id": current_task.issue_id,
-            "session_id": current_task.session_id,
-            "status": "done",
-            "result": current_task.result,
-            "execution_process_id": exec_process.id,
-        })
+        await codex_store.update_execution_process_status(
+            exec_process.id, "Completed", exit_code=0, completed_at=datetime.now()
+        )
+        await event_bus.append(
+            {
+                "type": "task_status",
+                "task_id": task_id,
+                "issue_id": current_task.issue_id,
+                "session_id": current_task.session_id,
+                "status": "done",
+                "result": current_task.result,
+                "execution_process_id": exec_process.id,
+            }
+        )
         # The assistant reply is whatever the run produced. For chat it lives only
         # in the message log; for refine/rerun it's also the new task.result.
         assistant_content = current_task.result or "Task updated."
@@ -4514,7 +4686,11 @@ async def _run_task_with_user_content(task_id: str, content: str, kind: str):
         def _msg_attr(m, name):
             return m.get(name) if isinstance(m, dict) else getattr(m, name, None)
 
-        if last and _msg_attr(last, "role") == "assistant" and _msg_attr(last, "content") == assistant_content:
+        if (
+            last
+            and _msg_attr(last, "role") == "assistant"
+            and _msg_attr(last, "content") == assistant_content
+        ):
             return last
         assistant_message = CodexTaskMessage(
             id=str(uuid4()),
@@ -4525,31 +4701,45 @@ async def _run_task_with_user_content(task_id: str, content: str, kind: str):
             created_at=datetime.now(),
         )
         await codex_store.save_codex_task_message(assistant_message)
-        await event_bus.append({
-            "type": "message_created",
-            "execution_process_id": exec_process.id,
-            "message": {
-                "id": assistant_message.id,
-                "task_id": assistant_message.task_id,
-                "execution_process_id": assistant_message.execution_process_id,
-                "role": assistant_message.role,
-                "content": assistant_message.content,
-                "created_at": assistant_message.created_at.isoformat() if assistant_message.created_at else None,
+        await event_bus.append(
+            {
+                "type": "message_created",
+                "execution_process_id": exec_process.id,
+                "message": {
+                    "id": assistant_message.id,
+                    "task_id": assistant_message.task_id,
+                    "execution_process_id": assistant_message.execution_process_id,
+                    "role": assistant_message.role,
+                    "content": assistant_message.content,
+                    "created_at": assistant_message.created_at.isoformat()
+                    if assistant_message.created_at
+                    else None,
+                },
             }
-        })
+        )
         return assistant_message
 
     # Only wait for completion in mock mode; real manager relies on notifications
     if isinstance(get_codex_process_manager(), MockCodexProcessManager):
         task = await codex_store.load_codex_task(task_id) or task
         assistant_message = await _finalize_completed_task(task)
-        return {"message": message, "assistant_message": assistant_message, "task": task, "execution_process": exec_process}
+        return {
+            "message": message,
+            "assistant_message": assistant_message,
+            "task": task,
+            "execution_process": exec_process,
+        }
 
     # Real manager: return immediately; notification handler will update task state
     assistant_message = None
     if task.status == "done":
         assistant_message = await _finalize_completed_task(task)
-    return {"message": message, "assistant_message": assistant_message, "task": task, "execution_process": exec_process}
+    return {
+        "message": message,
+        "assistant_message": assistant_message,
+        "task": task,
+        "execution_process": exec_process,
+    }
 
 
 class ChatRequest(BaseModel):
@@ -4577,6 +4767,7 @@ async def send_codex_task_message(task_id: str, request: SendTaskMessageRequest)
 def _has_canonical_artifact_for_task(task) -> bool:
     """Check whether the role's canonical artifact exists on disk."""
     from app.application.issue_artifact_documents import IssueArtifactDocuments
+
     if not getattr(task, "workspace_path", None):
         return False
     docs = IssueArtifactDocuments()
@@ -4587,7 +4778,9 @@ def _has_canonical_artifact_for_task(task) -> bool:
     if role == "architect":
         return docs.architect_system_design_json_path(task.workspace_path, issue_id).exists()
     if role == "engineer":
-        return docs.engineer_implementation_md_path(task.workspace_path, issue_id, task_id=task.id).exists()
+        return docs.engineer_implementation_md_path(
+            task.workspace_path, issue_id, task_id=task.id
+        ).exists()
     if role == "qa":
         return docs.qa_plan_json_path(task.workspace_path, issue_id).exists()
     return False
@@ -4612,7 +4805,7 @@ async def refine_codex_task(task_id: str, request: RefineRequest):
     if not _has_canonical_artifact_for_task(task):
         raise HTTPException(
             status_code=409,
-            detail="无法 refine：当前任务尚未生成产物，请先完成 initial 运行",
+            detail="无法 refine：当前任务尚未生成产物，请先完成 initial 运行",  # noqa: RUF001
         )
     return await _run_task_with_user_content(task_id, request.content, kind="refine")
 
@@ -4644,7 +4837,7 @@ async def send_codex_task(task_id: str, request: SendRequest):
         if resolved_mode == "refine" and not _has_canonical_artifact_for_task(task):
             raise HTTPException(
                 status_code=409,
-                detail="无法 refine：当前任务尚未生成产物，请先完成 initial 运行",
+                detail="无法 refine：当前任务尚未生成产物，请先完成 initial 运行",  # noqa: RUF001
             )
     else:
         proposed = classify_intent(request.content)
@@ -4677,8 +4870,8 @@ async def rerun_codex_task(task_id: str, request: RerunRequest | None = None):
     """
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    from datetime import datetime
-    from app.domain.models import CodexTaskMessage
+    from datetime import datetime  # noqa: F401, I001
+    from app.domain.models import CodexTaskMessage  # noqa: F401
 
     task = await codex_store.load_codex_task(task_id)
     if task is None:
@@ -4688,9 +4881,16 @@ async def rerun_codex_task(task_id: str, request: RerunRequest | None = None):
     # must wait for previous task to be done.
     if task.sequence_index is not None and task.phase == "development" and task.sequence_index > 0:
         prev_index = task.sequence_index - 1
-        all_tasks = await codex_store.list_codex_tasks(session_id=task.session_id, issue_id=task.issue_id)
+        all_tasks = await codex_store.list_codex_tasks(
+            session_id=task.session_id, issue_id=task.issue_id
+        )
         prev_task = next(
-            (t for t in all_tasks if t.get("sequence_index") == prev_index and t.get("sequence_group") == task.sequence_group),
+            (
+                t
+                for t in all_tasks
+                if t.get("sequence_index") == prev_index
+                and t.get("sequence_group") == task.sequence_group
+            ),
             None,
         )
         if prev_task is None or prev_task.get("status") != "done":
@@ -4705,9 +4905,9 @@ async def rerun_codex_task(task_id: str, request: RerunRequest | None = None):
             run_model=request.model if request else None,
         )
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e))  # noqa: B904
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))  # noqa: B904
 
     # In mock mode the run finalizes synchronously; refresh task state for the response.
     if isinstance(get_codex_process_manager(), MockCodexProcessManager):
@@ -4737,11 +4937,11 @@ def _format_review_feedback(artifact) -> str:
     """Render a ReviewReportDocument into the parent task's review_comment."""
     review_parts = [artifact.reason]
     if artifact.suggestions:
-        review_parts.append("\n\n**改进建议：**")
+        review_parts.append("\n\n**改进建议：**")  # noqa: RUF001
         for i, suggestion in enumerate(artifact.suggestions, 1):
             review_parts.append(f"{i}. {suggestion}")
     if artifact.risks_identified:
-        review_parts.append("\n\n**识别的风险：**")
+        review_parts.append("\n\n**识别的风险：**")  # noqa: RUF001
         for i, risk in enumerate(artifact.risks_identified, 1):
             review_parts.append(f"{i}. {risk}")
     return "\n".join(review_parts)
@@ -4763,23 +4963,29 @@ async def _apply_automated_review_to_parent(parent_task_id: str, artifact) -> No
     parent_task.review_comment = _format_review_feedback(artifact)
     parent_task.updated_at = datetime.now()
     await codex_store.save_codex_task(parent_task)
-    await event_bus.append({
-        "type": "task_status",
-        "task_id": parent_task.id,
-        "issue_id": parent_task.issue_id,
-        "session_id": parent_task.session_id,
-        "status": parent_task.status,
-        "review_comment": parent_task.review_comment,
-    })
+    await event_bus.append(
+        {
+            "type": "task_status",
+            "task_id": parent_task.id,
+            "issue_id": parent_task.issue_id,
+            "session_id": parent_task.session_id,
+            "status": parent_task.status,
+            "review_comment": parent_task.review_comment,
+        }
+    )
     # Push to WebSocket for real-time update
     try:
         from app.interfaces.codex_ws import stream_manager
-        stream_manager.buffer_pending(parent_task.session_id, {
-            "type": "task_status",
-            "task_id": parent_task.id,
-            "status": parent_task.status,
-            "review_comment": parent_task.review_comment,
-        })
+
+        stream_manager.buffer_pending(
+            parent_task.session_id,
+            {
+                "type": "task_status",
+                "task_id": parent_task.id,
+                "status": parent_task.status,
+                "review_comment": parent_task.review_comment,
+            },
+        )
     except Exception:
         pass
 
@@ -4789,30 +4995,29 @@ async def submit_codex_task_for_review(task_id: str):
     """Mark a completed development task as awaiting review and trigger automated AI review."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    
     task = await codex_store.load_codex_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    
     if task.status != "done":
         raise HTTPException(status_code=409, detail="Task must be completed before submission")
-    
     # 1. Update original task status
     task.status = "awaiting_review"
     task.updated_at = datetime.now()
     await codex_store.save_codex_task(task)
-    
-    await event_bus.append({
-        "type": "task_status",
-        "task_id": task.id,
-        "issue_id": task.issue_id,
-        "session_id": task.session_id,
-        "status": "awaiting_review",
-    })
+    await event_bus.append(
+        {
+            "type": "task_status",
+            "task_id": task.id,
+            "issue_id": task.issue_id,
+            "session_id": task.session_id,
+            "status": "awaiting_review",
+        }
+    )
 
     # 2. Automatically spawn an Architect Review task
     print(f"DEBUG: Spawning automated review task for parent_task={task.id}")
     from app.domain.models import CodexTask
+
     review_task_id = str(uuid4())
     review_executor, review_provider, review_model, _, _ = await _resolve_task_runtime_config(task)
     review_task = CodexTask(
@@ -4834,12 +5039,13 @@ async def submit_codex_task_for_review(task_id: str):
     review_task.created_at = datetime.now()
     review_task.updated_at = datetime.now()
     await codex_store.save_codex_task(review_task)
-    
-    await event_bus.append({
-        "type": "task_created",
-        "session_id": task.session_id,
-        "task": _serialize_task_payload(review_task),
-    })
+    await event_bus.append(
+        {
+            "type": "task_created",
+            "session_id": task.session_id,
+            "task": _serialize_task_payload(review_task),
+        }
+    )
 
     # 2b. Deterministic hard short-circuit (B2/B3): if the Engineer claimed it
     # landed code but the worktree shows zero file changes, this is a
@@ -4853,7 +5059,7 @@ async def submit_codex_task_for_review(task_id: str):
         guard = compute_review_guard(
             task.workspace_path, task.issue_id or task.id, include_diff_summary=False
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("review guard computation failed for task %s: %s", task.id, exc)
         guard = None
 
@@ -4877,16 +5083,20 @@ async def submit_codex_task_for_review(task_id: str):
         # Mark the review task complete WITHOUT running the LLM, and write the
         # decision back onto the parent (parent -> rework).
         review_task.status = "done"
-        review_task.result = f"Review completed (framework guard): {synthetic.decision}. Reason: {synthetic.reason}"
+        review_task.result = (
+            f"Review completed (framework guard): {synthetic.decision}. Reason: {synthetic.reason}"
+        )
         review_task.updated_at = datetime.now()
         await codex_store.save_codex_task(review_task)
-        await event_bus.append({
-            "type": "task_status",
-            "task_id": review_task.id,
-            "issue_id": review_task.issue_id,
-            "session_id": review_task.session_id,
-            "status": review_task.status,
-        })
+        await event_bus.append(
+            {
+                "type": "task_status",
+                "task_id": review_task.id,
+                "issue_id": review_task.issue_id,
+                "session_id": review_task.session_id,
+                "status": review_task.status,
+            }
+        )
         await _apply_automated_review_to_parent(task.id, synthetic)
         return task
 
@@ -4894,7 +5104,7 @@ async def submit_codex_task_for_review(task_id: str):
     try:
         await run_codex_task(review_task_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start review task: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start review task: {e}")  # noqa: B904
 
     return task
 
@@ -4909,28 +5119,26 @@ async def review_codex_task(task_id: str, request: TaskReviewRequest):
     """Submit architect review for a task."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    
     task = await codex_store.load_codex_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    
     if request.decision == "approve":
         task.status = "done"
     else:
         task.status = "rework"
-    
     task.review_comment = request.comment
     task.updated_at = datetime.now()
     await codex_store.save_codex_task(task)
-    
-    await event_bus.append({
-        "type": "task_status",
-        "task_id": task.id,
-        "issue_id": task.issue_id,
-        "session_id": task.session_id,
-        "status": task.status,
-        "review_comment": task.review_comment,
-    })
+    await event_bus.append(
+        {
+            "type": "task_status",
+            "task_id": task.id,
+            "issue_id": task.issue_id,
+            "session_id": task.session_id,
+            "status": task.status,
+            "review_comment": task.review_comment,
+        }
+    )
     return task
 
 
@@ -4956,6 +5164,7 @@ async def answer_codex_task_clarification(task_id: str, request: AnswerClarifica
         raise HTTPException(status_code=404, detail="Task not found")
 
     from app.application.clarification import question_text
+
     question = question_text(task)
     if not question:
         raise HTTPException(status_code=409, detail="Task has no pending clarification")
@@ -4975,21 +5184,23 @@ async def answer_codex_task_clarification(task_id: str, request: AnswerClarifica
     task.updated_at = datetime.now()
     await codex_store.save_codex_task(task)
 
-    await event_bus.append({
-        "type": "task_status",
-        "task_id": task.id,
-        "issue_id": task.issue_id,
-        "session_id": task.session_id,
-        "status": "pending",
-        "review_comment": task.review_comment,
-    })
+    await event_bus.append(
+        {
+            "type": "task_status",
+            "task_id": task.id,
+            "issue_id": task.issue_id,
+            "session_id": task.session_id,
+            "status": "pending",
+            "review_comment": task.review_comment,
+        }
+    )
 
     try:
         await run_codex_task(task_id)
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to re-run task: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to re-run task: {exc}")  # noqa: B904
 
     refreshed = await codex_store.load_codex_task(task_id)
     return refreshed or task
@@ -5019,7 +5230,7 @@ async def resolve_approval(request: ResolveApprovalRequest):
     try:
         success = await mgr.resolve_approval(request.item_id, request.decision)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to resolve approval: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to resolve approval: {e}")  # noqa: B904
     if not success:
         raise HTTPException(status_code=404, detail="Pending approval not found")
     return {"resolved": True, "item_id": request.item_id, "decision": request.decision}
@@ -5033,6 +5244,7 @@ async def list_pending_approvals():
 
 
 # --- ExecutionProcess APIs ---
+
 
 @router.get("/codex/execution-processes")
 async def list_execution_processes(session_id: str | None = None, task_id: str | None = None):
@@ -5073,8 +5285,11 @@ async def get_execution_process_logs(process_id: str):
 
 # --- Runtime Catalog APIs ---
 
-from app.application.runtime_catalog_service import RuntimeCatalogService, RuntimeCatalogValidationError
-from app.domain.models import RuntimeCatalog
+from app.application.runtime_catalog_service import (  # noqa: E402
+    RuntimeCatalogService,
+    RuntimeCatalogValidationError,
+)  # noqa: E402, I001, RUF100
+from app.domain.models import RuntimeCatalog  # noqa: E402
 
 
 def _get_runtime_catalog_service() -> RuntimeCatalogService:
@@ -5175,7 +5390,7 @@ async def update_runtime_catalog(request: RuntimeCatalogRequest):
         catalog = await service.save_catalog(await _merge_existing_runtime_secrets(request.catalog))
         return _public_runtime_catalog(catalog)
     except RuntimeCatalogValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))  # noqa: B904
 
 
 @router.post("/runtime-catalog/validate")
@@ -5206,7 +5421,7 @@ async def test_runtime_executor(request: TestExecutorRequest):
 
     Returns {"success": true, "latency_ms": ...} or {"success": false, "error": "..."}
     """
-    import os
+    import os  # noqa: I001
     import time
     import httpx
 
@@ -5224,9 +5439,14 @@ async def test_runtime_executor(request: TestExecutorRequest):
     if provider_id == "None":
         provider_id = None
 
-    provider = next((p for p in executor.providers if p.id == provider_id), None) if provider_id else None
+    provider = (
+        next((p for p in executor.providers if p.id == provider_id), None) if provider_id else None
+    )
     if provider_id and provider is None:
-        raise HTTPException(status_code=400, detail=f"Provider '{provider_id}' not found in executor '{request.executor_id}'")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Provider '{provider_id}' not found in executor '{request.executor_id}'",
+        )
 
     model_id = request.model_id
     if model_id == "None" or model_id == "":
@@ -5237,13 +5457,17 @@ async def test_runtime_executor(request: TestExecutorRequest):
         model_id = None
 
     if model_id is None:
-        raise HTTPException(status_code=400, detail=f"No model specified for executor '{request.executor_id}'")
+        raise HTTPException(
+            status_code=400, detail=f"No model specified for executor '{request.executor_id}'"
+        )
 
     effective_endpoint = request.api_endpoint or executor.api_endpoint
     if provider and not effective_endpoint:
         model = next((m for m in provider.models if m.id == model_id), None)
         if model is None:
-            raise HTTPException(status_code=400, detail=f"Model '{model_id}' not found in provider '{provider_id}'")
+            raise HTTPException(
+                status_code=400, detail=f"Model '{model_id}' not found in provider '{provider_id}'"
+            )
 
     # Resolve endpoint + key with env-var fallback (UI placeholder promises this).
     executor_type = executor.executor_type
@@ -5340,7 +5564,10 @@ async def test_runtime_executor(request: TestExecutorRequest):
         if response.status_code == 200:
             return {"success": True, "latency_ms": round(latency_ms, 1)}
         else:
-            return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}: {response.text[:200]}",
+            }
     except httpx.TimeoutException:
         return {"success": False, "error": "Request timed out after 10s"}
     except Exception as e:
@@ -5348,6 +5575,7 @@ async def test_runtime_executor(request: TestExecutorRequest):
 
 
 # --- Agent CRUD (PR1: Workflow DAG, behind WORKFLOW_DAG_ENABLED) ---
+
 
 class AgentCreateRequest(BaseModel):
     name: str
@@ -5415,6 +5643,7 @@ async def create_agent(request: AgentCreateRequest):
     """
     store = _require_agent_store()
     from app.domain.models import Agent
+
     if not request.role_key.strip():
         raise HTTPException(status_code=400, detail="role_key is required")
     if not request.system_prompt_template.strip():
@@ -5442,7 +5671,9 @@ async def create_agent(request: AgentCreateRequest):
         default_model=request.default_model,
         artifact_subdir=request.artifact_subdir or f"node_{request.role_key}",
         persist_kind=request.persist_kind,
-        agent_tier=request.agent_tier if request.agent_tier in {"managed", "specialist", "custom"} else "custom",
+        agent_tier=request.agent_tier
+        if request.agent_tier in {"managed", "specialist", "custom"}
+        else "custom",
         triggers_replan_on_done=request.triggers_replan_on_done,
         triggers_replan_on_fail=request.triggers_replan_on_fail,
         is_builtin=False,
@@ -5461,7 +5692,11 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     # Builtin agents are partially editable: only trigger flags and prompt overrides.
     if agent.is_builtin:
-        forbidden_changes = {k for k, v in request.model_dump(exclude_unset=True).items() if v is not None and k not in {"triggers_replan_on_done", "triggers_replan_on_fail"}}
+        forbidden_changes = {
+            k
+            for k, v in request.model_dump(exclude_unset=True).items()
+            if v is not None and k not in {"triggers_replan_on_done", "triggers_replan_on_fail"}
+        }
         if forbidden_changes:
             raise HTTPException(
                 status_code=400,
@@ -5548,9 +5783,7 @@ async def get_issue_graph_stats(issue_id: str):
     # the pipeline-stages endpoint reads. We compute these even when the
     # graph itself isn't materialized yet so the DAG nodes look populated.
     worktree = issue.git_worktree_path if issue else None
-    issue_root: Path | None = (
-        Path(worktree) / "issues" / issue_id if worktree else None
-    )
+    issue_root: Path | None = Path(worktree) / "issues" / issue_id if worktree else None
 
     def _read_json(rel: str):
         if not issue_root:
@@ -5574,10 +5807,7 @@ async def get_issue_graph_stats(issue_id: str):
                 },
                 {"num": _safe_len(prd.get("goals")), "label": "goals"},
                 {
-                    "num": _safe_len(
-                        prd.get("requirements")
-                        or prd.get("functional_requirements")
-                    ),
+                    "num": _safe_len(prd.get("requirements") or prd.get("functional_requirements")),
                     "label": "reqs",
                 },
             ]
@@ -5589,9 +5819,7 @@ async def get_issue_graph_stats(issue_id: str):
                     "label": "component",
                 },
                 {
-                    "num": _safe_len(
-                        design.get("schemas") or design.get("data_models")
-                    ),
+                    "num": _safe_len(design.get("schemas") or design.get("data_models")),
                     "label": "schemas",
                 },
                 {
@@ -5611,11 +5839,9 @@ async def get_issue_graph_stats(issue_id: str):
                     text = f.read_text(encoding="utf-8")
                 except OSError:
                     continue
-                m_files = _re.search(
-                    r"(\d+)\s*files?", text, _re.IGNORECASE
-                )
+                m_files = _re.search(r"(\d+)\s*files?", text, _re.IGNORECASE)
                 m_add = _re.search(r"\+(\d+)", text)
-                m_rm = _re.search(r"[-−](\d+)\b", text)
+                m_rm = _re.search(r"[-−](\d+)\b", text)  # noqa: RUF001
                 if m_files:
                     files_changed = max(files_changed, int(m_files.group(1)))
                 if m_add:
@@ -5629,9 +5855,7 @@ async def get_issue_graph_stats(issue_id: str):
             ]
         if role_key == "qa":
             qa = _read_json("qa/qa_plan.json") or {}
-            results = (
-                qa.get("results") if isinstance(qa.get("results"), dict) else {}
-            )
+            results = qa.get("results") if isinstance(qa.get("results"), dict) else {}
             passed = qa.get("passed") or (results.get("passed") if results else 0) or 0
             failed = qa.get("failed") or (results.get("failed") if results else 0) or 0
             cmds = qa.get("recommended_commands") or qa.get("commands") or []
@@ -5700,28 +5924,19 @@ async def get_issue_graph_stats(issue_id: str):
                         seen_msg.add(msg_id)
                     tokens_in += int(usage.get("input_tokens") or 0)
                     tokens_out += int(usage.get("output_tokens") or 0)
-                    cache_in += int(
-                        usage.get("cache_read_input_tokens") or 0
-                    )
+                    cache_in += int(usage.get("cache_read_input_tokens") or 0)
 
         # Duration: prefer the node's started_at..completed_at window;
         # fall back to the task's created_at..updated_at.
         dur = None
-        start_iso = (
-            n.started_at.isoformat() if n.started_at else None
-        )
-        end_iso = (
-            n.completed_at.isoformat() if n.completed_at else None
-        )
+        start_iso = n.started_at.isoformat() if n.started_at else None
+        end_iso = n.completed_at.isoformat() if n.completed_at else None
         if start_iso and end_iso:
             try:
                 dur = max(
                     0,
                     int(
-                        (
-                            _dt.fromisoformat(end_iso)
-                            - _dt.fromisoformat(start_iso)
-                        ).total_seconds()
+                        (_dt.fromisoformat(end_iso) - _dt.fromisoformat(start_iso)).total_seconds()
                     ),
                 )
             except ValueError:
@@ -5732,9 +5947,7 @@ async def get_issue_graph_stats(issue_id: str):
                 try:
                     dur = max(
                         0,
-                        int(
-                            (task.updated_at - task.created_at).total_seconds()
-                        ),
+                        int((task.updated_at - task.created_at).total_seconds()),
                     )
                 except (TypeError, ValueError):
                     dur = None
@@ -5822,7 +6035,9 @@ async def _start_issue_conductor_graph(issue_id: str, *, store) -> dict:
         project = await project_service.get(issue.project_id)
         if project is not None:
             try:
-                branch, wt_path, base = await worktree_manager.prepare_issue_worktree(project, issue)
+                branch, wt_path, base = await worktree_manager.prepare_issue_worktree(
+                    project, issue
+                )
                 issue.git_branch = branch
                 issue.git_worktree_path = wt_path
                 issue.git_base_branch = base
@@ -5831,6 +6046,7 @@ async def _start_issue_conductor_graph(issue_id: str, *, store) -> dict:
                 pass  # No git project — run without worktree (tests, demo mode)
 
     from app.domain.models import WorkflowGraph
+
     now = datetime.now()
     graph = WorkflowGraph(
         id=str(uuid4()),
@@ -5853,7 +6069,10 @@ async def _start_issue_conductor_graph(issue_id: str, *, store) -> dict:
     if not project_id:
         raise HTTPException(status_code=409, detail="Issue has no associated project")
 
-    from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
+    from app.application.conductor_main_loop import (
+        recover_background_conductor_failure,
+        run_issue_conductor_loop,
+    )  # noqa: I001, RUF100
     from app.application.event_bus import _workflow_task_dispatcher
 
     handle = await registry.try_start(
@@ -5910,7 +6129,7 @@ def _handle_conductor_loop_done(task, *, issue_id: str, store, recover_fn) -> No
         issue_id,
         exc_info=(type(exc), exc, exc.__traceback__),
     )
-    asyncio.create_task(
+    asyncio.create_task(  # noqa: RUF006
         recover_fn(
             issue_id=issue_id,
             store=store,
@@ -5933,7 +6152,7 @@ async def _resolve_project_repo_path_async(project_id: str | None) -> str | None
         return None
     try:
         proj = await load_project(project_id)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         return None
     if proj is None:
         return None
@@ -5960,6 +6179,7 @@ async def codex_search(
     limit = max(1, min(50, limit))
     from app.application import knowledge_index_service as kidx
     from app.application.embedding_service import get_embedding_service
+
     emb = get_embedding_service()
     result = await kidx.search(
         codex_store,
@@ -5981,13 +6201,21 @@ async def codex_issue_conductor_log(issue_id: str):
     if not hasattr(codex_store, "list_conductor_decisions"):
         return {"decisions": []}
     decisions = await codex_store.list_conductor_decisions(issue_id)
-    return {"decisions": [
-        {"id": d.id, "issue_id": d.issue_id, "task_id": d.task_id,
-         "action": d.action, "reason": d.reason, "diff_json": d.diff_json,
-         "applied_at": d.applied_at.isoformat() if d.applied_at else None,
-         "created_at": d.created_at.isoformat() if d.created_at else None}
-        for d in decisions
-    ]}
+    return {
+        "decisions": [
+            {
+                "id": d.id,
+                "issue_id": d.issue_id,
+                "task_id": d.task_id,
+                "action": d.action,
+                "reason": d.reason,
+                "diff_json": d.diff_json,
+                "applied_at": d.applied_at.isoformat() if d.applied_at else None,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            }
+            for d in decisions
+        ]
+    }
 
 
 @router.get("/codex/issues/{issue_id}/conductor-turns")
@@ -6022,7 +6250,9 @@ async def codex_issue_conductor_turns(
                 "kind": turn.kind,
                 "payload": turn_payload,
                 "created_at": turn.created_at.isoformat() if turn.created_at else None,
-                "consumed_at": turn.consumed_at.isoformat() if getattr(turn, "consumed_at", None) else None,
+                "consumed_at": turn.consumed_at.isoformat()
+                if getattr(turn, "consumed_at", None)
+                else None,
             }
         )
     return {"turns": payload}
@@ -6062,7 +6292,9 @@ async def codex_issue_conductor_message(issue_id: str, request: IssueConductorMe
     issue = await codex_store.load_codex_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail="Issue not found")
-    if not hasattr(codex_store, "load_latest_conductor_task_for_issue") or not hasattr(codex_store, "enqueue_conductor_user_message"):
+    if not hasattr(codex_store, "load_latest_conductor_task_for_issue") or not hasattr(
+        codex_store, "enqueue_conductor_user_message"
+    ):
         raise HTTPException(status_code=501, detail="Conductor inbox not supported by this store")
     conductor_task = await codex_store.load_latest_conductor_task_for_issue(issue_id)
     if conductor_task is None or conductor_task.status not in {"running", "paused"}:
@@ -6072,7 +6304,7 @@ async def codex_issue_conductor_message(issue_id: str, request: IssueConductorMe
         raise HTTPException(status_code=400, detail="message is required")
     turn = await codex_store.enqueue_conductor_user_message(conductor_task.id, issue_id, text)
     if conductor_task.status == "paused":
-        from app.application.conductor_pause_registry import ConductorPauseRegistry
+        from app.application.conductor_pause_registry import ConductorPauseRegistry  # noqa: I001
         from app.application.conductor_main_loop import transition_conductor_phase
 
         payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
@@ -6124,7 +6356,7 @@ async def codex_issue_conductor_pause(issue_id: str):
         return {"ok": True, "conductor_task_id": conductor_task.id, "status": conductor_task.status}
     if conductor_task.status != "running":
         raise HTTPException(status_code=409, detail="Conductor loop is not running")
-    from app.application.conductor_pause_registry import ConductorPauseRegistry
+    from app.application.conductor_pause_registry import ConductorPauseRegistry  # noqa: I001
     from app.application.conductor_main_loop import transition_conductor_phase
 
     await ConductorPauseRegistry.instance().request_pause(conductor_task.id)
@@ -6154,7 +6386,7 @@ async def codex_issue_conductor_resume(issue_id: str):
     conductor_task = await codex_store.load_latest_conductor_task_for_issue(issue_id)
     if conductor_task is None or conductor_task.status != "paused":
         raise HTTPException(status_code=409, detail="Conductor loop is not paused")
-    from app.application.conductor_pause_registry import ConductorPauseRegistry
+    from app.application.conductor_pause_registry import ConductorPauseRegistry  # noqa: I001
     from app.application.conductor_main_loop import transition_conductor_phase
 
     payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
@@ -6179,7 +6411,8 @@ async def codex_issue_conductor_restart(issue_id: str):
     Marks any running/paused conductor task as failed, marks the current
     workflow graph as failed, then starts a fresh conductor loop.
     """
-    import asyncio
+    import asyncio  # noqa: F401
+
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     issue = await codex_store.load_codex_issue(issue_id)
@@ -6190,9 +6423,11 @@ async def codex_issue_conductor_restart(issue_id: str):
     # Cancel the live in-process session, then kill ALL conductor task rows
     # for this issue (not just the latest). Multiple rows can accumulate.
     from app.application.conductor_session_registry import ConductorSessionRegistry
+
     await ConductorSessionRegistry.instance().stop(issue_id)
     if hasattr(codex_store, "list_conductor_tasks"):
         from app.application.conductor_pause_registry import ConductorPauseRegistry
+
         _pause_reg = ConductorPauseRegistry.instance()
         all_running = await codex_store.list_conductor_tasks(status="running")
         all_paused = await codex_store.list_conductor_tasks(status="paused")
@@ -6209,23 +6444,32 @@ async def codex_issue_conductor_restart(issue_id: str):
     if old_graph is not None and old_graph.status in ("running", "pending"):
         old_graph.status = "failed"
         old_graph.updated_at = datetime.now()
-        await codex_store.save_workflow_graph(old_graph, nodes=old_graph.nodes, edges=old_graph.edges)
+        await codex_store.save_workflow_graph(
+            old_graph, nodes=old_graph.nodes, edges=old_graph.edges
+        )
 
     # Ensure worktree exists
     if not issue.git_worktree_path:
         try:
-            branch, wt_path, base = await worktree_manager.prepare_issue_worktree(run_project, issue)
+            branch, wt_path, base = await worktree_manager.prepare_issue_worktree(
+                run_project, issue
+            )
             issue.project_id = issue.project_id or run_project.id
             issue.git_branch = branch
             issue.git_worktree_path = wt_path
             issue.git_base_branch = base
             await codex_store.save_codex_issue(issue)
         except (GitError, WorktreeError) as exc:
-            raise HTTPException(status_code=500, detail=f"failed to prepare issue worktree: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"failed to prepare issue worktree: {exc}"
+            ) from exc
 
     project_id = issue.project_id or run_project.id
 
-    from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
+    from app.application.conductor_main_loop import (
+        recover_background_conductor_failure,
+        run_issue_conductor_loop,
+    )  # noqa: I001, RUF100
     from app.application.event_bus import _workflow_task_dispatcher
     from app.domain.models import WorkflowGraph
 
@@ -6270,7 +6514,8 @@ async def codex_issue_reset(issue_id: str):
     """Hard-reset an issue: cancel all in-flight tasks, wipe graph history,
     restore the issue to open state, and launch a fresh Conductor loop.
     """
-    import asyncio
+    import asyncio  # noqa: F401
+
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     issue = await codex_store.load_codex_issue(issue_id)
@@ -6280,12 +6525,14 @@ async def codex_issue_reset(issue_id: str):
 
     # 1. Cancel the live in-process session, then kill ALL conductor task rows
     from app.application.conductor_session_registry import ConductorSessionRegistry
+
     await ConductorSessionRegistry.instance().stop(issue_id)
     if hasattr(codex_store, "list_conductor_tasks"):
         from app.application.conductor_pause_registry import ConductorPauseRegistry
+
         _pause_reg = ConductorPauseRegistry.instance()
         for _status in ("running", "paused"):
-            for _ct in (await codex_store.list_conductor_tasks(status=_status) or []):
+            for _ct in await codex_store.list_conductor_tasks(status=_status) or []:
                 if getattr(_ct, "issue_id", None) != issue_id:
                     continue
                 await _pause_reg.request_pause(_ct.id)
@@ -6296,8 +6543,8 @@ async def codex_issue_reset(issue_id: str):
     # 2. Delete ALL codex tasks for this issue (full wipe, not just cancel)
     if hasattr(codex_store, "list_codex_tasks") and hasattr(codex_store, "delete_codex_task"):
         task_dicts = await codex_store.list_codex_tasks(issue_id=issue_id)
-        for td in (task_dicts or []):
-            try:
+        for td in task_dicts or []:
+            try:  # noqa: SIM105
                 await codex_store.delete_codex_task(td["id"])
             except Exception:
                 pass
@@ -6311,14 +6558,14 @@ async def codex_issue_reset(issue_id: str):
     # the issue worktree. A prior run may have already pruned git metadata while
     # leaving filesystem-only `swarm-<issue-id>-*` dirs that would block the next
     # dispatch_batch from creating the same paths.
-    try:
+    try:  # noqa: SIM105
         await worktree_manager.cleanup_issue_swarm_worktrees(run_project, issue)
     except Exception:
         pass
 
     # 5. Remove the git worktree and issue branch so generated code is fully
     # purged and the deterministic issue branch can be recreated below.
-    try:
+    try:  # noqa: SIM105
         await worktree_manager.cleanup_issue_worktree_for_reset(run_project, issue)
     except Exception:
         pass
@@ -6346,11 +6593,16 @@ async def codex_issue_reset(issue_id: str):
         issue.git_base_branch = base
         await codex_store.save_codex_issue(issue)
     except (GitError, WorktreeError) as exc:
-        raise HTTPException(status_code=500, detail=f"failed to prepare issue worktree: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"failed to prepare issue worktree: {exc}"
+        ) from exc
 
     project_id = issue.project_id or run_project.id
 
-    from app.application.conductor_main_loop import recover_background_conductor_failure, run_issue_conductor_loop
+    from app.application.conductor_main_loop import (
+        recover_background_conductor_failure,
+        run_issue_conductor_loop,
+    )  # noqa: I001, RUF100
     from app.application.event_bus import _workflow_task_dispatcher
     from app.domain.models import WorkflowGraph
 
@@ -6428,6 +6680,7 @@ async def list_conductors(project_id: str | None = None):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     from app.application.conductor_session_registry import ConductorSessionRegistry
+
     registry = ConductorSessionRegistry.instance()
     all_tasks = await codex_store.list_conductor_tasks() or []
     now = datetime.now()
@@ -6453,31 +6706,35 @@ async def list_conductors(project_id: str | None = None):
         phase_started_at = None
         duration_ms: float | None = None
         try:
-            logs = await codex_store.list_conductor_state_logs(ct.issue_id, limit=1, descending=True)
+            logs = await codex_store.list_conductor_state_logs(
+                ct.issue_id, limit=1, descending=True
+            )
             if logs:
                 phase_started_at = logs[0].transition_at
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             phase_started_at = None
         if phase_started_at is None:
             phase_started_at = ct.heartbeat_at or ct.updated_at
         if phase_started_at is not None and status.lower() == "running":
             duration_ms = max(0.0, (now - phase_started_at).total_seconds() * 1000)
 
-        sessions.append({
-            "conductor_task_id": ct.id,
-            "issue_id": ct.issue_id,
-            "issue_title": issue_title,
-            "project_id": ct.project_id,
-            "status": status,
-            "phase": phase,
-            "detail": detail,
-            "phase_started_at": phase_started_at.isoformat() if phase_started_at else None,
-            "phase_duration_ms": duration_ms,
-            "health": _conductor_health(status, phase, duration_ms),
-            "lease_owner": ct.lease_owner,
-            "alive": registry.is_conductor_task_alive(ct.issue_id, ct.id),
-            "updated_at": ct.updated_at.isoformat() if ct.updated_at else None,
-        })
+        sessions.append(
+            {
+                "conductor_task_id": ct.id,
+                "issue_id": ct.issue_id,
+                "issue_title": issue_title,
+                "project_id": ct.project_id,
+                "status": status,
+                "phase": phase,
+                "detail": detail,
+                "phase_started_at": phase_started_at.isoformat() if phase_started_at else None,
+                "phase_duration_ms": duration_ms,
+                "health": _conductor_health(status, phase, duration_ms),
+                "lease_owner": ct.lease_owner,
+                "alive": registry.is_conductor_task_alive(ct.issue_id, ct.id),
+                "updated_at": ct.updated_at.isoformat() if ct.updated_at else None,
+            }
+        )
     # Order: problems first (failed/stalled/danger/warn), then running, by recency.
     health_rank = {"failed": 0, "stalled": 1, "danger": 2, "warn": 3, "paused": 4, "ok": 5}
     sessions.sort(key=lambda s: (health_rank.get(s["health"], 9), s.get("updated_at") or ""))
@@ -6550,10 +6807,7 @@ async def codex_issue_conductor_phase_estimates(issue_id: str):
     estimates = await estimator.all_estimates()
     return {
         "issue_id": issue_id,
-        "estimates": {
-            phase: estimate.to_dict()
-            for phase, estimate in estimates.items()
-        },
+        "estimates": {phase: estimate.to_dict() for phase, estimate in estimates.items()},
     }
 
 
@@ -6662,7 +6916,9 @@ def _open_pr_task_candidate_from_apply_plan(proposal) -> dict:
         if isinstance(candidate, dict) and candidate.get("kind") == "open_pr_task"
     ]
     if len(open_pr_candidates) != 1:
-        raise ValueError("Self-improvement apply plan must contain exactly one open_pr_task candidate")
+        raise ValueError(
+            "Self-improvement apply plan must contain exactly one open_pr_task candidate"
+        )
     title = open_pr_candidates[0].get("title")
     body = open_pr_candidates[0].get("body")
     if not isinstance(title, str) or not title.strip() or not isinstance(body, str):
@@ -6702,7 +6958,7 @@ async def _record_self_improvement_activation_failure(*, proposal, error: str) -
             status="failed",
             error=error,
         )
-    except Exception:  # noqa: BLE001 - best-effort audit recording after activation failure
+    except Exception:  # noqa: BLE001, RUF100
         logger.warning(
             "failed to record self-improvement activation failure event for proposal %s",
             proposal.id,
@@ -6726,7 +6982,7 @@ def _self_improvement_conductor_event_result(issue_id: str, start_result: dict) 
 async def _start_self_improvement_activation_conductor(*, proposal, issue: CodexIssue) -> dict:
     try:
         start_result = await _start_issue_conductor_graph(issue.id, store=codex_store)
-    except Exception as exc:  # noqa: BLE001 - transport boundary records safe failed event
+    except Exception as exc:  # noqa: BLE001, RUF100
         error = exc.detail if isinstance(exc, HTTPException) else str(exc)
         error_text = str(error or exc.__class__.__name__)
         await _record_self_improvement_application_event(
@@ -6917,7 +7173,9 @@ async def activate_self_improvement_proposal_task(
             detail="Self-improvement proposal source issue is unavailable for this project",
         )
 
-    existing = await _load_existing_self_improvement_activation(project_id=project_id, proposal_id=proposal_id)
+    existing = await _load_existing_self_improvement_activation(
+        project_id=project_id, proposal_id=proposal_id
+    )
     if existing is not None:
         existing_issue, existing_event = existing
         activation = {
@@ -6966,12 +7224,14 @@ async def activate_self_improvement_proposal_task(
             event="created",
             base_branch=base,
         )
-        await event_bus.append({
-            "type": "issue_created",
-            "issue_id": issue.id,
-            "session_id": issue.session_id,
-            "issue": _codex_issue_to_dict(issue),
-        })
+        await event_bus.append(
+            {
+                "type": "issue_created",
+                "issue_id": issue.id,
+                "session_id": issue.session_id,
+                "issue": _codex_issue_to_dict(issue),
+            }
+        )
         event = await _record_self_improvement_application_event(
             proposal=proposal,
             action="open_pr_task",
@@ -6992,7 +7252,7 @@ async def activate_self_improvement_proposal_task(
             status_code=500,
             detail=f"failed to activate self-improvement proposal task: {error}",
         ) from exc
-    except Exception as exc:  # noqa: BLE001 - store failures lack typed errors
+    except Exception as exc:  # noqa: BLE001, RUF100
         error = str(exc) or exc.__class__.__name__
         await _record_self_improvement_activation_failure(proposal=proposal, error=error)
         raise HTTPException(
@@ -7050,7 +7310,9 @@ async def codex_project_self_improvement_proposal_applications(
         proposal_id=proposal_id,
         limit=limit,
     )
-    return {"applications": [_self_improvement_application_event_to_dict(event) for event in events]}
+    return {
+        "applications": [_self_improvement_application_event_to_dict(event) for event in events]
+    }
 
 
 @router.post("/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/apply")
@@ -7195,7 +7457,9 @@ async def codex_project_conductor_state(project_id: str):
         "hot_tokens": state.hot_tokens,
         "warm_tokens": state.warm_tokens,
         "total_tasks_handled": state.total_tasks_handled,
-        "last_compaction_at": state.last_compaction_at.isoformat() if state.last_compaction_at else None,
+        "last_compaction_at": state.last_compaction_at.isoformat()
+        if state.last_compaction_at
+        else None,
         "updated_at": state.updated_at.isoformat() if state.updated_at else None,
     }
 
@@ -7243,7 +7507,9 @@ async def codex_project_conductor_schedule_review(project_id: str):
 
 
 @router.post("/codex/projects/{project_id}/conductor/start-loop")
-async def codex_project_conductor_start_loop(project_id: str, request: ProjectConductorStartLoopRequest):
+async def codex_project_conductor_start_loop(
+    project_id: str, request: ProjectConductorStartLoopRequest
+):
     """Run the Phase 6 ProjectConductor Anthropic tool-use loop."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
@@ -7341,7 +7607,7 @@ async def codex_project_conductor_start_loop(project_id: str, request: ProjectCo
                     "status": result.status,
                 },
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             logger.debug("ProjectConductor loop event emit failed", exc_info=True)
     return payload
 
@@ -7351,7 +7617,7 @@ async def codex_project_conductor_stream(project_id: str):
     """SSE replay of recent ProjectConductor loop/tool events."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import StreamingResponse  # noqa: I001
     from app.application.project_conductor import ProjectConductor
 
     project = await codex_store.load_project(project_id)
@@ -7403,17 +7669,19 @@ async def codex_issue_subagent_results(issue_id: str):
                 artifact = json.loads(t["result_json"])
             except (json.JSONDecodeError, TypeError):
                 artifact = None
-        results.append({
-            "task_id": t["id"],
-            "role": t.get("role") or "unknown",
-            "title": t.get("title") or "",
-            "status": t.get("status"),
-            "task_kind": t.get("task_kind") or "initial",
-            "parent_task_id": t.get("parent_task_id"),
-            "summary": t.get("result") or "",
-            "artifact_json": artifact,
-            "updated_at": t.get("updated_at"),
-        })
+        results.append(
+            {
+                "task_id": t["id"],
+                "role": t.get("role") or "unknown",
+                "title": t.get("title") or "",
+                "status": t.get("status"),
+                "task_kind": t.get("task_kind") or "initial",
+                "parent_task_id": t.get("parent_task_id"),
+                "summary": t.get("result") or "",
+                "artifact_json": artifact,
+                "updated_at": t.get("updated_at"),
+            }
+        )
     return results
 
 
@@ -7438,6 +7706,7 @@ async def codex_project_conductor_message(project_id: str, request: ProjectCondu
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     from app.application.project_conductor import ProjectConductor
+
     conductor = ProjectConductor(project_id=project_id, store=codex_store)
     await conductor.append_hot_event(role="user", content=request.message)
     return {"status": "ok"}
@@ -7477,6 +7746,7 @@ async def codex_issue_similar(issue_id: str, k: int = 5):
     k = max(1, min(20, k))
     from app.application import knowledge_index_service as kidx
     from app.application.embedding_service import get_embedding_service
+
     items = await kidx.find_similar_issues(
         codex_store, issue_id, k=k, embedding_service=get_embedding_service()
     )
@@ -7491,6 +7761,7 @@ async def codex_reindex(project_id: str | None = None):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     from app.application import knowledge_index_service as kidx
     from app.application.embedding_service import get_embedding_service
+
     stats = await kidx.reindex_all(
         codex_store, project_id=project_id, embedding_service=get_embedding_service()
     )
@@ -7501,6 +7772,7 @@ async def codex_reindex(project_id: str | None = None):
 async def codex_embedding_status():
     """Tells the frontend whether semantic search is online."""
     from app.application.embedding_service import get_embedding_service
+
     emb = get_embedding_service()
     return {
         "enabled": emb.enabled,
@@ -7514,6 +7786,7 @@ async def get_team_notes(project_id: str, include_deleted: bool = False):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     from app.application.team_notes_service import team_notes
+
     repo_path = await _resolve_project_repo_path_async(project_id)
     raw = team_notes.read_markdown(repo_path)
     blocks = await team_notes.list_blocks(
@@ -7535,6 +7808,7 @@ async def delete_team_notes_block(project_id: str, block_id: str):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     from app.application.team_notes_service import team_notes
+
     await team_notes.soft_delete(codex_store, project_id, block_id)
     return {"ok": True, "block_id": block_id, "deleted": True}
 
@@ -7544,6 +7818,7 @@ async def restore_team_notes_block(project_id: str, block_id: str):
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     from app.application.team_notes_service import team_notes
+
     await team_notes.restore(codex_store, project_id, block_id)
     return {"ok": True, "block_id": block_id, "deleted": False}
 
@@ -7553,6 +7828,7 @@ async def pin_team_notes_block(project_id: str, block_id: str, body: TeamNotesPi
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
     from app.application.team_notes_service import team_notes
+
     await team_notes.set_pinned(codex_store, project_id, block_id, body.pinned)
     return {"ok": True, "block_id": block_id, "pinned": body.pinned}
 
@@ -7579,46 +7855,54 @@ async def trigger_benchmark_run(body: dict = Body(...)):
     # only needs to know that ``body`` is a JSON object — we mark
     # it with ``Body(...)`` to keep it out of the query string.
     from benchmark import api as benchmark_api
+
     return await benchmark_api.trigger_run(body)
 
 
 @router.get("/codex/benchmark/runs")
 async def list_benchmark_runs(limit: int = 50):
     from benchmark import api as benchmark_api
+
     return benchmark_api.list_runs(limit=limit)
 
 
 @router.get("/codex/benchmark/runs/{run_id}")
 async def get_benchmark_run(run_id: str):
     from benchmark import api as benchmark_api
+
     return benchmark_api.get_run(run_id)
 
 
 @router.get("/codex/benchmark/runs/{run_id}/diff")
 async def get_benchmark_run_diff(run_id: str):
     from benchmark import api as benchmark_api
+
     return benchmark_api.get_run_diff(run_id)
 
 
 @router.get("/codex/benchmark/baseline")
 async def get_benchmark_baseline():
     from benchmark import api as benchmark_api
+
     return benchmark_api.get_baseline()
 
 
 @router.post("/codex/benchmark/baseline/{run_id}")
 async def set_benchmark_baseline(run_id: str):
     from benchmark import api as benchmark_api
+
     return benchmark_api.set_baseline(run_id)
 
 
 @router.get("/codex/benchmark/jobs/{job_id}")
 async def get_benchmark_job(job_id: str):
     from benchmark import api as benchmark_api
+
     return benchmark_api.get_job(job_id)
 
 
 @router.get("/codex/benchmark/calibration")
 async def get_benchmark_calibration(floor: float = 0.7):
     from benchmark import api as benchmark_api
+
     return benchmark_api.get_calibration_report(floor=floor)

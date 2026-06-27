@@ -4,6 +4,7 @@ Phase 5 keeps this deterministic by default: compaction and retrieval are
 local summaries so the feature works without adding a vector service or extra
 LLM spend. The storage model is ready for a richer embedding backend later.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,14 +43,12 @@ def _safe_json_list(raw: str | None) -> list:
 
 
 def _tokenize(text: str) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
-        if len(token) >= 3
-    }
+    return {token for token in re.findall(r"[\w\u4e00-\u9fff]+", text.lower()) if len(token) >= 3}
 
 
-async def _run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> subprocess.CompletedProcess[str]:
+async def _run_subprocess(
+    args: list[str], *, cwd: str, timeout_s: int = 30
+) -> subprocess.CompletedProcess[str]:
     def _run() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             args,
@@ -101,7 +100,12 @@ class ProjectConductor:
             state,
             {"role": "user", "kind": task.task_kind, "content": question, "task_id": task.id},
         )
-        answer_event = {"role": "project_conductor", "kind": "answer", "content": answer, "task_id": task.id}
+        answer_event = {
+            "role": "project_conductor",
+            "kind": "answer",
+            "content": answer,
+            "task_id": task.id,
+        }
         if github_pr_followup is not None:
             answer_event["github_pr_followup"] = github_pr_followup
         await self._append_hot_without_compaction(
@@ -132,8 +136,12 @@ class ProjectConductor:
                 run_subprocess=_run_subprocess,
                 auto_merge=True,
             )
-        except Exception as exc:  # noqa: BLE001 - scheduled reviews are best-effort supervisor work.
-            logger.exception("scheduled GitHub PR follow-up failed project_id=%s task_id=%s", self.project_id, task.id)
+        except Exception as exc:  # noqa: BLE001, RUF100
+            logger.exception(
+                "scheduled GitHub PR follow-up failed project_id=%s task_id=%s",
+                self.project_id,
+                task.id,
+            )
             return {"status": "failed", "error": str(exc)}
         return summary.to_dict()
 
@@ -180,7 +188,9 @@ class ProjectConductor:
         await self.store.save_project_conductor_state(state)
         return state
 
-    async def answer_question(self, question: str, *, state: ProjectConductorState | None = None) -> str:
+    async def answer_question(
+        self, question: str, *, state: ProjectConductorState | None = None
+    ) -> str:
         state = state or await self.get_or_create_state()
         warm = _safe_json_list(state.warm_summaries_json)
         warm_text = "\n".join(
@@ -245,7 +255,9 @@ class ProjectConductor:
         except OSError:
             return ""
 
-    async def _append_hot_without_compaction(self, state: ProjectConductorState, event: dict) -> None:
+    async def _append_hot_without_compaction(
+        self, state: ProjectConductorState, event: dict
+    ) -> None:
         hot = _safe_json_list(state.hot_thread_json)
         hot.append(event)
         state.hot_thread_json = json.dumps(hot, ensure_ascii=False, default=str)
@@ -264,12 +276,14 @@ class ProjectConductor:
             return
         summary = self._summarize_events(hot)
         warm = _safe_json_list(state.warm_summaries_json)
-        warm.append({
-            "id": str(uuid4()),
-            "summary": summary,
-            "event_count": len(hot),
-            "created_at": datetime.now().isoformat(),
-        })
+        warm.append(
+            {
+                "id": str(uuid4()),
+                "summary": summary,
+                "event_count": len(hot),
+                "created_at": datetime.now().isoformat(),
+            }
+        )
         state.hot_thread_json = "[]"
         state.hot_tokens = 0
         state.warm_summaries_json = json.dumps(warm, ensure_ascii=False)

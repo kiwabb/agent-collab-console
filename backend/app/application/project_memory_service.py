@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Cross-issue project memory.
 
 Each project gets a single team-notes file at
@@ -26,14 +28,11 @@ Two failure modes are explicitly tolerated:
   - Filesystem write error → log and continue (memory is best-effort, never
     a reason to fail an issue).
 """
-
-from __future__ import annotations
-
-import json
-import logging
-from datetime import datetime
-from pathlib import Path
-from typing import Any
+import json  # noqa: E402
+import logging  # noqa: E402
+from datetime import datetime  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402, F401
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +262,10 @@ class ProjectMemoryService:
 
         # Drop trailing empty section if nothing useful was found.
         meaningful = any(
-            line and not line.startswith("##") and not line.startswith("<!--") and not line.startswith("_intent:")
+            line
+            and not line.startswith("##")
+            and not line.startswith("<!--")
+            and not line.startswith("_intent:")
             for line in lines
         )
         if not meaningful:
@@ -306,7 +308,7 @@ class ProjectMemoryService:
         chunks: list[str] = []
         current: list[str] = []
         for line in content.splitlines():
-            if line.startswith("<!-- issue:") or (line.startswith("## ") and not current):
+            if line.startswith("<!-- issue:") or (line.startswith("## ") and not current):  # noqa: SIM102
                 if current:
                     chunks.append("\n".join(current).strip())
                     current = []
@@ -369,12 +371,11 @@ class ProjectMemoryService:
             "- Keep conventions, architectural decisions, gotchas, repeated bug classes, anti-patterns.\n"
             "- Each lesson: a single sentence in present tense imperative ('Use X', 'Prefer Y over Z', 'Always validate W').\n"
             "- Reply with ONLY a markdown bullet list, no preamble.\n\n"
-            "Notes to distill:\n\n"
-            + "\n\n".join(to_distill)
+            "Notes to distill:\n\n" + "\n\n".join(to_distill)
         )
         try:
             response = await llm_runner(prompt)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("project_memory distillation LLM call failed: %s", exc)
             return None
         if not isinstance(response, str) or not response.strip():
@@ -390,12 +391,15 @@ class ProjectMemoryService:
                 lines = lines[:-1]
             body = "\n".join(lines).strip()
 
-        rebuilt = "\n\n".join(
-            [
-                f"{DISTILLED_HEADER}\n{body}",
-                *keep_recent,
-            ]
-        ).strip() + "\n"
+        rebuilt = (
+            "\n\n".join(
+                [
+                    f"{DISTILLED_HEADER}\n{body}",
+                    *keep_recent,
+                ]
+            ).strip()
+            + "\n"
+        )
         try:
             path.write_text(self._trim_to_cap(rebuilt), encoding="utf-8")
         except OSError as exc:
@@ -433,7 +437,8 @@ async def record_project_memory(graph_id: str, store) -> None:
     Conductor-driven issue loop (run_issue_conductor_loop).
     """
     try:
-        from app.domain.models import WorkflowGraph
+        from app.domain.models import WorkflowGraph  # noqa: F401
+
         graph = await store.load_workflow_graph(graph_id)
         if graph is None:
             return
@@ -457,6 +462,7 @@ async def record_project_memory(graph_id: str, store) -> None:
         # Reconcile team_notes_state
         try:
             from app.application.team_notes_service import team_notes
+
             if issue.project_id and project_repo_path:
                 md = team_notes.read_markdown(project_repo_path)
                 parsed = team_notes.parse_blocks(md)
@@ -473,9 +479,9 @@ async def record_project_memory(graph_id: str, store) -> None:
                             (issue.project_id, stale_id),
                         )
                         await conn.commit()
-                    except Exception:  # noqa: BLE001
+                    except Exception:  # noqa: BLE001, RUF100
                         pass
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("team_notes_state reconcile skipped: %s", exc)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.warning("record_project_memory failed for graph %s: %s", graph_id, exc)

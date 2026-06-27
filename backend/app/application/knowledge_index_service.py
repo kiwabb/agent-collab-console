@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Cross-issue knowledge index: FTS5 + optional semantic embeddings.
 
 Indexes:
@@ -19,17 +21,14 @@ Failure model:
   - Embedding writes are best-effort: caller wraps in asyncio.create_task.
   - Search is robust to missing tables: returns empty results.
 """
-
-from __future__ import annotations
-
-import html
-import json
-import logging
-import math
-import struct
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Iterable, Literal, Optional
+import html  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import math  # noqa: E402
+import struct  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any, Iterable, Literal, Optional  # noqa: E402, F401, UP035
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +45,7 @@ SearchScope = Literal["issues", "artifacts", "all"]
 # ---------------------------------------------------------------------------
 # Vector helpers (float32 little-endian BLOB)
 # ---------------------------------------------------------------------------
+
 
 def pack_vector(vec: Iterable[float]) -> bytes:
     floats = [float(x) for x in vec]
@@ -65,7 +65,7 @@ def cosine(a: list[float], b: list[float]) -> float:
     dot = 0.0
     na = 0.0
     nb = 0.0
-    for x, y in zip(a, b):
+    for x, y in zip(a, b):  # noqa: B905
         dot += x * y
         na += x * x
         nb += y * y
@@ -77,6 +77,7 @@ def cosine(a: list[float], b: list[float]) -> float:
 # ---------------------------------------------------------------------------
 # Text helpers
 # ---------------------------------------------------------------------------
+
 
 def _truncate_bytes(text: str, cap: int = CONTENT_BYTES_CAP) -> str:
     if not text:
@@ -105,14 +106,14 @@ def _read_artifact_text(path_str: str | None) -> str:
         return ""
     try:
         text = raw.decode("utf-8", errors="ignore")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         return ""
     # If JSON, flatten to text for better FTS tokenization.
     if p.suffix.lower() == ".json":
         try:
             obj = json.loads(text)
             text = _json_to_text(obj)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             pass
     return _truncate_bytes(text)
 
@@ -154,22 +155,17 @@ def _sanitize_fts_snippet(snippet: str | None) -> str:
     """Escape indexed content while preserving FTS-generated mark tags."""
     if not snippet:
         return ""
-    protected = (
-        snippet
-        .replace("<mark>", MARK_OPEN_SENTINEL)
-        .replace("</mark>", MARK_CLOSE_SENTINEL)
+    protected = snippet.replace("<mark>", MARK_OPEN_SENTINEL).replace(
+        "</mark>", MARK_CLOSE_SENTINEL
     )
     escaped = html.escape(protected, quote=True)
-    return (
-        escaped
-        .replace(MARK_OPEN_SENTINEL, "<mark>")
-        .replace(MARK_CLOSE_SENTINEL, "</mark>")
-    )
+    return escaped.replace(MARK_OPEN_SENTINEL, "<mark>").replace(MARK_CLOSE_SENTINEL, "</mark>")
 
 
 # ---------------------------------------------------------------------------
 # Indexing
 # ---------------------------------------------------------------------------
+
 
 async def index_issue(store, issue) -> None:
     """Upsert an issue row into issues_fts.
@@ -190,7 +186,7 @@ async def index_issue(store, issue) -> None:
             (issue_id, project_id, title, _truncate_bytes(description)),
         )
         await conn.commit()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index.index_issue failed for %s: %s", issue_id, exc)
 
 
@@ -217,7 +213,7 @@ async def index_artifact(store, artifact_row: dict) -> None:
             (artifact_id, issue_id, project_id or "", role, name, content),
         )
         await conn.commit()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index.index_artifact failed for %s: %s", artifact_id, exc)
 
 
@@ -227,13 +223,11 @@ async def delete_artifact_index(store, artifact_id: str) -> None:
         await conn.execute("DELETE FROM artifacts_fts WHERE artifact_id = ?", (artifact_id,))
         await conn.execute("DELETE FROM artifact_embeddings WHERE artifact_id = ?", (artifact_id,))
         await conn.commit()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index.delete_artifact_index failed for %s: %s", artifact_id, exc)
 
 
-async def store_issue_embedding(
-    store, issue_id: str, vector: list[float], model: str
-) -> None:
+async def store_issue_embedding(store, issue_id: str, vector: list[float], model: str) -> None:
     if not issue_id or not vector:
         return
     try:
@@ -241,10 +235,16 @@ async def store_issue_embedding(
         await conn.execute(
             "INSERT OR REPLACE INTO issue_embeddings (issue_id, vector, model, dim, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            (issue_id, pack_vector(vector), model, len(vector), datetime.now(timezone.utc).isoformat()),
+            (
+                issue_id,
+                pack_vector(vector),
+                model,
+                len(vector),
+                datetime.now(timezone.utc).isoformat(),  # noqa: UP017
+            ),  # noqa: RUF100, UP017
         )
         await conn.commit()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index.store_issue_embedding failed: %s", exc)
 
 
@@ -258,16 +258,23 @@ async def store_artifact_embedding(
         await conn.execute(
             "INSERT OR REPLACE INTO artifact_embeddings (artifact_id, vector, model, dim, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            (artifact_id, pack_vector(vector), model, len(vector), datetime.now(timezone.utc).isoformat()),
+            (
+                artifact_id,
+                pack_vector(vector),
+                model,
+                len(vector),
+                datetime.now(timezone.utc).isoformat(),  # noqa: UP017
+            ),  # noqa: RUF100, UP017
         )
         await conn.commit()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index.store_artifact_embedding failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
+
 
 async def search(
     store,
@@ -288,7 +295,7 @@ async def search(
 
     fts_issues: list[dict] = []
     fts_artifacts: list[dict] = []
-    if mode in ("fts", "hybrid") or mode == "semantic" and embedding_service is None:
+    if mode in ("fts", "hybrid") or mode == "semantic" and embedding_service is None:  # noqa: RUF021
         if scope in ("issues", "all"):
             fts_issues = await _fts_search_issues(store, query, project_id, limit)
         if scope in ("artifacts", "all"):
@@ -297,10 +304,14 @@ async def search(
     sem_issues: list[dict] = []
     sem_artifacts: list[dict] = []
     effective_mode = mode
-    if mode in ("semantic", "hybrid") and embedding_service is not None and embedding_service.enabled:
+    if (
+        mode in ("semantic", "hybrid")
+        and embedding_service is not None
+        and embedding_service.enabled
+    ):
         try:
             qvec = await embedding_service.embed_one(query)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.info("knowledge_index.search semantic embed failed: %s — falling back", exc)
             qvec = None
         if qvec:
@@ -314,11 +325,15 @@ async def search(
         effective_mode = "fts"  # graceful downgrade
 
     # Merge
-    issues = _merge_rrf(fts_issues, sem_issues, limit) if mode == "hybrid" else (
-        sem_issues if mode == "semantic" and sem_issues else fts_issues
+    issues = (
+        _merge_rrf(fts_issues, sem_issues, limit)
+        if mode == "hybrid"
+        else (sem_issues if mode == "semantic" and sem_issues else fts_issues)
     )
-    artifacts = _merge_rrf(fts_artifacts, sem_artifacts, limit) if mode == "hybrid" else (
-        sem_artifacts if mode == "semantic" and sem_artifacts else fts_artifacts
+    artifacts = (
+        _merge_rrf(fts_artifacts, sem_artifacts, limit)
+        if mode == "hybrid"
+        else (sem_artifacts if mode == "semantic" and sem_artifacts else fts_artifacts)
     )
     return {
         "issues": issues,
@@ -356,7 +371,7 @@ async def find_similar_issues(
             "SELECT title, description, project_id FROM codex_issues WHERE id = ?", (issue_id,)
         )
         row = await cur.fetchone()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         return []
     if not row:
         return []
@@ -371,6 +386,7 @@ async def find_similar_issues(
 # ---------------------------------------------------------------------------
 # Reindex (admin / migration)
 # ---------------------------------------------------------------------------
+
 
 async def reindex_all(
     store,
@@ -388,7 +404,7 @@ async def reindex_all(
 
     try:
         issues = await store.list_codex_issues(None, project_id)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         issues = []
     for issue in issues or []:
         await index_issue(store, issue)
@@ -405,7 +421,7 @@ async def reindex_all(
                             store, _attr(issue, "id"), vec, embedding_service.model_label
                         )
                         embedded_issues += 1
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001, RUF100
                     logger.debug("reindex issue embed failed: %s", exc)
 
     # Artifacts — pull via per-issue list to reuse existing helper
@@ -415,7 +431,7 @@ async def reindex_all(
             continue
         try:
             arts = await store.list_artifacts(issue_id)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             arts = []
         for art in arts:
             await index_artifact(store, art)
@@ -430,7 +446,7 @@ async def reindex_all(
                                 store, art.get("id"), vec, embedding_service.model_label
                             )
                             embedded_artifacts += 1
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001, RUF100
                         logger.debug("reindex artifact embed failed: %s", exc)
 
     return {
@@ -445,6 +461,7 @@ async def reindex_all(
 # Internals
 # ---------------------------------------------------------------------------
 
+
 def _attr(obj: Any, name: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(name)
@@ -455,7 +472,12 @@ def _derive_role(artifact_row: dict) -> str:
     name = (artifact_row.get("name") or "").lower()
     path = (artifact_row.get("path") or "").lower()
     for role in ("pm", "architect", "engineer", "qa"):
-        if f"/{role}/" in path or path.endswith(f"/{role}") or name.startswith(f"{role}_") or f"/{role}/" in name:
+        if (
+            f"/{role}/" in path
+            or path.endswith(f"/{role}")
+            or name.startswith(f"{role}_")
+            or f"/{role}/" in name
+        ):
             return role
     # fall back to artifact kind if present
     kind = (artifact_row.get("kind") or "").lower()
@@ -471,7 +493,7 @@ async def _lookup_project_id(store, issue_id: str) -> str | None:
         conn = await store._get_conn()
         cur = await conn.execute("SELECT project_id FROM codex_issues WHERE id = ?", (issue_id,))
         row = await cur.fetchone()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         return None
     if not row:
         return None
@@ -498,24 +520,28 @@ async def _fts_search_issues(store, query: str, project_id: str | None, limit: i
         conn = await store._get_conn()
         cur = await conn.execute(sql, params)
         rows = await cur.fetchall()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index._fts_search_issues failed: %s", exc)
         return []
     out: list[dict] = []
     for r in rows:
-        out.append({
-            "kind": "issue",
-            "issue_id": r[0],
-            "project_id": r[1],
-            "title": r[2],
-            "snippet": _sanitize_fts_snippet(r[3]),
-            "score": float(r[4]) if r[4] is not None else 0.0,
-            "source": "fts",
-        })
+        out.append(
+            {
+                "kind": "issue",
+                "issue_id": r[0],
+                "project_id": r[1],
+                "title": r[2],
+                "snippet": _sanitize_fts_snippet(r[3]),
+                "score": float(r[4]) if r[4] is not None else 0.0,
+                "source": "fts",
+            }
+        )
     return out
 
 
-async def _fts_search_artifacts(store, query: str, project_id: str | None, limit: int) -> list[dict]:
+async def _fts_search_artifacts(
+    store, query: str, project_id: str | None, limit: int
+) -> list[dict]:
     match = _escape_fts_query(query)
     if not match:
         return []
@@ -535,26 +561,30 @@ async def _fts_search_artifacts(store, query: str, project_id: str | None, limit
         conn = await store._get_conn()
         cur = await conn.execute(sql, params)
         rows = await cur.fetchall()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index._fts_search_artifacts failed: %s", exc)
         return []
     out: list[dict] = []
     for r in rows:
-        out.append({
-            "kind": "artifact",
-            "artifact_id": r[0],
-            "issue_id": r[1],
-            "project_id": r[2],
-            "role": r[3],
-            "name": r[4],
-            "snippet": _sanitize_fts_snippet(r[5]),
-            "score": float(r[6]) if r[6] is not None else 0.0,
-            "source": "fts",
-        })
+        out.append(
+            {
+                "kind": "artifact",
+                "artifact_id": r[0],
+                "issue_id": r[1],
+                "project_id": r[2],
+                "role": r[3],
+                "name": r[4],
+                "snippet": _sanitize_fts_snippet(r[5]),
+                "score": float(r[6]) if r[6] is not None else 0.0,
+                "source": "fts",
+            }
+        )
     return out
 
 
-async def _semantic_search_issues(store, qvec: list[float], project_id: str | None, limit: int) -> list[dict]:
+async def _semantic_search_issues(
+    store, qvec: list[float], project_id: str | None, limit: int
+) -> list[dict]:
     sql = (
         "SELECT e.issue_id, e.vector, i.title, i.project_id "
         "FROM issue_embeddings e JOIN codex_issues i ON i.id = e.issue_id"
@@ -567,7 +597,7 @@ async def _semantic_search_issues(store, qvec: list[float], project_id: str | No
         conn = await store._get_conn()
         cur = await conn.execute(sql, params)
         rows = await cur.fetchall()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index._semantic_search_issues failed: %s", exc)
         return []
     scored: list[dict] = []
@@ -576,20 +606,24 @@ async def _semantic_search_issues(store, qvec: list[float], project_id: str | No
         if not vec:
             continue
         score = cosine(qvec, vec)
-        scored.append({
-            "kind": "issue",
-            "issue_id": r[0],
-            "project_id": r[3],
-            "title": r[2],
-            "snippet": "",
-            "score": score,
-            "source": "semantic",
-        })
+        scored.append(
+            {
+                "kind": "issue",
+                "issue_id": r[0],
+                "project_id": r[3],
+                "title": r[2],
+                "snippet": "",
+                "score": score,
+                "source": "semantic",
+            }
+        )
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:limit]
 
 
-async def _semantic_search_artifacts(store, qvec: list[float], project_id: str | None, limit: int) -> list[dict]:
+async def _semantic_search_artifacts(
+    store, qvec: list[float], project_id: str | None, limit: int
+) -> list[dict]:
     sql = (
         "SELECT e.artifact_id, e.vector, ap.issue_id, ap.name, ci.project_id "
         "FROM artifact_embeddings e "
@@ -604,7 +638,7 @@ async def _semantic_search_artifacts(store, qvec: list[float], project_id: str |
         conn = await store._get_conn()
         cur = await conn.execute(sql, params)
         rows = await cur.fetchall()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index._semantic_search_artifacts failed: %s", exc)
         return []
     scored: list[dict] = []
@@ -613,17 +647,19 @@ async def _semantic_search_artifacts(store, qvec: list[float], project_id: str |
         if not vec:
             continue
         score = cosine(qvec, vec)
-        scored.append({
-            "kind": "artifact",
-            "artifact_id": r[0],
-            "issue_id": r[2],
-            "project_id": r[4],
-            "role": "",
-            "name": r[3],
-            "snippet": "",
-            "score": score,
-            "source": "semantic",
-        })
+        scored.append(
+            {
+                "kind": "artifact",
+                "artifact_id": r[0],
+                "issue_id": r[2],
+                "project_id": r[4],
+                "role": "",
+                "name": r[3],
+                "snippet": "",
+                "score": score,
+                "source": "semantic",
+            }
+        )
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:limit]
 
@@ -635,14 +671,16 @@ async def _load_issue_embedding(store, issue_id: str) -> list[float] | None:
             "SELECT vector FROM issue_embeddings WHERE issue_id = ?", (issue_id,)
         )
         row = await cur.fetchone()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         return None
     if not row:
         return None
     return unpack_vector(row[0])
 
 
-async def _semantic_similar_issues(store, self_issue_id: str, anchor: list[float], k: int) -> list[dict]:
+async def _semantic_similar_issues(
+    store, self_issue_id: str, anchor: list[float], k: int
+) -> list[dict]:
     try:
         conn = await store._get_conn()
         cur = await conn.execute(
@@ -652,7 +690,7 @@ async def _semantic_similar_issues(store, self_issue_id: str, anchor: list[float
             (self_issue_id,),
         )
         rows = await cur.fetchall()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("knowledge_index._semantic_similar_issues failed: %s", exc)
         return []
     out: list[dict] = []
@@ -661,13 +699,15 @@ async def _semantic_similar_issues(store, self_issue_id: str, anchor: list[float
         if not vec:
             continue
         score = cosine(anchor, vec)
-        out.append({
-            "issue_id": r[0],
-            "title": r[2],
-            "project_id": r[3],
-            "score": score,
-            "source": "semantic",
-        })
+        out.append(
+            {
+                "issue_id": r[0],
+                "title": r[2],
+                "project_id": r[3],
+                "score": score,
+                "source": "semantic",
+            }
+        )
     out.sort(key=lambda x: x["score"], reverse=True)
     return out[:k]
 

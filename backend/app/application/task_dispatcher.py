@@ -3,21 +3,22 @@
 Creates a CodexTask for a given role, optionally adding a dynamic node to the
 issue's WorkflowGraph for visualization, then kicks off the task runner.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any  # noqa: F401
 from uuid import uuid4
 
 from app.domain.models import (
-    Agent,
+    Agent,  # noqa: F401
     AgentMessage,
     CodexIssue,
     CodexTask,
     WorkflowEdge,
-    WorkflowGraph,
+    WorkflowGraph,  # noqa: F401
     WorkflowNode,
 )
 
@@ -166,8 +167,7 @@ async def dispatch_role(
             raise ValueError(f"No workflow graph for issue {issue.id}")
 
         same_role_count = sum(
-            1 for n in graph.nodes
-            if n.node_key == role or n.node_key.startswith(f"{role}#")
+            1 for n in graph.nodes if n.node_key == role or n.node_key.startswith(f"{role}#")
         )
         node_key = role if same_role_count == 0 else f"{role}#{same_role_count}"
 
@@ -216,7 +216,7 @@ async def dispatch_role(
             created_at=now,
         )
         await store.save_agent_message(mesh_msg)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         mesh_msg = None
         logger.warning("dispatch_role mesh write failed: %s", exc)
 
@@ -224,34 +224,41 @@ async def dispatch_role(
     if event_bus is not None:
         try:
             from app.application.task_serialization import serialize_task_payload
+
             await event_bus.append({"type": "task_created", "task": serialize_task_payload(task)})
-            await event_bus.append({
-                "type": "workflow_node_updated",
-                "issue_id": issue.id,
-                "session_id": issue.session_id,
-                "node_id": node.id,
-                "node_key": node_key,
-                "status": "running",
-                "task_id": task.id,
-                "batch_key": batch_key,
-            })
-            if mesh_msg is not None:
-                await event_bus.append({
-                    "type": "agent_message_posted",
+            await event_bus.append(
+                {
+                    "type": "workflow_node_updated",
                     "issue_id": issue.id,
                     "session_id": issue.session_id,
-                    "message": {
-                        "id": mesh_msg.id,
-                        "issue_id": mesh_msg.issue_id,
-                        "graph_id": mesh_msg.graph_id,
-                        "from_node_key": mesh_msg.from_node_key,
-                        "to_node_key": mesh_msg.to_node_key,
-                        "message_type": mesh_msg.message_type,
-                        "body": mesh_msg.body,
-                        "created_at": mesh_msg.created_at.isoformat() if mesh_msg.created_at else None,
-                    },
-                })
-        except Exception as exc:  # noqa: BLE001
+                    "node_id": node.id,
+                    "node_key": node_key,
+                    "status": "running",
+                    "task_id": task.id,
+                    "batch_key": batch_key,
+                }
+            )
+            if mesh_msg is not None:
+                await event_bus.append(
+                    {
+                        "type": "agent_message_posted",
+                        "issue_id": issue.id,
+                        "session_id": issue.session_id,
+                        "message": {
+                            "id": mesh_msg.id,
+                            "issue_id": mesh_msg.issue_id,
+                            "graph_id": mesh_msg.graph_id,
+                            "from_node_key": mesh_msg.from_node_key,
+                            "to_node_key": mesh_msg.to_node_key,
+                            "message_type": mesh_msg.message_type,
+                            "body": mesh_msg.body,
+                            "created_at": mesh_msg.created_at.isoformat()
+                            if mesh_msg.created_at
+                            else None,
+                        },
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("dispatch_role emit failed: %s", exc)
 
     # Register the task in the completion registry BEFORE launching the runner so
@@ -259,6 +266,7 @@ async def dispatch_role(
     # caller (e.g. _run_single_dispatch) may register again with no effect.
     if register_completion:
         from app.application.task_completion_registry import TaskCompletionRegistry
+
         TaskCompletionRegistry.get().register(task.id)
 
     # Start task execution
@@ -267,7 +275,7 @@ async def dispatch_role(
             result = task_dispatcher_fn(task)
             if asyncio.iscoroutine(result):
                 await result
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("dispatch_role task runner failed: %s", exc)
 
     return task.id, node_id

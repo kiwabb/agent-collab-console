@@ -1,4 +1,6 @@
-import asyncio
+from __future__ import annotations  # noqa: I001
+
+import asyncio  # noqa: I001, RUF100
 import json
 from datetime import datetime
 from pathlib import Path
@@ -7,7 +9,31 @@ from uuid import uuid4
 import aiosqlite
 
 from app.adapters.audit_log_query import build_audit_log_query as _build_audit_log_query
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, Project, Prototype, PrototypeVersion, Skill, SelfImprovementProposal, SelfImprovementApplicationEvent
+from app.domain.models import (
+    Session,
+    Task,
+    AgentRun,
+    Artifact,
+    Message,
+    Approval,
+    ApprovalEvent,
+    PlanDetails,
+    CodexSession,
+    CodexMessage,
+    CodexIssue,
+    CodexTask,
+    CodexTaskMessage,
+    LogEvent,
+    ExecutionProcess,
+    HelpRequest,
+    RuntimeCatalog,
+    Project,
+    Prototype,
+    PrototypeVersion,
+    Skill,
+    SelfImprovementProposal,
+    SelfImprovementApplicationEvent,
+)
 
 
 class AsyncSQLiteStore:
@@ -228,197 +254,211 @@ class AsyncSQLiteStore:
             );
         """)
         for table in ["tasks", "runs", "artifacts", "messages", "approvals", "approval_events"]:
-            try:
+            try:  # noqa: SIM105
                 await conn.execute(f"ALTER TABLE {table} ADD COLUMN created_at TEXT")
             except aiosqlite.OperationalError:
                 pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_sessions ADD COLUMN thread_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_sessions ADD COLUMN claude_thread_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_sessions ADD COLUMN project_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_sessions ADD COLUMN settings_json TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE log_events ADD COLUMN task_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
-            await conn.execute("ALTER TABLE codex_task_messages ADD COLUMN execution_process_id TEXT")
+        try:  # noqa: SIM105
+            await conn.execute(
+                "ALTER TABLE codex_task_messages ADD COLUMN execution_process_id TEXT"
+            )
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE log_events ADD COLUMN execution_process_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
-            await conn.execute("ALTER TABLE codex_tasks ADD COLUMN phase TEXT DEFAULT 'requirements'")
+        try:  # noqa: SIM105
+            await conn.execute(
+                "ALTER TABLE codex_tasks ADD COLUMN phase TEXT DEFAULT 'requirements'"
+            )
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN issue_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN role TEXT DEFAULT 'general'")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN executor TEXT DEFAULT 'codex'")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_session_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_message_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN workspace_path TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN last_execution_process_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN task_kind TEXT DEFAULT 'normal'")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN blocked_by_help_id TEXT")
         except aiosqlite.OperationalError:
             pass
         # Add provider and model columns to codex_tasks
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN provider TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN model TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN result_json TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE agents ADD COLUMN agent_tier TEXT DEFAULT 'managed'")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN project_id TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN review_comment TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN milestone TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_branch TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_base_branch TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_worktree_path TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
-            await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_merge_status TEXT DEFAULT 'open'")
+        try:  # noqa: SIM105
+            await conn.execute(
+                "ALTER TABLE codex_issues ADD COLUMN git_merge_status TEXT DEFAULT 'open'"
+            )
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_last_commit_sha TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_url TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_state TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
-            await conn.execute("ALTER TABLE codex_issues ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+        try:  # noqa: SIM105
+            await conn.execute(
+                "ALTER TABLE codex_issues ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"
+            )
         except aiosqlite.OperationalError:
             pass
         # Issue-level executor selection (propagated to Conductor sub-agents)
         for _issue_exec_col in ("executor", "provider", "model"):
-            try:
+            try:  # noqa: SIM105
                 await conn.execute(f"ALTER TABLE codex_issues ADD COLUMN {_issue_exec_col} TEXT")
             except aiosqlite.OperationalError:
                 pass
         # Per-issue cost budget (cost-aware conductor scheduling, PR2)
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN budget_usd REAL")
         except aiosqlite.OperationalError:
             pass
         # Add executor/provider/model snapshot columns to execution_processes
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN provider TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN model TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
-            await conn.execute("ALTER TABLE execution_processes ADD COLUMN kind TEXT NOT NULL DEFAULT 'initial'")
+        try:  # noqa: SIM105
+            await conn.execute(
+                "ALTER TABLE execution_processes ADD COLUMN kind TEXT NOT NULL DEFAULT 'initial'"
+            )
         except aiosqlite.OperationalError:
             pass
-        try:
-            await conn.execute("ALTER TABLE execution_processes ADD COLUMN triggering_message_id TEXT")
+        try:  # noqa: SIM105
+            await conn.execute(
+                "ALTER TABLE execution_processes ADD COLUMN triggering_message_id TEXT"
+            )
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_index INTEGER")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_group TEXT")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN review_comment TEXT")
         except aiosqlite.OperationalError:
             pass
         # Add token usage and cost columns to execution_processes
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN input_tokens INTEGER")
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN output_tokens INTEGER")
         except aiosqlite.OperationalError:
             pass
-        try:
-            await conn.execute("ALTER TABLE execution_processes ADD COLUMN cache_read_tokens INTEGER")
+        try:  # noqa: SIM105
+            await conn.execute(
+                "ALTER TABLE execution_processes ADD COLUMN cache_read_tokens INTEGER"
+            )
         except aiosqlite.OperationalError:
             pass
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN total_cost_usd REAL")
         except aiosqlite.OperationalError:
             pass
@@ -436,7 +476,9 @@ class AsyncSQLiteStore:
                 updated_at TEXT
             )
         """)
-        await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_repo_path ON projects(repo_path)")
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_repo_path ON projects(repo_path)"
+        )
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_version (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -481,13 +523,15 @@ class AsyncSQLiteStore:
             # Project dev-server runner: persisted command run in repo_path.
             "ALTER TABLE projects ADD COLUMN run_command TEXT",
         ):
-            try:
+            try:  # noqa: SIM105
                 await conn.execute(stmt)
             except aiosqlite.OperationalError:
                 pass
         # One-time wipe of legacy codex data so all rows have project_id.
         # The decision to clear was made explicitly (dev-stage data).
-        version_row = await (await conn.execute("SELECT version FROM schema_version WHERE id = 1")).fetchone()
+        version_row = await (
+            await conn.execute("SELECT version FROM schema_version WHERE id = 1")
+        ).fetchone()
         current_version = version_row[0] if version_row else 0
         if current_version < 2:
             await conn.executescript(
@@ -650,7 +694,7 @@ class AsyncSQLiteStore:
             )
         """)
         # Add workflow_node_id FK to codex_tasks for DAG-aware runtime routing.
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN workflow_node_id TEXT")
         except Exception:
             pass  # Column already exists
@@ -857,68 +901,156 @@ class AsyncSQLiteStore:
             )
         """)
         # Create indexes for frequently queried columns
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_project_id ON codex_tasks(project_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_sessions_project_id ON codex_sessions(project_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_issues_project_id ON codex_issues(project_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_parent_task_id ON codex_tasks(parent_task_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_status ON codex_tasks(status)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_task_kind ON codex_tasks(task_kind)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_issues_session_id ON codex_issues(session_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_task_messages_task_id ON codex_task_messages(task_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_task_messages_execution_process_id ON codex_task_messages(execution_process_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_session_id ON log_events(session_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_task_id ON log_events(task_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_tasks_project_id ON codex_tasks(project_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_sessions_project_id ON codex_sessions(project_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_issues_project_id ON codex_issues(project_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_tasks_parent_task_id ON codex_tasks(parent_task_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_tasks_status ON codex_tasks(status)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_tasks_task_kind ON codex_tasks(task_kind)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_issues_session_id ON codex_issues(session_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_task_messages_task_id ON codex_task_messages(task_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_task_messages_execution_process_id ON codex_task_messages(execution_process_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_log_events_session_id ON log_events(session_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_log_events_task_id ON log_events(task_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)"
+        )
         # Must run BEFORE idx_conductor_turns_inbox below; the index
         # references consumed_at, and on an existing DB without the column
         # the CREATE INDEX otherwise raises and crashes _init_db().
-        try:
+        try:  # noqa: SIM105
             await conn.execute("ALTER TABLE conductor_turns ADD COLUMN consumed_at TEXT")
         except aiosqlite.OperationalError:
             pass
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_state_log_issue_transition ON conductor_state_log(issue_id, transition_at)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_session_id ON execution_processes(session_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_task_id ON execution_processes(task_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_paths_issue_id ON artifact_paths(issue_id)")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conductor_state_log_issue_transition ON conductor_state_log(issue_id, transition_at)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_execution_processes_session_id ON execution_processes(session_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_execution_processes_task_id ON execution_processes(task_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_artifact_paths_issue_id ON artifact_paths(issue_id)"
+        )
         # Workflow DAG indexes
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_role_key ON agents(role_key)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_workspace_id ON agents(workspace_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_graphs_issue_id ON workflow_graphs(issue_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_graph_id ON workflow_nodes(graph_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_status ON workflow_nodes(status)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_task_id ON workflow_nodes(task_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_edges_graph_id ON workflow_edges(graph_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_graph_id ON graph_replan_pending(graph_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_status ON graph_replan_pending(status)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_workflow_node_id ON codex_tasks(workflow_node_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_messages_issue_id ON agent_messages(issue_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_messages_graph_id ON agent_messages(graph_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_issue_id ON conductor_decisions(issue_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_id ON conductor_tasks(project_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agents_workspace_id ON agents(workspace_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_graphs_issue_id ON workflow_graphs(issue_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_nodes_graph_id ON workflow_nodes(graph_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_nodes_status ON workflow_nodes(status)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_nodes_task_id ON workflow_nodes(task_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_edges_graph_id ON workflow_edges(graph_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_graph_id ON graph_replan_pending(graph_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_status ON graph_replan_pending(status)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_codex_tasks_workflow_node_id ON codex_tasks(workflow_node_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_messages_issue_id ON agent_messages(issue_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_messages_graph_id ON agent_messages(graph_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conductor_decisions_issue_id ON conductor_decisions(issue_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_id ON conductor_tasks(project_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)"
+        )
         for stmt in (
             "ALTER TABLE conductor_tasks ADD COLUMN lease_owner TEXT",
             "ALTER TABLE conductor_tasks ADD COLUMN heartbeat_at TEXT",
             "ALTER TABLE conductor_tasks ADD COLUMN lease_expires_at TEXT",
         ):
-            try:
+            try:  # noqa: SIM105
                 await conn.execute(stmt)
             except aiosqlite.OperationalError:
                 pass
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_lease ON conductor_tasks(status, lease_expires_at)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_project_created ON self_improvement_proposals(project_id, created_at)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_issue ON self_improvement_proposals(issue_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_status ON self_improvement_proposals(status)")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conductor_tasks_lease ON conductor_tasks(status, lease_expires_at)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_self_improvement_project_created ON self_improvement_proposals(project_id, created_at)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_self_improvement_issue ON self_improvement_proposals(issue_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_self_improvement_status ON self_improvement_proposals(status)"
+        )
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_self_improvement_application_events_project_created "
             "ON self_improvement_application_events(project_id, created_at)"
@@ -928,9 +1060,15 @@ class AsyncSQLiteStore:
             "ON self_improvement_application_events(proposal_id, created_at)"
         )
         # Audit log filter/pagination indexes (PR3 read API will lean on these).
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_category_created ON audit_log(category, created_at)")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_log_category_created ON audit_log(category, created_at)"
+        )
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)")
         # --- Prototype design tool (PRD 06-23) ---
         # Single-file HTML prototypes hang off a Project; iterations are
@@ -948,7 +1086,9 @@ class AsyncSQLiteStore:
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
             )
         """)
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_prototypes_project_id ON prototypes(project_id)")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_prototypes_project_id ON prototypes(project_id)"
+        )
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS prototype_versions (
                 id TEXT PRIMARY KEY,
@@ -962,19 +1102,19 @@ class AsyncSQLiteStore:
                 FOREIGN KEY (prototype_id) REFERENCES prototypes(id) ON DELETE CASCADE
             )
         """)
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_prototype_versions_prototype_id ON prototype_versions(prototype_id)")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_prototype_versions_prototype_id ON prototype_versions(prototype_id)"
+        )
         # Phase 4: add instance_index to workflow_nodes for existing DBs
-        try:
+        try:  # noqa: SIM105
             await conn.execute(
                 "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
             )
         except aiosqlite.OperationalError:
             pass
         # Parallel swarm: add batch_key to group nodes from one dispatch_batch call
-        try:
-            await conn.execute(
-                "ALTER TABLE workflow_nodes ADD COLUMN batch_key TEXT"
-            )
+        try:  # noqa: SIM105
+            await conn.execute("ALTER TABLE workflow_nodes ADD COLUMN batch_key TEXT")
         except aiosqlite.OperationalError:
             pass
         await conn.commit()
@@ -997,12 +1137,28 @@ class AsyncSQLiteStore:
         for task in session.tasks:
             await conn.execute(
                 "INSERT OR REPLACE INTO tasks (id, session_id, title, assignee, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (task.id, session.id, task.title, task.assignee, task.status, self._format_datetime(task.created_at)),
+                (
+                    task.id,
+                    session.id,
+                    task.title,
+                    task.assignee,
+                    task.status,
+                    self._format_datetime(task.created_at),
+                ),
             )
         for run in session.runs:
             await conn.execute(
                 "INSERT OR REPLACE INTO runs (id, task_id, agent_id, role, status, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (run.id, run.task_id, run.agent_id, run.role, run.status, run.summary, json.dumps(run.payload) if run.payload else None, self._format_datetime(run.created_at)),
+                (
+                    run.id,
+                    run.task_id,
+                    run.agent_id,
+                    run.role,
+                    run.status,
+                    run.summary,
+                    json.dumps(run.payload) if run.payload else None,
+                    self._format_datetime(run.created_at),
+                ),
             )
         for artifact in session.artifacts:
             content = artifact.content
@@ -1012,22 +1168,50 @@ class AsyncSQLiteStore:
                 content = json.dumps(content)
             await conn.execute(
                 "INSERT OR REPLACE INTO artifacts (id, task_id, kind, content, steps, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (artifact.id, artifact.task_id, artifact.kind, content, json.dumps(artifact.steps) if artifact.steps else None, self._format_datetime(artifact.created_at)),
+                (
+                    artifact.id,
+                    artifact.task_id,
+                    artifact.kind,
+                    content,
+                    json.dumps(artifact.steps) if artifact.steps else None,
+                    self._format_datetime(artifact.created_at),
+                ),
             )
         for message in session.messages:
             await conn.execute(
                 "INSERT OR REPLACE INTO messages (id, task_id, agent_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (message.id, message.task_id, message.agent_id, message.role, message.content, self._format_datetime(message.created_at)),
+                (
+                    message.id,
+                    message.task_id,
+                    message.agent_id,
+                    message.role,
+                    message.content,
+                    self._format_datetime(message.created_at),
+                ),
             )
         for approval in session.approvals:
             await conn.execute(
                 "INSERT OR REPLACE INTO approvals (id, session_id, task_id, action, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (approval.id, approval.session_id, approval.task_id, approval.action, approval.status, self._format_datetime(approval.created_at)),
+                (
+                    approval.id,
+                    approval.session_id,
+                    approval.task_id,
+                    approval.action,
+                    approval.status,
+                    self._format_datetime(approval.created_at),
+                ),
             )
         for event in session.approval_events:
             await conn.execute(
                 "INSERT OR REPLACE INTO approval_events (id, session_id, task_id, approval_id, event_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (event.id, event.session_id, event.task_id, event.approval_id, event.event_type, self._format_datetime(event.created_at)),
+                (
+                    event.id,
+                    event.session_id,
+                    event.task_id,
+                    event.approval_id,
+                    event.event_type,
+                    self._format_datetime(event.created_at),
+                ),
             )
         await conn.commit()
 
@@ -1046,87 +1230,114 @@ class AsyncSQLiteStore:
         )
 
         async def load_tasks():
-            async with conn.execute("SELECT * FROM tasks WHERE session_id = ?", (session_id,)) as cur:
+            async with conn.execute(
+                "SELECT * FROM tasks WHERE session_id = ?", (session_id,)
+            ) as cur:
                 async for t_row in cur:
-                    session.tasks.append(Task(
-                        id=t_row["id"],
-                        session_id=t_row["session_id"],
-                        title=t_row["title"],
-                        assignee=t_row["assignee"],
-                        status=t_row["status"],
-                        created_at=self._parse_datetime(t_row["created_at"]),
-                    ))
+                    session.tasks.append(
+                        Task(
+                            id=t_row["id"],
+                            session_id=t_row["session_id"],
+                            title=t_row["title"],
+                            assignee=t_row["assignee"],
+                            status=t_row["status"],
+                            created_at=self._parse_datetime(t_row["created_at"]),
+                        )
+                    )
 
         async def load_runs():
-            async with conn.execute("SELECT * FROM runs WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)) as cur:
+            async with conn.execute(
+                "SELECT * FROM runs WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
+                (session_id,),
+            ) as cur:
                 async for r_row in cur:
-                    session.runs.append(AgentRun(
-                        id=r_row["id"],
-                        task_id=r_row["task_id"],
-                        agent_id=r_row["agent_id"],
-                        role=r_row["role"],
-                        status=r_row["status"],
-                        summary=r_row["summary"],
-                        payload=json.loads(r_row["payload"]) if r_row["payload"] else None,
-                        created_at=self._parse_datetime(r_row["created_at"]),
-                    ))
+                    session.runs.append(
+                        AgentRun(
+                            id=r_row["id"],
+                            task_id=r_row["task_id"],
+                            agent_id=r_row["agent_id"],
+                            role=r_row["role"],
+                            status=r_row["status"],
+                            summary=r_row["summary"],
+                            payload=json.loads(r_row["payload"]) if r_row["payload"] else None,
+                            created_at=self._parse_datetime(r_row["created_at"]),
+                        )
+                    )
 
         async def load_artifacts():
-            async with conn.execute("SELECT * FROM artifacts WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)) as cur:
+            async with conn.execute(
+                "SELECT * FROM artifacts WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
+                (session_id,),
+            ) as cur:
                 async for a_row in cur:
                     content = a_row["content"]
                     try:
                         parsed = json.loads(content)
-                        if isinstance(parsed, dict):
+                        if isinstance(parsed, dict):  # noqa: SIM108
                             content = PlanDetails(**parsed)
                         else:
                             content = parsed
                     except (json.JSONDecodeError, TypeError):
                         pass
-                    session.artifacts.append(Artifact(
-                        id=a_row["id"],
-                        task_id=a_row["task_id"],
-                        kind=a_row["kind"],
-                        content=content,
-                        steps=json.loads(a_row["steps"]) if a_row["steps"] else None,
-                        created_at=self._parse_datetime(a_row["created_at"]),
-                    ))
+                    session.artifacts.append(
+                        Artifact(
+                            id=a_row["id"],
+                            task_id=a_row["task_id"],
+                            kind=a_row["kind"],
+                            content=content,
+                            steps=json.loads(a_row["steps"]) if a_row["steps"] else None,
+                            created_at=self._parse_datetime(a_row["created_at"]),
+                        )
+                    )
 
         async def load_messages():
-            async with conn.execute("SELECT * FROM messages WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)) as cur:
+            async with conn.execute(
+                "SELECT * FROM messages WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
+                (session_id,),
+            ) as cur:
                 async for m_row in cur:
-                    session.messages.append(Message(
-                        id=m_row["id"],
-                        task_id=m_row["task_id"],
-                        agent_id=m_row["agent_id"],
-                        role=m_row["role"],
-                        content=m_row["content"],
-                        created_at=self._parse_datetime(m_row["created_at"]),
-                    ))
+                    session.messages.append(
+                        Message(
+                            id=m_row["id"],
+                            task_id=m_row["task_id"],
+                            agent_id=m_row["agent_id"],
+                            role=m_row["role"],
+                            content=m_row["content"],
+                            created_at=self._parse_datetime(m_row["created_at"]),
+                        )
+                    )
 
         async def load_approvals():
-            async with conn.execute("SELECT * FROM approvals WHERE session_id = ?", (session_id,)) as cur:
+            async with conn.execute(
+                "SELECT * FROM approvals WHERE session_id = ?", (session_id,)
+            ) as cur:
                 async for ap_row in cur:
-                    session.approvals.append(Approval(
-                        id=ap_row["id"],
-                        session_id=ap_row["session_id"],
-                        task_id=ap_row["task_id"],
-                        action=ap_row["action"],
-                        status=ap_row["status"],
-                        created_at=self._parse_datetime(ap_row["created_at"]),
-                    ))
+                    session.approvals.append(
+                        Approval(
+                            id=ap_row["id"],
+                            session_id=ap_row["session_id"],
+                            task_id=ap_row["task_id"],
+                            action=ap_row["action"],
+                            status=ap_row["status"],
+                            created_at=self._parse_datetime(ap_row["created_at"]),
+                        )
+                    )
 
         async def load_approval_events():
-            async with conn.execute("SELECT * FROM approval_events WHERE session_id = ?", (session_id,)) as cur:
+            async with conn.execute(
+                "SELECT * FROM approval_events WHERE session_id = ?", (session_id,)
+            ) as cur:
                 async for ev_row in cur:
-                    session.approval_events.append(ApprovalEvent(
-                        id=ev_row["id"],
-                        session_id=ev_row["session_id"],
-                        task_id=ev_row["task_id"],
-                        approval_id=ev_row["approval_id"],
-                        event_type=ev_row["event_type"],
-                        created_at=self._parse_datetime(ev_row["created_at"]),
-                    ))
+                    session.approval_events.append(
+                        ApprovalEvent(
+                            id=ev_row["id"],
+                            session_id=ev_row["session_id"],
+                            task_id=ev_row["task_id"],
+                            approval_id=ev_row["approval_id"],
+                            event_type=ev_row["event_type"],
+                            created_at=self._parse_datetime(ev_row["created_at"]),
+                        )
+                    )
 
         await load_tasks()
         await load_runs()
@@ -1148,19 +1359,33 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         await conn.execute(
             "INSERT OR REPLACE INTO codex_sessions (id, title, cwd, project_id, status, created_at, last_active_at, log_path, thread_id, claude_thread_id, settings_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (session.id, session.title, session.cwd, session.project_id, session.status,
-             self._format_datetime(session.created_at),
-             self._format_datetime(session.last_active_at),
-             session.log_path,
-             session.thread_id,
-             session.claude_thread_id,
-             json.dumps(session.settings, ensure_ascii=False) if getattr(session, "settings", None) is not None else None),
+            (
+                session.id,
+                session.title,
+                session.cwd,
+                session.project_id,
+                session.status,
+                self._format_datetime(session.created_at),
+                self._format_datetime(session.last_active_at),
+                session.log_path,
+                session.thread_id,
+                session.claude_thread_id,
+                json.dumps(session.settings, ensure_ascii=False)
+                if getattr(session, "settings", None) is not None
+                else None,
+            ),
         )
         await conn.execute("DELETE FROM codex_messages WHERE session_id = ?", (session.id,))
         for msg in session.messages:
             await conn.execute(
                 "INSERT INTO codex_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
-                (msg.id, msg.session_id, msg.role, msg.content, self._format_datetime(msg.created_at)),
+                (
+                    msg.id,
+                    msg.session_id,
+                    msg.role,
+                    msg.content,
+                    self._format_datetime(msg.created_at),
+                ),
             )
         await conn.commit()
 
@@ -1194,14 +1419,16 @@ class AsyncSQLiteStore:
             id=row["id"],
             title=row["title"],
             cwd=row["cwd"],
-            project_id=row["project_id"] if "project_id" in row.keys() else None,
+            project_id=row["project_id"] if "project_id" in row.keys() else None,  # noqa: SIM118
             status=row["status"],
             created_at=self._parse_datetime(row["created_at"]),
             last_active_at=self._parse_datetime(row["last_active_at"]),
             log_path=row["log_path"],
-            thread_id=row["thread_id"] if "thread_id" in row.keys() else None,
-            claude_thread_id=row["claude_thread_id"] if "claude_thread_id" in row.keys() else None,
-            settings=json.loads(row["settings_json"]) if "settings_json" in row.keys() and row["settings_json"] else {"plan_first_pm": True},
+            thread_id=row["thread_id"] if "thread_id" in row.keys() else None,  # noqa: SIM118
+            claude_thread_id=row["claude_thread_id"] if "claude_thread_id" in row.keys() else None,  # noqa: SIM118
+            settings=json.loads(row["settings_json"])
+            if "settings_json" in row.keys() and row["settings_json"]  # noqa: SIM118
+            else {"plan_first_pm": True},  # noqa: RUF100, SIM118
             messages=messages,
         )
 
@@ -1214,15 +1441,27 @@ class AsyncSQLiteStore:
         conn.row_factory = aiosqlite.Row
         base = "SELECT id, title, project_id, status, created_at, last_active_at, settings_json FROM codex_sessions"
         if project_id:
-            async with conn.execute(f"{base} WHERE project_id = ? ORDER BY last_active_at DESC", (project_id,)) as cur:
+            async with conn.execute(
+                f"{base} WHERE project_id = ? ORDER BY last_active_at DESC", (project_id,)
+            ) as cur:
                 rows = await cur.fetchall()
         else:
             async with conn.execute(f"{base} ORDER BY last_active_at DESC") as cur:
                 rows = await cur.fetchall()
-        return [{"id": r["id"], "title": r["title"], "project_id": r["project_id"], "status": r["status"],
-                 "created_at": r["created_at"], "last_active_at": r["last_active_at"],
-                 "settings": json.loads(r["settings_json"]) if "settings_json" in r.keys() and r["settings_json"] else {"plan_first_pm": True}}
-                for r in rows]
+        return [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "project_id": r["project_id"],
+                "status": r["status"],
+                "created_at": r["created_at"],
+                "last_active_at": r["last_active_at"],
+                "settings": json.loads(r["settings_json"])
+                if "settings_json" in r.keys() and r["settings_json"]  # noqa: SIM118
+                else {"plan_first_pm": True},
+            }  # noqa: RUF100, SIM118
+            for r in rows
+        ]
 
     async def list_codex_workspaces(self, project_id: str | None = None) -> list[dict]:
         return await self.list_codex_sessions(project_id=project_id)
@@ -1296,7 +1535,7 @@ class AsyncSQLiteStore:
                 "INSERT INTO issues_fts (issue_id, project_id, title, description) VALUES (?, ?, ?, ?)",
                 (issue.id, issue.project_id or "", issue.title or "", issue.description or ""),
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             pass
         await conn.commit()
 
@@ -1321,21 +1560,37 @@ class AsyncSQLiteStore:
             is_pinned=bool(row["is_pinned"]) if "is_pinned" in keys else False,
             milestone=row["milestone"] if "milestone" in keys and row["milestone"] else None,
             git_branch=row["git_branch"] if "git_branch" in keys and row["git_branch"] else None,
-            git_base_branch=row["git_base_branch"] if "git_base_branch" in keys and row["git_base_branch"] else None,
-            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in keys and row["git_worktree_path"] else None,
-            git_merge_status=row["git_merge_status"] if "git_merge_status" in keys and row["git_merge_status"] else "open",
-            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in keys and row["git_last_commit_sha"] else None,
-            github_pr_url=row["github_pr_url"] if "github_pr_url" in keys and row["github_pr_url"] else None,
-            github_pr_state=row["github_pr_state"] if "github_pr_state" in keys and row["github_pr_state"] else None,
+            git_base_branch=row["git_base_branch"]
+            if "git_base_branch" in keys and row["git_base_branch"]
+            else None,
+            git_worktree_path=row["git_worktree_path"]
+            if "git_worktree_path" in keys and row["git_worktree_path"]
+            else None,
+            git_merge_status=row["git_merge_status"]
+            if "git_merge_status" in keys and row["git_merge_status"]
+            else "open",
+            git_last_commit_sha=row["git_last_commit_sha"]
+            if "git_last_commit_sha" in keys and row["git_last_commit_sha"]
+            else None,
+            github_pr_url=row["github_pr_url"]
+            if "github_pr_url" in keys and row["github_pr_url"]
+            else None,
+            github_pr_state=row["github_pr_state"]
+            if "github_pr_state" in keys and row["github_pr_state"]
+            else None,
             executor=row["executor"] if "executor" in keys and row["executor"] else None,
             provider=row["provider"] if "provider" in keys and row["provider"] else None,
             model=row["model"] if "model" in keys and row["model"] else None,
-            budget_usd=row["budget_usd"] if "budget_usd" in keys and row["budget_usd"] is not None else None,
+            budget_usd=row["budget_usd"]
+            if "budget_usd" in keys and row["budget_usd"] is not None
+            else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def list_codex_issues(self, session_id: str | None = None, project_id: str | None = None) -> list[dict]:
+    async def list_codex_issues(
+        self, session_id: str | None = None, project_id: str | None = None
+    ) -> list[dict]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -1364,15 +1619,40 @@ class AsyncSQLiteStore:
                 resume_session_id, resume_message_id, last_execution_process_id,
                 sequence_index, sequence_group, review_comment, workflow_node_id, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (task.id, task.session_id, task.project_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
-             task.provider, task.model, task.status, task.result, task.result_json, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
-             task.workspace_path,
-             task.git_branch, task.git_base_branch, task.git_worktree_path, task.git_merge_status, task.git_last_commit_sha,
-             task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
-             task.sequence_index, task.sequence_group, task.review_comment,
-             getattr(task, "workflow_node_id", None),
-             self._format_datetime(task.created_at),
-             self._format_datetime(task.updated_at)),
+            (
+                task.id,
+                task.session_id,
+                task.project_id,
+                task.issue_id,
+                task.phase,
+                task.title,
+                task.prompt,
+                task.role,
+                task.executor,
+                task.provider,
+                task.model,
+                task.status,
+                task.result,
+                task.result_json,
+                task.parent_task_id,
+                task.task_kind,
+                task.blocked_by_help_id,
+                task.workspace_path,
+                task.git_branch,
+                task.git_base_branch,
+                task.git_worktree_path,
+                task.git_merge_status,
+                task.git_last_commit_sha,
+                task.resume_session_id,
+                task.resume_message_id,
+                task.last_execution_process_id,
+                task.sequence_index,
+                task.sequence_group,
+                task.review_comment,
+                getattr(task, "workflow_node_id", None),
+                self._format_datetime(task.created_at),
+                self._format_datetime(task.updated_at),
+            ),
         )
         await conn.commit()
 
@@ -1399,23 +1679,45 @@ class AsyncSQLiteStore:
             model=row["model"] if "model" in keys and row["model"] else None,
             status=row["status"],
             result=row["result"],
-            result_json=row["result_json"] if "result_json" in keys and row["result_json"] else None,
+            result_json=row["result_json"]
+            if "result_json" in keys and row["result_json"]
+            else None,
             parent_task_id=row["parent_task_id"] if row["parent_task_id"] else None,
             task_kind=row["task_kind"] if "task_kind" in keys and row["task_kind"] else "normal",
-            blocked_by_help_id=row["blocked_by_help_id"] if "blocked_by_help_id" in keys and row["blocked_by_help_id"] else None,
-            workspace_path=row["workspace_path"] if "workspace_path" in keys and row["workspace_path"] else None,
+            blocked_by_help_id=row["blocked_by_help_id"]
+            if "blocked_by_help_id" in keys and row["blocked_by_help_id"]
+            else None,
+            workspace_path=row["workspace_path"]
+            if "workspace_path" in keys and row["workspace_path"]
+            else None,
             git_branch=row["git_branch"] if "git_branch" in keys and row["git_branch"] else None,
-            git_base_branch=row["git_base_branch"] if "git_base_branch" in keys and row["git_base_branch"] else None,
-            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in keys and row["git_worktree_path"] else None,
-            git_merge_status=row["git_merge_status"] if "git_merge_status" in keys and row["git_merge_status"] else "open",
-            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in keys and row["git_last_commit_sha"] else None,
-            resume_session_id=row["resume_session_id"] if "resume_session_id" in keys and row["resume_session_id"] else None,
-            resume_message_id=row["resume_message_id"] if "resume_message_id" in keys and row["resume_message_id"] else None,
-            last_execution_process_id=row["last_execution_process_id"] if "last_execution_process_id" in keys and row["last_execution_process_id"] else None,
+            git_base_branch=row["git_base_branch"]
+            if "git_base_branch" in keys and row["git_base_branch"]
+            else None,
+            git_worktree_path=row["git_worktree_path"]
+            if "git_worktree_path" in keys and row["git_worktree_path"]
+            else None,
+            git_merge_status=row["git_merge_status"]
+            if "git_merge_status" in keys and row["git_merge_status"]
+            else "open",
+            git_last_commit_sha=row["git_last_commit_sha"]
+            if "git_last_commit_sha" in keys and row["git_last_commit_sha"]
+            else None,
+            resume_session_id=row["resume_session_id"]
+            if "resume_session_id" in keys and row["resume_session_id"]
+            else None,
+            resume_message_id=row["resume_message_id"]
+            if "resume_message_id" in keys and row["resume_message_id"]
+            else None,
+            last_execution_process_id=row["last_execution_process_id"]
+            if "last_execution_process_id" in keys and row["last_execution_process_id"]
+            else None,
             sequence_index=row["sequence_index"] if "sequence_index" in keys else None,
             sequence_group=row["sequence_group"] if "sequence_group" in keys else None,
             review_comment=row["review_comment"] if "review_comment" in keys else None,
-            workflow_node_id=row["workflow_node_id"] if "workflow_node_id" in keys and row["workflow_node_id"] else None,
+            workflow_node_id=row["workflow_node_id"]
+            if "workflow_node_id" in keys and row["workflow_node_id"]
+            else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1447,7 +1749,9 @@ class AsyncSQLiteStore:
             clauses.append("project_id = ?")
             params.append(project_id)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        async with conn.execute(f"{select_sql}{where} ORDER BY created_at ASC", tuple(params)) as cur:
+        async with conn.execute(
+            f"{select_sql}{where} ORDER BY created_at ASC", tuple(params)
+        ) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
@@ -1562,9 +1866,7 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-            "SELECT * FROM prototypes WHERE id = ?", (prototype_id,)
-        ) as cur:
+        async with conn.execute("SELECT * FROM prototypes WHERE id = ?", (prototype_id,)) as cur:
             row = await cur.fetchone()
         if not row:
             return None
@@ -1604,9 +1906,7 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         # Versions CASCADE via FK; explicit delete for clarity in logs.
-        await conn.execute(
-            "DELETE FROM prototype_versions WHERE prototype_id = ?", (prototype_id,)
-        )
+        await conn.execute("DELETE FROM prototype_versions WHERE prototype_id = ?", (prototype_id,))
         await conn.execute("DELETE FROM prototypes WHERE id = ?", (prototype_id,))
         await conn.commit()
 
@@ -1742,7 +2042,9 @@ class AsyncSQLiteStore:
                 help_request.context_summary,
                 help_request.status,
                 help_request.error_message,
-                json.dumps(help_request.continuation_payload) if help_request.continuation_payload is not None else None,
+                json.dumps(help_request.continuation_payload)
+                if help_request.continuation_payload is not None
+                else None,
                 self._format_datetime(help_request.created_at),
                 self._format_datetime(help_request.started_at),
                 self._format_datetime(help_request.completed_at),
@@ -1756,11 +2058,15 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT * FROM help_requests WHERE id = ?", (help_request_id,)) as cur:
+        async with conn.execute(
+            "SELECT * FROM help_requests WHERE id = ?", (help_request_id,)
+        ) as cur:
             row = await cur.fetchone()
         if not row:
             return None
-        continuation_payload = json.loads(row["continuation_payload"]) if row["continuation_payload"] else None
+        continuation_payload = (
+            json.loads(row["continuation_payload"]) if row["continuation_payload"] else None
+        )
         return HelpRequest(
             id=row["id"],
             workspace_id=row["workspace_id"],
@@ -1781,7 +2087,9 @@ class AsyncSQLiteStore:
             consumed_at=self._parse_datetime(row["consumed_at"]),
         )
 
-    async def list_help_requests(self, *, parent_task_id: str | None = None, child_task_id: str | None = None) -> list[HelpRequest]:
+    async def list_help_requests(
+        self, *, parent_task_id: str | None = None, child_task_id: str | None = None
+    ) -> list[HelpRequest]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -1813,7 +2121,9 @@ class AsyncSQLiteStore:
                 context_summary=row["context_summary"],
                 status=row["status"],
                 error_message=row["error_message"],
-                continuation_payload=json.loads(row["continuation_payload"]) if row["continuation_payload"] else None,
+                continuation_payload=json.loads(row["continuation_payload"])
+                if row["continuation_payload"]
+                else None,
                 created_at=self._parse_datetime(row["created_at"]),
                 started_at=self._parse_datetime(row["started_at"]),
                 completed_at=self._parse_datetime(row["completed_at"]),
@@ -1876,7 +2186,9 @@ class AsyncSQLiteStore:
             CodexTaskMessage(
                 id=r["id"],
                 task_id=r["task_id"],
-                execution_process_id=r["execution_process_id"] if "execution_process_id" in r.keys() else None,
+                execution_process_id=r["execution_process_id"]
+                if "execution_process_id" in r.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
                 role=r["role"],
                 content=r["content"],
                 created_at=self._parse_datetime(r["created_at"]),
@@ -1956,8 +2268,10 @@ class AsyncSQLiteStore:
                 session_id=r["session_id"],
                 stream=r["stream"],
                 content=r["content"],
-                task_id=r["task_id"] if "task_id" in r.keys() else None,
-                execution_process_id=r["execution_process_id"] if "execution_process_id" in r.keys() else None,
+                task_id=r["task_id"] if "task_id" in r.keys() else None,  # noqa: SIM118
+                execution_process_id=r["execution_process_id"]
+                if "execution_process_id" in r.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
                 created_at=self._parse_datetime(r["created_at"]),
             )
             for r in rows
@@ -1968,14 +2282,26 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         await conn.execute(
             "INSERT OR REPLACE INTO execution_processes (id, task_id, session_id, status, exit_code, executor, provider, model, kind, triggering_message_id, input_tokens, output_tokens, cache_read_tokens, total_cost_usd, started_at, completed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (process.id, process.task_id, process.session_id, process.status, process.exit_code,
-             process.executor, process.provider, process.model,
-             process.kind, process.triggering_message_id,
-             process.input_tokens, process.output_tokens, process.cache_read_tokens, process.total_cost_usd,
-             self._format_datetime(process.started_at),
-             self._format_datetime(process.completed_at),
-             self._format_datetime(process.created_at),
-             self._format_datetime(process.updated_at)),
+            (
+                process.id,
+                process.task_id,
+                process.session_id,
+                process.status,
+                process.exit_code,
+                process.executor,
+                process.provider,
+                process.model,
+                process.kind,
+                process.triggering_message_id,
+                process.input_tokens,
+                process.output_tokens,
+                process.cache_read_tokens,
+                process.total_cost_usd,
+                self._format_datetime(process.started_at),
+                self._format_datetime(process.completed_at),
+                self._format_datetime(process.created_at),
+                self._format_datetime(process.updated_at),
+            ),
         )
         await conn.commit()
 
@@ -1983,7 +2309,9 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT * FROM execution_processes WHERE id = ?", (process_id,)) as cur:
+        async with conn.execute(
+            "SELECT * FROM execution_processes WHERE id = ?", (process_id,)
+        ) as cur:
             row = await cur.fetchone()
         if not row:
             return None
@@ -1993,22 +2321,28 @@ class AsyncSQLiteStore:
             session_id=row["session_id"],
             status=row["status"],
             exit_code=row["exit_code"],
-            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
-            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
-            model=row["model"] if "model" in row.keys() and row["model"] else None,
-            input_tokens=row["input_tokens"] if "input_tokens" in row.keys() else None,
-            output_tokens=row["output_tokens"] if "output_tokens" in row.keys() else None,
-            cache_read_tokens=row["cache_read_tokens"] if "cache_read_tokens" in row.keys() else None,
-            total_cost_usd=row["total_cost_usd"] if "total_cost_usd" in row.keys() else None,
-            kind=row["kind"] if "kind" in row.keys() and row["kind"] else "initial",
-            triggering_message_id=row["triggering_message_id"] if "triggering_message_id" in row.keys() else None,
+            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,  # noqa: SIM118
+            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,  # noqa: SIM118
+            model=row["model"] if "model" in row.keys() and row["model"] else None,  # noqa: SIM118
+            input_tokens=row["input_tokens"] if "input_tokens" in row.keys() else None,  # noqa: SIM118
+            output_tokens=row["output_tokens"] if "output_tokens" in row.keys() else None,  # noqa: SIM118
+            cache_read_tokens=row["cache_read_tokens"]
+            if "cache_read_tokens" in row.keys()  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            total_cost_usd=row["total_cost_usd"] if "total_cost_usd" in row.keys() else None,  # noqa: SIM118
+            kind=row["kind"] if "kind" in row.keys() and row["kind"] else "initial",  # noqa: SIM118
+            triggering_message_id=row["triggering_message_id"]
+            if "triggering_message_id" in row.keys()  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def list_execution_processes(self, session_id: str | None = None, task_id: str | None = None) -> list[ExecutionProcess]:
+    async def list_execution_processes(
+        self, session_id: str | None = None, task_id: str | None = None
+    ) -> list[ExecutionProcess]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2031,7 +2365,9 @@ class AsyncSQLiteStore:
             ) as cur:
                 rows = await cur.fetchall()
         else:
-            async with conn.execute("SELECT * FROM execution_processes ORDER BY created_at DESC") as cur:
+            async with conn.execute(
+                "SELECT * FROM execution_processes ORDER BY created_at DESC"
+            ) as cur:
                 rows = await cur.fetchall()
         return [
             ExecutionProcess(
@@ -2040,15 +2376,19 @@ class AsyncSQLiteStore:
                 session_id=r["session_id"],
                 status=r["status"],
                 exit_code=r["exit_code"],
-                executor=r["executor"] if "executor" in r.keys() and r["executor"] else None,
-                provider=r["provider"] if "provider" in r.keys() and r["provider"] else None,
-                model=r["model"] if "model" in r.keys() and r["model"] else None,
-                input_tokens=r["input_tokens"] if "input_tokens" in r.keys() else None,
-                output_tokens=r["output_tokens"] if "output_tokens" in r.keys() else None,
-                cache_read_tokens=r["cache_read_tokens"] if "cache_read_tokens" in r.keys() else None,
-                total_cost_usd=r["total_cost_usd"] if "total_cost_usd" in r.keys() else None,
-                kind=r["kind"] if "kind" in r.keys() and r["kind"] else "initial",
-                triggering_message_id=r["triggering_message_id"] if "triggering_message_id" in r.keys() else None,
+                executor=r["executor"] if "executor" in r.keys() and r["executor"] else None,  # noqa: SIM118
+                provider=r["provider"] if "provider" in r.keys() and r["provider"] else None,  # noqa: SIM118
+                model=r["model"] if "model" in r.keys() and r["model"] else None,  # noqa: SIM118
+                input_tokens=r["input_tokens"] if "input_tokens" in r.keys() else None,  # noqa: SIM118
+                output_tokens=r["output_tokens"] if "output_tokens" in r.keys() else None,  # noqa: SIM118
+                cache_read_tokens=r["cache_read_tokens"]
+                if "cache_read_tokens" in r.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
+                total_cost_usd=r["total_cost_usd"] if "total_cost_usd" in r.keys() else None,  # noqa: SIM118
+                kind=r["kind"] if "kind" in r.keys() and r["kind"] else "initial",  # noqa: SIM118
+                triggering_message_id=r["triggering_message_id"]
+                if "triggering_message_id" in r.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
                 started_at=self._parse_datetime(r["started_at"]),
                 completed_at=self._parse_datetime(r["completed_at"]),
                 created_at=self._parse_datetime(r["created_at"]),
@@ -2057,42 +2397,72 @@ class AsyncSQLiteStore:
             for r in rows
         ]
 
-    async def list_execution_process_runtime_rows(self, session_id: str) -> list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]]:
+    async def list_execution_process_runtime_rows(
+        self, session_id: str
+    ) -> list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]]:
         processes = await self.list_execution_processes(session_id=session_id)
         rows = []
         for process in processes:
             task = await self.load_codex_task(process.task_id)
-            messages = await self.list_codex_task_messages(process.task_id, execution_process_id=process.id)
-            logs = await self.load_log_events(session_id, task_id=process.task_id, execution_process_id=process.id, limit=10000)
+            messages = await self.list_codex_task_messages(
+                process.task_id, execution_process_id=process.id
+            )
+            logs = await self.load_log_events(
+                session_id, task_id=process.task_id, execution_process_id=process.id, limit=10000
+            )
             rows.append((process, task, messages, logs))
         return rows
 
-    async def update_execution_process_status(self, process_id: str, status: str, exit_code: int | None = None, completed_at: datetime | None = None):
+    async def update_execution_process_status(
+        self,
+        process_id: str,
+        status: str,
+        exit_code: int | None = None,
+        completed_at: datetime | None = None,
+    ):
         await self._ensure_db()
         conn = await self._get_conn()
         from datetime import datetime as dt
+
         now = dt.now()
-        completed_at_value = self._format_datetime(completed_at) if completed_at is not None else None
+        completed_at_value = (
+            self._format_datetime(completed_at) if completed_at is not None else None
+        )
         await conn.execute(
             "UPDATE execution_processes SET status = ?, exit_code = ?, completed_at = ?, updated_at = ? WHERE id = ?",
             (status, exit_code, completed_at_value, self._format_datetime(now), process_id),
         )
         await conn.commit()
 
-    async def update_execution_process_usage(self, process_id: str, input_tokens: int | None = None, output_tokens: int | None = None, cache_read_tokens: int | None = None, total_cost_usd: float | None = None):
+    async def update_execution_process_usage(
+        self,
+        process_id: str,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        total_cost_usd: float | None = None,
+    ):
         await self._ensure_db()
         conn = await self._get_conn()
         from datetime import datetime as dt
+
         now = dt.now()
         await conn.execute(
             "UPDATE execution_processes SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, total_cost_usd = ?, updated_at = ? WHERE id = ?",
-            (input_tokens, output_tokens, cache_read_tokens, total_cost_usd, self._format_datetime(now), process_id),
+            (
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                total_cost_usd,
+                self._format_datetime(now),
+                process_id,
+            ),
         )
         await conn.commit()
 
     # --- Runtime Catalog ---
 
-    async def save_runtime_catalog(self, catalog: "RuntimeCatalog"):
+    async def save_runtime_catalog(self, catalog: "RuntimeCatalog"):  # noqa: UP037
         """Save the runtime catalog to the database."""
         await self._ensure_db()
         conn = await self._get_conn()
@@ -2102,13 +2472,16 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def load_runtime_catalog(self) -> "RuntimeCatalog | None":
+    async def load_runtime_catalog(self) -> "RuntimeCatalog | None":  # noqa: UP037
         """Load the runtime catalog from the database."""
         await self._ensure_db()
         from app.domain.models import RuntimeCatalog
+
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        async with conn.execute("SELECT data FROM runtime_catalog_settings WHERE id = ?", ("runtime_catalog",)) as cur:
+        async with conn.execute(
+            "SELECT data FROM runtime_catalog_settings WHERE id = ?", ("runtime_catalog",)
+        ) as cur:
             row = await cur.fetchone()
         if not row:
             return None
@@ -2152,8 +2525,9 @@ class AsyncSQLiteStore:
 
     # --- Agents (PR1: Workflow DAG) ---
 
-    def _row_to_agent(self, row) -> "Agent":
+    def _row_to_agent(self, row) -> "Agent":  # noqa: F821, UP037
         from app.domain.models import Agent
+
         return Agent(
             id=row["id"],
             workspace_id=row["workspace_id"],
@@ -2168,7 +2542,9 @@ class AsyncSQLiteStore:
             default_model=row["default_model"],
             artifact_subdir=row["artifact_subdir"],
             persist_kind=row["persist_kind"],
-            agent_tier=row["agent_tier"] if "agent_tier" in row.keys() and row["agent_tier"] else "managed",
+            agent_tier=row["agent_tier"]
+            if "agent_tier" in row.keys() and row["agent_tier"]  # noqa: SIM118
+            else "managed",  # noqa: RUF100, SIM118
             triggers_replan_on_done=bool(row["triggers_replan_on_done"]),
             triggers_replan_on_fail=bool(row["triggers_replan_on_fail"]),
             is_builtin=bool(row["is_builtin"]),
@@ -2176,7 +2552,7 @@ class AsyncSQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def save_agent(self, agent: "Agent") -> None:
+    async def save_agent(self, agent: "Agent") -> None:  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -2212,7 +2588,7 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def load_agent(self, agent_id: str) -> "Agent | None":
+    async def load_agent(self, agent_id: str) -> "Agent | None":  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2220,7 +2596,9 @@ class AsyncSQLiteStore:
             row = await cur.fetchone()
         return self._row_to_agent(row) if row else None
 
-    async def list_agents(self, workspace_id: str | None = None, role_key: str | None = None) -> list["Agent"]:
+    async def list_agents(
+        self, workspace_id: str | None = None, role_key: str | None = None
+    ) -> list["Agent"]:  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2249,8 +2627,9 @@ class AsyncSQLiteStore:
 
     # --- Workflow Graphs / Nodes / Edges / Replan (PR3) ---
 
-    def _row_to_workflow_graph(self, row) -> "WorkflowGraph":
+    def _row_to_workflow_graph(self, row) -> "WorkflowGraph":  # noqa: F821, UP037
         from app.domain.models import WorkflowGraph
+
         return WorkflowGraph(
             id=row["id"],
             issue_id=row["issue_id"],
@@ -2263,8 +2642,9 @@ class AsyncSQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def _row_to_workflow_node(self, row) -> "WorkflowNode":
+    def _row_to_workflow_node(self, row) -> "WorkflowNode":  # noqa: F821, UP037
         from app.domain.models import WorkflowNode
+
         return WorkflowNode(
             id=row["id"],
             graph_id=row["graph_id"],
@@ -2277,16 +2657,17 @@ class AsyncSQLiteStore:
             artifact_dir=row["artifact_dir"],
             retries=row["retries"] or 0,
             max_retries=row["max_retries"] or 1,
-            instance_index=row["instance_index"] if "instance_index" in row.keys() else 0,
-            batch_key=row["batch_key"] if "batch_key" in row.keys() else None,
+            instance_index=row["instance_index"] if "instance_index" in row.keys() else 0,  # noqa: SIM118
+            batch_key=row["batch_key"] if "batch_key" in row.keys() else None,  # noqa: SIM118
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def _row_to_workflow_edge(self, row) -> "WorkflowEdge":
+    def _row_to_workflow_edge(self, row) -> "WorkflowEdge":  # noqa: F821, UP037
         from app.domain.models import WorkflowEdge
+
         return WorkflowEdge(
             id=row["id"],
             graph_id=row["graph_id"],
@@ -2299,9 +2680,9 @@ class AsyncSQLiteStore:
 
     async def save_workflow_graph(
         self,
-        graph: "WorkflowGraph",
-        nodes: list["WorkflowNode"] | None = None,
-        edges: list["WorkflowEdge"] | None = None,
+        graph: "WorkflowGraph",  # noqa: F821, UP037
+        nodes: list["WorkflowNode"] | None = None,  # noqa: F821, UP037
+        edges: list["WorkflowEdge"] | None = None,  # noqa: F821, UP037
     ) -> None:
         """Persist graph + rebuild derived nodes/edges atomically."""
         await self._ensure_db()
@@ -2379,7 +2760,7 @@ class AsyncSQLiteStore:
                 )
         await conn.commit()
 
-    async def load_workflow_graph(self, graph_id: str) -> "WorkflowGraph | None":
+    async def load_workflow_graph(self, graph_id: str) -> "WorkflowGraph | None":  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2402,7 +2783,7 @@ class AsyncSQLiteStore:
         graph.edges = [self._row_to_workflow_edge(r) for r in edge_rows]
         return graph
 
-    async def load_workflow_graph_for_issue(self, issue_id: str) -> "WorkflowGraph | None":
+    async def load_workflow_graph_for_issue(self, issue_id: str) -> "WorkflowGraph | None":  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2434,27 +2815,37 @@ class AsyncSQLiteStore:
         sets: list[str] = []
         params: list = []
         if status is not None:
-            sets.append("status = ?"); params.append(status)
+            sets.append("status = ?")
+            params.append(status)  # noqa: E702, RUF100
         if task_id is not None:
-            sets.append("task_id = ?"); params.append(task_id)
+            sets.append("task_id = ?")
+            params.append(task_id)  # noqa: E702, RUF100
         if artifact_dir is not None:
-            sets.append("artifact_dir = ?"); params.append(artifact_dir)
+            sets.append("artifact_dir = ?")
+            params.append(artifact_dir)  # noqa: E702, RUF100
         if prompt_override is not None:
-            sets.append("prompt_override = ?"); params.append(prompt_override)
+            sets.append("prompt_override = ?")
+            params.append(prompt_override)  # noqa: E702, RUF100
         if retries is not None:
-            sets.append("retries = ?"); params.append(retries)
+            sets.append("retries = ?")
+            params.append(retries)  # noqa: E702, RUF100
         if started_at is not None:
-            sets.append("started_at = ?"); params.append(self._format_datetime(started_at))
+            sets.append("started_at = ?")
+            params.append(self._format_datetime(started_at))  # noqa: E702, RUF100
         if completed_at is not self._UNSET:
             # Explicit None clears the column to NULL; a datetime value formats it.
             db_val = self._format_datetime(completed_at) if completed_at is not None else None
-            sets.append("completed_at = ?"); params.append(db_val)
-        sets.append("updated_at = ?"); params.append(self._format_datetime(datetime.now()))
+            sets.append("completed_at = ?")
+            params.append(db_val)  # noqa: E702, RUF100
+        sets.append("updated_at = ?")
+        params.append(self._format_datetime(datetime.now()))  # noqa: E702, RUF100
         params.append(node_id)
-        await conn.execute(f"UPDATE workflow_nodes SET {', '.join(sets)} WHERE id = ?", tuple(params))
+        await conn.execute(
+            f"UPDATE workflow_nodes SET {', '.join(sets)} WHERE id = ?", tuple(params)
+        )
         await conn.commit()
 
-    async def add_workflow_node(self, node: "WorkflowNode") -> None:
+    async def add_workflow_node(self, node: "WorkflowNode") -> None:  # noqa: F821, UP037
         """Insert a single new node (used by Conductor-driven dynamic dispatch)."""
         await self._ensure_db()
         conn = await self._get_conn()
@@ -2468,9 +2859,19 @@ class AsyncSQLiteStore:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                node.id, node.graph_id, node.node_key, node.agent_id, node.title,
-                node.prompt_override, node.status, node.task_id, node.artifact_dir,
-                node.retries, node.max_retries, node.instance_index, node.batch_key,
+                node.id,
+                node.graph_id,
+                node.node_key,
+                node.agent_id,
+                node.title,
+                node.prompt_override,
+                node.status,
+                node.task_id,
+                node.artifact_dir,
+                node.retries,
+                node.max_retries,
+                node.instance_index,
+                node.batch_key,
                 self._format_datetime(node.started_at),
                 self._format_datetime(node.completed_at),
                 self._format_datetime(node.created_at) or now_iso,
@@ -2479,7 +2880,7 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def add_workflow_edge(self, edge: "WorkflowEdge") -> None:
+    async def add_workflow_edge(self, edge: "WorkflowEdge") -> None:  # noqa: F821, UP037
         """Insert a single new edge (used by Conductor-driven dynamic dispatch)."""
         await self._ensure_db()
         conn = await self._get_conn()
@@ -2492,14 +2893,18 @@ class AsyncSQLiteStore:
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                edge.id, edge.graph_id, edge.from_node_key, edge.to_node_key,
-                edge.edge_type, edge.condition_expr,
+                edge.id,
+                edge.graph_id,
+                edge.from_node_key,
+                edge.to_node_key,
+                edge.edge_type,
+                edge.condition_expr,
                 self._format_datetime(edge.created_at) or now_iso,
             ),
         )
         await conn.commit()
 
-    async def find_node_by_task_id(self, task_id: str) -> "WorkflowNode | None":
+    async def find_node_by_task_id(self, task_id: str) -> "WorkflowNode | None":  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2510,7 +2915,7 @@ class AsyncSQLiteStore:
             row = await cur.fetchone()
         return self._row_to_workflow_node(row) if row else None
 
-    async def save_replan_pending(self, replan: "GraphReplanPending") -> None:
+    async def save_replan_pending(self, replan: "GraphReplanPending") -> None:  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -2534,8 +2939,9 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def list_pending_replans(self, graph_id: str) -> list["GraphReplanPending"]:
+    async def list_pending_replans(self, graph_id: str) -> list["GraphReplanPending"]:  # noqa: F821, UP037
         from app.domain.models import GraphReplanPending
+
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2546,17 +2952,19 @@ class AsyncSQLiteStore:
             rows = await cur.fetchall()
         out: list[GraphReplanPending] = []
         for r in rows:
-            out.append(GraphReplanPending(
-                id=r["id"],
-                graph_id=r["graph_id"],
-                triggered_by_node_key=r["triggered_by_node_key"],
-                trigger_reason=r["trigger_reason"],
-                diff_json=r["diff_json"],
-                rationale=r["rationale"],
-                status=r["status"],
-                created_at=self._parse_datetime(r["created_at"]),
-                resolved_at=self._parse_datetime(r["resolved_at"]),
-            ))
+            out.append(
+                GraphReplanPending(
+                    id=r["id"],
+                    graph_id=r["graph_id"],
+                    triggered_by_node_key=r["triggered_by_node_key"],
+                    trigger_reason=r["trigger_reason"],
+                    diff_json=r["diff_json"],
+                    rationale=r["rationale"],
+                    status=r["status"],
+                    created_at=self._parse_datetime(r["created_at"]),
+                    resolved_at=self._parse_datetime(r["resolved_at"]),
+                )
+            )
         return out
 
     async def resolve_replan(self, replan_id: str, status: str) -> bool:
@@ -2569,8 +2977,9 @@ class AsyncSQLiteStore:
         await conn.commit()
         return (cur.rowcount or 0) > 0
 
-    async def save_agent_message(self, msg: "AgentMessage") -> None:
+    async def save_agent_message(self, msg: "AgentMessage") -> None:  # noqa: F821, UP037
         from app.domain.models import AgentMessage  # noqa: F401 (type hint import)
+
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -2606,8 +3015,9 @@ class AsyncSQLiteStore:
         await conn.execute("DELETE FROM conductor_state_log WHERE issue_id = ?", (issue_id,))
         await conn.commit()
 
-    async def list_agent_messages(self, issue_id: str) -> list["AgentMessage"]:
+    async def list_agent_messages(self, issue_id: str) -> list["AgentMessage"]:  # noqa: F821, UP037
         from app.domain.models import AgentMessage
+
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2618,20 +3028,23 @@ class AsyncSQLiteStore:
             rows = await cur.fetchall()
         out: list[AgentMessage] = []
         for r in rows:
-            out.append(AgentMessage(
-                id=r["id"],
-                issue_id=r["issue_id"],
-                graph_id=r["graph_id"],
-                from_node_key=r["from_node_key"],
-                to_node_key=r["to_node_key"],
-                message_type=r["message_type"],
-                body=r["body"],
-                created_at=self._parse_datetime(r["created_at"]),
-            ))
+            out.append(
+                AgentMessage(
+                    id=r["id"],
+                    issue_id=r["issue_id"],
+                    graph_id=r["graph_id"],
+                    from_node_key=r["from_node_key"],
+                    to_node_key=r["to_node_key"],
+                    message_type=r["message_type"],
+                    body=r["body"],
+                    created_at=self._parse_datetime(r["created_at"]),
+                )
+            )
         return out
 
-    async def save_conductor_state(self, state: "ConductorState") -> None:
+    async def save_conductor_state(self, state: "ConductorState") -> None:  # noqa: F821, UP037
         from app.domain.models import ConductorState  # noqa: F401 (type hint import)
+
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -2649,8 +3062,9 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def load_conductor_state(self, issue_id: str) -> "ConductorState | None":
+    async def load_conductor_state(self, issue_id: str) -> "ConductorState | None":  # noqa: F821, UP037
         from app.domain.models import ConductorState
+
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2670,8 +3084,9 @@ class AsyncSQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def save_project_conductor_state(self, state: "ProjectConductorState") -> None:
+    async def save_project_conductor_state(self, state: "ProjectConductorState") -> None:  # noqa: F821, UP037
         from app.domain.models import ProjectConductorState  # noqa: F401
+
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -2693,8 +3108,9 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def load_project_conductor_state(self, project_id: str) -> "ProjectConductorState | None":
+    async def load_project_conductor_state(self, project_id: str) -> "ProjectConductorState | None":  # noqa: F821, UP037
         from app.domain.models import ProjectConductorState
+
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2717,7 +3133,7 @@ class AsyncSQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def _row_to_conductor_task(self, row) -> "ConductorTask":
+    def _row_to_conductor_task(self, row) -> "ConductorTask":  # noqa: F821, UP037
         from app.domain.models import ConductorTask
 
         try:
@@ -2733,15 +3149,22 @@ class AsyncSQLiteStore:
             issue_id=row["issue_id"],
             status=row["status"],
             result_json=row["result_json"],
-            lease_owner=row["lease_owner"] if "lease_owner" in keys and row["lease_owner"] else None,
-            heartbeat_at=self._parse_datetime(row["heartbeat_at"] if "heartbeat_at" in keys else None),
-            lease_expires_at=self._parse_datetime(row["lease_expires_at"] if "lease_expires_at" in keys else None),
+            lease_owner=row["lease_owner"]
+            if "lease_owner" in keys and row["lease_owner"]
+            else None,
+            heartbeat_at=self._parse_datetime(
+                row["heartbeat_at"] if "heartbeat_at" in keys else None
+            ),
+            lease_expires_at=self._parse_datetime(
+                row["lease_expires_at"] if "lease_expires_at" in keys else None
+            ),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def save_conductor_task(self, task: "ConductorTask") -> None:
+    async def save_conductor_task(self, task: "ConductorTask") -> None:  # noqa: F821, UP037
         from app.domain.models import ConductorTask  # noqa: F401
+
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -2766,7 +3189,7 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def load_conductor_task(self, task_id: str) -> "ConductorTask | None":
+    async def load_conductor_task(self, task_id: str) -> "ConductorTask | None":  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2776,7 +3199,7 @@ class AsyncSQLiteStore:
             return None
         return self._row_to_conductor_task(row)
 
-    async def load_latest_conductor_task_for_issue(self, issue_id: str) -> "ConductorTask | None":
+    async def load_latest_conductor_task_for_issue(self, issue_id: str) -> "ConductorTask | None":  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2792,7 +3215,7 @@ class AsyncSQLiteStore:
             return None
         return self._row_to_conductor_task(row)
 
-    async def list_conductor_tasks(self, *, status: str | None = None) -> list["ConductorTask"]:
+    async def list_conductor_tasks(self, *, status: str | None = None) -> list["ConductorTask"]:  # noqa: F821, UP037
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2811,8 +3234,9 @@ class AsyncSQLiteStore:
                 rows = await cur.fetchall()
         return [self._row_to_conductor_task(row) for row in rows]
 
-    async def save_conductor_turn(self, turn: "ConductorTurn") -> None:
+    async def save_conductor_turn(self, turn: "ConductorTurn") -> None:  # noqa: F821, UP037
         from app.domain.models import ConductorTurn  # noqa: F401
+
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -2833,7 +3257,9 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def enqueue_conductor_user_message(self, conductor_task_id: str, issue_id: str, text: str) -> "ConductorTurn":
+    async def enqueue_conductor_user_message(
+        self, conductor_task_id: str, issue_id: str, text: str
+    ) -> "ConductorTurn":  # noqa: F821, UP037
         from app.domain.models import ConductorTurn
 
         await self._ensure_db()
@@ -2859,7 +3285,7 @@ class AsyncSQLiteStore:
         await self.save_conductor_turn(turn)
         return turn
 
-    async def drain_conductor_inbox(self, conductor_task_id: str) -> list["ConductorTurn"]:
+    async def drain_conductor_inbox(self, conductor_task_id: str) -> list["ConductorTurn"]:  # noqa: F821, UP037
         from app.domain.models import ConductorTurn
 
         await self._ensure_db()
@@ -2901,8 +3327,9 @@ class AsyncSQLiteStore:
         *,
         conductor_task_id: str | None = None,
         limit: int = 200,
-    ) -> list["ConductorTurn"]:
+    ) -> list["ConductorTurn"]:  # noqa: F821, UP037
         from app.domain.models import ConductorTurn
+
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2926,12 +3353,14 @@ class AsyncSQLiteStore:
                 kind=row["kind"],
                 payload_json=row["payload_json"] or "{}",
                 created_at=self._parse_datetime(row["created_at"]),
-                consumed_at=self._parse_datetime(row["consumed_at"]) if "consumed_at" in row.keys() else None,
+                consumed_at=self._parse_datetime(row["consumed_at"])
+                if "consumed_at" in row.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
             )
             for row in rows
         ]
 
-    async def save_conductor_state_log(self, entry: "ConductorStateLog") -> None:
+    async def save_conductor_state_log(self, entry: "ConductorStateLog") -> None:  # noqa: F821, UP037
         from app.domain.models import ConductorStateLog  # noqa: F401
 
         await self._ensure_db()
@@ -2960,7 +3389,7 @@ class AsyncSQLiteStore:
         *,
         limit: int = 200,
         descending: bool = False,
-    ) -> list["ConductorStateLog"]:
+    ) -> list["ConductorStateLog"]:  # noqa: F821, UP037
         from app.domain.models import ConductorStateLog
 
         await self._ensure_db()
@@ -2993,7 +3422,7 @@ class AsyncSQLiteStore:
             for row in rows
         ]
 
-    async def save_audit_log(self, entry: "AuditLog") -> None:
+    async def save_audit_log(self, entry: "AuditLog") -> None:  # noqa: F821, UP037
         from app.domain.models import AuditLog  # noqa: F401
 
         await self._ensure_db()
@@ -3035,7 +3464,7 @@ class AsyncSQLiteStore:
         cursor_id: str | None = None,
         limit: int = 200,
         descending: bool = True,
-    ) -> list["AuditLog"]:
+    ) -> list["AuditLog"]:  # noqa: F821, UP037
         from app.domain.models import AuditLog
 
         await self._ensure_db()
@@ -3075,8 +3504,9 @@ class AsyncSQLiteStore:
             for row in rows
         ]
 
-    async def save_project_memory_embedding(self, memory: "ProjectMemoryEmbedding") -> None:
+    async def save_project_memory_embedding(self, memory: "ProjectMemoryEmbedding") -> None:  # noqa: F821, UP037
         from app.domain.models import ProjectMemoryEmbedding  # noqa: F401
+
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -3095,8 +3525,11 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def list_project_memory_embeddings(self, project_id: str, limit: int | None = None) -> list["ProjectMemoryEmbedding"]:
+    async def list_project_memory_embeddings(
+        self, project_id: str, limit: int | None = None
+    ) -> list["ProjectMemoryEmbedding"]:  # noqa: F821, UP037
         from app.domain.models import ProjectMemoryEmbedding
+
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -3120,7 +3553,7 @@ class AsyncSQLiteStore:
             for row in rows
         ]
 
-    async def save_self_improvement_proposal(self, proposal: "SelfImprovementProposal") -> None:
+    async def save_self_improvement_proposal(self, proposal: "SelfImprovementProposal") -> None:  # noqa: UP037
         from app.domain.models import SelfImprovementProposal  # noqa: F401
 
         await self._ensure_db()
@@ -3160,7 +3593,9 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def load_self_improvement_proposal(self, proposal_id: str) -> "SelfImprovementProposal | None":
+    async def load_self_improvement_proposal(
+        self, proposal_id: str
+    ) -> "SelfImprovementProposal | None":  # noqa: UP037
         from app.domain.models import SelfImprovementProposal
 
         await self._ensure_db()
@@ -3195,7 +3630,7 @@ class AsyncSQLiteStore:
         self,
         proposal_id: str,
         status: str,
-    ) -> "SelfImprovementProposal | None":
+    ) -> "SelfImprovementProposal | None":  # noqa: UP037
         await self._ensure_db()
         conn = await self._get_conn()
         cur = await conn.execute(
@@ -3213,7 +3648,7 @@ class AsyncSQLiteStore:
         issue_id: str | None = None,
         status: str | None = None,
         limit: int | None = None,
-    ) -> list["SelfImprovementProposal"]:
+    ) -> list["SelfImprovementProposal"]:  # noqa: UP037
         from app.domain.models import SelfImprovementProposal
 
         await self._ensure_db()
@@ -3262,7 +3697,7 @@ class AsyncSQLiteStore:
 
     async def save_self_improvement_application_event(
         self,
-        event: "SelfImprovementApplicationEvent",
+        event: "SelfImprovementApplicationEvent",  # noqa: UP037
     ) -> None:
         from app.domain.models import SelfImprovementApplicationEvent  # noqa: F401
 
@@ -3296,7 +3731,7 @@ class AsyncSQLiteStore:
         project_id: str | None = None,
         proposal_id: str | None = None,
         limit: int | None = None,
-    ) -> list["SelfImprovementApplicationEvent"]:
+    ) -> list["SelfImprovementApplicationEvent"]:  # noqa: UP037
         from app.domain.models import SelfImprovementApplicationEvent
 
         await self._ensure_db()
@@ -3339,8 +3774,9 @@ class AsyncSQLiteStore:
             for row in rows
         ]
 
-    async def save_conductor_decision(self, d: "ConductorDecision") -> None:
+    async def save_conductor_decision(self, d: "ConductorDecision") -> None:  # noqa: F821, UP037
         from app.domain.models import ConductorDecision  # noqa: F401 (type hint import)
+
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -3360,8 +3796,9 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def list_conductor_decisions(self, issue_id: str) -> list["ConductorDecision"]:
+    async def list_conductor_decisions(self, issue_id: str) -> list["ConductorDecision"]:  # noqa: F821, UP037
         from app.domain.models import ConductorDecision
+
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -3372,16 +3809,18 @@ class AsyncSQLiteStore:
             rows = await cur.fetchall()
         out: list[ConductorDecision] = []
         for r in rows:
-            out.append(ConductorDecision(
-                id=r["id"],
-                issue_id=r["issue_id"],
-                task_id=r["task_id"],
-                action=r["action"],
-                reason=r["reason"],
-                diff_json=r["diff_json"],
-                applied_at=self._parse_datetime(r["applied_at"]),
-                created_at=self._parse_datetime(r["created_at"]),
-            ))
+            out.append(
+                ConductorDecision(
+                    id=r["id"],
+                    issue_id=r["issue_id"],
+                    task_id=r["task_id"],
+                    action=r["action"],
+                    reason=r["reason"],
+                    diff_json=r["diff_json"],
+                    applied_at=self._parse_datetime(r["applied_at"]),
+                    created_at=self._parse_datetime(r["created_at"]),
+                )
+            )
         return out
 
     # --- Skill CRUD ---
@@ -3458,7 +3897,7 @@ class AsyncSQLiteStore:
     async def list_skill_categories(self) -> list[str]:
         """Union of (categories observed on skills) ∪ (user-pre-created empty
         categories). Returned sorted alphabetically.
-        """
+        """  # noqa: RUF002
         await self._ensure_db()
         conn = await self._get_conn()
         async with conn.execute(

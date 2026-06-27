@@ -1,4 +1,5 @@
 """Project lifecycle: create from local path or clone, list/get/update/delete."""
+
 from __future__ import annotations
 
 import shutil
@@ -53,7 +54,7 @@ class ProjectService:
         parent.mkdir(parents=True, exist_ok=True)
         slug = (name.strip() or _slug_from_url(origin_url)).replace(" ", "-")
         dest = parent / slug
-        if dest.exists():
+        if dest.exists():  # noqa: SIM102
             if any(dest.iterdir()):
                 raise ProjectError(f"destination already exists and is not empty: {dest}")
         try:

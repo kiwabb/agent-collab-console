@@ -5,6 +5,7 @@ watchdog reads it (alongside `task.status` from the store) to decide whether
 a task has gone silent past the stall threshold. Both writers and the
 watchdog are single-loop asyncio code, so a plain dict is sufficient.
 """
+
 from __future__ import annotations
 
 from datetime import datetime

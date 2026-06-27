@@ -43,16 +43,21 @@ class GenericSpecialistWorkflow:
 
     def persist_result(self, task, workspace_title: str | None = None) -> SpecialistReportDocument:
         if not getattr(task, "workspace_path", None):
-            raise GenericSpecialistWorkflowError("Task workspace_path is required for specialist artifacts")
+            raise GenericSpecialistWorkflowError(
+                "Task workspace_path is required for specialist artifacts"
+            )
         if not getattr(task, "result", None) or not str(task.result).strip():
             raise GenericSpecialistWorkflowError("Specialist task result is empty")
 
         definition = self._resolve_definition(getattr(task, "role", ""))
         try:
             from app.application.tolerant_json import tolerant_json_loads
+
             payload = tolerant_json_loads(task.result)
         except json.JSONDecodeError as exc:
-            raise GenericSpecialistWorkflowError(f"Specialist output is not valid JSON: {exc}") from exc
+            raise GenericSpecialistWorkflowError(
+                f"Specialist output is not valid JSON: {exc}"
+            ) from exc
         if not isinstance(payload, dict):
             raise GenericSpecialistWorkflowError("Specialist output must be a JSON object")
 
@@ -63,18 +68,17 @@ class GenericSpecialistWorkflow:
             definition.role_key,
             task.id,
         )
-        artifact_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        artifact_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         rel_name = f"specialists/{definition.role_key}/{task.id}.json"
         task.result = (
-            f"Specialist {definition.role_key} report generated. "
-            f"File: {artifact_path.name}."
+            f"Specialist {definition.role_key} report generated. File: {artifact_path.name}."
         )
         return SpecialistReportDocument(
             role_key=definition.role_key,
             artifact=payload,
-            written_files=[
-                {"name": rel_name, "path": str(artifact_path), "kind": "specialist"}
-            ],
+            written_files=[{"name": rel_name, "path": str(artifact_path), "kind": "specialist"}],
             clarification_question=payload.get("clarification_question"),
         )
 

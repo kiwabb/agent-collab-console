@@ -40,11 +40,9 @@ _BENCHMARK_EVIDENCE_TERMS = (
 
 
 class _ProposalStore(Protocol):
-    async def list_conductor_tasks(self, *, status: str | None = None) -> list[object]:
-        ...
+    async def list_conductor_tasks(self, *, status: str | None = None) -> list[object]: ...
 
-    async def save_self_improvement_proposal(self, proposal: SelfImprovementProposal) -> None:
-        ...
+    async def save_self_improvement_proposal(self, proposal: SelfImprovementProposal) -> None: ...
 
 
 def _json_text(value: object) -> str:
@@ -62,7 +60,9 @@ def _normalize_fingerprint_part(value: str) -> str:
 
 
 def _fingerprint(issue: CodexIssue, target_kind: str, rule_id: str) -> str:
-    return "|".join([issue.project_id or "", issue.id, target_kind, _normalize_fingerprint_part(rule_id)])
+    return "|".join(
+        [issue.project_id or "", issue.id, target_kind, _normalize_fingerprint_part(rule_id)]
+    )
 
 
 def _proposal(
@@ -106,9 +106,11 @@ async def _load_issue_tasks(issue: CodexIssue, store: _ProposalStore) -> list[ob
         for status in ("failed", "stalled", "done"):
             try:
                 tasks.extend(await store.list_conductor_tasks(status=status))
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("self_improvement task read failed for %s/%s: %s", issue.id, status, exc)
-    except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001, RUF100
+                logger.debug(
+                    "self_improvement task read failed for %s/%s: %s", issue.id, status, exc
+                )
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.debug("self_improvement task read failed for %s: %s", issue.id, exc)
         return []
     return [task for task in tasks if _task_matches_issue(task, issue.id)]
@@ -260,7 +262,9 @@ def _classify_tasks(issue: CodexIssue, tasks: list[object]) -> list[SelfImprovem
         text = _task_result_text(task)
         status = str(getattr(task, "status", "") or "").lower()
         lowered = text.lower()
-        if "qa" in lowered and ("failed" in lowered or "bugs_found" in lowered or "exit_code" in lowered):
+        if "qa" in lowered and (
+            "failed" in lowered or "bugs_found" in lowered or "exit_code" in lowered
+        ):
             proposal = _proposal(
                 issue,
                 target_kind="code_spec",
@@ -311,7 +315,9 @@ def _classify_tasks(issue: CodexIssue, tasks: list[object]) -> list[SelfImprovem
     return list(proposals.values())
 
 
-async def extract_self_improvement_proposals(issue: CodexIssue, store: _ProposalStore) -> list[SelfImprovementProposal]:
+async def extract_self_improvement_proposals(
+    issue: CodexIssue, store: _ProposalStore
+) -> list[SelfImprovementProposal]:
     if not issue.project_id:
         return []
     tasks = await _load_issue_tasks(issue, store)
@@ -320,16 +326,18 @@ async def extract_self_improvement_proposals(issue: CodexIssue, store: _Proposal
     for proposal in proposals:
         try:
             await store.save_self_improvement_proposal(proposal)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("self_improvement proposal save failed for issue %s: %s", issue.id, exc)
             return []
         saved.append(proposal)
     return saved
 
 
-async def record_issue_self_improvement(issue: CodexIssue, store: _ProposalStore) -> list[SelfImprovementProposal]:
+async def record_issue_self_improvement(
+    issue: CodexIssue, store: _ProposalStore
+) -> list[SelfImprovementProposal]:
     try:
         return await extract_self_improvement_proposals(issue, store)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.warning("self_improvement extraction failed for issue %s: %s", issue.id, exc)
         return []

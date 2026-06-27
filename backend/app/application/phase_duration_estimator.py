@@ -39,7 +39,9 @@ class PhaseDurationEstimator:
             next_row = rows[index + 1] if index + 1 < len(rows) else None
             if row.transition_at is None or next_row is None or next_row.transition_at is None:
                 continue
-            duration_ms = max(1, int((next_row.transition_at - row.transition_at).total_seconds() * 1000))
+            duration_ms = max(
+                1, int((next_row.transition_at - row.transition_at).total_seconds() * 1000)
+            )
             buckets.setdefault(row.to_phase, []).append(duration_ms)
         self._cache = {
             phase: EstimateResult(
@@ -78,6 +80,6 @@ def _percentile(values: list[int], percentile: int) -> int | None:
     if percentile >= 100:
         return ordered[-1]
     try:
-        return int(round(quantiles(ordered, n=100, method="inclusive")[percentile - 1]))
+        return int(round(quantiles(ordered, n=100, method="inclusive")[percentile - 1]))  # noqa: RUF046
     except StatisticsError:
         return ordered[-1]

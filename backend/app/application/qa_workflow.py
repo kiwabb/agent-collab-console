@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import json
 import logging
@@ -8,7 +8,7 @@ import time
 
 from pydantic import BaseModel, Field, ValidationError
 
-from app.application.command_safety import REFUSED_COMMAND_PATTERNS as _REFUSED_COMMAND_PATTERNS
+from app.application.command_safety import REFUSED_COMMAND_PATTERNS as _REFUSED_COMMAND_PATTERNS  # noqa: F401
 from app.application.command_safety import refuse_reason as _shared_refuse_reason
 from app.application.issue_artifact_documents import IssueArtifactDocuments
 from app.application.qa_failure_summary import format_qa_failure_narrative
@@ -28,7 +28,9 @@ QA_COMMAND_TIMEOUT_S = int(os.getenv("QA_COMMAND_TIMEOUT_S", "120"))
 QA_TOTAL_BUDGET_S = int(os.getenv("QA_TOTAL_BUDGET_S", "300"))
 # Whether to actually execute verification commands. Default ON in real-CLI
 # mode. Disable for offline tests / quick demos.
-QA_EXECUTE_COMMANDS = os.getenv("QA_EXECUTE_COMMANDS", os.getenv("REAL_CLI", "true")).lower() == "true"
+QA_EXECUTE_COMMANDS = (
+    os.getenv("QA_EXECUTE_COMMANDS", os.getenv("REAL_CLI", "true")).lower() == "true"
+)
 
 # Patterns we refuse to run even if the LLM proposes them live in the shared
 # `command_safety` module (also used by the project dev-server runner). Imported
@@ -56,7 +58,9 @@ class QAReportDocument(BaseModel):
     # Phase 4: Request specialist assistance (e.g., security review) without waiting for Conductor.
     # Set this field to call a specialist agent directly. The specialist will complete,
     # and the QA will resume with the specialist's findings in review_comment.
-    call_specialist: dict | None = None  # {"role_key": "security_reviewer", "prompt": "...", "why": "..."}
+    call_specialist: dict | None = (
+        None  # {"role_key": "security_reviewer", "prompt": "...", "why": "..."}
+    )
 
 
 class QAWorkflow:
@@ -111,7 +115,12 @@ class QAWorkflow:
         implementation_md = engineer_artifacts.get("implementation_md", "")
 
         upstream_context = self._build_upstream_context(
-            requirement_text, prd_text, bugfix_text, system_design_json, implementation_plan, implementation_md
+            requirement_text,
+            prd_text,
+            bugfix_text,
+            system_design_json,
+            implementation_plan,
+            implementation_md,
         )
 
         return (
@@ -158,6 +167,7 @@ class QAWorkflow:
 
         try:
             from app.application.tolerant_json import tolerant_json_loads
+
             payload = tolerant_json_loads(task.result)
         except json.JSONDecodeError as exc:
             raise QAWorkflowError(f"QA output is not valid JSON: {exc}") from exc
@@ -205,7 +215,9 @@ class QAWorkflow:
         # diff is suspicious. Bump to `needs_follow_up` (soft, sticky over a
         # `passed` claim) so a human looks — never harder than the command
         # reconcile (a real command FAILURE keeps `failed`).
-        git_status, git_note = self._git_cross_check(report.status, task.workspace_path, canonical_issue_id)
+        git_status, git_note = self._git_cross_check(
+            report.status, task.workspace_path, canonical_issue_id
+        )
         if git_note:
             if git_status != report.status:
                 report.status = git_status
@@ -234,15 +246,18 @@ class QAWorkflow:
             )
         elif report.status in ("blocked", "needs_follow_up"):
             # Keep status="done" (no rework loop), but surface the verdict.
-            task.review_comment = (
-                f"[{report.status.upper()}] "
-                + format_qa_failure_narrative(report.model_dump(), qa_report_relpath=qa_relpath)
+            task.review_comment = f"[{report.status.upper()}] " + format_qa_failure_narrative(
+                report.model_dump(), qa_report_relpath=qa_relpath
             )
         # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
-        object.__setattr__(report, "written_files", [
-            {"name": "qa/qa_plan.json", "path": str(qa_plan_path), "kind": "testing"},
-            {"name": "qa/qa_report.md", "path": str(qa_report_path), "kind": "testing"},
-        ])
+        object.__setattr__(
+            report,
+            "written_files",
+            [
+                {"name": "qa/qa_plan.json", "path": str(qa_plan_path), "kind": "testing"},
+                {"name": "qa/qa_report.md", "path": str(qa_report_path), "kind": "testing"},
+            ],
+        )
         # Surface execution results so the scheduler / replanner can reason
         # about whether to dispatch an Engineer rework.
         object.__setattr__(report, "execution_results", execution_results or [])
@@ -270,7 +285,9 @@ class QAWorkflow:
                 exit_code = r.get("exit_code")
                 status = "error" if (refused or (exit_code or 0) != 0) else "ok"
                 duration_s = r.get("duration_s")
-                duration_ms = int(duration_s * 1000) if isinstance(duration_s, (int, float)) else None
+                duration_ms = (
+                    int(duration_s * 1000) if isinstance(duration_s, (int, float)) else None
+                )
                 audit_logger.record(
                     "command_exec",
                     actor="qa",
@@ -288,7 +305,7 @@ class QAWorkflow:
                     },
                     error=str(refused) if refused else None,
                 )
-        except Exception:  # noqa: BLE001 — audit must never break QA
+        except Exception:  # noqa: BLE001, RUF100
             pass
 
     def _execute_verification_commands(
@@ -319,25 +336,29 @@ class QAWorkflow:
                 continue
             elapsed = time.monotonic() - start
             if elapsed >= QA_TOTAL_BUDGET_S:
-                results.append({
-                    "command": cmd,
-                    "exit_code": -1,
-                    "stdout": "",
-                    "stderr": "",
-                    "duration_s": 0.0,
-                    "refused": "budget_exhausted",
-                })
+                results.append(
+                    {
+                        "command": cmd,
+                        "exit_code": -1,
+                        "stdout": "",
+                        "stderr": "",
+                        "duration_s": 0.0,
+                        "refused": "budget_exhausted",
+                    }
+                )
                 continue
             refusal = self._refuse_reason(cmd)
             if refusal:
-                results.append({
-                    "command": cmd,
-                    "exit_code": -1,
-                    "stdout": "",
-                    "stderr": f"refused by framework: {refusal}",
-                    "duration_s": 0.0,
-                    "refused": refusal,
-                })
+                results.append(
+                    {
+                        "command": cmd,
+                        "exit_code": -1,
+                        "stdout": "",
+                        "stderr": f"refused by framework: {refusal}",
+                        "duration_s": 0.0,
+                        "refused": refusal,
+                    }
+                )
                 continue
             t0 = time.monotonic()
             try:
@@ -349,32 +370,38 @@ class QAWorkflow:
                     text=True,
                     timeout=QA_COMMAND_TIMEOUT_S,
                 )
-                results.append({
-                    "command": cmd,
-                    "exit_code": proc.returncode,
-                    "stdout": (proc.stdout or "")[-4000:],
-                    "stderr": (proc.stderr or "")[-4000:],
-                    "duration_s": round(time.monotonic() - t0, 2),
-                })
+                results.append(
+                    {
+                        "command": cmd,
+                        "exit_code": proc.returncode,
+                        "stdout": (proc.stdout or "")[-4000:],
+                        "stderr": (proc.stderr or "")[-4000:],
+                        "duration_s": round(time.monotonic() - t0, 2),
+                    }
+                )
             except subprocess.TimeoutExpired as exc:
-                results.append({
-                    "command": cmd,
-                    "exit_code": -1,
-                    "stdout": (exc.stdout or "")[-4000:] if isinstance(exc.stdout, str) else "",
-                    "stderr": f"timed out after {QA_COMMAND_TIMEOUT_S}s",
-                    "duration_s": round(time.monotonic() - t0, 2),
-                    "refused": "timeout",
-                })
-            except Exception as exc:  # noqa: BLE001
+                results.append(
+                    {
+                        "command": cmd,
+                        "exit_code": -1,
+                        "stdout": (exc.stdout or "")[-4000:] if isinstance(exc.stdout, str) else "",
+                        "stderr": f"timed out after {QA_COMMAND_TIMEOUT_S}s",
+                        "duration_s": round(time.monotonic() - t0, 2),
+                        "refused": "timeout",
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001, RUF100
                 logger.warning("QA command %r raised: %s", cmd, exc)
-                results.append({
-                    "command": cmd,
-                    "exit_code": -1,
-                    "stdout": "",
-                    "stderr": f"command runner error: {exc}",
-                    "duration_s": round(time.monotonic() - t0, 2),
-                    "refused": "runner_error",
-                })
+                results.append(
+                    {
+                        "command": cmd,
+                        "exit_code": -1,
+                        "stdout": "",
+                        "stderr": f"command runner error: {exc}",
+                        "duration_s": round(time.monotonic() - t0, 2),
+                        "refused": "runner_error",
+                    }
+                )
         return results
 
     @staticmethod
@@ -410,9 +437,7 @@ class QAWorkflow:
             )
 
         if failed:
-            failed_summary = ", ".join(
-                f"{r['command']!r} → exit {r['exit_code']}" for r in failed
-            )
+            failed_summary = ", ".join(f"{r['command']!r} → exit {r['exit_code']}" for r in failed)
             notes.insert(
                 0,
                 f"[framework] Verification failed on {len(failed)} command(s): {failed_summary}. "
@@ -459,20 +484,20 @@ class QAWorkflow:
         try:
             from app.application.engineer_workflow import git_changed_files
             from app.application.review_guard import _read_engineer_report
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             return current_status, None
 
         try:
             eng_status, _claimed, has_completed_tasks = _read_engineer_report(
                 workspace_path, issue_id
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             return current_status, None
 
         # Engineer report implies it did implementation work.
         implies_implementation = (
-            (eng_status is not None and eng_status != "blocked") or has_completed_tasks
-        )
+            eng_status is not None and eng_status != "blocked"
+        ) or has_completed_tasks
         if not implies_implementation:
             return current_status, None
 
@@ -535,32 +560,44 @@ class QAWorkflow:
         if requirement:
             parts.append(f"requirement_document:\n{requirement}\n")
         else:
-            parts.append("NOTE: requirement.md is missing. Use test_scope and test_gaps for any underspecified requirement coverage.\n")
+            parts.append(
+                "NOTE: requirement.md is missing. Use test_scope and test_gaps for any underspecified requirement coverage.\n"
+            )
 
         if prd:
             parts.append(f"existing_prd:\n{prd}\n")
         else:
-            parts.append("NOTE: prd.json is missing. Use acceptance_coverage for any missing requirement details.\n")
+            parts.append(
+                "NOTE: prd.json is missing. Use acceptance_coverage for any missing requirement details.\n"
+            )
 
         if bugfix:
             parts.append(f"existing_bugfix:\n{bugfix}\n")
         else:
-            parts.append("NOTE: bugfix.md is not present. Use bugs_found for any missing defect context.\n")
+            parts.append(
+                "NOTE: bugfix.md is not present. Use bugs_found for any missing defect context.\n"
+            )
 
         if system_design:
             parts.append(f"existing_system_design:\n{system_design}\n")
         else:
-            parts.append("NOTE: system_design.json is missing. Use test_gaps for any missing design context.\n")
+            parts.append(
+                "NOTE: system_design.json is missing. Use test_gaps for any missing design context.\n"
+            )
 
         if implementation_plan:
             parts.append(f"implementation_plan:\n{implementation_plan}\n")
         else:
-            parts.append("NOTE: implementation_plan.json is missing. Use test_gaps for any missing implementation breakdown.\n")
+            parts.append(
+                "NOTE: implementation_plan.json is missing. Use test_gaps for any missing implementation breakdown.\n"
+            )
 
         if implementation_md:
             parts.append(f"existing_implementation_report:\n{implementation_md}\n")
         else:
-            parts.append("NOTE: implementation.md is not present. Use test_gaps for any missing implementation context.\n")
+            parts.append(
+                "NOTE: implementation.md is not present. Use test_gaps for any missing implementation context.\n"
+            )
 
         return "\n".join(parts)
 

@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 """Shared utilities for extracting and pricing token usage."""
-import os
+
+import os  # noqa: E402
 
 
 def extract_usage(obj) -> dict | None:
@@ -88,7 +91,7 @@ def _read_price(pricing, attr: str) -> float | None:
     """Read a per-million price field from a model config object or dict."""
     if pricing is None:
         return None
-    if isinstance(pricing, dict):
+    if isinstance(pricing, dict):  # noqa: SIM108
         value = pricing.get(attr)
     else:
         value = getattr(pricing, attr, None)

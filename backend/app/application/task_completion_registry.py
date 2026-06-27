@@ -4,17 +4,18 @@ WorkflowScheduler.on_task_completed calls .signal() when a registered task
 finishes.  The Conductor's dispatch_subagent tool calls .wait_for() which
 blocks until that signal arrives.
 """
+
 from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Callable
+from typing import Any, Callable  # noqa: UP035
 
 
 class TaskCompletionRegistry:
     """Process-singleton registry of in-flight conductor-dispatched tasks."""
 
-    _instance: "TaskCompletionRegistry | None" = None
+    _instance: "TaskCompletionRegistry | None" = None  # noqa: UP037
 
     # Defensive buffer of results that arrived BEFORE their task was registered.
     # Bounded + time-pruned so a truly-never-registered task can't leak forever
@@ -22,7 +23,7 @@ class TaskCompletionRegistry:
     _PENDING_TTL_S: float = 1800.0
     _PENDING_MAX: int = 256
 
-    def __new__(cls) -> "TaskCompletionRegistry":
+    def __new__(cls) -> "TaskCompletionRegistry":  # noqa: UP037
         if cls._instance is None:
             obj = super().__new__(cls)
             obj._events: dict[str, asyncio.Event] = {}
@@ -33,7 +34,7 @@ class TaskCompletionRegistry:
         return cls._instance
 
     @classmethod
-    def get(cls) -> "TaskCompletionRegistry":
+    def get(cls) -> "TaskCompletionRegistry":  # noqa: UP037
         return cls()
 
     def register(self, task_id: str) -> None:
@@ -93,7 +94,7 @@ class TaskCompletionRegistry:
             raise LookupError(f"Task {task_id} not registered in completion registry")
         try:
             await asyncio.wait_for(asyncio.shield(ev.wait()), timeout=timeout)
-        except asyncio.TimeoutError as exc:
+        except asyncio.TimeoutError as exc:  # noqa: UP041
             raise TimeoutError(f"Task {task_id} did not complete within {timeout}s") from exc
         finally:
             self._events.pop(task_id, None)
@@ -133,16 +134,16 @@ class TaskCompletionRegistry:
                 try:
                     await asyncio.wait_for(asyncio.shield(ev.wait()), timeout=poll)
                     break
-                except asyncio.TimeoutError:
+                except asyncio.TimeoutError:  # noqa: UP041
                     elapsed = time.monotonic() - start
                     if elapsed >= hard_timeout:
-                        raise TimeoutError(
+                        raise TimeoutError(  # noqa: B904
                             f"Task {task_id} did not complete within hard limit {hard_timeout:.0f}s"
                         )
                     if activity_age is not None:
                         age = activity_age(task_id)
                         if age is not None and age >= idle_timeout:
-                            raise TimeoutError(
+                            raise TimeoutError(  # noqa: B904
                                 f"Task {task_id} idle for {age:.0f}s (limit {idle_timeout:.0f}s)"
                             )
         finally:

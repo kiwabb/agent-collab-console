@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Per-issue cost/budget awareness (cost-aware conductor scheduling, PR2 + PR3).
 
 Cost is recorded after the fact on every ``ExecutionProcess`` row
@@ -23,12 +25,10 @@ its ``ExecutionProcess.status`` is one of the terminal states
 excluded — their ``total_cost_usd`` is not yet final and would double-count
 once the run lands. This matches the PRD constraint ("只算已完成 run").
 """
-from __future__ import annotations
+from dataclasses import dataclass  # noqa: E402
 
-from dataclasses import dataclass
-
-from app.application import timeouts
-from app.domain.models import CodexIssue, RuntimeCatalog
+from app.application import timeouts  # noqa: E402
+from app.domain.models import CodexIssue, RuntimeCatalog  # noqa: E402
 
 # Terminal execution-process states whose cost is final and safe to sum.
 COMPLETED_PROCESS_STATES = frozenset({"Completed", "Failed", "Killed"})
@@ -87,14 +87,8 @@ class IssueBudgetStatus:
             "issue_id": self.issue_id,
             "spent_usd": round(self.spent_usd, 6),
             "budget_usd": round(self.budget_usd, 6),
-            "remaining_usd": (
-                None if self.remaining_usd is None
-                else round(self.remaining_usd, 6)
-            ),
-            "used_ratio": (
-                None if self.used_ratio is None
-                else round(self.used_ratio, 6)
-            ),
+            "remaining_usd": (None if self.remaining_usd is None else round(self.remaining_usd, 6)),
+            "used_ratio": (None if self.used_ratio is None else round(self.used_ratio, 6)),
             "soft_warn": self.soft_warn,
             "over_budget": self.over_budget,
             "soft_warn_ratio": round(self.soft_warn_ratio, 6),
@@ -217,6 +211,7 @@ def _render_candidate_models(candidates: list[CandidateModelPrice]) -> list[str]
         "'env' = falls back to the global flat rate):"
     ]
     for cand in candidates:
+
         def _fmt(value: float | None) -> str:
             return "env" if value is None else f"${value:.4f}"
 
@@ -257,9 +252,7 @@ def render_budget_summary(
         return "\n".join(lines)
 
     remaining = status.remaining_usd or 0.0
-    source = (
-        "per-issue override" if status.budget_source == "issue" else "global default"
-    )
+    source = "per-issue override" if status.budget_source == "issue" else "global default"
     lines.append(
         f"Spent so far: ${status.spent_usd:.4f} / Budget: ${status.budget_usd:.4f} "
         f"({source}) / Remaining: ${remaining:.4f}."
@@ -274,10 +267,10 @@ def render_budget_summary(
             "guidance, not a hard stop.)"
         )
     elif status.soft_warn:
-        pct = int(round((status.used_ratio or 0.0) * 100))
+        pct = int(round((status.used_ratio or 0.0) * 100))  # noqa: RUF046
         lines.append(
             f"BUDGET WARNING: ~{pct}% of the budget is spent (soft-warn threshold "
-            f"{int(round(status.soft_warn_ratio * 100))}% reached). Economise: prefer "
+            f"{int(round(status.soft_warn_ratio * 100))}% reached). Economise: prefer "  # noqa: RUF046
             "cheaper models from the list below, dispatch fewer agents, and avoid "
             "wide parallel fan-outs unless clearly necessary."
         )

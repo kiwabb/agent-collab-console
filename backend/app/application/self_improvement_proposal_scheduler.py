@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 from collections.abc import Mapping
@@ -101,7 +101,9 @@ class SelfImprovementProposalSchedulerStatus:
             "running": self.running,
             "tick_count": self.tick_count,
             "last_started_at": self.last_started_at.isoformat() if self.last_started_at else None,
-            "last_completed_at": self.last_completed_at.isoformat() if self.last_completed_at else None,
+            "last_completed_at": self.last_completed_at.isoformat()
+            if self.last_completed_at
+            else None,
             "last_error": self.last_error,
             "last_summary_counts": dict(self.last_summary_counts),
         }
@@ -180,7 +182,9 @@ async def _has_succeeded_conductor_start(
         proposal_id=proposal.id,
         limit=100,
     )
-    return any(event.action == "start_conductor" and event.status == "succeeded" for event in events)
+    return any(
+        event.action == "start_conductor" and event.status == "succeeded" for event in events
+    )
 
 
 async def run_self_improvement_proposal_tick(
@@ -215,7 +219,7 @@ async def run_self_improvement_proposal_tick(
             continue
         try:
             activation = await activate_fn(proposal.project_id, proposal.id, start_conductor=True)
-        except Exception as exc:  # noqa: BLE001 - isolate one proposal failure per scheduler tick
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.exception(
                 "self-improvement proposal scheduler activation failed project_id=%s proposal_id=%s",
                 proposal.project_id,
@@ -255,7 +259,9 @@ async def run_self_improvement_proposal_scheduler_loop(
     sleep_fn: SelfImprovementProposalSleepFn = asyncio.sleep,
 ) -> None:
     _ = event_bus
-    interval = interval_s if interval_s is not None else timeouts.self_improvement_proposal_interval_s()
+    interval = (
+        interval_s if interval_s is not None else timeouts.self_improvement_proposal_interval_s()
+    )
     proposal_limit = limit if limit is not None else timeouts.self_improvement_proposal_limit()
 
     try:
@@ -266,7 +272,7 @@ async def run_self_improvement_proposal_scheduler_loop(
             except asyncio.CancelledError:
                 _scheduler_status.mark_cancelled()
                 raise
-            except Exception as exc:  # noqa: BLE001 - supervisor loop survives a failed scan.
+            except Exception as exc:  # noqa: BLE001, RUF100
                 _scheduler_status.mark_failed(exc)
                 logger.exception("self-improvement proposal scheduler tick failed")
             else:

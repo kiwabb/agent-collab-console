@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 def serialize_task_payload(task) -> dict:
     return {
         "id": task.id,

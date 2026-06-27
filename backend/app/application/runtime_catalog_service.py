@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 """Runtime catalog service for managing executor/provider/model configurations."""
 
-import os
-from typing import Any
+import os  # noqa: E402, I001
+from typing import Any  # noqa: E402, F401
 
-from app.domain.models import (
+from app.domain.models import (  # noqa: E402
     RuntimeCatalog,
     RuntimeExecutorConfig,
     RuntimeProviderConfig,
@@ -13,6 +15,7 @@ from app.domain.models import (
 
 class RuntimeCatalogValidationError(ValueError):
     """Raised when runtime catalog validation fails."""
+
     pass
 
 
@@ -85,14 +88,14 @@ class RuntimeCatalogService:
                     model_ids.add(model.id)
 
                 # Validate default_model_id references an existing model
-                if provider.default_model_id:
+                if provider.default_model_id:  # noqa: SIM102
                     if provider.default_model_id not in model_ids:
                         raise RuntimeCatalogValidationError(
                             f"Provider '{provider.id}' has invalid default_model_id '{provider.default_model_id}'"
                         )
 
             # Validate default_provider_id references an existing provider
-            if executor.default_provider_id and executor.default_provider_id != "None":
+            if executor.default_provider_id and executor.default_provider_id != "None":  # noqa: SIM102
                 if executor.default_provider_id not in provider_ids:
                     raise RuntimeCatalogValidationError(
                         f"Executor '{executor.id}' has invalid default_provider_id '{executor.default_provider_id}'"
@@ -107,7 +110,12 @@ class RuntimeCatalogService:
                         f"Executor '{executor.id}' defaults to disabled provider '{executor.default_provider_id}'"
                     )
                 if provider and provider.default_model_id and provider.default_model_id != "None":
-                    model = self._find_model(catalog, executor.id, executor.default_provider_id, provider.default_model_id)
+                    model = self._find_model(
+                        catalog,
+                        executor.id,
+                        executor.default_provider_id,
+                        provider.default_model_id,
+                    )
                     if model and not model.enabled:
                         raise RuntimeCatalogValidationError(
                             f"Provider '{provider.id}' defaults to disabled model '{provider.default_model_id}'"
@@ -144,9 +152,11 @@ class RuntimeCatalogService:
                     raise RuntimeCatalogValidationError(f"Unknown executor: {executor}")
                 raise RuntimeCatalogValidationError(f"Executor '{executor}' is disabled")
             import logging
+
             logging.getLogger(__name__).info(
                 "Runtime catalog: requested executor %r not available; falling back to %r",
-                executor, fallback.id,
+                executor,
+                fallback.id,
             )
             executor_config = fallback
             executor = fallback.id
@@ -176,10 +186,13 @@ class RuntimeCatalogService:
             model = None
 
         if model is None:
-            model = executor_config.default_model or (provider_config.default_model_id if provider_config else None)
-            
+            model = executor_config.default_model or (
+                provider_config.default_model_id if provider_config else None
+            )
         if model is None:
-            raise RuntimeCatalogValidationError(f"No model specified and no default for executor '{executor}'")
+            raise RuntimeCatalogValidationError(
+                f"No model specified and no default for executor '{executor}'"
+            )
 
         if provider_config is not None and not executor_config.api_endpoint:
             # Skip model whitelist check when a custom api_endpoint is configured —
@@ -209,7 +222,8 @@ class RuntimeCatalogService:
 
         # Find all placeholders in the template
         import re
-        found = set(re.findall(r'\{(\w+)\}', template))
+
+        found = set(re.findall(r"\{(\w+)\}", template))
 
         # Check for invalid placeholders
         valid_placeholders = {"model", "provider", "workspace_cwd", "task_id"}
@@ -233,7 +247,9 @@ class RuntimeCatalogService:
 
         return result
 
-    def get_executor_defaults(self, catalog: RuntimeCatalog, executor_id: str) -> tuple[str | None, str | None]:
+    def get_executor_defaults(
+        self, catalog: RuntimeCatalog, executor_id: str
+    ) -> tuple[str | None, str | None]:
         """Get the default provider and model for an executor.
 
         Returns (default_provider_id, default_model_id).
@@ -252,7 +268,9 @@ class RuntimeCatalogService:
 
         return provider_id, provider.default_model_id
 
-    def _find_executor(self, catalog: RuntimeCatalog, executor_id: str) -> RuntimeExecutorConfig | None:
+    def _find_executor(
+        self, catalog: RuntimeCatalog, executor_id: str
+    ) -> RuntimeExecutorConfig | None:
         for executor in catalog.executors:
             if executor.id == executor_id:
                 return executor
@@ -315,9 +333,15 @@ class RuntimeCatalogService:
                             label="Anthropic",
                             enabled=True,
                             models=[
-                                RuntimeModelConfig(id="claude-sonnet-4-6", label="Claude Sonnet 4.6", enabled=True),
-                                RuntimeModelConfig(id="claude-opus-4-7", label="Claude Opus 4.7", enabled=True),
-                                RuntimeModelConfig(id="claude-haiku-4-5", label="Claude Haiku 4.5", enabled=True),
+                                RuntimeModelConfig(
+                                    id="claude-sonnet-4-6", label="Claude Sonnet 4.6", enabled=True
+                                ),
+                                RuntimeModelConfig(
+                                    id="claude-opus-4-7", label="Claude Opus 4.7", enabled=True
+                                ),
+                                RuntimeModelConfig(
+                                    id="claude-haiku-4-5", label="Claude Haiku 4.5", enabled=True
+                                ),
                             ],
                             default_model_id="claude-sonnet-4-6",
                         ),
@@ -326,8 +350,12 @@ class RuntimeCatalogService:
                             label="DeepSeek",
                             enabled=True,
                             models=[
-                                RuntimeModelConfig(id="deepseek-chat", label="DeepSeek Chat", enabled=True),
-                                RuntimeModelConfig(id="deepseek-coder", label="DeepSeek Coder", enabled=True),
+                                RuntimeModelConfig(
+                                    id="deepseek-chat", label="DeepSeek Chat", enabled=True
+                                ),
+                                RuntimeModelConfig(
+                                    id="deepseek-coder", label="DeepSeek Coder", enabled=True
+                                ),
                             ],
                             default_model_id="deepseek-chat",
                         ),
@@ -346,9 +374,15 @@ class RuntimeCatalogService:
                             label="Anthropic",
                             enabled=True,
                             models=[
-                                RuntimeModelConfig(id="claude-sonnet-4-6", label="Claude Sonnet 4.6", enabled=True),
-                                RuntimeModelConfig(id="claude-opus-4-7", label="Claude Opus 4.7", enabled=True),
-                                RuntimeModelConfig(id="claude-haiku-4-5", label="Claude Haiku 4.5", enabled=True),
+                                RuntimeModelConfig(
+                                    id="claude-sonnet-4-6", label="Claude Sonnet 4.6", enabled=True
+                                ),
+                                RuntimeModelConfig(
+                                    id="claude-opus-4-7", label="Claude Opus 4.7", enabled=True
+                                ),
+                                RuntimeModelConfig(
+                                    id="claude-haiku-4-5", label="Claude Haiku 4.5", enabled=True
+                                ),
                             ],
                             default_model_id="claude-sonnet-4-6",
                         ),
@@ -357,8 +391,12 @@ class RuntimeCatalogService:
                             label="DeepSeek",
                             enabled=True,
                             models=[
-                                RuntimeModelConfig(id="deepseek-chat", label="DeepSeek Chat", enabled=True),
-                                RuntimeModelConfig(id="deepseek-coder", label="DeepSeek Coder", enabled=True),
+                                RuntimeModelConfig(
+                                    id="deepseek-chat", label="DeepSeek Chat", enabled=True
+                                ),
+                                RuntimeModelConfig(
+                                    id="deepseek-coder", label="DeepSeek Coder", enabled=True
+                                ),
                             ],
                             default_model_id="deepseek-chat",
                         ),

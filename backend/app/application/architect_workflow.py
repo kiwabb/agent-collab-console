@@ -107,9 +107,7 @@ class ArchitectWorkflow:
         plan_review = getattr(task, "review_comment", None)
         if plan_review:
             upstream_context = (
-                f"{upstream_context}\n\n"
-                "PLAN REVIEW / APPROVAL FEEDBACK:\n"
-                f"{plan_review}"
+                f"{upstream_context}\n\nPLAN REVIEW / APPROVAL FEEDBACK:\n{plan_review}"
             )
 
         is_update = bool(existing_design_json)
@@ -177,6 +175,7 @@ class ArchitectWorkflow:
 
         try:
             from app.application.tolerant_json import tolerant_json_loads
+
             payload = tolerant_json_loads(task.result)
         except json.JSONDecodeError as exc:
             raise ArchitectWorkflowError(f"Architect output is not valid JSON: {exc}") from exc
@@ -203,27 +202,57 @@ class ArchitectWorkflow:
 
         self._docs.ensure_issue_root(task.workspace_path, canonical_issue_id)
 
-        design_json_path = self._docs.architect_system_design_json_path(task.workspace_path, canonical_issue_id)
-        design_md_path = self._docs.architect_system_design_md_path(task.workspace_path, canonical_issue_id)
-        impl_plan_path = self._docs.architect_implementation_plan_path(task.workspace_path, canonical_issue_id)
-        dev_task_list_path = self._docs.architect_development_task_list_path(task.workspace_path, canonical_issue_id)
+        design_json_path = self._docs.architect_system_design_json_path(
+            task.workspace_path, canonical_issue_id
+        )
+        design_md_path = self._docs.architect_system_design_md_path(
+            task.workspace_path, canonical_issue_id
+        )
+        impl_plan_path = self._docs.architect_implementation_plan_path(
+            task.workspace_path, canonical_issue_id
+        )
+        dev_task_list_path = self._docs.architect_development_task_list_path(
+            task.workspace_path, canonical_issue_id
+        )
 
         design_json_path.write_text(design.model_dump_json(indent=2), encoding="utf-8")
         design_md_path.write_text(self._render_design_markdown(design), encoding="utf-8")
         impl_plan_path.write_text(self._render_implementation_plan(design), encoding="utf-8")
-        dev_task_list_path.write_text(json.dumps(design.development_task_list, indent=2, ensure_ascii=False), encoding="utf-8")
+        dev_task_list_path.write_text(
+            json.dumps(design.development_task_list, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
         task.result = (
             f"System design generated for {design.issue_title}. "
             f"Files: {design_json_path.name}, {design_md_path.name}, {impl_plan_path.name}, {dev_task_list_path.name}."
         )
         # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
-        object.__setattr__(design, "written_files", [
-            {"name": "architect/system_design.json", "path": str(design_json_path), "kind": "architecture"},
-            {"name": "architect/system_design.md", "path": str(design_md_path), "kind": "architecture"},
-            {"name": "architect/implementation_plan.json", "path": str(impl_plan_path), "kind": "architecture"},
-            {"name": "architect/development_task_list.json", "path": str(dev_task_list_path), "kind": "architecture"},
-        ])
+        object.__setattr__(
+            design,
+            "written_files",
+            [
+                {
+                    "name": "architect/system_design.json",
+                    "path": str(design_json_path),
+                    "kind": "architecture",
+                },
+                {
+                    "name": "architect/system_design.md",
+                    "path": str(design_md_path),
+                    "kind": "architecture",
+                },
+                {
+                    "name": "architect/implementation_plan.json",
+                    "path": str(impl_plan_path),
+                    "kind": "architecture",
+                },
+                {
+                    "name": "architect/development_task_list.json",
+                    "path": str(dev_task_list_path),
+                    "kind": "architecture",
+                },
+            ],
+        )
         return design
 
     def _validate_development_task_list(self, design: SystemDesignDocument) -> None:
@@ -250,7 +279,9 @@ class ArchitectWorkflow:
         if dev_set != impl_set:
             # AUTO-REPAIR: If counts match, assume dev_list titles were just paraphrased and align them to impl_titles
             if len(dev_list) == len(impl_titles):
-                print(f"DEBUG: Auto-aligning paraphrased development_task_list titles to match implementation_tasks for issue {design.issue_id}")
+                print(
+                    f"DEBUG: Auto-aligning paraphrased development_task_list titles to match implementation_tasks for issue {design.issue_id}"
+                )
                 design.development_task_list = impl_titles
                 return
 
@@ -261,8 +292,9 @@ class ArchitectWorkflow:
                 msg_parts.append(f"缺少: {missing_in_dev}")
             if extra_in_dev:
                 msg_parts.append(f"多余: {extra_in_dev}")
-            raise ArchitectWorkflowError(f"development_task_list 与 implementation_tasks 不匹配。{'; '.join(msg_parts)}")
-
+            raise ArchitectWorkflowError(
+                f"development_task_list 与 implementation_tasks 不匹配。{'; '.join(msg_parts)}"
+            )
 
     def _read_pm_artifacts(self, workspace_path: str, issue_id: str) -> dict[str, str]:
         artifacts: dict[str, str] = {}
@@ -302,7 +334,7 @@ class ArchitectWorkflow:
 
             guard = compute_review_guard(task.workspace_path, issue_id)
             guard_block = "\n" + render_guard_context(guard) + "\n"
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             guard_block = ""
 
         return (
@@ -360,17 +392,23 @@ class ArchitectWorkflow:
         if requirement:
             parts.append(f"requirement_document:\n{requirement}\n")
         else:
-            parts.append("NOTE: requirement.md is missing. Treat this as an underspecified requirement.\n")
+            parts.append(
+                "NOTE: requirement.md is missing. Treat this as an underspecified requirement.\n"
+            )
 
         if prd:
             parts.append(f"existing_prd:\n{prd}\n")
         else:
-            parts.append("NOTE: prd.json is missing. Include open_questions for any missing requirement details.\n")
+            parts.append(
+                "NOTE: prd.json is missing. Include open_questions for any missing requirement details.\n"
+            )
 
         if bugfix:
             parts.append(f"existing_bugfix:\n{bugfix}\n")
         else:
-            parts.append("NOTE: bugfix.md is not present. Include open_questions for any missing defect context.\n")
+            parts.append(
+                "NOTE: bugfix.md is not present. Include open_questions for any missing defect context.\n"
+            )
 
         if existing_design:
             parts.append(f"existing_system_design (update):\n{existing_design}\n")

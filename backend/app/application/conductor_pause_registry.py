@@ -17,14 +17,14 @@ class _ConductorControl:
 class ConductorPauseRegistry:
     """Process-local runtime controls for active issue conductor loops."""
 
-    _instance: "ConductorPauseRegistry | None" = None
+    _instance: "ConductorPauseRegistry | None" = None  # noqa: UP037
 
     def __init__(self) -> None:
         self._controls: dict[str, _ConductorControl] = {}
         self._lock = asyncio.Lock()
 
     @classmethod
-    def instance(cls) -> "ConductorPauseRegistry":
+    def instance(cls) -> "ConductorPauseRegistry":  # noqa: UP037
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -43,7 +43,9 @@ class ConductorPauseRegistry:
         async with self._lock:
             self._controls.pop(conductor_task_id, None)
 
-    async def set_inflight_llm_task(self, conductor_task_id: str, task: asyncio.Task | None) -> None:
+    async def set_inflight_llm_task(
+        self, conductor_task_id: str, task: asyncio.Task | None
+    ) -> None:
         async with self._lock:
             control = self._controls.get(conductor_task_id)
             if control is not None:

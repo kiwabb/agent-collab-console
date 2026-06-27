@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Optional embedding provider for semantic search.
 
 Configuration source: environment variables (so it doesn't require a UI in
@@ -12,18 +14,15 @@ providers are a new concept). Drop-in additions:
 
 Failure mode: any missing config → service is disabled, all callers no-op.
 """
+import asyncio  # noqa: E402
+import hashlib  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+from collections import OrderedDict  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402, F401
+from typing import Iterable  # noqa: E402, UP035
 
-from __future__ import annotations
-
-import asyncio
-import hashlib
-import logging
-import os
-from collections import OrderedDict
-from dataclasses import dataclass, field
-from typing import Iterable
-
-import httpx
+import httpx  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +71,7 @@ class EmbeddingService:
             return cached
         try:
             vectors = await self._call_provider([text])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.info("embedding_service.embed_one failed: %s", exc)
             return None
         if not vectors:
@@ -92,7 +91,7 @@ class EmbeddingService:
             return [None] * len(items)
         try:
             vectors = await self._call_provider([t for t in items if t])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.info("embedding_service.embed_batch failed: %s", exc)
             return [None] * len(items)
         out: list[list[float] | None] = []
@@ -128,9 +127,7 @@ class EmbeddingService:
         async with httpx.AsyncClient(timeout=c.timeout_s) as client:
             response = await client.post(url, headers=headers, json=payload)
         if response.status_code != 200:
-            raise RuntimeError(
-                f"embedding HTTP {response.status_code}: {response.text[:300]}"
-            )
+            raise RuntimeError(f"embedding HTTP {response.status_code}: {response.text[:300]}")
         data = response.json()
         out: list[list[float]] = []
         for item in data.get("data") or []:

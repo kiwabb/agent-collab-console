@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Awaitable, Callable, Protocol
+from typing import Awaitable, Callable, Protocol  # noqa: UP035
 
 from app.domain.models import CodexIssue
 
@@ -24,8 +24,12 @@ class CompletedProcessLike(Protocol):
 class GitHubPRFollowupStore(Protocol):
     async def load_codex_issue(self, issue_id: str) -> CodexIssue | None: ...
     async def save_codex_issue(self, issue: CodexIssue) -> None: ...
-    async def list_codex_issues(self, session_id: str | None = None, project_id: str | None = None) -> list[dict[str, object]]: ...
-    async def list_codex_tasks(self, session_id: str | None = None, issue_id: str | None = None) -> list[dict[str, object]]: ...
+    async def list_codex_issues(
+        self, session_id: str | None = None, project_id: str | None = None
+    ) -> list[dict[str, object]]: ...
+    async def list_codex_tasks(
+        self, session_id: str | None = None, issue_id: str | None = None
+    ) -> list[dict[str, object]]: ...
     async def load_codex_task(self, task_id: str) -> object | None: ...
     async def save_codex_task(self, task: object) -> None: ...
     async def append_project_audit(
@@ -80,7 +84,9 @@ class GitHubPRFollowupStatus:
             "running": self.running,
             "sweep_count": self.sweep_count,
             "last_started_at": self.last_started_at.isoformat() if self.last_started_at else None,
-            "last_completed_at": self.last_completed_at.isoformat() if self.last_completed_at else None,
+            "last_completed_at": self.last_completed_at.isoformat()
+            if self.last_completed_at
+            else None,
             "last_error": self.last_error,
             "last_summary_counts": dict(self.last_summary_counts),
             "auto_merge_enabled": self.auto_merge_enabled,
@@ -250,14 +256,14 @@ async def _enqueue_engineer_rework(
     engineer = await store.load_codex_task(task_id)
     if engineer is None:
         return False
-    setattr(engineer, "status", "pending")
-    setattr(
+    setattr(engineer, "status", "pending")  # noqa: B010
+    setattr(  # noqa: B010
         engineer,
         "review_comment",
         "GitHub PR review requested changes. Address the feedback below "
         "before re-submitting.\n\n" + review_body,
     )
-    setattr(engineer, "updated_at", datetime.now())
+    setattr(engineer, "updated_at", datetime.now())  # noqa: B010
     await store.save_codex_task(engineer)
     await _append_event(
         event_bus,
@@ -299,7 +305,7 @@ async def refresh_issue_github_pr(
             cwd=issue.git_worktree_path or ".",
             timeout_s=30,
         )
-    except Exception as exc:  # noqa: BLE001 - follow-up sweeps are best-effort per issue.
+    except Exception as exc:  # noqa: BLE001, RUF100
         return await _record_failed_followup(
             issue,
             store=store,
@@ -366,11 +372,18 @@ async def refresh_issue_github_pr(
                 else:
                     try:
                         merge = await run_subprocess(
-                            ["gh", "pr", "merge", issue.github_pr_url, "--merge", "--delete-branch"],
+                            [
+                                "gh",
+                                "pr",
+                                "merge",
+                                issue.github_pr_url,
+                                "--merge",
+                                "--delete-branch",
+                            ],
                             cwd=issue.git_worktree_path or ".",
                             timeout_s=60,
                         )
-                    except Exception as exc:  # noqa: BLE001 - merge attempts are isolated per issue.
+                    except Exception as exc:  # noqa: BLE001, RUF100
                         status = "merge_failed"
                         message = f"gh pr merge failed: {exc}"
                     else:
@@ -434,7 +447,9 @@ async def sweep_project_github_prs(
                     auto_merge=auto_merge,
                 )
             except GitHubPRFollowupError as exc:
-                result = GitHubPRFollowupResult(issue_id=issue_id, status=exc.status, error=exc.message)
+                result = GitHubPRFollowupResult(
+                    issue_id=issue_id, status=exc.status, error=exc.message
+                )
             results.append(result)
         summary = GitHubPRFollowupSummary(project_id=project_id, results=results)
         await _append_event(
@@ -445,7 +460,7 @@ async def sweep_project_github_prs(
                 "counts": summary.counts,
             },
         )
-    except Exception as exc:  # noqa: BLE001 - record sweep-boundary status, then preserve caller semantics.
+    except Exception as exc:  # noqa: BLE001, RUF100
         _followup_status.mark_failed(exc)
         raise
     _followup_status.mark_completed(summary)

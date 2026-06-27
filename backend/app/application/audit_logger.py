@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Unified audit-trail writer (PR1).
 
 Single write entry-point for the `audit_log` table. Every choke point — LLM
@@ -20,17 +22,14 @@ Design (mirrors `event_bus.EventBus._db_worker`):
 PR1 scope: this module + the `audit_log` table are wired up and unit-tested, but
 NO choke point calls it yet. Instrumentation is PR2.
 """
-
-from __future__ import annotations
-
-import asyncio
-import json
-import os
-import sys
-import threading
-from datetime import datetime
-from typing import Any
-from uuid import uuid4
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import sys  # noqa: E402
+import threading  # noqa: E402
+from datetime import datetime  # noqa: E402
+from typing import Any  # noqa: E402
+from uuid import uuid4  # noqa: E402
 
 # Category constants (string enum — no DB-level constraint, matches the PRD).
 CATEGORY_LLM_CALL = "llm_call"
@@ -154,7 +153,7 @@ class AuditLogger:
                     break
                 if self._store is not None:
                     await self._store.save_audit_log(entry)
-            except Exception as exc:  # noqa: BLE001 — best-effort, never propagate
+            except Exception as exc:  # noqa: BLE001, RUF100
                 print(f"[AuditLogger] write error: {exc}", file=sys.stderr)
             finally:
                 self._queue.task_done()
@@ -163,9 +162,9 @@ class AuditLogger:
         if self._worker_task is None:
             return
         await self._queue.put(None)
-        try:
+        try:  # noqa: SIM105
             await self._worker_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001, RUF100
             pass
         self._worker_task = None
 
@@ -303,7 +302,7 @@ class AuditLogger:
                 error=error,
             )
             self._enqueue(entry)
-        except Exception as exc:  # noqa: BLE001 — best-effort, never propagate
+        except Exception as exc:  # noqa: BLE001, RUF100
             print(f"[AuditLogger] enqueue error: {exc}", file=sys.stderr)
 
     @property

@@ -1,4 +1,6 @@
-from collections import deque
+from __future__ import annotations  # noqa: I001
+
+from collections import deque  # noqa: I001, RUF100
 from datetime import datetime
 from typing import Any
 import asyncio
@@ -134,29 +136,30 @@ class EventBus:
                     "payload_preview": preview,
                 },
             )
-        except Exception as exc:  # noqa: BLE001 — audit must never break broadcast
+        except Exception as exc:  # noqa: BLE001, RUF100
             print(f"[EventBus] audit mirror error: {exc}", file=sys.stderr)
 
     async def _broadcast_to_ws(self, event: dict[str, Any], envelope: dict[str, Any] | None = None):
         """Broadcast events to WebSocket subscribers via JSON Patch."""
         try:
-            from app.interfaces.codex_ws import message_stream_manager, raw_log_stream_manager, stream_manager
-            
+            from app.interfaces.codex_ws import (
+                message_stream_manager,
+                raw_log_stream_manager,
+                stream_manager,
+            )  # noqa: I001, RUF100
+
             event_type = event.get("type")
-            
             if event_type == "task_created":
                 task = event.get("task", {})
                 workspace_id = task.get("session_id")
                 if workspace_id:
                     await stream_manager.add_task(workspace_id, task)
-            
             elif event_type == "task_status":
                 task_id = event.get("task_id")
                 status = event.get("status")
                 result = event.get("result")
                 execution_process_id = event.get("execution_process_id")
                 workspace_id = event.get("session_id") or event.get("workspace_id")
-                
                 if workspace_id and task_id:
                     await stream_manager.update_task_status(
                         workspace_id,
@@ -165,16 +168,26 @@ class EventBus:
                         result,
                         execution_process_id=execution_process_id,
                     )
-                    if execution_process_id and str(status or "").lower() in {"done", "completed", "failed", "killed"}:
+                    if execution_process_id and str(status or "").lower() in {
+                        "done",
+                        "completed",
+                        "failed",
+                        "killed",
+                    }:
                         await message_stream_manager.publish_finished(execution_process_id)
                         await raw_log_stream_manager.publish_finished(execution_process_id)
 
                 # Workflow DAG: notify scheduler on terminal task statuses so
                 # the graph can advance / open a replan.
-                if task_id and str(status or "").lower() in {"done", "failed", "completed", "killed"}:
+                if task_id and str(status or "").lower() in {
+                    "done",
+                    "failed",
+                    "completed",
+                    "killed",
+                }:
                     try:
                         await self._notify_workflow_scheduler(task_id)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001, RUF100
                         print(f"[EventBus] workflow scheduler notify error: {exc}", file=sys.stderr)
 
             elif event_type == "task_deleted":
@@ -182,7 +195,6 @@ class EventBus:
                 workspace_id = event.get("session_id")
                 if workspace_id and task_id:
                     await stream_manager.remove_task(workspace_id, task_id)
-            
             elif event_type == "message_created":
                 message = event.get("message", {})
                 task_id = message.get("task_id")
@@ -212,28 +224,34 @@ class EventBus:
                     # token flow without subscribing to a second channel. Not
                     # written to the LogEvent table — purely real-time.
                     import datetime as _dt
-                    await raw_log_stream_manager.publish_log(execution_process_id, {
-                        "kind": "assistant_delta",
-                        "seq": event.get("seq"),
-                        "delta_text": event.get("delta_text"),
-                        "task_id": event.get("task_id"),
-                        "session_id": event.get("session_id"),
-                        "created_at": _dt.datetime.now().isoformat(),
-                    })
+
+                    await raw_log_stream_manager.publish_log(
+                        execution_process_id,
+                        {
+                            "kind": "assistant_delta",
+                            "seq": event.get("seq"),
+                            "delta_text": event.get("delta_text"),
+                            "task_id": event.get("task_id"),
+                            "session_id": event.get("session_id"),
+                            "created_at": _dt.datetime.now().isoformat(),
+                        },
+                    )
 
             elif event_type == "heartbeat":
                 execution_process_id = event.get("execution_process_id")
                 if execution_process_id:
-                    await raw_log_stream_manager.publish_log(execution_process_id, {
-                        "kind": "heartbeat",
-                        "phase": event.get("phase"),
-                        "last_event_at": event.get("last_event_at"),
-                        "elapsed_since_last_ms": event.get("elapsed_since_last_ms"),
-                        "task_id": event.get("task_id"),
-                        "session_id": event.get("session_id"),
-                        "created_at": event.get("created_at"),
-                    })
-            
+                    await raw_log_stream_manager.publish_log(
+                        execution_process_id,
+                        {
+                            "kind": "heartbeat",
+                            "phase": event.get("phase"),
+                            "last_event_at": event.get("last_event_at"),
+                            "elapsed_since_last_ms": event.get("elapsed_since_last_ms"),
+                            "task_id": event.get("task_id"),
+                            "session_id": event.get("session_id"),
+                            "created_at": event.get("created_at"),
+                        },
+                    )
             elif event_type == "log":
                 task_id = event.get("task_id")
                 workspace_id = event.get("session_id")
@@ -300,18 +318,21 @@ class EventBus:
                     await stream_manager.publish_event(workspace_id, event)
         except Exception as e:
             import traceback
+
             print(f"[EventBus] Error broadcasting event {event.get('type')}: {e}", file=sys.stderr)
             traceback.print_exc()
 
     async def _notify_workflow_scheduler(self, task_id: str) -> None:
         """Forward a terminal task_status event to the workflow scheduler."""
         from app.bootstrap import async_store
+
         if async_store is None:
             return
         task = await async_store.load_codex_task(task_id)
         if task is None or not getattr(task, "workflow_node_id", None):
             return
         from app.application.workflow_scheduler import WorkflowScheduler
+
         scheduler = WorkflowScheduler(
             store=async_store,
             task_dispatcher=_workflow_task_dispatcher,
@@ -368,11 +389,13 @@ async def _workflow_task_dispatcher(task) -> None:
     settle-after-task-done path (event_bus._notify_workflow_scheduler).
     """
     from app.bootstrap import get_task_runner
+
     # `refresh_task_result` is None-safe at the runner layer; we don't have a
     # session-level handle here, so pass a noop coroutine. Production callers
     # always provide the real one via bootstrap.
-    async def _noop(_t):  # noqa: ANN001
+    async def _noop(_t):  # noqa: ANN001, RUF100
         return None
+
     runner = get_task_runner(_noop)
     await runner.start_task_run(task)
 

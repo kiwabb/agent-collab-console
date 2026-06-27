@@ -6,6 +6,7 @@ Conductor's orchestrating brain has its own configurable model/provider/protocol
 only speaks Anthropic-shaped messages; `call_conductor_llm` translates when the
 chosen executor's protocol is OpenAI.
 """
+
 from __future__ import annotations
 
 import logging
@@ -53,14 +54,20 @@ def resolve_conductor_llm_context(catalog) -> ConductorLLMContext | None:
         os.getenv("CONDUCTOR_LLM_MODEL"),
         getattr(cfg, "model", None) if cfg else None,
     )
-    max_tokens = int(_env_or(
-        os.getenv("CONDUCTOR_LLM_MAX_TOKENS"),
-        getattr(cfg, "max_tokens", None) if cfg else None,
-    ) or 8192)
-    timeout_s = float(_env_or(
-        os.getenv("CONDUCTOR_LLM_TIMEOUT"),
-        getattr(cfg, "timeout_s", None) if cfg else None,
-    ) or 120.0)
+    max_tokens = int(
+        _env_or(
+            os.getenv("CONDUCTOR_LLM_MAX_TOKENS"),
+            getattr(cfg, "max_tokens", None) if cfg else None,
+        )
+        or 8192
+    )
+    timeout_s = float(
+        _env_or(
+            os.getenv("CONDUCTOR_LLM_TIMEOUT"),
+            getattr(cfg, "timeout_s", None) if cfg else None,
+        )
+        or 120.0
+    )
 
     executor = _pick_executor(catalog, preferred_executor_id)
     if executor is None:
@@ -69,7 +76,8 @@ def resolve_conductor_llm_context(catalog) -> ConductorLLMContext | None:
     if not model:
         return None
     protocol = str(
-        _env_or(os.getenv("CONDUCTOR_LLM_PROTOCOL"), getattr(executor, "protocol", None)) or "anthropic"
+        _env_or(os.getenv("CONDUCTOR_LLM_PROTOCOL"), getattr(executor, "protocol", None))
+        or "anthropic"
     ).lower()
     if protocol not in ("anthropic", "openai"):
         protocol = "anthropic"

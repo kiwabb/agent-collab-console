@@ -1,4 +1,6 @@
-import asyncio
+from __future__ import annotations  # noqa: I001
+
+import asyncio  # noqa: I001, RUF100
 import contextlib
 from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -63,7 +65,15 @@ async def global_events_ws(websocket: WebSocket):
         while True:
             await asyncio.sleep(30)
             async with send_lock:
-                await websocket.send_json({"v": 1, "ts": datetime.now().isoformat(), "event_id": "ping", "type": "ping", "payload": {}})
+                await websocket.send_json(
+                    {
+                        "v": 1,
+                        "ts": datetime.now().isoformat(),
+                        "event_id": "ping",
+                        "type": "ping",
+                        "payload": {},
+                    }
+                )
             if asyncio.get_running_loop().time() - last_pong_at > 60:
                 await websocket.close(code=1011, reason="pong timeout")
                 return

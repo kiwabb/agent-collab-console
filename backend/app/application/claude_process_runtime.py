@@ -1,14 +1,29 @@
-import asyncio
+from __future__ import annotations
+
+import asyncio  # noqa: I001, RUF100
 import json
 import os
 import subprocess
 from datetime import datetime
 
-from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime, is_workspace_console_task
+from app.application.process_runtime_common import (
+    AsyncProcessEntry,
+    BaseProcessRuntime,
+    is_workspace_console_task,
+)
 
 
 class ClaudeProcessRuntime(BaseProcessRuntime):
-    def __init__(self, codex_store, log_store, data_dir=None, event_bus=None, processes=None, help_orchestrator=None, refresh_task_result=None):
+    def __init__(
+        self,
+        codex_store,
+        log_store,
+        data_dir=None,
+        event_bus=None,
+        processes=None,
+        help_orchestrator=None,
+        refresh_task_result=None,
+    ):
         super().__init__(
             codex_store,
             log_store,
@@ -18,16 +33,19 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             help_orchestrator=help_orchestrator,
             refresh_task_result=refresh_task_result,
         )
-        self._claude_cmd = (
-            os.getenv("CLAUDE_CMD", "claude -p --output-format=stream-json --verbose").split()
-        )
+        self._claude_cmd = os.getenv(
+            "CLAUDE_CMD", "claude -p --output-format=stream-json --verbose"
+        ).split()
 
     def check_availability(self) -> bool:
         try:
-            return subprocess.run(
-                [self._claude_cmd[0], "--version"],
-                capture_output=True,
-            ).returncode == 0
+            return (
+                subprocess.run(
+                    [self._claude_cmd[0], "--version"],
+                    capture_output=True,
+                ).returncode
+                == 0
+            )
         except Exception:
             return False
 
@@ -102,7 +120,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         if wait and evt:
             try:
                 await asyncio.wait_for(evt.wait(), timeout=600)
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError:  # noqa: UP041
                 return "timeout"
             return "done"
 
@@ -135,12 +153,14 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         await self.codex_store.save_codex_workspace(workspace)
 
         if self._event_bus is not None:
-            await self._event_bus.append({
-                "type": "session_status",
-                "session_id": workspace_id,
-                "workspace_id": workspace_id,
-                "status": "responding",
-            })
+            await self._event_bus.append(
+                {
+                    "type": "session_status",
+                    "session_id": workspace_id,
+                    "workspace_id": workspace_id,
+                    "status": "responding",
+                }
+            )
 
         # Per-task session identity: only the human workspace-console task may fall
         # back to the shared workspace.claude_thread_id. Role/help tasks resume only
@@ -160,7 +180,9 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         allow_ws_fallback = task is None or is_workspace_console_task(task)
         ws_fallback_id = workspace.claude_thread_id if allow_ws_fallback else None
         # When force_new_session=True, do NOT fall back to the workspace pointer.
-        effective_resume_id = resume_session_id if force_new_session else (resume_session_id or ws_fallback_id)
+        effective_resume_id = (
+            resume_session_id if force_new_session else (resume_session_id or ws_fallback_id)
+        )
         cmd = self._build_claude_command(
             effective_resume_id,
             resume_message_id=resume_message_id,
@@ -168,7 +190,15 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         )
 
         env = os.environ.copy()
-        paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin", os.path.expanduser("~/.npm-global/bin")]
+        paths = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+            os.path.expanduser("~/.npm-global/bin"),
+        ]
         env["PATH"] = ":".join(paths) + ":" + env.get("PATH", "")
         env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
@@ -275,7 +305,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
                     "pid": pid,
                 },
             )
-        except Exception:  # noqa: BLE001 — audit must never break process spawn
+        except Exception:  # noqa: BLE001, RUF100
             pass
 
     def _build_claude_command(
@@ -312,12 +342,11 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         # Clean up any existing permission flags to avoid duplicates/conflicts
         base = [arg for arg in base if not arg.startswith("--permission-mode=")]
         base = [arg for arg in base if not arg.startswith("--permission-prompt-tool=")]
-        
         # Always enable correct permission bypass for automated background tasks
         base.append("--permission-prompt-tool=stdio")
         base.append("--permission-mode=bypassPermissions")
 
-        if not approval_mode:
+        if not approval_mode:  # noqa: SIM102
             if "--disallowedTools=AskUserQuestion" not in " ".join(base):
                 base.append("--disallowedTools=AskUserQuestion")
 

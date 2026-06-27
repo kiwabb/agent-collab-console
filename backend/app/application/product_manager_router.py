@@ -20,7 +20,9 @@ class ProductManagerRouter:
     def __init__(self, documents: ProductManagerDocuments | None = None):
         self.documents = documents or ProductManagerDocuments()
 
-    def route_requirement(self, *, prompt: str, workspace_path: str, issue_id: str) -> RequirementRoute:
+    def route_requirement(
+        self, *, prompt: str, workspace_path: str, issue_id: str
+    ) -> RequirementRoute:
         issue_root = self.documents.ensure_issue_root(workspace_path, issue_id)
         requirement_path = self.documents.requirement_path(workspace_path, issue_id)
         existing_prd_files = self.documents.find_issue_prd_files(workspace_path, issue_id)

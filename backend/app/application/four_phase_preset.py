@@ -2,6 +2,7 @@
 don't yet have one. Used by the startup migration so that opening an old
 issue under the new DAG-aware UI never errors out.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,7 +28,7 @@ async def ensure_four_phase_preset(store) -> None:
         "nodes": [{"node_key": rk, "role_key": rk, "title": rk} for rk in _FOUR_PHASE_ORDER],
         "edges": [
             {"from_node_key": a, "to_node_key": b, "edge_type": "sequence"}
-            for a, b in zip(_FOUR_PHASE_ORDER, _FOUR_PHASE_ORDER[1:])
+            for a, b in zip(_FOUR_PHASE_ORDER, _FOUR_PHASE_ORDER[1:])  # noqa: B905, RUF007
         ],
     }
     await conn.execute(
@@ -50,12 +51,15 @@ async def backfill_graphs_for_existing_issues(store) -> int:
     agents = await store.list_agents(workspace_id=None)
     role_to_agent = {a.role_key: a for a in agents}
     if not all(rk in role_to_agent for rk in _FOUR_PHASE_ORDER):
-        logger.warning("Skipping graph backfill — built-in agents missing %s",
-                       [rk for rk in _FOUR_PHASE_ORDER if rk not in role_to_agent])
+        logger.warning(
+            "Skipping graph backfill — built-in agents missing %s",
+            [rk for rk in _FOUR_PHASE_ORDER if rk not in role_to_agent],
+        )
         return 0
     # Pull every issue id; filter those without a graph.
     conn = await store._get_conn()
     import aiosqlite
+
     conn.row_factory = aiosqlite.Row
     async with conn.execute("SELECT id FROM codex_issues") as cur:
         issue_rows = await cur.fetchall()
@@ -78,30 +82,53 @@ async def _create_four_phase_graph(store, issue_id: str, role_to_agent: dict) ->
     nodes: list[WorkflowNode] = []
     for role_key in _FOUR_PHASE_ORDER:
         agent = role_to_agent[role_key]
-        nodes.append(WorkflowNode(
-            id=str(uuid4()),
-            graph_id=graph_id,
-            node_key=role_key,
-            agent_id=agent.id,
-            title=agent.name,
-            status="pending",
-            artifact_dir=agent.artifact_subdir,
-            created_at=now,
-        ))
+        nodes.append(
+            WorkflowNode(
+                id=str(uuid4()),
+                graph_id=graph_id,
+                node_key=role_key,
+                agent_id=agent.id,
+                title=agent.name,
+                status="pending",
+                artifact_dir=agent.artifact_subdir,
+                created_at=now,
+            )
+        )
     edges: list[WorkflowEdge] = []
-    for prev, curr in zip(_FOUR_PHASE_ORDER, _FOUR_PHASE_ORDER[1:]):
-        edges.append(WorkflowEdge(
-            id=str(uuid4()),
-            graph_id=graph_id,
-            from_node_key=prev,
-            to_node_key=curr,
-            edge_type="sequence",
-            created_at=now,
-        ))
+    for prev, curr in zip(_FOUR_PHASE_ORDER, _FOUR_PHASE_ORDER[1:]):  # noqa: B905, RUF007
+        edges.append(
+            WorkflowEdge(
+                id=str(uuid4()),
+                graph_id=graph_id,
+                from_node_key=prev,
+                to_node_key=curr,
+                edge_type="sequence",
+                created_at=now,
+            )
+        )
     dag = {
-        "meta": {"intent": "feature", "rationale": "Auto-migrated legacy 4-phase issue.", "created_by": "migration"},
-        "nodes": [{"node_key": n.node_key, "agent_id": n.agent_id, "role_key": n.node_key, "title": n.title} for n in nodes],
-        "edges": [{"from_node_key": e.from_node_key, "to_node_key": e.to_node_key, "edge_type": e.edge_type} for e in edges],
+        "meta": {
+            "intent": "feature",
+            "rationale": "Auto-migrated legacy 4-phase issue.",
+            "created_by": "migration",
+        },
+        "nodes": [
+            {
+                "node_key": n.node_key,
+                "agent_id": n.agent_id,
+                "role_key": n.node_key,
+                "title": n.title,
+            }
+            for n in nodes
+        ],
+        "edges": [
+            {
+                "from_node_key": e.from_node_key,
+                "to_node_key": e.to_node_key,
+                "edge_type": e.edge_type,
+            }
+            for e in edges
+        ],
     }
     graph = WorkflowGraph(
         id=graph_id,

@@ -105,7 +105,7 @@ class IssueArtifactDocuments:
         don't overwrite each other. Default subdir is `engineer` for the
         single-engineer flow.
         """
-        if task_id:
+        if task_id:  # noqa: SIM108
             filename = f"implementation-{task_id}.md"
         else:
             filename = "implementation.md"
@@ -180,9 +180,11 @@ class IssueArtifactDocuments:
             if path.name not in seen_names:
                 seen_names.add(path.name)
                 result.append(path)
-        for path in [self.pm_requirement_path(workspace_path, issue_id),
-                     self.pm_bugfix_path(workspace_path, issue_id),
-                     self.pm_prd_md_path(workspace_path, issue_id)]:
+        for path in [
+            self.pm_requirement_path(workspace_path, issue_id),
+            self.pm_bugfix_path(workspace_path, issue_id),
+            self.pm_prd_md_path(workspace_path, issue_id),
+        ]:
             if path.exists() and path.name not in seen_names:
                 seen_names.add(path.name)
                 result.append(path)

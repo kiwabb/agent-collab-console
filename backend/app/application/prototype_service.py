@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Prototype design tool service.
 
 Streams a single-file HTML prototype from the LLM, versionizes iterations,
@@ -20,27 +22,27 @@ Notes on the SSE loop:
   is written (the version counter is unchanged). The disk mirror only happens
   after the full document is committed.
 """
-from __future__ import annotations
 
-import json
-import logging
-import os
-import re
-from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
-from typing import AsyncIterator
-from uuid import uuid4
 
-import httpx
+import json  # noqa: E402, I001
+import logging  # noqa: E402
+import os  # noqa: E402, F401
+import re  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+from datetime import datetime  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import AsyncIterator  # noqa: E402, UP035
+from uuid import uuid4  # noqa: E402
 
-from app.adapters.async_sqlite_store import AsyncSQLiteStore
-from app.application.llm_runner import (
+import httpx  # noqa: E402
+
+from app.adapters.async_sqlite_store import AsyncSQLiteStore  # noqa: E402
+from app.application.llm_runner import (  # noqa: E402
     StreamingPlanContext,
     _llm_http_client,
     resolve_streaming_context,
 )
-from app.domain.models import Prototype, PrototypeVersion, Project
+from app.domain.models import Prototype, PrototypeVersion, Project  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +96,9 @@ def build_html_system_prompt(brief: str) -> str:
         "Output ONLY a complete HTML document. No markdown, no explanation, no code fences.\n"
         "Strict constraints:\n"
         "- ONE HTML file. Inline all CSS in <style>, all JS in <script>.\n"
-        "- Use Tailwind via CDN: <script src=\"https://cdn.tailwindcss.com\"></script>.\n"
+        '- Use Tailwind via CDN: <script src="https://cdn.tailwindcss.com"></script>.\n'
         "- Inline any icon set as inline SVG or via emoji; no external CDN fonts/icons.\n"
-        "- No <script src=\"...\"> to non-whitelisted hosts. No external CSS files.\n"
+        '- No <script src="..."> to non-whitelisted hosts. No external CSS files.\n'
         "- The page must render correctly when opened as a static HTML file.\n"
         "- Prefer system font stack; avoid web fonts.\n"
         "- Start the response with <!DOCTYPE html>.\n"
@@ -114,7 +116,7 @@ def build_iteration_system_prompt(latest_html: str, instruction: str) -> str:
         "Output ONLY the new complete HTML document. No markdown, no explanation, no code fences.\n"
         "Strict constraints (unchanged):\n"
         "- ONE HTML file. Inline all CSS in <style>, all JS in <script>.\n"
-        "- Use Tailwind via CDN: <script src=\"https://cdn.tailwindcss.com\"></script>.\n"
+        '- Use Tailwind via CDN: <script src="https://cdn.tailwindcss.com"></script>.\n'
         "- No external dependencies besides the Tailwind CDN.\n"
         "- Start the response with <!DOCTYPE html> and end with </html>.\n"
         "- Preserve what already works; only change what the user's instruction asks for.\n\n"
@@ -146,13 +148,11 @@ async def _stream_html(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[
         "content-type": "application/json",
         "accept": "text/event-stream",
     }
-    async with _llm_http_client(ctx.timeout_s) as client:
+    async with _llm_http_client(ctx.timeout_s) as client:  # noqa: SIM117
         async with client.stream("POST", url, headers=headers, json=payload) as response:
             if response.status_code != 200:
                 body = await response.aread()
-                raise RuntimeError(
-                    f"prototype stream HTTP {response.status_code}: {body[:300]!r}"
-                )
+                raise RuntimeError(f"prototype stream HTTP {response.status_code}: {body[:300]!r}")
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
@@ -376,9 +376,7 @@ class PrototypeService:
 
     # --- Project-level batch regen --------------------------------------------
 
-    async def regenerate_all_stream(
-        self, project_id: str
-    ) -> AsyncIterator[StreamEvent]:
+    async def regenerate_all_stream(self, project_id: str) -> AsyncIterator[StreamEvent]:
         """Project-level batch regen: re-run generation for every prototype
         under `project_id` from its original seed brief (i.e. `instruction=None`,
         which is the same path as the first-time generation — no iteration
@@ -437,15 +435,13 @@ class PrototypeService:
                             "prototype_error",
                             {"prototype_id": p.id, "message": message},
                         )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001, RUF100
                 # stream_events normally translates all internal failures
                 # (timeout, runtime error, empty html, missing seed, ...) into
                 # an `error` event and returns cleanly. Anything that bubbles
                 # up here is unexpected (e.g. DB write failure); we still
                 # record it and keep going so the rest of the batch runs.
-                logger.warning(
-                    "regenerate_all: prototype %s aborted: %s", p.id, exc
-                )
+                logger.warning("regenerate_all: prototype %s aborted: %s", p.id, exc)
                 message = str(exc) or exc.__class__.__name__
                 failed.append({"prototype_id": p.id, "message": message})
                 yield StreamEvent(

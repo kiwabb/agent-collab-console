@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Shared, parameterized query builder for the `audit_log` read path (PR3).
 
 Both the async (`async_sqlite_store`) and sync (`sqlite_store`) stores call this
@@ -15,15 +17,10 @@ predicate is `(created_at, id) < (cursor_created_at, cursor_id)`; SQLite
 supports row-value comparison directly, so this is a clean keyset page that is
 immune to offset drift when new rows arrive mid-pagination.
 """
-
-from __future__ import annotations
-
 _LIMIT_HARD_CAP = 5000
 
 
-def _normalize_categories(
-    category: str | None, categories: list[str] | None
-) -> list[str]:
+def _normalize_categories(category: str | None, categories: list[str] | None) -> list[str]:
     """Merge the legacy single `category` arg with the multi-value `categories`.
 
     De-dupes while preserving order and drops blanks. Keeping the singular

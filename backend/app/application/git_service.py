@@ -6,6 +6,7 @@ joined into a shell string) and untrusted inputs (branch names, paths)
 are validated against a strict character whitelist to prevent command
 injection and accidental injection of git options.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -92,11 +93,13 @@ class GitService:
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError as exc:
+        except asyncio.TimeoutError as exc:  # noqa: UP041
             proc.kill()
             await proc.wait()
             # Audit the timeout (best-effort) before raising.
-            self._audit_git(args, cwd, None, "", "timeout", started, error=f"timed out after {timeout}s")
+            self._audit_git(
+                args, cwd, None, "", "timeout", started, error=f"timed out after {timeout}s"
+            )
             raise GitError(f"git {' '.join(args)} timed out after {timeout}s") from exc
         result = _CommandResult(
             returncode=proc.returncode or 0,
@@ -149,7 +152,7 @@ class GitService:
                 },
                 error=error,
             )
-        except Exception:  # noqa: BLE001 — audit must never break git
+        except Exception:  # noqa: BLE001, RUF100
             pass
 
     # --- Repo validation ---
@@ -225,7 +228,9 @@ class GitService:
                 GitBranch(
                     name=name,
                     is_current=head_marker.strip() == "*",
-                    is_remote=name.startswith("origin/") or "/" in name and not name.startswith("refs/"),
+                    is_remote=name.startswith("origin/")
+                    or "/" in name  # noqa: RUF021
+                    and not name.startswith("refs/"),  # noqa: RUF021, RUF100
                     last_commit_date=commit_date,
                     last_commit_sha=sha or None,
                 )
@@ -311,9 +316,7 @@ class GitService:
             check=False,
         )
         if result.returncode != 0:
-            raise GitError(
-                f"fast-forward failed: {result.stderr.strip() or result.stdout.strip()}"
-            )
+            raise GitError(f"fast-forward failed: {result.stderr.strip() or result.stdout.strip()}")
         head = await self._run(["rev-parse", "HEAD"], cwd=repo_path)
         return head.stdout.strip()
 
@@ -479,8 +482,11 @@ class GitService:
         await self._run(["worktree", "prune"], cwd=repo_p, check=False)
         # Remove any leftover directory from a previous failed merge.
         if tmp_path.exists():
-            await self._run(["worktree", "remove", "--force", str(tmp_path)], cwd=repo_p, check=False)
+            await self._run(
+                ["worktree", "remove", "--force", str(tmp_path)], cwd=repo_p, check=False
+            )
             import shutil as _shutil
+
             if tmp_path.exists():
                 _shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -587,7 +593,9 @@ class GitService:
 
         await self._run(["worktree", "prune"], cwd=repo_p, check=False)
         if tmp_path.exists():
-            await self._run(["worktree", "remove", "--force", str(tmp_path)], cwd=repo_p, check=False)
+            await self._run(
+                ["worktree", "remove", "--force", str(tmp_path)], cwd=repo_p, check=False
+            )
             if tmp_path.exists():
                 shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -676,11 +684,13 @@ class GitService:
             if not rel_path:
                 continue
             try:
-                content = (Path(worktree_path) / rel_path).read_text(encoding="utf-8", errors="replace")
+                content = (Path(worktree_path) / rel_path).read_text(
+                    encoding="utf-8", errors="replace"
+                )
             except OSError:
                 continue
             lines = content.splitlines(keepends=True)
-            added = "".join(f"+{l}" if l.endswith("\n") else f"+{l}\n" for l in lines)
+            added = "".join(f"+{l}" if l.endswith("\n") else f"+{l}\n" for l in lines)  # noqa: E741
             parts.append(
                 f"diff --git a/{rel_path} b/{rel_path}\n"
                 f"new file mode 100644\n"
@@ -779,6 +789,7 @@ class GitService:
         if not text:
             return out
         import re as _re
+
         for clause, key in (
             (r"(\d+) files? changed", "files"),
             (r"(\d+) insertions?", "insertions"),
@@ -816,7 +827,7 @@ class GitService:
         out: list[str] = []
         for line in result.stdout.splitlines():
             if line.startswith("worktree "):
-                out.append(line[len("worktree "):].strip())
+                out.append(line[len("worktree ") :].strip())
         return out
 
     async def list_branch_names(self, repo_path: str | Path, prefix: str) -> list[str]:

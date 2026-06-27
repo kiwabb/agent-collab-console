@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Task completion hook for Conductor-driven orchestration.
 
 In the Conductor world, the WorkflowScheduler is no longer a scheduler — it
@@ -15,15 +17,13 @@ It does NOT mark the WorkflowGraph terminal — `run_issue_conductor_loop`
 owns the graph lifecycle and sets `graph.status` itself when the Conductor
 loop exits.
 """
-from __future__ import annotations
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+from datetime import datetime  # noqa: E402
+from uuid import uuid4  # noqa: E402
 
-import asyncio
-import logging
-from datetime import datetime
-from uuid import uuid4
-
-from app.domain.models import (
-    Agent,
+from app.domain.models import (  # noqa: E402
+    Agent,  # noqa: F401
     AgentMessage,
     CodexIssue,
     CodexTask,
@@ -35,9 +35,7 @@ logger = logging.getLogger(__name__)
 
 _ENGINEER_ROLES = {"engineer", "engineer_frontend", "engineer_backend"}
 _DIFF_GUARD_CLAIM_MARKER = "Engineer claimed status="
-_DIFF_GUARD_ZERO_DIFF_MARKER = (
-    "git diff against the base branch shows no file changes"
-)
+_DIFF_GUARD_ZERO_DIFF_MARKER = "git diff against the base branch shows no file changes"
 
 
 class WorkflowSchedulerError(RuntimeError):
@@ -60,16 +58,18 @@ class WorkflowScheduler:
         if self._event_bus is None or issue is None:
             return
         try:
-            await self._event_bus.append({
-                "type": "workflow_node_updated",
-                "issue_id": issue.id,
-                "session_id": issue.session_id,
-                "node_id": node.id,
-                "node_key": node.node_key,
-                "status": node.status,
-                "task_id": node.task_id,
-            })
-        except Exception as exc:  # noqa: BLE001
+            await self._event_bus.append(
+                {
+                    "type": "workflow_node_updated",
+                    "issue_id": issue.id,
+                    "session_id": issue.session_id,
+                    "node_id": node.id,
+                    "node_key": node.node_key,
+                    "status": node.status,
+                    "task_id": node.task_id,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("workflow_node_updated emit failed: %s", exc)
 
     async def _emit_artifact_validation_failed(
@@ -85,17 +85,19 @@ class WorkflowScheduler:
         if self._event_bus is None:
             return
         try:
-            await self._event_bus.append({
-                "type": "artifact_validation_failed",
-                "issue_id": issue.id if issue is not None else task.issue_id,
-                "session_id": issue.session_id if issue is not None else None,
-                "task_id": task.id,
-                "node_id": node.id,
-                "node_key": node.node_key,
-                "role": task.role,
-                "validation_error": validation_error,
-            })
-        except Exception as exc:  # noqa: BLE001
+            await self._event_bus.append(
+                {
+                    "type": "artifact_validation_failed",
+                    "issue_id": issue.id if issue is not None else task.issue_id,
+                    "session_id": issue.session_id if issue is not None else None,
+                    "task_id": task.id,
+                    "node_id": node.id,
+                    "node_key": node.node_key,
+                    "role": task.role,
+                    "validation_error": validation_error,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("artifact_validation_failed emit failed: %s", exc)
 
     async def _emit_diff_guard_failed(
@@ -108,17 +110,19 @@ class WorkflowScheduler:
         if self._event_bus is None:
             return
         try:
-            await self._event_bus.append({
-                "type": "workflow_node_diff_guard_failed",
-                "issue_id": issue.id if issue is not None else task.issue_id,
-                "session_id": issue.session_id if issue is not None else task.session_id,
-                "task_id": task.id,
-                "node_id": node.id,
-                "node_key": node.node_key,
-                "role": task.role,
-                "reason": reason,
-            })
-        except Exception as exc:  # noqa: BLE001
+            await self._event_bus.append(
+                {
+                    "type": "workflow_node_diff_guard_failed",
+                    "issue_id": issue.id if issue is not None else task.issue_id,
+                    "session_id": issue.session_id if issue is not None else task.session_id,
+                    "task_id": task.id,
+                    "node_id": node.id,
+                    "node_key": node.node_key,
+                    "role": task.role,
+                    "reason": reason,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("workflow_node_diff_guard_failed emit failed: %s", exc)
 
     async def on_task_completed(self, task: CodexTask) -> None:
@@ -136,7 +140,7 @@ class WorkflowScheduler:
         if graph is not None:
             try:
                 issue_for_event = await self.store.load_codex_issue(graph.issue_id)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, RUF100
                 issue_for_event = None
             diff_guard_reason = self._engineer_diff_guard_failure_reason(task)
             if terminal == "done" and diff_guard_reason:
@@ -173,9 +177,11 @@ class WorkflowScheduler:
         # Signal TaskCompletionRegistry so Conductor's dispatch_subagent
         # tool call can unblock with a SubAgentResult.
         from app.application.task_completion_registry import TaskCompletionRegistry
+
         reg = TaskCompletionRegistry.get()
         if reg.is_registered(task.id):
             from app.application.subagent_result_builder import build_subagent_result
+
             try:
                 subagent_result = build_subagent_result(
                     task=task,
@@ -204,16 +210,19 @@ class WorkflowScheduler:
                         task, node, issue_for_event, validation_error
                     )
                 reg.signal(task.id, signal_payload)
-            except Exception:  # noqa: BLE001
-                reg.signal(task.id, {
-                    "task_id": task.id,
-                    "role": task.role,
-                    "status": task.status,
-                    "summary": task.result or "",
-                })
+            except Exception:  # noqa: BLE001, RUF100
+                reg.signal(
+                    task.id,
+                    {
+                        "task_id": task.id,
+                        "role": task.role,
+                        "status": task.status,
+                        "summary": task.result or "",
+                    },
+                )
 
         # Phase 4: specialist_child → resume parent with findings.
-        if task.task_kind == "specialist_child" and task.status == "done":
+        if task.task_kind == "specialist_child" and task.status == "done":  # noqa: SIM102
             if await self._maybe_resume_from_specialist(task, graph):
                 return
 
@@ -294,7 +303,7 @@ class WorkflowScheduler:
             result = self._task_dispatcher(retry_task)
             if asyncio.iscoroutine(result):
                 await result
-        except Exception as exc:  # noqa: BLE001 - retry dispatch is best-effort recovery.
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning(
                 "workflow node auto-retry dispatch failed issue_id=%s node_id=%s task_id=%s: %s",
                 graph.issue_id,
@@ -339,26 +348,30 @@ class WorkflowScheduler:
         if self._event_bus is None:
             return
         try:
-            await self._event_bus.append({
-                "type": "workflow_node_retrying",
-                "issue_id": issue.id,
-                "session_id": issue.session_id,
-                "node_id": node.id,
-                "node_key": node.node_key,
-                "previous_task_id": task.id,
-                "retry_task_id": retry_task.id,
-                "retry": retry_number,
-                "max_retries": max_retries,
-            })
-            await self._event_bus.append({
-                "type": "task_status",
-                "task_id": retry_task.id,
-                "issue_id": retry_task.issue_id,
-                "session_id": retry_task.session_id,
-                "status": retry_task.status,
-                "review_comment": retry_task.review_comment,
-            })
-        except Exception as exc:  # noqa: BLE001
+            await self._event_bus.append(
+                {
+                    "type": "workflow_node_retrying",
+                    "issue_id": issue.id,
+                    "session_id": issue.session_id,
+                    "node_id": node.id,
+                    "node_key": node.node_key,
+                    "previous_task_id": task.id,
+                    "retry_task_id": retry_task.id,
+                    "retry": retry_number,
+                    "max_retries": max_retries,
+                }
+            )
+            await self._event_bus.append(
+                {
+                    "type": "task_status",
+                    "task_id": retry_task.id,
+                    "issue_id": retry_task.issue_id,
+                    "session_id": retry_task.session_id,
+                    "status": retry_task.status,
+                    "review_comment": retry_task.review_comment,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("workflow_node_retrying emit failed: %s", exc)
 
     async def _emit_retry_failed_event(
@@ -371,25 +384,29 @@ class WorkflowScheduler:
         if self._event_bus is None:
             return
         try:
-            await self._event_bus.append({
-                "type": "workflow_node_retry_failed",
-                "issue_id": issue.id,
-                "session_id": issue.session_id,
-                "node_id": node.id,
-                "node_key": node.node_key,
-                "retry_task_id": retry_task.id,
-                "status": "failed",
-                "error": str(exc),
-            })
-            await self._event_bus.append({
-                "type": "task_status",
-                "task_id": retry_task.id,
-                "issue_id": retry_task.issue_id,
-                "session_id": retry_task.session_id,
-                "status": retry_task.status,
-                "review_comment": retry_task.review_comment,
-            })
-        except Exception as emit_exc:  # noqa: BLE001
+            await self._event_bus.append(
+                {
+                    "type": "workflow_node_retry_failed",
+                    "issue_id": issue.id,
+                    "session_id": issue.session_id,
+                    "node_id": node.id,
+                    "node_key": node.node_key,
+                    "retry_task_id": retry_task.id,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+            await self._event_bus.append(
+                {
+                    "type": "task_status",
+                    "task_id": retry_task.id,
+                    "issue_id": retry_task.issue_id,
+                    "session_id": retry_task.session_id,
+                    "status": retry_task.status,
+                    "review_comment": retry_task.review_comment,
+                }
+            )
+        except Exception as emit_exc:  # noqa: BLE001, RUF100
             logger.debug("workflow_node_retry_failed emit failed: %s", emit_exc)
 
     async def _maybe_resume_from_specialist(
@@ -414,9 +431,7 @@ class WorkflowScheduler:
             f"Incorporate the above specialist findings into your next output."
         )
         parent.review_comment = (
-            f"{parent.review_comment}\n\n{continuation}"
-            if parent.review_comment
-            else continuation
+            f"{parent.review_comment}\n\n{continuation}" if parent.review_comment else continuation
         )
         parent.status = "pending"
         parent.updated_at = now
@@ -434,25 +449,29 @@ class WorkflowScheduler:
                 created_at=now,
             )
             await self.store.save_agent_message(msg)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("Failed to record specialist result message: %s", exc)
 
         if self._event_bus is not None:
             try:
-                await self._event_bus.append({
-                    "type": "specialist_completed",
-                    "parent_task_id": parent.id,
-                    "child_task_id": specialist_child_task.id,
-                    "specialist_role": specialist_child_task.role,
-                })
-                await self._event_bus.append({
-                    "type": "task_status",
-                    "task_id": parent.id,
-                    "issue_id": parent.issue_id,
-                    "session_id": parent.session_id,
-                    "status": parent.status,
-                })
-            except Exception:  # noqa: BLE001
+                await self._event_bus.append(
+                    {
+                        "type": "specialist_completed",
+                        "parent_task_id": parent.id,
+                        "child_task_id": specialist_child_task.id,
+                        "specialist_role": specialist_child_task.role,
+                    }
+                )
+                await self._event_bus.append(
+                    {
+                        "type": "task_status",
+                        "task_id": parent.id,
+                        "issue_id": parent.issue_id,
+                        "session_id": parent.session_id,
+                        "status": parent.status,
+                    }
+                )
+            except Exception:  # noqa: BLE001, RUF100
                 pass
 
         # Re-dispatch the parent's role on a fresh task so the runner picks
@@ -462,6 +481,7 @@ class WorkflowScheduler:
             if parent_issue is None:
                 return True
             from app.application.task_dispatcher import dispatch_role
+
             await dispatch_role(
                 issue=parent_issue,
                 role=parent.role,
@@ -470,7 +490,7 @@ class WorkflowScheduler:
                 event_bus=self._event_bus,
                 prev_node_key=specialist_child_task.role,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("Failed to re-dispatch parent after specialist: %s", exc)
 
         return True
@@ -499,6 +519,7 @@ class WorkflowScheduler:
             return
         agents_by_id = {a.id: a for a in await self.store.list_agents(workspace_id=None)}
         from collections import defaultdict
+
         statuses_by_role: dict[str, set[str]] = defaultdict(set)
         for node in graph.nodes:
             agent = agents_by_id.get(node.agent_id)
@@ -523,12 +544,14 @@ class WorkflowScheduler:
         issue.updated_at = datetime.now()
         await self.store.save_codex_issue(issue)
         if self._event_bus is not None:
-            try:
-                await self._event_bus.append({
-                    "type": "issue_updated",
-                    "issue_id": issue.id,
-                    "session_id": issue.session_id,
-                    "current_phase": issue.current_phase,
-                })
-            except Exception:  # noqa: BLE001
+            try:  # noqa: SIM105
+                await self._event_bus.append(
+                    {
+                        "type": "issue_updated",
+                        "issue_id": issue.id,
+                        "session_id": issue.session_id,
+                        "current_phase": issue.current_phase,
+                    }
+                )
+            except Exception:  # noqa: BLE001, RUF100
                 pass

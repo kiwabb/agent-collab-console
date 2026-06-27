@@ -6,6 +6,7 @@ Two complementary layers (merged from two independently developed designs):
 - ConductorPolicyDecision: runtime evidence (recent turns / graph / budget)
   -> per-loop action decision (call_llm vs deterministic guard / finalize).
 """
+
 from __future__ import annotations
 
 import json
@@ -107,7 +108,9 @@ def classify_issue_orchestration(title: str | None, description: str | None) -> 
 
     explicit_parallel = _contains_any(text, _EXPLICIT_PARALLEL_PATTERNS)
     independent_slices = _contains_any(text, _INDEPENDENT_PATTERNS) or len(file_refs) >= 3
-    trivial = _contains_any(text, _TRIVIAL_PATTERNS) or (0 < len(file_refs) <= 1 and len(text) < 180)
+    trivial = _contains_any(text, _TRIVIAL_PATTERNS) or (
+        0 < len(file_refs) <= 1 and len(text) < 180
+    )
     ambiguous = _is_ambiguous(text)
     risky = _contains_any(text, _RISK_PATTERNS) or _mentions_multiple_layers(text)
 
@@ -209,7 +212,9 @@ def render_issue_orchestration_policy_block(title: str | None, description: str 
 
 
 def _normalize_text(title: str | None, description: str | None) -> str:
-    return " ".join(part.strip() for part in (title or "", description or "") if part and part.strip()).lower()
+    return " ".join(
+        part.strip() for part in (title or "", description or "") if part and part.strip()
+    ).lower()
 
 
 def _contains_any(text: str, patterns: tuple[str, ...]) -> bool:
@@ -240,6 +245,7 @@ def _mentions_multiple_layers(text: str) -> bool:
 # ---------------------------------------------------------------------------
 # Runtime per-loop policy decision (origin/main design)
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class ConductorPolicyDecision:

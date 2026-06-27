@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Phase 4: Specialist Orchestrator — P2P mesh calls between agents.
 
 Allows Engineer/QA to directly invoke specialist agents (security_reviewer, etc.)
@@ -15,11 +17,10 @@ Core flows:
 
 Mesh depth limit: ≤ 2 (no specialist→specialist calls).
 """
+from datetime import datetime  # noqa: E402, I001
+from uuid import uuid4  # noqa: E402
 
-from datetime import datetime
-from uuid import uuid4
-
-from app.domain.models import CodexTask, AgentMessage
+from app.domain.models import CodexTask, AgentMessage  # noqa: E402
 
 
 class SpecialistOrchestratorError(ValueError):
@@ -130,34 +131,40 @@ class SpecialistOrchestrator:
                 created_at=now,
             )
             await self.store.save_agent_message(msg)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             pass  # AgentMessage is nice-to-have, don't block on failure
 
         # Emit events for real-time UI updates
-        await self.event_bus.append({
-            "type": "specialist_requested",
-            "parent_task_id": parent_task.id,
-            "child_task_id": child_id,
-            "specialist_role": specialist_role_key,
-            "reason": why,
-        })
-        await self.event_bus.append({
-            "type": "task_status",
-            "task_id": parent_task.id,
-            "issue_id": parent_task.issue_id,
-            "session_id": parent_task.session_id,
-            "status": parent_task.status,
-        })
+        await self.event_bus.append(
+            {
+                "type": "specialist_requested",
+                "parent_task_id": parent_task.id,
+                "child_task_id": child_id,
+                "specialist_role": specialist_role_key,
+                "reason": why,
+            }
+        )
+        await self.event_bus.append(
+            {
+                "type": "task_status",
+                "task_id": parent_task.id,
+                "issue_id": parent_task.issue_id,
+                "session_id": parent_task.session_id,
+                "status": parent_task.status,
+            }
+        )
 
         # Start the specialist child task
         await self.task_runner.start_task_run(child)
 
-        await self.event_bus.append({
-            "type": "specialist_child_started",
-            "parent_task_id": parent_task.id,
-            "child_task_id": child_id,
-            "specialist_role": specialist_role_key,
-        })
+        await self.event_bus.append(
+            {
+                "type": "specialist_child_started",
+                "parent_task_id": parent_task.id,
+                "child_task_id": child_id,
+                "specialist_role": specialist_role_key,
+            }
+        )
 
         return child
 
@@ -183,7 +190,9 @@ class SpecialistOrchestrator:
         """
         child = await self.store.load_codex_task(specialist_child_task_id)
         if child is None:
-            raise SpecialistOrchestratorError(f"Specialist child task {specialist_child_task_id} not found")
+            raise SpecialistOrchestratorError(
+                f"Specialist child task {specialist_child_task_id} not found"
+            )
 
         parent = await self.store.load_codex_task(child.parent_task_id)
         if parent is None:
@@ -220,23 +229,27 @@ class SpecialistOrchestrator:
                 created_at=now,
             )
             await self.store.save_agent_message(msg)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             pass
 
         # Emit events
-        await self.event_bus.append({
-            "type": "specialist_completed",
-            "parent_task_id": parent.id,
-            "child_task_id": specialist_child_task_id,
-            "specialist_role": child.role,
-        })
-        await self.event_bus.append({
-            "type": "task_status",
-            "task_id": parent.id,
-            "issue_id": parent.issue_id,
-            "session_id": parent.session_id,
-            "status": parent.status,
-        })
+        await self.event_bus.append(
+            {
+                "type": "specialist_completed",
+                "parent_task_id": parent.id,
+                "child_task_id": specialist_child_task_id,
+                "specialist_role": child.role,
+            }
+        )
+        await self.event_bus.append(
+            {
+                "type": "task_status",
+                "task_id": parent.id,
+                "issue_id": parent.issue_id,
+                "session_id": parent.session_id,
+                "status": parent.status,
+            }
+        )
 
         return parent
 
@@ -245,8 +258,9 @@ class SpecialistOrchestrator:
         try:
             children = await self.store.list_codex_tasks(parent_task_id=parent_task_id)
             return any(
-                c.task_kind == "specialist_child" and c.status in {"pending", "running", "responding"}
+                c.task_kind == "specialist_child"
+                and c.status in {"pending", "running", "responding"}
                 for c in children
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             return False

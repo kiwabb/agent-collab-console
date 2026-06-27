@@ -33,6 +33,7 @@ def git_changed_files(workspace_path: str | None) -> list[str]:
     if not workspace_path:
         return []
     import subprocess
+
     for base in ("origin/main", "main", "HEAD~1"):
         try:
             result = subprocess.run(
@@ -133,7 +134,9 @@ class EngineerReportDocument(BaseModel):
     # Phase 4: Request specialist assistance (e.g., security review) without waiting for Conductor.
     # Set this field to call a specialist agent directly. The specialist will complete,
     # and the Engineer will resume with the specialist's findings in review_comment.
-    call_specialist: dict | None = None  # {"role_key": "security_reviewer", "prompt": "...", "why": "..."}
+    call_specialist: dict | None = (
+        None  # {"role_key": "security_reviewer", "prompt": "...", "why": "..."}
+    )
 
 
 class EngineerWorkflow:
@@ -193,8 +196,7 @@ class EngineerWorkflow:
         scope_hint = _scope_hint_for_role(getattr(task, "role", "engineer"))
 
         return (
-            scope_hint
-            + "You are acting as Engineer. Follow an implementation workflow: "
+            scope_hint + "You are acting as Engineer. Follow an implementation workflow: "
             "understand the requirements and design, modify code in the current task workspace, "
             "and produce exactly one JSON object that matches the required schema at the end. "
             "Do not auto-commit or auto-merge changes unless explicitly asked by the user. "
@@ -239,7 +241,8 @@ class EngineerWorkflow:
                 "REWORK REQUIRED - ARCHITECT REVIEW FEEDBACK:\n"
                 f"{task.review_comment}\n\n"
                 "You MUST address ALL points in the above feedback before producing the final JSON.\n\n"
-                if getattr(task, "review_comment", None) else ""
+                if getattr(task, "review_comment", None)
+                else ""
             )
             + "TOOL USE REQUIREMENT (NEW — strictly enforced):\n"
             "- When status will be 'completed' or 'partial', you MUST actually call Write/Edit/Bash tools to modify files in the workspace. A description of what you would do is NOT acceptable.\n"
@@ -304,6 +307,7 @@ class EngineerWorkflow:
 
         try:
             from app.application.tolerant_json import tolerant_json_loads
+
             payload = tolerant_json_loads(task.result)
         except json.JSONDecodeError as exc:
             raise EngineerWorkflowError(f"Engineer output is not valid JSON: {exc}") from exc
@@ -344,9 +348,17 @@ class EngineerWorkflow:
             f"Status: {report.status}. File: {impl_md_path.name}."
         )
         # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
-        object.__setattr__(report, "written_files", [
-            {"name": f"{subdir}/{impl_md_path.name}", "path": str(impl_md_path), "kind": "development"},
-        ])
+        object.__setattr__(
+            report,
+            "written_files",
+            [
+                {
+                    "name": f"{subdir}/{impl_md_path.name}",
+                    "path": str(impl_md_path),
+                    "kind": "development",
+                },
+            ],
+        )
         return report
 
     def _git_changed_files(self, workspace_path: str | None) -> list[str]:
@@ -401,8 +413,14 @@ class EngineerWorkflow:
 
         # --- C2: reconcile claimed list to ground truth ---
         if actually_changed:
-            actual_norm = {_normalize_repo_path(f) for f in actually_changed if _normalize_repo_path(f)}
-            claimed_norm = {_normalize_repo_path(f) for f in (report.changed_files or []) if _normalize_repo_path(f)}
+            actual_norm = {
+                _normalize_repo_path(f) for f in actually_changed if _normalize_repo_path(f)
+            }
+            claimed_norm = {
+                _normalize_repo_path(f)
+                for f in (report.changed_files or [])
+                if _normalize_repo_path(f)
+            }
             if actual_norm != claimed_norm:
                 reconcile_note = (
                     f"[framework] Engineer-claimed changed_files {report.changed_files!r} did not "
@@ -469,17 +487,23 @@ class EngineerWorkflow:
         if bugfix:
             parts.append(f"existing_bugfix:\n{bugfix}\n")
         else:
-            parts.append("NOTE: bugfix.md is not present. Use qa_notes for any missing defect context.\n")
+            parts.append(
+                "NOTE: bugfix.md is not present. Use qa_notes for any missing defect context.\n"
+            )
 
         if system_design:
             parts.append(f"existing_system_design:\n{system_design}\n")
         else:
-            parts.append("NOTE: system_design.json is missing. Use qa_notes for any missing design context.\n")
+            parts.append(
+                "NOTE: system_design.json is missing. Use qa_notes for any missing design context.\n"
+            )
 
         if implementation_plan:
             parts.append(f"implementation_plan:\n{implementation_plan}\n")
         else:
-            parts.append("NOTE: implementation_plan.json is missing. Use deferred_tasks for any missing implementation breakdown.\n")
+            parts.append(
+                "NOTE: implementation_plan.json is missing. Use deferred_tasks for any missing implementation breakdown.\n"
+            )
 
         return "\n".join(parts)
 
@@ -507,9 +531,15 @@ class EngineerWorkflow:
         ]
         lines.extend([f"- {f}" for f in report.changed_files] or ["- None"])
         lines.extend(["", "## Completed Tasks"])
-        lines.extend([f"- **{t.title}** ({t.priority}): {t.description}" for t in report.completed_tasks] or ["- None"])
+        lines.extend(
+            [f"- **{t.title}** ({t.priority}): {t.description}" for t in report.completed_tasks]
+            or ["- None"]
+        )
         lines.extend(["", "## Deferred Tasks"])
-        lines.extend([f"- **{t.title}** ({t.priority}): {t.description}" for t in report.deferred_tasks] or ["- None"])
+        lines.extend(
+            [f"- **{t.title}** ({t.priority}): {t.description}" for t in report.deferred_tasks]
+            or ["- None"]
+        )
         lines.extend(["", "## Risks"])
         lines.extend([f"- {r}" for r in report.risks] or ["- None"])
         lines.extend(["", "## Verification Commands"])

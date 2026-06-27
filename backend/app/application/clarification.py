@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Agent clarification flow.
 
 Each role's JSON output schema carries an optional `clarification_question`
@@ -17,9 +19,6 @@ stay blocked until the user replies via /codex/tasks/{id}/answer.
 The instruction injected into every role's prompt nudges them to use this
 field whenever they would otherwise have to invent context.
 """
-
-from __future__ import annotations
-
 CLARIFY_PREFIX = "[CLARIFY] "
 
 
@@ -47,7 +46,7 @@ def question_text(task) -> str | None:
         return None
     if not rc.startswith(CLARIFY_PREFIX):
         return None
-    return rc[len(CLARIFY_PREFIX):].strip()
+    return rc[len(CLARIFY_PREFIX) :].strip()
 
 
 def mark_task_pending_clarification(task, question: str) -> None:

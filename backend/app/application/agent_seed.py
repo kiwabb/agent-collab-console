@@ -5,7 +5,8 @@ template (`[builtin:<role_key>]`). The runtime continues to dispatch via
 RoleWorkflowService for these roles. Later PRs will read the template
 directly when the WORKFLOW_DAG_ENABLED flag flips on.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 from datetime import datetime
 from uuid import uuid4
@@ -23,7 +24,7 @@ _BUILTIN_SPECS: list[tuple[str, str, str, str, str, bool, bool]] = [
         "Drafts the PRD / requirements document for an issue.",
         "pm",
         "product_manager",
-        True,   # replan after PM done — requirements may shift the rest of the graph
+        True,  # replan after PM done — requirements may shift the rest of the graph
         False,
     ),
     (
@@ -32,7 +33,7 @@ _BUILTIN_SPECS: list[tuple[str, str, str, str, str, bool, bool]] = [
         "Designs system architecture and produces the implementation plan.",
         "architect",
         "architect",
-        True,   # replan after architect done — may surface need for security/perf reviewers
+        True,  # replan after architect done — may surface need for security/perf reviewers
         False,
     ),
     (
@@ -73,7 +74,7 @@ _BUILTIN_SPECS: list[tuple[str, str, str, str, str, bool, bool]] = [
         "qa",
         "qa",
         False,
-        True,   # QA failed → replan can decide whether to loop back to engineer or architect
+        True,  # QA failed → replan can decide whether to loop back to engineer or architect
     ),
 ]
 

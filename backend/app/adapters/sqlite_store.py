@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import sqlite3
@@ -7,7 +9,27 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, SelfImprovementProposal, SelfImprovementApplicationEvent
+from app.domain.models import (  # noqa: I001
+    Session,
+    Task,
+    AgentRun,
+    Artifact,
+    Message,
+    Approval,
+    ApprovalEvent,
+    PlanDetails,
+    CodexSession,
+    CodexMessage,
+    CodexIssue,
+    CodexTask,
+    CodexTaskMessage,
+    LogEvent,
+    ExecutionProcess,
+    HelpRequest,
+    RuntimeCatalog,
+    SelfImprovementProposal,
+    SelfImprovementApplicationEvent,
+)  # noqa: I001, RUF100
 
 
 class SQLiteStore:
@@ -27,13 +49,15 @@ class SQLiteStore:
             return conn.execute(query, params)
         except sqlite3.Error as e:
             logger.error("Database error: %s | query: %s | params: %s", e, query, params)
-            try:
+            try:  # noqa: SIM105
                 conn.rollback()
             except sqlite3.Error:
                 pass
             raise
 
-    def _execute_with_commit(self, conn: sqlite3.Connection, query: str, params: tuple = ()) -> sqlite3.Cursor:
+    def _execute_with_commit(
+        self, conn: sqlite3.Connection, query: str, params: tuple = ()
+    ) -> sqlite3.Cursor:
         """Execute a query with commit, rolling back on failure."""
         try:
             cur = conn.execute(query, params)
@@ -41,7 +65,7 @@ class SQLiteStore:
             return cur
         except sqlite3.Error as e:
             logger.error("Database error: %s | query: %s | params: %s", e, query, params)
-            try:
+            try:  # noqa: SIM105
                 conn.rollback()
             except sqlite3.Error:
                 pass
@@ -249,199 +273,207 @@ class SQLiteStore:
             """)
             # Add created_at column to existing tables if not present (backward compatibility)
             for table in ["tasks", "runs", "artifacts", "messages", "approvals", "approval_events"]:
-                try:
+                try:  # noqa: SIM105
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN created_at TEXT")
                 except sqlite3.OperationalError:
                     pass  # Column already exists
             # Add thread_id column to codex_sessions for session resume support
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_sessions ADD COLUMN thread_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_sessions ADD COLUMN claude_thread_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_sessions ADD COLUMN project_id TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_sessions ADD COLUMN settings_json TEXT")
             except sqlite3.OperationalError:
                 pass
             # Add task_id column to log_events for task-scoped log attribution
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE log_events ADD COLUMN task_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_task_messages ADD COLUMN execution_process_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE log_events ADD COLUMN execution_process_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
             # Add executor column to codex_tasks for dual-executor support
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN phase TEXT DEFAULT 'requirements'")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN issue_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN role TEXT DEFAULT 'general'")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN executor TEXT DEFAULT 'codex'")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_session_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_message_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN workspace_path TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN last_execution_process_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN task_kind TEXT DEFAULT 'normal'")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN blocked_by_help_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
             # Add provider and model columns to codex_tasks
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN provider TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN model TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN result_json TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE agents ADD COLUMN agent_tier TEXT DEFAULT 'managed'")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN project_id TEXT")
             except sqlite3.OperationalError:
                 pass
             for _issue_exec_col in ("executor", "provider", "model"):
-                try:
+                try:  # noqa: SIM105
                     conn.execute(f"ALTER TABLE codex_issues ADD COLUMN {_issue_exec_col} TEXT")
                 except sqlite3.OperationalError:
                     pass
             # Per-issue cost budget (cost-aware conductor scheduling, PR2)
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN budget_usd REAL")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN review_comment TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN milestone TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN git_branch TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN git_base_branch TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN git_worktree_path TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
-                conn.execute("ALTER TABLE codex_issues ADD COLUMN git_merge_status TEXT DEFAULT 'open'")
+            try:  # noqa: SIM105
+                conn.execute(
+                    "ALTER TABLE codex_issues ADD COLUMN git_merge_status TEXT DEFAULT 'open'"
+                )
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN git_last_commit_sha TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_url TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_state TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
-                conn.execute("ALTER TABLE codex_issues ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+            try:  # noqa: SIM105
+                conn.execute(
+                    "ALTER TABLE codex_issues ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"
+                )
             except sqlite3.OperationalError:
                 pass
             # Add executor/provider/model snapshot columns to execution_processes
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN provider TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN model TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
-                conn.execute("ALTER TABLE execution_processes ADD COLUMN kind TEXT NOT NULL DEFAULT 'initial'")
+            try:  # noqa: SIM105
+                conn.execute(
+                    "ALTER TABLE execution_processes ADD COLUMN kind TEXT NOT NULL DEFAULT 'initial'"
+                )
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
-                conn.execute("ALTER TABLE execution_processes ADD COLUMN triggering_message_id TEXT")
+            try:  # noqa: SIM105
+                conn.execute(
+                    "ALTER TABLE execution_processes ADD COLUMN triggering_message_id TEXT"
+                )
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_index INTEGER")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_group TEXT")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN review_comment TEXT")
             except sqlite3.OperationalError:
                 pass
             # Add token usage and cost columns to execution_processes
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN input_tokens INTEGER")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN output_tokens INTEGER")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN cache_read_tokens INTEGER")
             except sqlite3.OperationalError:
                 pass
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN total_cost_usd REAL")
             except sqlite3.OperationalError:
                 pass
@@ -565,7 +597,7 @@ class SQLiteStore:
                     FOREIGN KEY (graph_id) REFERENCES workflow_graphs(id)
                 )
             """)
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN workflow_node_id TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
@@ -772,80 +804,156 @@ class SQLiteStore:
                 )
             """)
             # Create indexes for frequently queried columns
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_parent_task_id ON codex_tasks(parent_task_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_codex_tasks_issue_id ON codex_tasks(issue_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_codex_tasks_parent_task_id ON codex_tasks(parent_task_id)"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_status ON codex_tasks(status)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_task_kind ON codex_tasks(task_kind)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_issues_session_id ON codex_issues(session_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_task_messages_task_id ON codex_task_messages(task_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_task_messages_execution_process_id ON codex_task_messages(execution_process_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_session_id ON log_events(session_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_codex_tasks_task_kind ON codex_tasks(task_kind)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_codex_issues_session_id ON codex_issues(session_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_codex_task_messages_task_id ON codex_task_messages(task_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_codex_task_messages_execution_process_id ON codex_task_messages(execution_process_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_log_events_session_id ON log_events(session_id)"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_task_id ON log_events(task_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_session_id ON execution_processes(session_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_task_id ON execution_processes(task_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_paths_issue_id ON artifact_paths(issue_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_execution_processes_session_id ON execution_processes(session_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_execution_processes_task_id ON execution_processes(task_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_help_requests_child_task_id ON help_requests(child_task_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_help_requests_workspace_id ON help_requests(workspace_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_artifact_paths_issue_id ON artifact_paths(issue_id)"
+            )
             # Workflow DAG indexes
             conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_role_key ON agents(role_key)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_workspace_id ON agents(workspace_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_graphs_issue_id ON workflow_graphs(issue_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_graph_id ON workflow_nodes(graph_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_status ON workflow_nodes(status)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_nodes_task_id ON workflow_nodes(task_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_edges_graph_id ON workflow_edges(graph_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_graph_id ON graph_replan_pending(graph_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_status ON graph_replan_pending(status)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_tasks_workflow_node_id ON codex_tasks(workflow_node_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_messages_issue_id ON agent_messages(issue_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_messages_graph_id ON agent_messages(graph_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_issue_id ON conductor_decisions(issue_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_id ON conductor_tasks(project_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_agents_workspace_id ON agents(workspace_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_workflow_graphs_issue_id ON workflow_graphs(issue_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_workflow_nodes_graph_id ON workflow_nodes(graph_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_workflow_nodes_status ON workflow_nodes(status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_workflow_nodes_task_id ON workflow_nodes(task_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_workflow_edges_graph_id ON workflow_edges(graph_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_graph_id ON graph_replan_pending(graph_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_graph_replan_pending_status ON graph_replan_pending(status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_codex_tasks_workflow_node_id ON codex_tasks(workflow_node_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_agent_messages_issue_id ON agent_messages(issue_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_agent_messages_graph_id ON agent_messages(graph_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conductor_decisions_issue_id ON conductor_decisions(issue_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conductor_decisions_task_id ON conductor_decisions(task_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_id ON conductor_tasks(project_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status)"
+            )
             for stmt in (
                 "ALTER TABLE conductor_tasks ADD COLUMN lease_owner TEXT",
                 "ALTER TABLE conductor_tasks ADD COLUMN heartbeat_at TEXT",
                 "ALTER TABLE conductor_tasks ADD COLUMN lease_expires_at TEXT",
             ):
-                try:
+                try:  # noqa: SIM105
                     conn.execute(stmt)
                 except sqlite3.OperationalError:
                     pass
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_lease ON conductor_tasks(status, lease_expires_at)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conductor_tasks_lease ON conductor_tasks(status, lease_expires_at)"
+            )
             # Phase 4: add instance_index to workflow_nodes for existing DBs
-            try:
+            try:  # noqa: SIM105
                 conn.execute(
                     "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
                 )
             except sqlite3.OperationalError:
                 pass
             # Parallel swarm: add batch_key to group nodes from one dispatch_batch call
-            try:
-                conn.execute(
-                    "ALTER TABLE workflow_nodes ADD COLUMN batch_key TEXT"
-                )
+            try:  # noqa: SIM105
+                conn.execute("ALTER TABLE workflow_nodes ADD COLUMN batch_key TEXT")
             except sqlite3.OperationalError:
                 pass
             # Must run BEFORE idx_conductor_turns_inbox below; the index
             # references consumed_at, and on an existing DB without the column
             # the CREATE INDEX otherwise raises sqlite3.OperationalError and
             # tanks the whole _init_db().
-            try:
+            try:  # noqa: SIM105
                 conn.execute("ALTER TABLE conductor_turns ADD COLUMN consumed_at TEXT")
             except sqlite3.OperationalError:
                 pass
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_state_log_issue_transition ON conductor_state_log(issue_id, transition_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_project_created ON self_improvement_proposals(project_id, created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_issue ON self_improvement_proposals(issue_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_status ON self_improvement_proposals(status)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conductor_state_log_issue_transition ON conductor_state_log(issue_id, transition_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_self_improvement_project_created ON self_improvement_proposals(project_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_self_improvement_issue ON self_improvement_proposals(issue_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_self_improvement_status ON self_improvement_proposals(status)"
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_self_improvement_application_events_project_created "
                 "ON self_improvement_application_events(project_id, created_at)"
@@ -855,14 +963,20 @@ class SQLiteStore:
                 "ON self_improvement_application_events(proposal_id, created_at)"
             )
             # Audit log filter/pagination indexes (PR3 read API will lean on these).
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_category_created ON audit_log(category, created_at)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_log_category_created ON audit_log(category, created_at)"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)")
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database initialization error: %s", e)
-            try:
+            try:  # noqa: SIM105
                 conn.rollback()
             except sqlite3.Error:
                 pass
@@ -892,12 +1006,28 @@ class SQLiteStore:
             for task in session.tasks:
                 conn.execute(
                     "INSERT OR REPLACE INTO tasks (id, session_id, title, assignee, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (task.id, session.id, task.title, task.assignee, task.status, self._format_datetime(task.created_at)),
+                    (
+                        task.id,
+                        session.id,
+                        task.title,
+                        task.assignee,
+                        task.status,
+                        self._format_datetime(task.created_at),
+                    ),
                 )
             for run in session.runs:
                 conn.execute(
                     "INSERT OR REPLACE INTO runs (id, task_id, agent_id, role, status, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (run.id, run.task_id, run.agent_id, run.role, run.status, run.summary, json.dumps(run.payload) if run.payload else None, self._format_datetime(run.created_at)),
+                    (
+                        run.id,
+                        run.task_id,
+                        run.agent_id,
+                        run.role,
+                        run.status,
+                        run.summary,
+                        json.dumps(run.payload) if run.payload else None,
+                        self._format_datetime(run.created_at),
+                    ),
                 )
             for artifact in session.artifacts:
                 content = artifact.content
@@ -907,27 +1037,55 @@ class SQLiteStore:
                     content = json.dumps(content)
                 conn.execute(
                     "INSERT OR REPLACE INTO artifacts (id, task_id, kind, content, steps, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (artifact.id, artifact.task_id, artifact.kind, content, json.dumps(artifact.steps) if artifact.steps else None, self._format_datetime(artifact.created_at)),
+                    (
+                        artifact.id,
+                        artifact.task_id,
+                        artifact.kind,
+                        content,
+                        json.dumps(artifact.steps) if artifact.steps else None,
+                        self._format_datetime(artifact.created_at),
+                    ),
                 )
             for message in session.messages:
                 conn.execute(
                     "INSERT OR REPLACE INTO messages (id, task_id, agent_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (message.id, message.task_id, message.agent_id, message.role, message.content, self._format_datetime(message.created_at)),
+                    (
+                        message.id,
+                        message.task_id,
+                        message.agent_id,
+                        message.role,
+                        message.content,
+                        self._format_datetime(message.created_at),
+                    ),
                 )
             for approval in session.approvals:
                 conn.execute(
                     "INSERT OR REPLACE INTO approvals (id, session_id, task_id, action, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (approval.id, approval.session_id, approval.task_id, approval.action, approval.status, self._format_datetime(approval.created_at)),
+                    (
+                        approval.id,
+                        approval.session_id,
+                        approval.task_id,
+                        approval.action,
+                        approval.status,
+                        self._format_datetime(approval.created_at),
+                    ),
                 )
             for event in session.approval_events:
                 conn.execute(
                     "INSERT OR REPLACE INTO approval_events (id, session_id, task_id, approval_id, event_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (event.id, event.session_id, event.task_id, event.approval_id, event.event_type, self._format_datetime(event.created_at)),
+                    (
+                        event.id,
+                        event.session_id,
+                        event.task_id,
+                        event.approval_id,
+                        event.event_type,
+                        self._format_datetime(event.created_at),
+                    ),
                 )
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database error saving session %s: %s", session.id, e)
-            try:
+            try:  # noqa: SIM105
                 conn.rollback()
             except sqlite3.Error:
                 pass
@@ -953,86 +1111,111 @@ class SQLiteStore:
 
             # Load tasks
             for t_row in conn.execute("SELECT * FROM tasks WHERE session_id = ?", (session_id,)):
-                session.tasks.append(Task(
-                    id=t_row["id"],
-                    session_id=t_row["session_id"],
-                    title=t_row["title"],
-                    assignee=t_row["assignee"],
-                    status=t_row["status"],
-                    created_at=self._parse_datetime(t_row["created_at"]),
-                ))
+                session.tasks.append(
+                    Task(
+                        id=t_row["id"],
+                        session_id=t_row["session_id"],
+                        title=t_row["title"],
+                        assignee=t_row["assignee"],
+                        status=t_row["status"],
+                        created_at=self._parse_datetime(t_row["created_at"]),
+                    )
+                )
 
             # Load runs
-            for r_row in conn.execute("SELECT * FROM runs WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
-                session.runs.append(AgentRun(
-                    id=r_row["id"],
-                    task_id=r_row["task_id"],
-                    agent_id=r_row["agent_id"],
-                    role=r_row["role"],
-                    status=r_row["status"],
-                    summary=r_row["summary"],
-                    payload=json.loads(r_row["payload"]) if r_row["payload"] else None,
-                    created_at=self._parse_datetime(r_row["created_at"]),
-                ))
+            for r_row in conn.execute(
+                "SELECT * FROM runs WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
+                (session_id,),
+            ):
+                session.runs.append(
+                    AgentRun(
+                        id=r_row["id"],
+                        task_id=r_row["task_id"],
+                        agent_id=r_row["agent_id"],
+                        role=r_row["role"],
+                        status=r_row["status"],
+                        summary=r_row["summary"],
+                        payload=json.loads(r_row["payload"]) if r_row["payload"] else None,
+                        created_at=self._parse_datetime(r_row["created_at"]),
+                    )
+                )
 
             # Load artifacts
-            for a_row in conn.execute("SELECT * FROM artifacts WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
+            for a_row in conn.execute(
+                "SELECT * FROM artifacts WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
+                (session_id,),
+            ):
                 content = a_row["content"]
                 try:
                     parsed = json.loads(content)
-                    if isinstance(parsed, dict):
+                    if isinstance(parsed, dict):  # noqa: SIM108
                         content = PlanDetails(**parsed)
                     else:
                         content = parsed
                 except (json.JSONDecodeError, TypeError):
                     pass
-                session.artifacts.append(Artifact(
-                    id=a_row["id"],
-                    task_id=a_row["task_id"],
-                    kind=a_row["kind"],
-                    content=content,
-                    steps=json.loads(a_row["steps"]) if a_row["steps"] else None,
-                    created_at=self._parse_datetime(a_row["created_at"]),
-                ))
+                session.artifacts.append(
+                    Artifact(
+                        id=a_row["id"],
+                        task_id=a_row["task_id"],
+                        kind=a_row["kind"],
+                        content=content,
+                        steps=json.loads(a_row["steps"]) if a_row["steps"] else None,
+                        created_at=self._parse_datetime(a_row["created_at"]),
+                    )
+                )
 
             # Load messages
-            for m_row in conn.execute("SELECT * FROM messages WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
-                session.messages.append(Message(
-                    id=m_row["id"],
-                    task_id=m_row["task_id"],
-                    agent_id=m_row["agent_id"],
-                    role=m_row["role"],
-                    content=m_row["content"],
-                    created_at=self._parse_datetime(m_row["created_at"]),
-                ))
+            for m_row in conn.execute(
+                "SELECT * FROM messages WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
+                (session_id,),
+            ):
+                session.messages.append(
+                    Message(
+                        id=m_row["id"],
+                        task_id=m_row["task_id"],
+                        agent_id=m_row["agent_id"],
+                        role=m_row["role"],
+                        content=m_row["content"],
+                        created_at=self._parse_datetime(m_row["created_at"]),
+                    )
+                )
 
             # Load approvals
-            for ap_row in conn.execute("SELECT * FROM approvals WHERE session_id = ?", (session_id,)):
-                session.approvals.append(Approval(
-                    id=ap_row["id"],
-                    session_id=ap_row["session_id"],
-                    task_id=ap_row["task_id"],
-                    action=ap_row["action"],
-                    status=ap_row["status"],
-                    created_at=self._parse_datetime(ap_row["created_at"]),
-                ))
+            for ap_row in conn.execute(
+                "SELECT * FROM approvals WHERE session_id = ?", (session_id,)
+            ):
+                session.approvals.append(
+                    Approval(
+                        id=ap_row["id"],
+                        session_id=ap_row["session_id"],
+                        task_id=ap_row["task_id"],
+                        action=ap_row["action"],
+                        status=ap_row["status"],
+                        created_at=self._parse_datetime(ap_row["created_at"]),
+                    )
+                )
 
             # Load approval events
-            for ev_row in conn.execute("SELECT * FROM approval_events WHERE session_id = ?", (session_id,)):
-                session.approval_events.append(ApprovalEvent(
-                    id=ev_row["id"],
-                    session_id=ev_row["session_id"],
-                    task_id=ev_row["task_id"],
-                    approval_id=ev_row["approval_id"],
-                    event_type=ev_row["event_type"],
-                    created_at=self._parse_datetime(ev_row["created_at"]),
-                ))
+            for ev_row in conn.execute(
+                "SELECT * FROM approval_events WHERE session_id = ?", (session_id,)
+            ):
+                session.approval_events.append(
+                    ApprovalEvent(
+                        id=ev_row["id"],
+                        session_id=ev_row["session_id"],
+                        task_id=ev_row["task_id"],
+                        approval_id=ev_row["approval_id"],
+                        event_type=ev_row["event_type"],
+                        created_at=self._parse_datetime(ev_row["created_at"]),
+                    )
+                )
 
             conn.close()
             return session
         except sqlite3.Error as e:
             logger.error("Database error loading session %s: %s", session_id, e)
-            try:
+            try:  # noqa: SIM105
                 conn.rollback()
             except sqlite3.Error:
                 pass
@@ -1054,25 +1237,39 @@ class SQLiteStore:
         try:
             conn.execute(
                 "INSERT OR REPLACE INTO codex_sessions (id, title, cwd, project_id, status, created_at, last_active_at, log_path, thread_id, claude_thread_id, settings_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (session.id, session.title, session.cwd, session.project_id, session.status,
-                 self._format_datetime(session.created_at),
-                 self._format_datetime(session.last_active_at),
-                 session.log_path,
-                 session.thread_id,
-                 session.claude_thread_id,
-                 json.dumps(session.settings, ensure_ascii=False) if getattr(session, "settings", None) is not None else None),
+                (
+                    session.id,
+                    session.title,
+                    session.cwd,
+                    session.project_id,
+                    session.status,
+                    self._format_datetime(session.created_at),
+                    self._format_datetime(session.last_active_at),
+                    session.log_path,
+                    session.thread_id,
+                    session.claude_thread_id,
+                    json.dumps(session.settings, ensure_ascii=False)
+                    if getattr(session, "settings", None) is not None
+                    else None,
+                ),
             )
             # Persist messages
             conn.execute("DELETE FROM codex_messages WHERE session_id = ?", (session.id,))
             for msg in session.messages:
                 conn.execute(
                     "INSERT INTO codex_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (msg.id, msg.session_id, msg.role, msg.content, self._format_datetime(msg.created_at)),
+                    (
+                        msg.id,
+                        msg.session_id,
+                        msg.role,
+                        msg.content,
+                        self._format_datetime(msg.created_at),
+                    ),
                 )
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database error saving codex session %s: %s", session.id, e)
-            try:
+            try:  # noqa: SIM105
                 conn.rollback()
             except sqlite3.Error:
                 pass
@@ -1111,14 +1308,16 @@ class SQLiteStore:
             id=row["id"],
             title=row["title"],
             cwd=row["cwd"],
-            project_id=row["project_id"] if "project_id" in row.keys() else None,
+            project_id=row["project_id"] if "project_id" in row.keys() else None,  # noqa: SIM118
             status=row["status"],
             created_at=self._parse_datetime(row["created_at"]),
             last_active_at=self._parse_datetime(row["last_active_at"]),
             log_path=row["log_path"],
-            thread_id=row["thread_id"] if "thread_id" in row.keys() else None,
-            claude_thread_id=row["claude_thread_id"] if "claude_thread_id" in row.keys() else None,
-            settings=json.loads(row["settings_json"]) if "settings_json" in row.keys() and row["settings_json"] else {"plan_first_pm": True},
+            thread_id=row["thread_id"] if "thread_id" in row.keys() else None,  # noqa: SIM118
+            claude_thread_id=row["claude_thread_id"] if "claude_thread_id" in row.keys() else None,  # noqa: SIM118
+            settings=json.loads(row["settings_json"])
+            if "settings_json" in row.keys() and row["settings_json"]  # noqa: SIM118
+            else {"plan_first_pm": True},  # noqa: RUF100, SIM118
             messages=messages,
         )
 
@@ -1130,12 +1329,24 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT id, title, project_id, status, created_at, last_active_at, settings_json FROM codex_sessions ORDER BY last_active_at DESC").fetchall()
+        rows = conn.execute(
+            "SELECT id, title, project_id, status, created_at, last_active_at, settings_json FROM codex_sessions ORDER BY last_active_at DESC"
+        ).fetchall()
         conn.close()
-        return [{"id": r["id"], "title": r["title"], "project_id": r["project_id"], "status": r["status"],
-                 "created_at": r["created_at"], "last_active_at": r["last_active_at"],
-                 "settings": json.loads(r["settings_json"]) if r["settings_json"] else {"plan_first_pm": True}}
-                for r in rows]
+        return [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "project_id": r["project_id"],
+                "status": r["status"],
+                "created_at": r["created_at"],
+                "last_active_at": r["last_active_at"],
+                "settings": json.loads(r["settings_json"])
+                if r["settings_json"]
+                else {"plan_first_pm": True},
+            }
+            for r in rows
+        ]
 
     def list_codex_workspaces(self) -> list[dict]:
         return self.list_codex_sessions()
@@ -1228,25 +1439,41 @@ class SQLiteStore:
         return CodexIssue(
             id=row["id"],
             session_id=row["session_id"],
-            project_id=row["project_id"] if "project_id" in row.keys() else None,
+            project_id=row["project_id"] if "project_id" in row.keys() else None,  # noqa: SIM118
             title=row["title"],
             description=row["description"],
             current_phase=row["current_phase"],
             status=row["status"],
-            review_comment=row["review_comment"] if "review_comment" in row.keys() else None,
+            review_comment=row["review_comment"] if "review_comment" in row.keys() else None,  # noqa: SIM118
             is_pinned=bool(row["is_pinned"]),
-            milestone=row["milestone"] if "milestone" in row.keys() and row["milestone"] else None,
-            git_branch=row["git_branch"] if "git_branch" in row.keys() and row["git_branch"] else None,
-            git_base_branch=row["git_base_branch"] if "git_base_branch" in row.keys() and row["git_base_branch"] else None,
-            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in row.keys() and row["git_worktree_path"] else None,
-            git_merge_status=row["git_merge_status"] if "git_merge_status" in row.keys() and row["git_merge_status"] else "open",
-            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in row.keys() and row["git_last_commit_sha"] else None,
-            github_pr_url=row["github_pr_url"] if "github_pr_url" in row.keys() and row["github_pr_url"] else None,
-            github_pr_state=row["github_pr_state"] if "github_pr_state" in row.keys() and row["github_pr_state"] else None,
-            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
-            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
-            model=row["model"] if "model" in row.keys() and row["model"] else None,
-            budget_usd=row["budget_usd"] if "budget_usd" in row.keys() and row["budget_usd"] is not None else None,
+            milestone=row["milestone"] if "milestone" in row.keys() and row["milestone"] else None,  # noqa: SIM118
+            git_branch=row["git_branch"]
+            if "git_branch" in row.keys() and row["git_branch"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            git_base_branch=row["git_base_branch"]
+            if "git_base_branch" in row.keys() and row["git_base_branch"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            git_worktree_path=row["git_worktree_path"]
+            if "git_worktree_path" in row.keys() and row["git_worktree_path"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            git_merge_status=row["git_merge_status"]
+            if "git_merge_status" in row.keys() and row["git_merge_status"]  # noqa: SIM118
+            else "open",  # noqa: RUF100, SIM118
+            git_last_commit_sha=row["git_last_commit_sha"]
+            if "git_last_commit_sha" in row.keys() and row["git_last_commit_sha"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            github_pr_url=row["github_pr_url"]
+            if "github_pr_url" in row.keys() and row["github_pr_url"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            github_pr_state=row["github_pr_state"]
+            if "github_pr_state" in row.keys() and row["github_pr_state"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,  # noqa: SIM118
+            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,  # noqa: SIM118
+            model=row["model"] if "model" in row.keys() and row["model"] else None,  # noqa: SIM118
+            budget_usd=row["budget_usd"]
+            if "budget_usd" in row.keys() and row["budget_usd"] is not None  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1257,9 +1484,14 @@ class SQLiteStore:
         conn.row_factory = sqlite3.Row
         select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, budget_usd, created_at, updated_at FROM codex_issues"
         if session_id:
-            rows = conn.execute(f"{select_sql} WHERE session_id = ? ORDER BY is_pinned DESC, updated_at DESC, created_at DESC", (session_id,)).fetchall()
+            rows = conn.execute(
+                f"{select_sql} WHERE session_id = ? ORDER BY is_pinned DESC, updated_at DESC, created_at DESC",
+                (session_id,),
+            ).fetchall()
         else:
-            rows = conn.execute(f"{select_sql} ORDER BY is_pinned DESC, updated_at DESC, created_at DESC").fetchall()
+            rows = conn.execute(
+                f"{select_sql} ORDER BY is_pinned DESC, updated_at DESC, created_at DESC"
+            ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
 
@@ -1270,11 +1502,30 @@ class SQLiteStore:
         conn = self._get_conn()
         conn.execute(
             "INSERT OR REPLACE INTO codex_tasks (id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, result_json, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (task.id, task.session_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
-             task.provider, task.model, task.status, task.result, task.result_json, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
-             task.workspace_path, task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
-             self._format_datetime(task.created_at),
-             self._format_datetime(task.updated_at)),
+            (
+                task.id,
+                task.session_id,
+                task.issue_id,
+                task.phase,
+                task.title,
+                task.prompt,
+                task.role,
+                task.executor,
+                task.provider,
+                task.model,
+                task.status,
+                task.result,
+                task.result_json,
+                task.parent_task_id,
+                task.task_kind,
+                task.blocked_by_help_id,
+                task.workspace_path,
+                task.resume_session_id,
+                task.resume_message_id,
+                task.last_execution_process_id,
+                self._format_datetime(task.created_at),
+                self._format_datetime(task.updated_at),
+            ),
         )
         conn.commit()
         conn.close()
@@ -1290,29 +1541,45 @@ class SQLiteStore:
         return CodexTask(
             id=row["id"],
             session_id=row["session_id"],
-            issue_id=row["issue_id"] if "issue_id" in row.keys() and row["issue_id"] else None,
-            phase=row["phase"] if "phase" in row.keys() and row["phase"] else "requirements",
+            issue_id=row["issue_id"] if "issue_id" in row.keys() and row["issue_id"] else None,  # noqa: SIM118
+            phase=row["phase"] if "phase" in row.keys() and row["phase"] else "requirements",  # noqa: SIM118
             title=row["title"],
             prompt=row["prompt"],
-            role=row["role"] if "role" in row.keys() and row["role"] else "general",
+            role=row["role"] if "role" in row.keys() and row["role"] else "general",  # noqa: SIM118
             executor=row["executor"] if row["executor"] else "codex",
-            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
-            model=row["model"] if "model" in row.keys() and row["model"] else None,
+            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,  # noqa: SIM118
+            model=row["model"] if "model" in row.keys() and row["model"] else None,  # noqa: SIM118
             status=row["status"],
             result=row["result"],
-            result_json=row["result_json"] if "result_json" in row.keys() and row["result_json"] else None,
+            result_json=row["result_json"]
+            if "result_json" in row.keys() and row["result_json"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
             parent_task_id=row["parent_task_id"] if row["parent_task_id"] else None,
-            task_kind=row["task_kind"] if "task_kind" in row.keys() and row["task_kind"] else "normal",
-            blocked_by_help_id=row["blocked_by_help_id"] if "blocked_by_help_id" in row.keys() and row["blocked_by_help_id"] else None,
-            workspace_path=row["workspace_path"] if "workspace_path" in row.keys() and row["workspace_path"] else None,
-            resume_session_id=row["resume_session_id"] if "resume_session_id" in row.keys() and row["resume_session_id"] else None,
-            resume_message_id=row["resume_message_id"] if "resume_message_id" in row.keys() and row["resume_message_id"] else None,
-            last_execution_process_id=row["last_execution_process_id"] if "last_execution_process_id" in row.keys() and row["last_execution_process_id"] else None,
+            task_kind=row["task_kind"]
+            if "task_kind" in row.keys() and row["task_kind"]  # noqa: SIM118
+            else "normal",  # noqa: RUF100, SIM118
+            blocked_by_help_id=row["blocked_by_help_id"]
+            if "blocked_by_help_id" in row.keys() and row["blocked_by_help_id"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            workspace_path=row["workspace_path"]
+            if "workspace_path" in row.keys() and row["workspace_path"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            resume_session_id=row["resume_session_id"]
+            if "resume_session_id" in row.keys() and row["resume_session_id"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            resume_message_id=row["resume_message_id"]
+            if "resume_message_id" in row.keys() and row["resume_message_id"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            last_execution_process_id=row["last_execution_process_id"]
+            if "last_execution_process_id" in row.keys() and row["last_execution_process_id"]  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def list_codex_tasks(self, session_id: str | None = None, issue_id: str | None = None) -> list[dict]:
+    def list_codex_tasks(
+        self, session_id: str | None = None, issue_id: str | None = None
+    ) -> list[dict]:
         """List tasks, optionally filtered by session_id."""
         self._ensure_db()
         conn = self._get_conn()
@@ -1361,7 +1628,9 @@ class SQLiteStore:
                 help_request.context_summary,
                 help_request.status,
                 help_request.error_message,
-                json.dumps(help_request.continuation_payload) if help_request.continuation_payload is not None else None,
+                json.dumps(help_request.continuation_payload)
+                if help_request.continuation_payload is not None
+                else None,
                 self._format_datetime(help_request.created_at),
                 self._format_datetime(help_request.started_at),
                 self._format_datetime(help_request.completed_at),
@@ -1376,11 +1645,15 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM help_requests WHERE id = ?", (help_request_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM help_requests WHERE id = ?", (help_request_id,)
+        ).fetchone()
         conn.close()
         if not row:
             return None
-        continuation_payload = json.loads(row["continuation_payload"]) if row["continuation_payload"] else None
+        continuation_payload = (
+            json.loads(row["continuation_payload"]) if row["continuation_payload"] else None
+        )
         return HelpRequest(
             id=row["id"],
             workspace_id=row["workspace_id"],
@@ -1401,7 +1674,9 @@ class SQLiteStore:
             consumed_at=self._parse_datetime(row["consumed_at"]),
         )
 
-    def list_help_requests(self, *, parent_task_id: str | None = None, child_task_id: str | None = None) -> list[HelpRequest]:
+    def list_help_requests(
+        self, *, parent_task_id: str | None = None, child_task_id: str | None = None
+    ) -> list[HelpRequest]:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -1431,7 +1706,9 @@ class SQLiteStore:
                 context_summary=row["context_summary"],
                 status=row["status"],
                 error_message=row["error_message"],
-                continuation_payload=json.loads(row["continuation_payload"]) if row["continuation_payload"] else None,
+                continuation_payload=json.loads(row["continuation_payload"])
+                if row["continuation_payload"]
+                else None,
                 created_at=self._parse_datetime(row["created_at"]),
                 started_at=self._parse_datetime(row["started_at"]),
                 completed_at=self._parse_datetime(row["completed_at"]),
@@ -1495,7 +1772,9 @@ class SQLiteStore:
             CodexTaskMessage(
                 id=r["id"],
                 task_id=r["task_id"],
-                execution_process_id=r["execution_process_id"] if "execution_process_id" in r.keys() else None,
+                execution_process_id=r["execution_process_id"]
+                if "execution_process_id" in r.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
                 role=r["role"],
                 content=r["content"],
                 created_at=self._parse_datetime(r["created_at"]),
@@ -1574,8 +1853,10 @@ class SQLiteStore:
                 session_id=r["session_id"],
                 stream=r["stream"],
                 content=r["content"],
-                task_id=r["task_id"] if "task_id" in r.keys() else None,
-                execution_process_id=r["execution_process_id"] if "execution_process_id" in r.keys() else None,
+                task_id=r["task_id"] if "task_id" in r.keys() else None,  # noqa: SIM118
+                execution_process_id=r["execution_process_id"]
+                if "execution_process_id" in r.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
                 created_at=self._parse_datetime(r["created_at"]),
             )
             for r in rows
@@ -1589,14 +1870,26 @@ class SQLiteStore:
         conn = self._get_conn()
         conn.execute(
             "INSERT OR REPLACE INTO execution_processes (id, task_id, session_id, status, exit_code, executor, provider, model, kind, triggering_message_id, input_tokens, output_tokens, cache_read_tokens, total_cost_usd, started_at, completed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (process.id, process.task_id, process.session_id, process.status, process.exit_code,
-             process.executor, process.provider, process.model,
-             process.kind, process.triggering_message_id,
-             process.input_tokens, process.output_tokens, process.cache_read_tokens, process.total_cost_usd,
-             self._format_datetime(process.started_at),
-             self._format_datetime(process.completed_at),
-             self._format_datetime(process.created_at),
-             self._format_datetime(process.updated_at)),
+            (
+                process.id,
+                process.task_id,
+                process.session_id,
+                process.status,
+                process.exit_code,
+                process.executor,
+                process.provider,
+                process.model,
+                process.kind,
+                process.triggering_message_id,
+                process.input_tokens,
+                process.output_tokens,
+                process.cache_read_tokens,
+                process.total_cost_usd,
+                self._format_datetime(process.started_at),
+                self._format_datetime(process.completed_at),
+                self._format_datetime(process.created_at),
+                self._format_datetime(process.updated_at),
+            ),
         )
         conn.commit()
         conn.close()
@@ -1606,7 +1899,9 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM execution_processes WHERE id = ?", (process_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM execution_processes WHERE id = ?", (process_id,)
+        ).fetchone()
         conn.close()
         if not row:
             return None
@@ -1616,22 +1911,28 @@ class SQLiteStore:
             session_id=row["session_id"],
             status=row["status"],
             exit_code=row["exit_code"],
-            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
-            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
-            model=row["model"] if "model" in row.keys() and row["model"] else None,
-            input_tokens=row["input_tokens"] if "input_tokens" in row.keys() else None,
-            output_tokens=row["output_tokens"] if "output_tokens" in row.keys() else None,
-            cache_read_tokens=row["cache_read_tokens"] if "cache_read_tokens" in row.keys() else None,
-            total_cost_usd=row["total_cost_usd"] if "total_cost_usd" in row.keys() else None,
-            kind=row["kind"] if "kind" in row.keys() and row["kind"] else "initial",
-            triggering_message_id=row["triggering_message_id"] if "triggering_message_id" in row.keys() else None,
+            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,  # noqa: SIM118
+            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,  # noqa: SIM118
+            model=row["model"] if "model" in row.keys() and row["model"] else None,  # noqa: SIM118
+            input_tokens=row["input_tokens"] if "input_tokens" in row.keys() else None,  # noqa: SIM118
+            output_tokens=row["output_tokens"] if "output_tokens" in row.keys() else None,  # noqa: SIM118
+            cache_read_tokens=row["cache_read_tokens"]
+            if "cache_read_tokens" in row.keys()  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
+            total_cost_usd=row["total_cost_usd"] if "total_cost_usd" in row.keys() else None,  # noqa: SIM118
+            kind=row["kind"] if "kind" in row.keys() and row["kind"] else "initial",  # noqa: SIM118
+            triggering_message_id=row["triggering_message_id"]
+            if "triggering_message_id" in row.keys()  # noqa: SIM118
+            else None,  # noqa: RUF100, SIM118
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def list_execution_processes(self, session_id: str | None = None, task_id: str | None = None) -> list[ExecutionProcess]:
+    def list_execution_processes(
+        self, session_id: str | None = None, task_id: str | None = None
+    ) -> list[ExecutionProcess]:
         """List execution processes, optionally filtered by session_id and/or task_id."""
         self._ensure_db()
         conn = self._get_conn()
@@ -1663,15 +1964,19 @@ class SQLiteStore:
                 session_id=r["session_id"],
                 status=r["status"],
                 exit_code=r["exit_code"],
-                executor=r["executor"] if "executor" in r.keys() and r["executor"] else None,
-                provider=r["provider"] if "provider" in r.keys() and r["provider"] else None,
-                model=r["model"] if "model" in r.keys() and r["model"] else None,
-                input_tokens=r["input_tokens"] if "input_tokens" in r.keys() else None,
-                output_tokens=r["output_tokens"] if "output_tokens" in r.keys() else None,
-                cache_read_tokens=r["cache_read_tokens"] if "cache_read_tokens" in r.keys() else None,
-                total_cost_usd=r["total_cost_usd"] if "total_cost_usd" in r.keys() else None,
-                kind=r["kind"] if "kind" in r.keys() and r["kind"] else "initial",
-                triggering_message_id=r["triggering_message_id"] if "triggering_message_id" in r.keys() else None,
+                executor=r["executor"] if "executor" in r.keys() and r["executor"] else None,  # noqa: SIM118
+                provider=r["provider"] if "provider" in r.keys() and r["provider"] else None,  # noqa: SIM118
+                model=r["model"] if "model" in r.keys() and r["model"] else None,  # noqa: SIM118
+                input_tokens=r["input_tokens"] if "input_tokens" in r.keys() else None,  # noqa: SIM118
+                output_tokens=r["output_tokens"] if "output_tokens" in r.keys() else None,  # noqa: SIM118
+                cache_read_tokens=r["cache_read_tokens"]
+                if "cache_read_tokens" in r.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
+                total_cost_usd=r["total_cost_usd"] if "total_cost_usd" in r.keys() else None,  # noqa: SIM118
+                kind=r["kind"] if "kind" in r.keys() and r["kind"] else "initial",  # noqa: SIM118
+                triggering_message_id=r["triggering_message_id"]
+                if "triggering_message_id" in r.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
                 started_at=self._parse_datetime(r["started_at"]),
                 completed_at=self._parse_datetime(r["completed_at"]),
                 created_at=self._parse_datetime(r["created_at"]),
@@ -1680,23 +1985,38 @@ class SQLiteStore:
             for r in rows
         ]
 
-    def list_execution_process_runtime_rows(self, session_id: str) -> list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]]:
+    def list_execution_process_runtime_rows(
+        self, session_id: str
+    ) -> list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]]:
         processes = self.list_execution_processes(session_id=session_id)
         rows = []
         for process in processes:
             task = self.load_codex_task(process.task_id)
-            messages = self.list_codex_task_messages(process.task_id, execution_process_id=process.id)
-            logs = self.load_log_events(session_id, task_id=process.task_id, execution_process_id=process.id, limit=10000)
+            messages = self.list_codex_task_messages(
+                process.task_id, execution_process_id=process.id
+            )
+            logs = self.load_log_events(
+                session_id, task_id=process.task_id, execution_process_id=process.id, limit=10000
+            )
             rows.append((process, task, messages, logs))
         return rows
 
-    def update_execution_process_status(self, process_id: str, status: str, exit_code: int | None = None, completed_at: datetime | None = None):
+    def update_execution_process_status(
+        self,
+        process_id: str,
+        status: str,
+        exit_code: int | None = None,
+        completed_at: datetime | None = None,
+    ):
         """Update the status of an ExecutionProcess."""
         self._ensure_db()
         conn = self._get_conn()
         from datetime import datetime as dt
+
         now = dt.now()
-        completed_at_value = self._format_datetime(completed_at) if completed_at is not None else None
+        completed_at_value = (
+            self._format_datetime(completed_at) if completed_at is not None else None
+        )
         conn.execute(
             "UPDATE execution_processes SET status = ?, exit_code = ?, completed_at = ?, updated_at = ? WHERE id = ?",
             (status, exit_code, completed_at_value, self._format_datetime(now), process_id),
@@ -1704,23 +2024,39 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def update_execution_process_usage(self, process_id: str, input_tokens: int | None = None, output_tokens: int | None = None, cache_read_tokens: int | None = None, total_cost_usd: float | None = None):
+    def update_execution_process_usage(
+        self,
+        process_id: str,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        total_cost_usd: float | None = None,
+    ):
         """Update the token usage and cost of an ExecutionProcess."""
         self._ensure_db()
         conn = self._get_conn()
         from datetime import datetime as dt
+
         now = dt.now()
         conn.execute(
             "UPDATE execution_processes SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, total_cost_usd = ?, updated_at = ? WHERE id = ?",
-            (input_tokens, output_tokens, cache_read_tokens, total_cost_usd, self._format_datetime(now), process_id),
+            (
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                total_cost_usd,
+                self._format_datetime(now),
+                process_id,
+            ),
         )
         conn.commit()
         conn.close()
 
     # --- Conductor State ---
 
-    def save_conductor_state(self, state: "ConductorState") -> None:
-        from app.domain.models import ConductorState  # noqa: F401 (type hint import)
+    def save_conductor_state(self, state: "ConductorState") -> None:  # noqa: F821, UP037
+        from app.domain.models import ConductorState  # noqa: F401, RUF100
+
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1739,8 +2075,9 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def load_conductor_state(self, issue_id: str) -> "ConductorState | None":
+    def load_conductor_state(self, issue_id: str) -> "ConductorState | None":  # noqa: F821, UP037
         from app.domain.models import ConductorState
+
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -1760,8 +2097,9 @@ class SQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def save_project_conductor_state(self, state: "ProjectConductorState") -> None:
-        from app.domain.models import ProjectConductorState  # noqa: F401
+    def save_project_conductor_state(self, state: "ProjectConductorState") -> None:  # noqa: F821, UP037
+        from app.domain.models import ProjectConductorState  # noqa: F401, RUF100
+
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1784,8 +2122,9 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def load_project_conductor_state(self, project_id: str) -> "ProjectConductorState | None":
+    def load_project_conductor_state(self, project_id: str) -> "ProjectConductorState | None":  # noqa: F821, UP037
         from app.domain.models import ProjectConductorState
+
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -1808,7 +2147,7 @@ class SQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def _row_to_conductor_task(self, row) -> "ConductorTask":
+    def _row_to_conductor_task(self, row) -> "ConductorTask":  # noqa: F821, UP037
         from app.domain.models import ConductorTask
 
         try:
@@ -1824,15 +2163,22 @@ class SQLiteStore:
             issue_id=row["issue_id"],
             status=row["status"],
             result_json=row["result_json"],
-            lease_owner=row["lease_owner"] if "lease_owner" in keys and row["lease_owner"] else None,
-            heartbeat_at=self._parse_datetime(row["heartbeat_at"] if "heartbeat_at" in keys else None),
-            lease_expires_at=self._parse_datetime(row["lease_expires_at"] if "lease_expires_at" in keys else None),
+            lease_owner=row["lease_owner"]
+            if "lease_owner" in keys and row["lease_owner"]
+            else None,
+            heartbeat_at=self._parse_datetime(
+                row["heartbeat_at"] if "heartbeat_at" in keys else None
+            ),
+            lease_expires_at=self._parse_datetime(
+                row["lease_expires_at"] if "lease_expires_at" in keys else None
+            ),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def save_conductor_task(self, task: "ConductorTask") -> None:
-        from app.domain.models import ConductorTask  # noqa: F401
+    def save_conductor_task(self, task: "ConductorTask") -> None:  # noqa: F821, UP037
+        from app.domain.models import ConductorTask  # noqa: F401, RUF100
+
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1858,7 +2204,7 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def load_conductor_task(self, task_id: str) -> "ConductorTask | None":
+    def load_conductor_task(self, task_id: str) -> "ConductorTask | None":  # noqa: F821, UP037
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -1868,7 +2214,7 @@ class SQLiteStore:
             return None
         return self._row_to_conductor_task(row)
 
-    def load_latest_conductor_task_for_issue(self, issue_id: str) -> "ConductorTask | None":
+    def load_latest_conductor_task_for_issue(self, issue_id: str) -> "ConductorTask | None":  # noqa: F821, UP037
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -1884,7 +2230,7 @@ class SQLiteStore:
             return None
         return self._row_to_conductor_task(row)
 
-    def list_conductor_tasks(self, *, status: str | None = None) -> list["ConductorTask"]:
+    def list_conductor_tasks(self, *, status: str | None = None) -> list["ConductorTask"]:  # noqa: F821, UP037
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -1902,8 +2248,9 @@ class SQLiteStore:
         conn.close()
         return [self._row_to_conductor_task(row) for row in rows]
 
-    def save_conductor_turn(self, turn: "ConductorTurn") -> None:
-        from app.domain.models import ConductorTurn  # noqa: F401
+    def save_conductor_turn(self, turn: "ConductorTurn") -> None:  # noqa: F821, UP037
+        from app.domain.models import ConductorTurn  # noqa: F401, RUF100
+
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1925,7 +2272,9 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def enqueue_conductor_user_message(self, conductor_task_id: str, issue_id: str, text: str) -> "ConductorTurn":
+    def enqueue_conductor_user_message(
+        self, conductor_task_id: str, issue_id: str, text: str
+    ) -> "ConductorTurn":  # noqa: F821, UP037
         from app.domain.models import ConductorTurn
 
         self._ensure_db()
@@ -1967,7 +2316,7 @@ class SQLiteStore:
         conn.close()
         return turn
 
-    def drain_conductor_inbox(self, conductor_task_id: str) -> list["ConductorTurn"]:
+    def drain_conductor_inbox(self, conductor_task_id: str) -> list["ConductorTurn"]:  # noqa: F821, UP037
         from app.domain.models import ConductorTurn
 
         self._ensure_db()
@@ -2010,8 +2359,9 @@ class SQLiteStore:
         *,
         conductor_task_id: str | None = None,
         limit: int = 200,
-    ) -> list["ConductorTurn"]:
+    ) -> list["ConductorTurn"]:  # noqa: F821, UP037
         from app.domain.models import ConductorTurn
+
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -2035,13 +2385,15 @@ class SQLiteStore:
                 kind=row["kind"],
                 payload_json=row["payload_json"] or "{}",
                 created_at=self._parse_datetime(row["created_at"]),
-                consumed_at=self._parse_datetime(row["consumed_at"]) if "consumed_at" in row.keys() else None,
+                consumed_at=self._parse_datetime(row["consumed_at"])
+                if "consumed_at" in row.keys()  # noqa: SIM118
+                else None,  # noqa: RUF100, SIM118
             )
             for row in rows
         ]
 
-    def save_conductor_state_log(self, entry: "ConductorStateLog") -> None:
-        from app.domain.models import ConductorStateLog  # noqa: F401
+    def save_conductor_state_log(self, entry: "ConductorStateLog") -> None:  # noqa: F821, UP037
+        from app.domain.models import ConductorStateLog  # noqa: F401, RUF100
 
         self._ensure_db()
         conn = self._get_conn()
@@ -2070,7 +2422,7 @@ class SQLiteStore:
         *,
         limit: int = 200,
         descending: bool = False,
-    ) -> list["ConductorStateLog"]:
+    ) -> list["ConductorStateLog"]:  # noqa: F821, UP037
         from app.domain.models import ConductorStateLog
 
         self._ensure_db()
@@ -2103,8 +2455,8 @@ class SQLiteStore:
             for row in rows
         ]
 
-    def save_audit_log(self, entry: "AuditLog") -> None:
-        from app.domain.models import AuditLog  # noqa: F401
+    def save_audit_log(self, entry: "AuditLog") -> None:  # noqa: F821, UP037
+        from app.domain.models import AuditLog  # noqa: F401, RUF100
 
         self._ensure_db()
         conn = self._get_conn()
@@ -2146,7 +2498,7 @@ class SQLiteStore:
         cursor_id: str | None = None,
         limit: int = 200,
         descending: bool = True,
-    ) -> list["AuditLog"]:
+    ) -> list["AuditLog"]:  # noqa: F821, UP037
         from app.adapters.audit_log_query import build_audit_log_query
         from app.domain.models import AuditLog
 
@@ -2187,8 +2539,9 @@ class SQLiteStore:
             for row in rows
         ]
 
-    def save_project_memory_embedding(self, memory: "ProjectMemoryEmbedding") -> None:
-        from app.domain.models import ProjectMemoryEmbedding  # noqa: F401
+    def save_project_memory_embedding(self, memory: "ProjectMemoryEmbedding") -> None:  # noqa: F821, UP037
+        from app.domain.models import ProjectMemoryEmbedding  # noqa: F401, RUF100
+
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -2208,8 +2561,11 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def list_project_memory_embeddings(self, project_id: str, limit: int | None = None) -> list["ProjectMemoryEmbedding"]:
+    def list_project_memory_embeddings(
+        self, project_id: str, limit: int | None = None
+    ) -> list["ProjectMemoryEmbedding"]:  # noqa: F821, UP037
         from app.domain.models import ProjectMemoryEmbedding
+
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -2233,8 +2589,8 @@ class SQLiteStore:
             for row in rows
         ]
 
-    def save_self_improvement_proposal(self, proposal: "SelfImprovementProposal") -> None:
-        from app.domain.models import SelfImprovementProposal  # noqa: F401
+    def save_self_improvement_proposal(self, proposal: "SelfImprovementProposal") -> None:  # noqa: UP037
+        from app.domain.models import SelfImprovementProposal  # noqa: F401, RUF100
 
         self._ensure_db()
         conn = self._get_conn()
@@ -2274,7 +2630,7 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def load_self_improvement_proposal(self, proposal_id: str) -> "SelfImprovementProposal | None":
+    def load_self_improvement_proposal(self, proposal_id: str) -> "SelfImprovementProposal | None":  # noqa: UP037
         from app.domain.models import SelfImprovementProposal
 
         self._ensure_db()
@@ -2309,7 +2665,7 @@ class SQLiteStore:
         self,
         proposal_id: str,
         status: str,
-    ) -> "SelfImprovementProposal | None":
+    ) -> "SelfImprovementProposal | None":  # noqa: UP037
         self._ensure_db()
         conn = self._get_conn()
         cur = conn.execute(
@@ -2329,7 +2685,7 @@ class SQLiteStore:
         issue_id: str | None = None,
         status: str | None = None,
         limit: int | None = None,
-    ) -> list["SelfImprovementProposal"]:
+    ) -> list["SelfImprovementProposal"]:  # noqa: UP037
         from app.domain.models import SelfImprovementProposal
 
         self._ensure_db()
@@ -2376,8 +2732,11 @@ class SQLiteStore:
             for row in rows
         ]
 
-    def save_self_improvement_application_event(self, event: "SelfImprovementApplicationEvent") -> None:
-        from app.domain.models import SelfImprovementApplicationEvent  # noqa: F401
+    def save_self_improvement_application_event(
+        self,
+        event: "SelfImprovementApplicationEvent",  # noqa: UP037
+    ) -> None:
+        from app.domain.models import SelfImprovementApplicationEvent  # noqa: F401, RUF100
 
         self._ensure_db()
         conn = self._get_conn()
@@ -2410,7 +2769,7 @@ class SQLiteStore:
         project_id: str | None = None,
         proposal_id: str | None = None,
         limit: int | None = None,
-    ) -> list["SelfImprovementApplicationEvent"]:
+    ) -> list["SelfImprovementApplicationEvent"]:  # noqa: UP037
         from app.domain.models import SelfImprovementApplicationEvent
 
         self._ensure_db()
@@ -2455,7 +2814,7 @@ class SQLiteStore:
 
     # --- Runtime Catalog ---
 
-    def save_runtime_catalog(self, catalog: "RuntimeCatalog"):
+    def save_runtime_catalog(self, catalog: "RuntimeCatalog"):  # noqa: UP037
         """Save the runtime catalog to the database."""
         self._ensure_db()
         conn = self._get_conn()
@@ -2466,13 +2825,16 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def load_runtime_catalog(self) -> "RuntimeCatalog | None":
+    def load_runtime_catalog(self) -> "RuntimeCatalog | None":  # noqa: UP037
         """Load the runtime catalog from the database."""
         self._ensure_db()
         from app.domain.models import RuntimeCatalog
+
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT data FROM runtime_catalog_settings WHERE id = ?", ("runtime_catalog",)).fetchone()
+        row = conn.execute(
+            "SELECT data FROM runtime_catalog_settings WHERE id = ?", ("runtime_catalog",)
+        ).fetchone()
         conn.close()
         if not row:
             return None
@@ -2504,7 +2866,7 @@ class SQLiteStore:
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database error saving artifact: %s", e)
-            try:
+            try:  # noqa: SIM105
                 conn.rollback()
             except sqlite3.Error:
                 pass

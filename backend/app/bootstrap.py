@@ -1,4 +1,6 @@
-import os
+from __future__ import annotations  # noqa: I001
+
+import os  # noqa: I001, RUF100
 import shlex
 import shutil
 from pathlib import Path
@@ -62,7 +64,8 @@ effective_store = async_store if async_store is not None else store
 # Wire the unified audit logger to the effective store (PR1). The background
 # drain worker starts once both the store and the running loop are set; the loop
 # is set in main.py's lifespan startup, mirroring event_bus.set_loop.
-from app.application.audit_logger import audit_logger  # noqa: E402
+from app.application.audit_logger import audit_logger  # noqa: E402, I001, RUF100
+
 if effective_store is not None:
     audit_logger.set_store(effective_store)
 session_service = SessionService(store=effective_store)
@@ -101,7 +104,9 @@ codex_store = effective_store  # Use async_store if available
 
 # Git project + worktree services.
 git_service = GitService()
-project_service = ProjectService(store=async_store, git=git_service) if async_store is not None else None
+project_service = (
+    ProjectService(store=async_store, git=git_service) if async_store is not None else None
+)
 skill_service = SkillService(store=async_store) if async_store is not None else None
 worktree_manager = WorktreeManager(git=git_service)
 
@@ -109,7 +114,9 @@ worktree_manager = WorktreeManager(git=git_service)
 # design tool. Constructed lazily on first access so missing catalog settings
 # don't break boot; the conductor already does `await catalog_service.load_catalog()`
 # so the prototype path uses the same code path.
-runtime_catalog_service = RuntimeCatalogService(store=async_store) if async_store is not None else None
+runtime_catalog_service = (
+    RuntimeCatalogService(store=async_store) if async_store is not None else None
+)
 prototype_service = (
     PrototypeService(store=async_store, runtime_catalog_service=runtime_catalog_service)
     if async_store is not None and runtime_catalog_service is not None
@@ -189,7 +196,9 @@ class MockCodexProcessManager:
         is_console = mock_task is None or is_workspace_console_task(mock_task)
         if executor == "codex" and is_console:
             # Only the human console task touches the shared per-workspace pointer.
-            session.thread_id = resume_session_id or session.thread_id or f"mock-thread-{session_id}"
+            session.thread_id = (
+                resume_session_id or session.thread_id or f"mock-thread-{session_id}"
+            )
         await self.codex_store.save_codex_session(session)
         await self._append_log(session_id, "stdin", input_text, task_id)
         if task_id:
@@ -198,7 +207,9 @@ class MockCodexProcessManager:
                 # Role tasks keep per-task identity: only carry the explicitly
                 # passed resume id (or a fresh mock id), never the shared pointer.
                 fallback = session.thread_id if is_console else None
-                task.resume_session_id = resume_session_id or fallback or f"mock-thread-{session_id}"
+                task.resume_session_id = (
+                    resume_session_id or fallback or f"mock-thread-{session_id}"
+                )
                 task.resume_message_id = resume_message_id
                 task.result = task.result or input_text.strip()
                 task.status = "done"
@@ -242,8 +253,9 @@ class MockCodexProcessManager:
         return terminated
 
     async def _append_log(self, session_id, stream, content, task_id: str | None = None):
-        from app.domain.models import LogEvent
+        from app.domain.models import LogEvent  # noqa: I001
         from uuid import uuid4
+
         now = __import__("datetime").datetime.now()
         execution_process_id = None
         if task_id:
@@ -261,36 +273,41 @@ class MockCodexProcessManager:
         )
         if self._event_bus is not None:
             await self._event_bus.queue_log_event(event)
-        
         # In mock mode, also persist directly to ensure test stability
         if self.log_store is not None:
             if hasattr(self.log_store, "append_log_event_async"):
                 await self.log_store.append_log_event_async(event)
             else:
                 await self.log_store.append_log_event(event)
-            
         self._publish_to_ws(session_id, event.id, stream, content, now.isoformat())
         if self._event_bus is not None:
-            await self._event_bus.append({
-                "type": "log",
-                "session_id": session_id,
-                "stream": stream,
-                "content": content,
-                "task_id": task_id,
-                "execution_process_id": execution_process_id,
-            })
+            await self._event_bus.append(
+                {
+                    "type": "log",
+                    "session_id": session_id,
+                    "stream": stream,
+                    "content": content,
+                    "task_id": task_id,
+                    "execution_process_id": execution_process_id,
+                }
+            )
 
     def _publish_to_ws(self, session_id, event_id, stream, content, created_at_iso):
         from app.interfaces.codex_ws import stream_manager
-        stream_manager.buffer_pending(session_id, {
-            "id": event_id,
-            "stream": stream,
-            "content": content,
-            "created_at": created_at_iso,
-        })
+
+        stream_manager.buffer_pending(
+            session_id,
+            {
+                "id": event_id,
+                "stream": stream,
+                "content": content,
+                "created_at": created_at_iso,
+            },
+        )
 
     def buffer_pending(self, session_id, event):
         from app.interfaces.codex_ws import stream_manager
+
         stream_manager.buffer_pending(session_id, event)
 
 
@@ -299,10 +316,18 @@ def get_codex_process_manager():
     if codex_process_manager is None:
         if os.getenv("CODEX_LAUNCH_ENABLED", "true").lower() != "false":
             from app.application.codex_process_manager import CodexProcessManager
+
             data_dir = os.getenv("CODEX_DATA_DIR", "/tmp")
-            codex_process_manager = CodexProcessManager(codex_store=codex_store, log_store=codex_store, data_dir=data_dir, event_bus=event_bus)
+            codex_process_manager = CodexProcessManager(
+                codex_store=codex_store,
+                log_store=codex_store,
+                data_dir=data_dir,
+                event_bus=event_bus,
+            )
         else:
-            codex_process_manager = MockCodexProcessManager(codex_store=codex_store, log_store=codex_store)
+            codex_process_manager = MockCodexProcessManager(
+                codex_store=codex_store, log_store=codex_store
+            )
     return codex_process_manager
 
 

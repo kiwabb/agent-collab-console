@@ -7,15 +7,20 @@ session model. This facade routes each executor to its own async runtime.
 Phase 3: Async-only runtime - no more sync threading.Thread paths.
 """
 
+from __future__ import annotations  # noqa: I001
+
+
 from typing import Any
 
 from app.application.claude_process_runtime import ClaudeProcessRuntime
 from app.application.codex_app_server_runtime import CodexAppServerRuntime
-from app.application.process_runtime_common import AsyncProcessEntry
+from app.application.process_runtime_common import AsyncProcessEntry  # noqa: F401
 
 
 class CodexProcessManager:
-    def __init__(self, codex_store, log_store, data_dir=None, event_bus=None, refresh_task_result=None):
+    def __init__(
+        self, codex_store, log_store, data_dir=None, event_bus=None, refresh_task_result=None
+    ):
         shared_processes = {}
         # Secondary index keyed by task_id for fast lookup when multiple tasks
         # share the same workspace_id (Phase 4: concurrent same-role instances).
@@ -127,11 +132,10 @@ class CodexProcessManager:
 
     async def terminate(self, workspace_id: str | None = None, **legacy_kwargs):
         for runtime in (self._codex_runtime, self._claude_runtime):
-            try:
+            try:  # noqa: SIM105
                 await runtime.terminate(workspace_id=workspace_id, **legacy_kwargs)
             except KeyError:
                 pass
-        
         resolved_workspace_id = workspace_id or legacy_kwargs.get("session_id")
         workspace = await self._codex_store.load_codex_workspace(resolved_workspace_id)
         if workspace is None:

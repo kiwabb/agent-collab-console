@@ -3,7 +3,8 @@
 This module is intentionally transport-agnostic: tests and API endpoints can
 pass any LLM callable that returns Anthropic message-shaped dictionaries.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 import inspect
@@ -14,7 +15,7 @@ import traceback
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, Union
+from typing import Any, Awaitable, Callable, Union  # noqa: UP035
 from uuid import uuid4
 
 from app.application import timeouts
@@ -42,17 +43,17 @@ from app.application.self_improvement_service import record_issue_self_improveme
 from app.domain.models import ConductorStateLog, ConductorTask, ConductorTurn
 
 
-ToolCallable = Callable[[dict[str, Any]], Union[Awaitable[Any], Any]]
+ToolCallable = Callable[[dict[str, Any]], Union[Awaitable[Any], Any]]  # noqa: UP007
 LLMCallable = Callable[
     [list[dict[str, Any]], list[dict[str, Any]]],
-    Union[Awaitable[dict[str, Any]], dict[str, Any]],
+    Union[Awaitable[dict[str, Any]], dict[str, Any]],  # noqa: UP007
 ]
-TurnRecorder = Callable[..., Union[Awaitable[None], None]]
-InboxDrainer = Callable[[], Union[Awaitable[list[str]], list[str]]]
-PauseGate = Callable[[], Union[Awaitable[None], None]]
-PausePredicate = Callable[[], Union[Awaitable[bool], bool]]
-InflightTaskSetter = Callable[[asyncio.Task | None], Union[Awaitable[None], None]]
-TokenDeltaRecorder = Callable[..., Union[Awaitable[None], None]]
+TurnRecorder = Callable[..., Union[Awaitable[None], None]]  # noqa: UP007
+InboxDrainer = Callable[[], Union[Awaitable[list[str]], list[str]]]  # noqa: UP007
+PauseGate = Callable[[], Union[Awaitable[None], None]]  # noqa: UP007
+PausePredicate = Callable[[], Union[Awaitable[bool], bool]]  # noqa: UP007
+InflightTaskSetter = Callable[[asyncio.Task | None], Union[Awaitable[None], None]]  # noqa: UP007
+TokenDeltaRecorder = Callable[..., Union[Awaitable[None], None]]  # noqa: UP007
 
 
 def conductor_language_directive(output_language: str | None) -> str:
@@ -197,12 +198,36 @@ HEARTBEAT_DEGRADED_ALERT_AFTER = 3
 # (GAP C) rather than silently reviving a finished run.
 _TERMINAL_PHASES: frozenset[str] = frozenset({"done", "failed", "stalled"})
 LEGAL_TRANSITIONS: dict[str, set[str]] = {
-    "awaiting_llm": {"streaming_llm", "dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed", "stalled"},
-    "streaming_llm": {"dispatching_subagent", "awaiting_user_clarification", "paused", "done", "failed", "stalled"},
+    "awaiting_llm": {
+        "streaming_llm",
+        "dispatching_subagent",
+        "awaiting_user_clarification",
+        "paused",
+        "done",
+        "failed",
+        "stalled",
+    },
+    "streaming_llm": {
+        "dispatching_subagent",
+        "awaiting_user_clarification",
+        "paused",
+        "done",
+        "failed",
+        "stalled",
+    },
     "dispatching_subagent": {"awaiting_subagent", "awaiting_llm", "paused", "failed", "stalled"},
     "awaiting_subagent": {"awaiting_llm", "paused", "failed", "stalled"},
     "awaiting_user_clarification": {"awaiting_llm", "paused", "failed", "stalled"},
-    "paused": {"awaiting_llm", "streaming_llm", "dispatching_subagent", "awaiting_subagent", "awaiting_user_clarification", "done", "failed", "stalled"},
+    "paused": {
+        "awaiting_llm",
+        "streaming_llm",
+        "dispatching_subagent",
+        "awaiting_subagent",
+        "awaiting_user_clarification",
+        "done",
+        "failed",
+        "stalled",
+    },
     "done": set(),
     "failed": set(),
     "stalled": set(),
@@ -244,16 +269,17 @@ async def _run_heartbeat_pulse(
             consecutive_failures = 0
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             consecutive_failures += 1
             log.warning(
                 "conductor heartbeat pulse failed (%d consecutive): %s",
-                consecutive_failures, exc,
+                consecutive_failures,
+                exc,
             )
             if consecutive_failures == alert_after and on_degraded is not None:
-                try:
+                try:  # noqa: SIM105
                     await on_degraded(consecutive_failures, exc)
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001, RUF100
                     pass
 
 
@@ -393,7 +419,9 @@ async def run_conductor_loop(
                 payload={
                     "id": str(tool_use.get("id") or ""),
                     "name": str(tool_use.get("name") or ""),
-                    "input": tool_use.get("input") if isinstance(tool_use.get("input"), dict) else {},
+                    "input": tool_use.get("input")
+                    if isinstance(tool_use.get("input"), dict)
+                    else {},
                 },
             )
         events = await _execute_tool_uses(tool_uses, tools)
@@ -498,7 +526,7 @@ async def _execute_tool_use(
             "result": result,
             "is_error": False,
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         return {
             "id": tool_id,
             "name": name,
@@ -535,9 +563,7 @@ async def _call_llm_with_optional_delta(
 ):
     params = inspect.signature(llm).parameters
     if "on_token_delta" in params:
-        return await _maybe_await(
-            llm(messages, tool_definitions, on_token_delta=on_token_delta)
-        )
+        return await _maybe_await(llm(messages, tool_definitions, on_token_delta=on_token_delta))
     return await _maybe_await(llm(messages, tool_definitions))
 
 
@@ -621,7 +647,7 @@ def _audit_conductor_turn(
             payload=payload,
             error=error,
         )
-    except Exception:  # noqa: BLE001 — audit must never break the loop
+    except Exception:  # noqa: BLE001, RUF100
         pass
 
 
@@ -659,6 +685,7 @@ async def run_issue_conductor_loop(
     await store.save_conductor_task(conductor_task)
     await pause_registry.register(conductor_task.id)
     from app.application.conductor_session_registry import ConductorSessionRegistry
+
     await ConductorSessionRegistry.instance().bind_conductor_task(issue.id, conductor_task.id)
     await _emit_conductor_status(
         event_bus,
@@ -682,7 +709,7 @@ async def run_issue_conductor_loop(
                     "status": issue.status,
                 },
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("issue in_progress transition failed: %s", exc)
     estimator = get_phase_duration_estimator(store)
 
@@ -698,13 +725,16 @@ async def run_issue_conductor_loop(
         await store.save_conductor_task(conductor_task)
 
     async def _on_heartbeat_degraded(n: int, exc: Exception) -> None:
-        await _append_event(event_bus, {
-            "type": "conductor_heartbeat_degraded",
-            "issue_id": issue.id,
-            "conductor_task_id": conductor_task.id,
-            "consecutive_failures": n,
-            "error": str(exc),
-        })
+        await _append_event(
+            event_bus,
+            {
+                "type": "conductor_heartbeat_degraded",
+                "issue_id": issue.id,
+                "conductor_task_id": conductor_task.id,
+                "consecutive_failures": n,
+                "error": str(exc),
+            },
+        )
 
     async def heartbeat_pulse() -> None:
         # Delegates to the resilient module-level pulse (GAP A): renews the lease
@@ -717,14 +747,18 @@ async def run_issue_conductor_loop(
             on_degraded=_on_heartbeat_degraded,
         )
 
-    async def persist_turn(*, turn_index: int, sub_index: int, kind: str, payload: dict[str, Any]) -> None:
+    async def persist_turn(
+        *, turn_index: int, sub_index: int, kind: str, payload: dict[str, Any]
+    ) -> None:
         nonlocal current_turn_index
         # Non-fatal: the background pulse is the authoritative lease renewer;
         # a transient blip here must not crash the loop.
         try:
             await heartbeat()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("conductor heartbeat (persist_turn) failed for issue %s: %s", issue.id, exc)
+        except Exception as exc:  # noqa: BLE001, RUF100
+            logger.warning(
+                "conductor heartbeat (persist_turn) failed for issue %s: %s", issue.id, exc
+            )
         if kind == "llm_request":
             current_turn_index = turn_index
             await set_phase("awaiting_llm")
@@ -766,7 +800,9 @@ async def run_issue_conductor_loop(
             },
         )
 
-    async def persist_delta(*, turn_index: int, sub_index: int, content_block_index: int, kind: str, chunk: str) -> None:
+    async def persist_delta(
+        *, turn_index: int, sub_index: int, content_block_index: int, kind: str, chunk: str
+    ) -> None:
         await _append_event(
             event_bus,
             {
@@ -782,7 +818,9 @@ async def run_issue_conductor_loop(
             },
         )
 
-    async def set_phase(phase: str, detail: str | None = None, *, status: str | None = None) -> None:
+    async def set_phase(
+        phase: str, detail: str | None = None, *, status: str | None = None
+    ) -> None:
         await heartbeat()
         await transition_conductor_phase(
             store=store,
@@ -819,8 +857,10 @@ async def run_issue_conductor_loop(
         load_latest = getattr(store, "load_latest_conductor_task_for_issue", None)
         if callable(load_latest):
             latest_task = await _maybe_await(load_latest(issue.id))
-        if latest_task is not None and latest_task.id == conductor_task.id and (
-            latest_task.status == "paused" or _conductor_phase(latest_task) == "paused"
+        if (
+            latest_task is not None
+            and latest_task.id == conductor_task.id
+            and (latest_task.status == "paused" or _conductor_phase(latest_task) == "paused")
         ):
             conductor_task.status = latest_task.status
             conductor_task.payload = latest_task.payload
@@ -831,7 +871,11 @@ async def run_issue_conductor_loop(
         latest_task = None
         if callable(load_latest):
             latest_task = await _maybe_await(load_latest(issue.id))
-        if latest_task is not None and latest_task.id == conductor_task.id and latest_task.status == "running":
+        if (
+            latest_task is not None
+            and latest_task.id == conductor_task.id
+            and latest_task.status == "running"
+        ):
             conductor_task.status = latest_task.status
             conductor_task.payload = latest_task.payload
             conductor_task.updated_at = latest_task.updated_at
@@ -864,7 +908,7 @@ async def run_issue_conductor_loop(
                 # to English narration even on a Chinese issue.
                 output_language = detect_text_language(issue.title, issue.description)
             language_directive = conductor_language_directive(output_language)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             pass
 
         conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
@@ -873,12 +917,16 @@ async def run_issue_conductor_loop(
             state = await conductor.get_or_create_state()
             if state:
                 if state.pinned_text:
-                    project_context += f"\n\n## PROJECT CONTEXT (team_notes)\n{state.pinned_text[:2000]}"
+                    project_context += (
+                        f"\n\n## PROJECT CONTEXT (team_notes)\n{state.pinned_text[:2000]}"
+                    )
                 if state.warm_summaries_json:
                     warm = json.loads(state.warm_summaries_json or "[]")
                     if warm:
-                        project_context += "\n\n## RECENT PROJECT HISTORY\n" + "\n".join(str(w) for w in warm[-3:])
-        except Exception:  # noqa: BLE001
+                        project_context += "\n\n## RECENT PROJECT HISTORY\n" + "\n".join(
+                            str(w) for w in warm[-3:]
+                        )
+        except Exception:  # noqa: BLE001, RUF100
             pass
 
         # Cost-aware scheduling (PR2 + PR3): make accrued spend + budget visible to
@@ -900,7 +948,7 @@ async def run_issue_conductor_loop(
                     event_bus,
                     {**steering, "conductor_task_id": conductor_task.id},
                 )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             pass
 
         # Runtime per-loop policy decision (origin/main design). Required even
@@ -927,7 +975,7 @@ async def run_issue_conductor_loop(
                 graph=graph,
                 budget_status=budget_status,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("conductor policy decision failed for issue %s: %s", issue.id, exc)
 
         # Local refactored prompt builder (Operating Contract design) + the
@@ -944,22 +992,29 @@ async def run_issue_conductor_loop(
             if policy_decision.action == "skip_llm":
                 return {
                     "stop_reason": "tool_use",
-                    "content": [{
-                        "type": "tool_use",
-                        "id": "toolu_policy_skip",
-                        "name": "finalize_task",
-                        "input": {"status": "done", "answer": policy_decision.reason},
-                    }],
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_policy_skip",
+                            "name": "finalize_task",
+                            "input": {"status": "done", "answer": policy_decision.reason},
+                        }
+                    ],
                 }
             if cllm is None:
                 return {
                     "stop_reason": "tool_use",
-                    "content": [{
-                        "type": "tool_use",
-                        "id": "toolu_fallback",
-                        "name": "finalize_task",
-                        "input": {"status": "done", "answer": "LLM not configured; conductor loop skipped."},
-                    }],
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_fallback",
+                            "name": "finalize_task",
+                            "input": {
+                                "status": "done",
+                                "answer": "LLM not configured; conductor loop skipped.",
+                            },
+                        }
+                    ],
                 }
             streamed = False
 
@@ -987,7 +1042,7 @@ async def run_issue_conductor_loop(
                         cllm=cllm,
                         on_delta=handle_delta,
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001, RUF100
                     logger.warning("conductor streaming fallback to non-streaming: %s", exc)
             return await call_conductor_llm(messages=messages, tools=tools, cllm=cllm)
 
@@ -1013,7 +1068,9 @@ async def run_issue_conductor_loop(
             inbox_drain=drain_inbox_messages,
             wait_if_paused=wait_until_resumed,
             is_pause_requested=lambda: pause_registry.is_paused(conductor_task.id),
-            on_inflight_llm_task=lambda task: pause_registry.set_inflight_llm_task(conductor_task.id, task),
+            on_inflight_llm_task=lambda task: pause_registry.set_inflight_llm_task(
+                conductor_task.id, task
+            ),
             on_token_delta=persist_delta,
         )
 
@@ -1029,7 +1086,7 @@ async def run_issue_conductor_loop(
                     "tool_events": result.tool_events,
                 },
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("conductor hot event append failed: %s", exc)
 
         await _seal_graph_and_issue_status(
@@ -1064,7 +1121,7 @@ async def run_issue_conductor_loop(
         )
         await store.save_conductor_task(conductor_task)
         return result
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logger.exception("run_issue_conductor_loop failed for issue %s", issue.id)
         await _record_failure(
             store=store,
@@ -1109,9 +1166,13 @@ async def recover_background_conductor_failure(
     )
 
 
-async def _record_failure(*, store, issue, conductor_task: ConductorTask, event_bus, exc: BaseException) -> None:
+async def _record_failure(
+    *, store, issue, conductor_task: ConductorTask, event_bus, exc: BaseException
+) -> None:
     error_message = str(exc) or exc.__class__.__name__
-    tb_text = _truncate_text("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), _TRACEBACK_LIMIT)
+    tb_text = _truncate_text(
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), _TRACEBACK_LIMIT
+    )
     estimator = get_phase_duration_estimator(store)
     error_payload = {
         "error_class": exc.__class__.__name__,
@@ -1193,8 +1254,10 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
                 await record_project_memory(graph.id, store)
                 try:
                     await record_issue_self_improvement(issue, store)
-                except Exception as exc:  # noqa: BLE001
-                    logging.getLogger(__name__).warning("self_improvement extraction failed: %s", exc)
+                except Exception as exc:  # noqa: BLE001, RUF100
+                    logging.getLogger(__name__).warning(
+                        "self_improvement extraction failed: %s", exc
+                    )
         if issue.status not in {"awaiting_approval", "awaiting_review", "awaiting_merge"}:
             issue.status = "completed" if graph_status == "done" else "failed"
             issue.updated_at = datetime.now()
@@ -1208,7 +1271,7 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
                     "status": issue.status,
                 },
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logging.getLogger(__name__).warning("graph status seal / project memory failed: %s", exc)
 
     # Terminal-state swarm worktree cleanup (best-effort). Conductor finalizes
@@ -1221,8 +1284,9 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
         project = await store.load_project(issue.project_id)
         if project is not None:
             from app.bootstrap import worktree_manager as _wm
+
             await _wm.cleanup_issue_swarm_worktrees(project, issue)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001, RUF100
         logging.getLogger(__name__).warning("swarm worktree terminal cleanup failed: %s", exc)
 
 
@@ -1308,7 +1372,9 @@ async def transition_conductor_phase(
     if not is_legal and current_phase in _TERMINAL_PHASES:
         logging.getLogger(__name__).error(
             "Blocked illegal resurrection of terminal conductor for issue %s: %s -> %s",
-            issue_id, current_phase, phase,
+            issue_id,
+            current_phase,
+            phase,
         )
         await _append_event(
             event_bus,
@@ -1346,7 +1412,12 @@ async def transition_conductor_phase(
         estimator=estimator,
     )
     if not is_legal:
-        logging.getLogger(__name__).warning("Illegal conductor phase transition for issue %s: %s -> %s", issue_id, current_phase, phase)
+        logging.getLogger(__name__).warning(
+            "Illegal conductor phase transition for issue %s: %s -> %s",
+            issue_id,
+            current_phase,
+            phase,
+        )
         await _append_event(
             event_bus,
             {
@@ -1409,7 +1480,9 @@ async def _record_conductor_state_transition(
         estimator.invalidate()
 
 
-async def _emit_conductor_status(event_bus, *, issue_id: str, conductor_task: ConductorTask) -> None:
+async def _emit_conductor_status(
+    event_bus, *, issue_id: str, conductor_task: ConductorTask
+) -> None:
     await _append_event(
         event_bus,
         {
@@ -1419,7 +1492,9 @@ async def _emit_conductor_status(event_bus, *, issue_id: str, conductor_task: Co
             "status": conductor_task.status,
             "phase": _conductor_phase(conductor_task),
             "detail": _conductor_detail(conductor_task),
-            "updated_at": conductor_task.updated_at.isoformat() if conductor_task.updated_at else None,
+            "updated_at": conductor_task.updated_at.isoformat()
+            if conductor_task.updated_at
+            else None,
         },
     )
 

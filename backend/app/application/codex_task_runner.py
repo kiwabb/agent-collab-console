@@ -1,4 +1,6 @@
-from datetime import datetime
+from __future__ import annotations  # noqa: I001
+
+from datetime import datetime  # noqa: I001, RUF100
 from uuid import uuid4
 
 from app.domain.models import ExecutionProcess
@@ -12,7 +14,16 @@ class CodexTaskRunner:
         "follow those instructions and output exactly one raw JSON help request."
     )
 
-    def __init__(self, codex_store, event_bus, process_manager_factory, mock_manager_cls, refresh_task_result, help_orchestrator_factory=None, role_workflow_service=None):
+    def __init__(
+        self,
+        codex_store,
+        event_bus,
+        process_manager_factory,
+        mock_manager_cls,
+        refresh_task_result,
+        help_orchestrator_factory=None,
+        role_workflow_service=None,
+    ):
         self.codex_store = codex_store
         self.event_bus = event_bus
         self._process_manager_factory = process_manager_factory
@@ -88,7 +99,14 @@ class CodexTaskRunner:
 
         # Resolve effective executor/provider/model from runtime catalog
         # Also get rendered command args and env vars from templates
-        executor, provider, model, rendered_env, rendered_command_args, executor_type = await self._resolve_effective_config(
+        (
+            executor,
+            provider,
+            model,
+            rendered_env,
+            rendered_command_args,
+            executor_type,
+        ) = await self._resolve_effective_config(
             task,
             run_executor=run_executor,
             run_provider=run_provider,
@@ -101,20 +119,27 @@ class CodexTaskRunner:
         # Prime the activity tracker so the watchdog doesn't fire before the
         # first LLM token arrives (cold-start sometimes takes ~30s).
         from app.application import task_activity
+
         task_activity.touch(task.id)
         exec_process = await self._create_execution_process(
-            task, executor, provider, model,
-            kind=kind, triggering_message_id=triggering_message_id,
+            task,
+            executor,
+            provider,
+            model,
+            kind=kind,
+            triggering_message_id=triggering_message_id,
         )
-        await self.event_bus.append({
-            "type": "task_status",
-            "task_id": task.id,
-            "issue_id": task.issue_id,
-            "workspace_id": task.session_id,
-            "session_id": task.session_id,
-            "status": "running",
-            "execution_process_id": exec_process.id,
-        })
+        await self.event_bus.append(
+            {
+                "type": "task_status",
+                "task_id": task.id,
+                "issue_id": task.issue_id,
+                "workspace_id": task.session_id,
+                "session_id": task.session_id,
+                "status": "running",
+                "execution_process_id": exec_process.id,
+            }
+        )
 
         mgr = self._process_manager_factory()
         if self._help_orchestrator_factory is not None:
@@ -154,16 +179,20 @@ class CodexTaskRunner:
             task.status = "failed"
             task.updated_at = datetime.now()
             await self.codex_store.save_codex_task(task)
-            await self.codex_store.update_execution_process_status(exec_process.id, "Failed", exit_code=-1, completed_at=datetime.now())
-            await self.event_bus.append({
-                "type": "task_status",
-                "task_id": task.id,
-                "issue_id": task.issue_id,
-                "workspace_id": task.session_id,
-                "session_id": task.session_id,
-                "status": "failed",
-                "execution_process_id": exec_process.id,
-            })
+            await self.codex_store.update_execution_process_status(
+                exec_process.id, "Failed", exit_code=-1, completed_at=datetime.now()
+            )
+            await self.event_bus.append(
+                {
+                    "type": "task_status",
+                    "task_id": task.id,
+                    "issue_id": task.issue_id,
+                    "workspace_id": task.session_id,
+                    "session_id": task.session_id,
+                    "status": "failed",
+                    "execution_process_id": exec_process.id,
+                }
+            )
             raise
 
         task = await self.codex_store.load_codex_task(task.id) or task
@@ -187,16 +216,18 @@ class CodexTaskRunner:
                 completed_at=datetime.now(),
             )
             exec_process.status = "Failed"
-            await self.event_bus.append({
-                "type": "task_status",
-                "task_id": task.id,
-                "issue_id": task.issue_id,
-                "workspace_id": task.session_id,
-                "session_id": task.session_id,
-                "status": task.status,
-                "result": task.result,
-                "execution_process_id": exec_process.id,
-            })
+            await self.event_bus.append(
+                {
+                    "type": "task_status",
+                    "task_id": task.id,
+                    "issue_id": task.issue_id,
+                    "workspace_id": task.session_id,
+                    "session_id": task.session_id,
+                    "status": task.status,
+                    "result": task.result,
+                    "execution_process_id": exec_process.id,
+                }
+            )
             await self._complete_help_child_if_needed(task)
             return exec_process
         await self.codex_store.save_codex_task(task)
@@ -206,6 +237,7 @@ class CodexTaskRunner:
         if task.status == "done" and task.issue_id and task.git_worktree_path:
             try:
                 from app.application.git_service import git_service as _git
+
                 head = await _git.head_commit(task.git_worktree_path)
                 issue = await self.codex_store.load_codex_issue(task.issue_id)
                 if issue is not None and issue.git_last_commit_sha != head:
@@ -232,17 +264,19 @@ class CodexTaskRunner:
             completed_at=datetime.now() if task.status in {"done", "failed"} else None,
         )
         exec_process.status = exec_final_status
-        await self.event_bus.append({
-            "type": "task_status",
-            "task_id": task.id,
-            "issue_id": task.issue_id,
-            "workspace_id": task.session_id,
-            "session_id": task.session_id,
-            "status": task.status,
-            "result": task.result,
-            "review_comment": task.review_comment,
-            "execution_process_id": exec_process.id,
-        })
+        await self.event_bus.append(
+            {
+                "type": "task_status",
+                "task_id": task.id,
+                "issue_id": task.issue_id,
+                "workspace_id": task.session_id,
+                "session_id": task.session_id,
+                "status": task.status,
+                "result": task.result,
+                "review_comment": task.review_comment,
+                "execution_process_id": exec_process.id,
+            }
+        )
         await self._complete_help_child_if_needed(task)
 
         return exec_process
@@ -271,7 +305,16 @@ class CodexTaskRunner:
         except OSError:
             return None
 
-    async def _build_prompt_text(self, task, *, prompt_text: str, prompt_override: str | None, resume_session_id: str | None, resume_message_id: str | None, kind: str = "initial") -> str:
+    async def _build_prompt_text(
+        self,
+        task,
+        *,
+        prompt_text: str,
+        prompt_override: str | None,
+        resume_session_id: str | None,
+        resume_message_id: str | None,
+        kind: str = "initial",
+    ) -> str:
         # Chat mode: minimal prompt; CLI session resume carries history.
         # We intentionally do NOT call into role workflow's build_prompt here
         # (that would re-emit the full schema instructions and the agent would
@@ -287,7 +330,7 @@ class CodexTaskRunner:
                 "  1. Reply ONLY in natural language, like a human assistant chatting.\n"
                 "  2. Do NOT output JSON, code fences, schema-conforming structures, or markdown tables.\n"
                 "  3. Do NOT regenerate, repeat, or modify the task's stored artifact.\n"
-                "  4. Keep the reply concise (1–3 short paragraphs is plenty).\n"
+                "  4. Keep the reply concise (1–3 short paragraphs is plenty).\n"  # noqa: RUF001
                 "  5. If the user is just greeting you, greet back briefly.\n"
                 "\n"
                 f"User message:\n{prompt_text}\n"
@@ -311,8 +354,16 @@ class CodexTaskRunner:
                 + "Do not omit unchanged fields. Match the original schema exactly."
             )
         # Check if this is a managed role (using role_workflow_service)
-        if self._role_workflow_service.is_managed_role(task.role) and prompt_override is None and not (resume_session_id or resume_message_id):
-            workspace = await self.codex_store.load_codex_workspace(task.session_id) if self.codex_store is not None else None
+        if (
+            self._role_workflow_service.is_managed_role(task.role)
+            and prompt_override is None
+            and not (resume_session_id or resume_message_id)
+        ):
+            workspace = (
+                await self.codex_store.load_codex_workspace(task.session_id)
+                if self.codex_store is not None
+                else None
+            )
             workspace_title = workspace.title if workspace is not None else None
             # Resolve the project repo path so role builders can inject
             # accumulated team_notes.md context.
@@ -342,14 +393,23 @@ class CodexTaskRunner:
         return f"{self._CODEX_COLLABORATION_HINT}\n\n{prompt_text}"
 
     async def _complete_help_child_if_needed(self, task):
-        if self._help_orchestrator_factory is None or task.task_kind != "help_child" or not task.blocked_by_help_id:
+        if (
+            self._help_orchestrator_factory is None
+            or task.task_kind != "help_child"
+            or not task.blocked_by_help_id
+        ):
             return
         if task.status not in {"done", "failed"}:
             return
 
         help_orchestrator = self._help_orchestrator_factory()
         help_request = await self.codex_store.load_help_request(task.blocked_by_help_id)
-        if help_request is None or help_request.status in {"completed", "failed", "timed_out", "consumed"}:
+        if help_request is None or help_request.status in {
+            "completed",
+            "failed",
+            "timed_out",
+            "consumed",
+        }:
             return
 
         await help_orchestrator.complete_help_request(
@@ -385,7 +445,13 @@ class CodexTaskRunner:
         provider = run_provider if run_provider is not None else task.provider
         model = run_model if run_model is not None else task.model
 
-        resolved_executor, resolved_provider, resolved_model, executor_env_overrides, executor_type = service.resolve_effective_config(
+        (
+            resolved_executor,
+            resolved_provider,
+            resolved_model,
+            executor_env_overrides,
+            executor_type,
+        ) = service.resolve_effective_config(
             catalog,
             executor,
             provider=provider,
@@ -394,7 +460,11 @@ class CodexTaskRunner:
 
         # If resolved config differs from task defaults, update the task
         # This persists the override as the new task default
-        if task.executor != resolved_executor or task.provider != resolved_provider or task.model != resolved_model:
+        if (
+            task.executor != resolved_executor
+            or task.provider != resolved_provider
+            or task.model != resolved_model
+        ):
             task.executor = resolved_executor
             task.provider = resolved_provider
             task.model = resolved_model
@@ -426,10 +496,19 @@ class CodexTaskRunner:
                 # Render command_template (string template for additional command args)
                 if provider_config.command_template:
                     try:
-                        rendered_cmd = service.render_template(provider_config.command_template, context)
+                        rendered_cmd = service.render_template(
+                            provider_config.command_template, context
+                        )
                         # Split by whitespace to get individual args
                         rendered_command_args = rendered_cmd.split()
                     except Exception:
                         rendered_command_args = None
 
-        return (resolved_executor, resolved_provider, resolved_model, rendered_env, rendered_command_args, executor_type)
+        return (
+            resolved_executor,
+            resolved_provider,
+            resolved_model,
+            rendered_env,
+            rendered_command_args,
+            executor_type,
+        )

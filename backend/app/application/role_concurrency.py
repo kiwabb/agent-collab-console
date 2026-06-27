@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Process-wide per-role concurrency limiter for Conductor dispatch.
 
 ``MAX_CONCURRENT_INSTANCES_PER_ROLE`` caps how many subagents of the *same*
@@ -15,20 +17,18 @@ only shared mutation is lazily creating the per-role semaphore, which happens in
 a synchronous (no-``await``) section and so is atomic with respect to other
 coroutines.
 """
-from __future__ import annotations
+import asyncio  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
 
-import asyncio
-from contextlib import asynccontextmanager
-
-from app.application import timeouts
+from app.application import timeouts  # noqa: E402
 
 
 class RoleConcurrencyLimiter:
     """Process-singleton: one bounded semaphore per role key."""
 
-    _instance: "RoleConcurrencyLimiter | None" = None
+    _instance: "RoleConcurrencyLimiter | None" = None  # noqa: UP037
 
-    def __new__(cls) -> "RoleConcurrencyLimiter":
+    def __new__(cls) -> "RoleConcurrencyLimiter":  # noqa: UP037
         if cls._instance is None:
             obj = super().__new__(cls)
             obj._semaphores = {}
@@ -37,7 +37,7 @@ class RoleConcurrencyLimiter:
         return cls._instance
 
     @classmethod
-    def instance(cls) -> "RoleConcurrencyLimiter":
+    def instance(cls) -> "RoleConcurrencyLimiter":  # noqa: UP037
         return cls()
 
     def _semaphore_for(self, role: str) -> asyncio.Semaphore:
@@ -71,7 +71,7 @@ class RoleConcurrencyLimiter:
         try:
             await asyncio.wait_for(sem.acquire(), timeout=timeout)
             return True
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError:  # noqa: UP041
             return False
 
     def release(self, role: str) -> None:

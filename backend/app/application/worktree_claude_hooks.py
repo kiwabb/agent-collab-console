@@ -6,13 +6,14 @@ as a tool result to the upstream LLM, which can cause a multi-minute timeout or
 connection drop. The hook below blocks that Read and guides the engineer to use
 grep + targeted Read with offset instead.
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 from pathlib import Path
 
-_HOOK_SCRIPT = '''\
+_HOOK_SCRIPT = """\
 #!/usr/bin/env python3
 import json, sys
 from pathlib import Path
@@ -51,7 +52,7 @@ if line_count > MAX_LINES:
     )
     sys.exit(2)
 sys.exit(0)
-'''
+"""
 
 _SETTINGS = {
     "hooks": {
@@ -88,7 +89,7 @@ async def inject_worktree_claude_hooks(worktree_path: Path | str) -> None:
     settings_file = root / ".claude" / "settings.json"
     existing: dict = {}
     if settings_file.exists():
-        try:
+        try:  # noqa: SIM105
             existing = json.loads(settings_file.read_text())
         except (json.JSONDecodeError, OSError):
             pass

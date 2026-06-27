@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from app.domain.models import CodexTask, CodexTaskMessage, ExecutionProcess, LogEvent
 
 

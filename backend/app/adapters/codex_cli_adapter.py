@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import subprocess
 
@@ -16,29 +18,36 @@ class CodexCliAdapter:
             data = json.loads(text)
             return {
                 "summary": data.get("summary", text or task_title),
-                "artifacts": data.get("artifacts", [{
-                    "kind": "plan",
-                    "content": {
-                        "summary": data.get("summary", text or task_title),
-                        "next_steps": data.get("next_steps", [text or task_title]),
-                        "task_title": data.get("task_title", task_title),
-                    },
-                    "steps": data.get("next_steps", [text or task_title]),
-                }]),
+                "artifacts": data.get(
+                    "artifacts",
+                    [
+                        {
+                            "kind": "plan",
+                            "content": {
+                                "summary": data.get("summary", text or task_title),
+                                "next_steps": data.get("next_steps", [text or task_title]),
+                                "task_title": data.get("task_title", task_title),
+                            },
+                            "steps": data.get("next_steps", [text or task_title]),
+                        }
+                    ],
+                ),
                 "status": data.get("status", "completed"),
             }
         except (json.JSONDecodeError, TypeError):
             return {
                 "summary": text or task_title,
-                "artifacts": [{
-                    "kind": "plan",
-                    "content": {
-                        "summary": text or task_title,
-                        "next_steps": [text or task_title],
-                        "task_title": task_title,
-                    },
-                    "steps": [text or task_title],
-                }],
+                "artifacts": [
+                    {
+                        "kind": "plan",
+                        "content": {
+                            "summary": text or task_title,
+                            "next_steps": [text or task_title],
+                            "task_title": task_title,
+                        },
+                        "steps": [text or task_title],
+                    }
+                ],
                 "status": "completed",
             }
 

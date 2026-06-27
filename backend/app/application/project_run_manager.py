@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """In-memory dev-server runner for project repos.
 
 Deliberately ephemeral: nothing is persisted. One running process per project,
@@ -9,16 +11,14 @@ Out of scope (see PRD): WS streaming, cross-restart recovery, multiple
 instances, auto-restart. The app shutdown hook calls `shutdown_all()` so we
 never leak orphan processes.
 """
-from __future__ import annotations
+import asyncio  # noqa: E402
+import collections  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+import signal  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
-import asyncio
-import collections
-import logging
-import os
-import signal
-from datetime import datetime, timezone
-
-from app.application.command_safety import refuse_reason
+from app.application.command_safety import refuse_reason  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ _ENV_DROP_PREFIXES = ("CODEX_",)
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).isoformat()  # noqa: UP017
 
 
 def _child_env() -> dict[str, str]:
@@ -137,7 +137,7 @@ class ProjectRunManager:
                 asyncio.create_task(self._drain(entry, proc.stdout, "stdout")),
                 asyncio.create_task(self._drain(entry, proc.stderr, "stderr")),
             ]
-            asyncio.create_task(self._wait_exit(entry))
+            asyncio.create_task(self._wait_exit(entry))  # noqa: RUF006
             self._entries[project_id] = entry
             return entry.status_dict()
 
@@ -152,14 +152,14 @@ class ProjectRunManager:
                 entry.append_log(tag, raw.decode("utf-8", errors="replace").rstrip("\n"))
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - reader must never crash the manager
+        except Exception:  # noqa: BLE001, RUF100
             logger.debug("project run %s reader (%s) error", tag, entry.pid, exc_info=True)
 
     async def _wait_exit(self, entry: _RunEntry) -> None:
         try:
             rc = await entry.proc.wait()
             entry.exit_code = rc
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             logger.debug("project run waiter error pid=%s", entry.pid, exc_info=True)
 
     async def stop(self, project_id: str) -> dict:
@@ -201,9 +201,9 @@ class ProjectRunManager:
             task.cancel()
         for task in entry.readers:
             if current_loop is not None and task.get_loop() is current_loop:
-                try:
+                try:  # noqa: SIM105
                     await task
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001, RUF100
                     pass
         entry.readers = []
 
@@ -213,7 +213,7 @@ class ProjectRunManager:
             os.killpg(os.getpgid(pid), sig)
         except ProcessLookupError:
             pass
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             logger.debug("killpg %s failed pid=%s", sig, pid, exc_info=True)
 
     @staticmethod
@@ -231,7 +231,7 @@ class ProjectRunManager:
             except ChildProcessError:
                 # Already reaped by the transport's SIGCHLD handler.
                 return True
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, RUF100
                 return True
             if wpid == entry.pid:
                 entry.exit_code = os.waitstatus_to_exitcode(wstatus)
@@ -270,7 +270,7 @@ class ProjectRunManager:
         for entry in entries:
             try:
                 await self._terminate(entry)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, RUF100
                 logger.debug("shutdown_all terminate failed pid=%s", entry.pid, exc_info=True)
 
 

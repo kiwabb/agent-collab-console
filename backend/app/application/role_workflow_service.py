@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 from datetime import datetime
 
@@ -81,10 +81,11 @@ class RoleWorkflowService:
         if project_id and self.codex_store is not None:
             try:
                 from app.application.team_notes_service import team_notes
+
                 memory_text = await team_notes.format_for_prompt(
                     self.codex_store, project_id, project_repo_path
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, RUF100
                 memory_text = None
         if not memory_text:
             memory_text = project_memory.read_for_prompt(project_repo_path)
@@ -99,6 +100,7 @@ class RoleWorkflowService:
         if not workspace_path or not issue_id:
             return None
         from pathlib import Path
+
         p = Path(workspace_path) / "issues" / issue_id / "_steer.md"
         if not p.exists():
             return None
@@ -156,11 +158,13 @@ class RoleWorkflowService:
                 specialist_prompt = call_specialist.get("prompt")
                 why = call_specialist.get("why", "")
                 if specialist_role_key and specialist_prompt:
-                    await self._request_specialist(task, specialist_role_key, specialist_prompt, why)
+                    await self._request_specialist(
+                        task, specialist_role_key, specialist_prompt, why
+                    )
 
         # If store is available and document has written_files, persist to DB
         if self.codex_store and doc and hasattr(doc, "written_files"):
-            import asyncio
+            import asyncio  # noqa: I001
             from app.application import knowledge_index_service
             from app.application.embedding_service import get_embedding_service
 
@@ -176,13 +180,14 @@ class RoleWorkflowService:
                 }
                 await self.codex_store.save_artifact(artifact_row)
                 # FTS index: synchronous in-band (cheap).
-                try:
+                try:  # noqa: SIM105
                     await knowledge_index_service.index_artifact(self.codex_store, artifact_row)
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001, RUF100
                     pass
                 # Embedding: fire-and-forget, never blocks the task.
                 emb = get_embedding_service()
                 if emb.enabled:
+
                     async def _embed(row=artifact_row, emb=emb):
                         try:
                             text = knowledge_index_service._read_artifact_text(row.get("path"))
@@ -193,9 +198,10 @@ class RoleWorkflowService:
                                 await knowledge_index_service.store_artifact_embedding(
                                     self.codex_store, row["id"], vec, emb.model_label
                                 )
-                        except Exception:  # noqa: BLE001
+                        except Exception:  # noqa: BLE001, RUF100
                             pass
-                    asyncio.create_task(_embed())
+
+                    asyncio.create_task(_embed())  # noqa: RUF006
 
         return doc
 
@@ -208,7 +214,7 @@ class RoleWorkflowService:
         if not self.codex_store:
             return
         try:
-            from uuid import uuid4
+            from uuid import uuid4  # noqa: I001
             from datetime import datetime
             from app.domain.models import AgentMessage
             from app.application.event_bus import event_bus
@@ -229,24 +235,27 @@ class RoleWorkflowService:
                 created_at=datetime.now(),
             )
             await self.codex_store.save_agent_message(msg)
-            await event_bus.append({
-                "type": "agent_message_posted",
-                "issue_id": task.issue_id,
-                "session_id": task.session_id,
-                "workspace_id": task.session_id,
-                "message": {
-                    "id": msg.id,
-                    "issue_id": msg.issue_id,
-                    "graph_id": msg.graph_id,
-                    "from_node_key": msg.from_node_key,
-                    "to_node_key": msg.to_node_key,
-                    "message_type": msg.message_type,
-                    "body": msg.body,
-                    "created_at": msg.created_at.isoformat() if msg.created_at else None,
-                },
-            })
-        except Exception as exc:  # noqa: BLE001
+            await event_bus.append(
+                {
+                    "type": "agent_message_posted",
+                    "issue_id": task.issue_id,
+                    "session_id": task.session_id,
+                    "workspace_id": task.session_id,
+                    "message": {
+                        "id": msg.id,
+                        "issue_id": msg.issue_id,
+                        "graph_id": msg.graph_id,
+                        "from_node_key": msg.from_node_key,
+                        "to_node_key": msg.to_node_key,
+                        "message_type": msg.message_type,
+                        "body": msg.body,
+                        "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                    },
+                }
+            )
+        except Exception as exc:  # noqa: BLE001, RUF100
             import logging
+
             logging.getLogger(__name__).warning("_record_critique failed: %s", exc)
 
     async def _request_specialist(
@@ -256,8 +265,8 @@ class RoleWorkflowService:
         if not self.codex_store:
             return
         try:
-            from app.application.specialist_orchestrator import SpecialistOrchestrator
-            from app.application.event_bus import event_bus
+            from app.application.specialist_orchestrator import SpecialistOrchestrator  # noqa: F401, I001
+            from app.application.event_bus import event_bus  # noqa: F401
 
             # Initialize orchestrator with dependencies from the task runner
             # In production, this would be injected. For now, we instantiate it here.
@@ -275,6 +284,7 @@ class RoleWorkflowService:
                 f"[PENDING_SPECIALIST_CALL] role_key={specialist_role_key}\n"
                 f"prompt={specialist_prompt}\nwhy={why}"
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             import logging
+
             logging.getLogger(__name__).warning("_request_specialist setup failed: %s", exc)

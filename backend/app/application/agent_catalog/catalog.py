@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import json
 from dataclasses import dataclass
@@ -35,7 +35,9 @@ class AgentCatalog:
         normalized = self.normalize_role_key(role_key)
         if normalized in self._specialists:
             return self._specialists[normalized]
-        custom_key = normalized if normalized.startswith(CUSTOM_PREFIX) else f"{CUSTOM_PREFIX}{normalized}"
+        custom_key = (
+            normalized if normalized.startswith(CUSTOM_PREFIX) else f"{CUSTOM_PREFIX}{normalized}"
+        )
         if custom_key in self._custom:
             return self._custom[custom_key]
         raise KeyError(f"Unknown agent role_key: {role_key}")
@@ -63,7 +65,7 @@ class AgentCatalog:
     @staticmethod
     def normalize_role_key(role_key: str) -> str:
         if role_key.startswith(SPECIALIST_PREFIX):
-            return role_key[len(SPECIALIST_PREFIX):]
+            return role_key[len(SPECIALIST_PREFIX) :]
         return role_key
 
     def _load_specialists(self) -> dict[str, AgentDefinition]:

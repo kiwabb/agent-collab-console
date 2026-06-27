@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from uuid import uuid4
 
@@ -10,7 +12,9 @@ class HelpOrchestrator:
         self.event_bus = event_bus
         self.task_runner = task_runner
 
-    async def request_help(self, *, parent_task_id, target_executor, title, prompt, context_summary=None):
+    async def request_help(
+        self, *, parent_task_id, target_executor, title, prompt, context_summary=None
+    ):
         parent = await self._load_running_parent(parent_task_id)
         if target_executor == parent.executor:
             raise ValueError("Help target must differ from parent executor")
@@ -69,33 +73,49 @@ class HelpOrchestrator:
                 completed_at=now,
             )
 
-        await self.event_bus.append({
-            "type": "help_requested",
-            "task_id": parent.id,
-            "help_request_id": help_request.id,
-            "child_task_id": child.id,
-            "target": target_executor,
-        })
-        await self.event_bus.append({
-            "type": "task_status",
-            "task_id": parent.id,
-            "issue_id": parent.issue_id,
-            "session_id": parent.session_id,
-            "status": parent.status,
-            "execution_process_id": parent.last_execution_process_id,
-        })
+        await self.event_bus.append(
+            {
+                "type": "help_requested",
+                "task_id": parent.id,
+                "help_request_id": help_request.id,
+                "child_task_id": child.id,
+                "target": target_executor,
+            }
+        )
+        await self.event_bus.append(
+            {
+                "type": "task_status",
+                "task_id": parent.id,
+                "issue_id": parent.issue_id,
+                "session_id": parent.session_id,
+                "status": parent.status,
+                "execution_process_id": parent.last_execution_process_id,
+            }
+        )
 
         await self.task_runner.start_task_run(child)
-        await self.event_bus.append({
-            "type": "help_child_started",
-            "task_id": parent.id,
-            "help_request_id": help_request.id,
-            "child_task_id": child.id,
-            "target": target_executor,
-        })
+        await self.event_bus.append(
+            {
+                "type": "help_child_started",
+                "task_id": parent.id,
+                "help_request_id": help_request.id,
+                "child_task_id": child.id,
+                "target": target_executor,
+            }
+        )
         return help_request
 
-    async def request_help_from_runtime(self, *, task_id, workspace_id=None, source_executor=None, target_executor=None, title=None, prompt=None, context_summary=None):
+    async def request_help_from_runtime(
+        self,
+        *,
+        task_id,
+        workspace_id=None,
+        source_executor=None,
+        target_executor=None,
+        title=None,
+        prompt=None,
+        context_summary=None,
+    ):
         return await self.request_help(
             parent_task_id=task_id,
             target_executor=target_executor,
@@ -104,7 +124,9 @@ class HelpOrchestrator:
             context_summary=context_summary,
         )
 
-    async def complete_help_request(self, help_request_id: str, *, child_status: str, child_result: str | None):
+    async def complete_help_request(
+        self, help_request_id: str, *, child_status: str, child_result: str | None
+    ):
         help_request = await self.codex_store.load_help_request(help_request_id)
         if help_request is None:
             raise KeyError(help_request_id)
@@ -115,7 +137,9 @@ class HelpOrchestrator:
 
         completed_at = datetime.now()
         help_request.status = "completed" if child_status == "done" else "failed"
-        help_request.continuation_payload = self._build_continuation_payload(help_request, child_status, child_result)
+        help_request.continuation_payload = self._build_continuation_payload(
+            help_request, child_status, child_result
+        )
         help_request.completed_at = completed_at
         await self.codex_store.save_help_request(help_request)
 
@@ -129,13 +153,15 @@ class HelpOrchestrator:
                 completed_at=parent.updated_at,
             )
         event_type = "help_completed" if child_status == "done" else "help_failed"
-        await self.event_bus.append({
-            "type": event_type,
-            "task_id": parent.id,
-            "help_request_id": help_request.id,
-            "child_task_id": help_request.child_task_id,
-            "result": help_request.continuation_payload,
-        })
+        await self.event_bus.append(
+            {
+                "type": event_type,
+                "task_id": parent.id,
+                "help_request_id": help_request.id,
+                "child_task_id": help_request.child_task_id,
+                "result": help_request.continuation_payload,
+            }
+        )
 
         if await self._try_auto_resume_parent(parent, help_request):
             return await self.codex_store.load_help_request(help_request.id) or help_request
@@ -153,15 +179,17 @@ class HelpOrchestrator:
                 created_at=datetime.now(),
             )
         )
-        await self.event_bus.append({
-            "type": "task_status",
-            "task_id": parent.id,
-            "issue_id": parent.issue_id,
-            "session_id": parent.session_id,
-            "status": parent.status,
-            "result": parent.result,
-            "execution_process_id": parent.last_execution_process_id,
-        })
+        await self.event_bus.append(
+            {
+                "type": "task_status",
+                "task_id": parent.id,
+                "issue_id": parent.issue_id,
+                "session_id": parent.session_id,
+                "status": parent.status,
+                "result": parent.result,
+                "execution_process_id": parent.last_execution_process_id,
+            }
+        )
         return help_request
 
     async def _try_auto_resume_parent(self, parent: CodexTask, help_request: HelpRequest) -> bool:
@@ -175,7 +203,9 @@ class HelpOrchestrator:
         if not resume_session_id:
             return False
 
-        continuation_prompt = self._build_continuation_prompt(help_request.continuation_payload or {})
+        continuation_prompt = self._build_continuation_prompt(
+            help_request.continuation_payload or {}
+        )
         await self.task_runner.start_task_run(
             parent,
             prompt_override=continuation_prompt,
@@ -198,9 +228,14 @@ class HelpOrchestrator:
 
     async def _has_unresolved_help(self, parent_task_id: str) -> bool:
         requests = await self.codex_store.list_help_requests(parent_task_id=parent_task_id)
-        return any(request.status not in {"completed", "failed", "timed_out", "consumed"} for request in requests)
+        return any(
+            request.status not in {"completed", "failed", "timed_out", "consumed"}
+            for request in requests
+        )
 
-    def _build_continuation_payload(self, help_request: HelpRequest, child_status: str, child_result: str | None):
+    def _build_continuation_payload(
+        self, help_request: HelpRequest, child_status: str, child_result: str | None
+    ):
         status = "completed" if child_status == "done" else "failed"
         payload = {
             "type": "help_result",
@@ -241,7 +276,9 @@ class HelpOrchestrator:
             f"{error.get('message', '')}"
         )
 
-    def _build_help_result_message(self, help_request: HelpRequest, child_status: str, child_result: str | None) -> str:
+    def _build_help_result_message(
+        self, help_request: HelpRequest, child_status: str, child_result: str | None
+    ) -> str:
         helper_name = "Claude" if help_request.target_executor == "claude" else "Codex"
         if child_status == "done":
             return f"{helper_name} help result:\n{child_result or ''}".rstrip()

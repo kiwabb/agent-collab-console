@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Deterministic diff-vs-claim / diff-vs-plan guard for Architect Review.
 
 This module computes a deterministic, side-effect-free assessment of an
@@ -19,15 +21,12 @@ LLM to weigh.
 Nothing here mutates state, performs merges, or touches the primary repo.
 It only *reads* the worktree diff.
 """
+import json  # noqa: E402
+import re  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
 
-from __future__ import annotations
-
-import json
-import re
-from dataclasses import dataclass, field
-
-from app.application.engineer_workflow import git_changed_files
-from app.application.issue_artifact_documents import IssueArtifactDocuments
+from app.application.engineer_workflow import git_changed_files  # noqa: E402
+from app.application.issue_artifact_documents import IssueArtifactDocuments  # noqa: E402
 
 # Cap the diff text injected into the review prompt so a large change set does
 # not blow the prompt budget. The review LLM only needs a representative
@@ -140,14 +139,14 @@ def _read_expected_files(workspace_path: str, issue_id: str) -> list[str]:
     docs = IssueArtifactDocuments()
     try:
         plan_path = docs.architect_implementation_plan_path(workspace_path, issue_id)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         return []
     if not plan_path.exists():
         return []
     try:
         raw = plan_path.read_text(encoding="utf-8")
         data = json.loads(raw)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         return []
     union: list[str] = []
     if isinstance(data, list):
@@ -170,6 +169,7 @@ def git_diff_summary(workspace_path: str | None) -> str:
     if not workspace_path:
         return ""
     import subprocess
+
     for base in ("origin/main", "main", "HEAD~1"):
         try:
             result = subprocess.run(
@@ -214,7 +214,7 @@ def _read_engineer_report(workspace_path: str, issue_id: str) -> tuple[str | Non
     docs = IssueArtifactDocuments()
     try:
         impl_files = docs.engineer_find_artifacts(workspace_path, issue_id)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, RUF100
         return None, [], False
     status: str | None = None
     claimed: list[str] = []
@@ -222,11 +222,13 @@ def _read_engineer_report(workspace_path: str, issue_id: str) -> tuple[str | Non
     for path in impl_files or []:
         try:
             text = path.read_text(encoding="utf-8")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, RUF100
             continue
         s, files, completed = _parse_engineer_report_md(text)
         # Prefer a status that claims implementation if any report does.
-        if s and (status is None or (status not in _CLAIMED_IMPL_STATUSES and s in _CLAIMED_IMPL_STATUSES)):
+        if s and (
+            status is None or (status not in _CLAIMED_IMPL_STATUSES and s in _CLAIMED_IMPL_STATUSES)
+        ):
             status = s
         claimed.extend(files)
         has_completed = has_completed or completed

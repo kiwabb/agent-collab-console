@@ -9,6 +9,7 @@ This module provides:
 
 Based on the Rust implementation in vibe-kanban/crates/executors/src/executors/codex/
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,13 +18,14 @@ import logging
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable  # noqa: UP035
 
 logger = logging.getLogger(__name__)
 
 
 class PendingResponse:
     """Represents a pending JSON-RPC response."""
+
     Result = "result"
     Error = "error"
     Shutdown = "shutdown"
@@ -32,6 +34,7 @@ class PendingResponse:
 @dataclass
 class JsonRpcMessage:
     """Represents a parsed JSON-RPC message."""
+
     type: str  # "request", "response", "error", "notification"
     method: str | None = None
     request_id: Any = None
@@ -44,6 +47,7 @@ class JsonRpcMessage:
 @dataclass
 class ServerRequest:
     """Base class for server-initiated requests from Codex."""
+
     request_id: Any
     method: str
     params: dict
@@ -52,17 +56,20 @@ class ServerRequest:
 @dataclass
 class FileChangeRequestApproval(ServerRequest):
     """File change approval request (codex.apply_patch)."""
+
     item_id: str = ""
 
 
 @dataclass
 class CommandExecutionRequestApproval(ServerRequest):
     """Command execution approval request (codex.exec_command)."""
+
     item_id: str = ""
 
 
-class Decision(str, Enum):
+class Decision(str, Enum):  # noqa: UP042
     """Approval decisions for server requests."""
+
     Accept = "accept"
     AcceptForSession = "acceptForSession"
     Decline = "decline"
@@ -72,6 +79,7 @@ class Decision(str, Enum):
 @dataclass
 class JsonRpcCallbacks:
     """Callbacks for handling JSON-RPC events. Override as needed."""
+
     on_notification: Callable[[str, dict], Any] | None = None  # Returns True to stop reading
     on_server_request: Callable[[ServerRequest], Any] | None = None  # Returns response or None
     on_response: Callable[[Any, Any], None] | None = None
@@ -179,12 +187,12 @@ class JsonRpcPeer:
     def _reader_loop(self):
         """Main loop that reads and dispatches JSON-RPC messages."""
         import sys
+
         try:
             while not self._shutdown.is_set():
                 raw_line = self._stdout.readline()
                 if not raw_line:
                     break
-
 
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
@@ -382,7 +390,9 @@ class AppServerClient:
         self._callbacks = self._create_callbacks(existing_callbacks)
         peer._callbacks = self._callbacks
 
-    def _create_callbacks(self, existing_callbacks: JsonRpcCallbacks | None = None) -> JsonRpcCallbacks:
+    def _create_callbacks(
+        self, existing_callbacks: JsonRpcCallbacks | None = None
+    ) -> JsonRpcCallbacks:
         """Create callbacks for JSON-RPC events."""
         existing_callbacks = existing_callbacks or JsonRpcCallbacks()
         return JsonRpcCallbacks(
@@ -506,7 +516,9 @@ class AppServerClient:
                 "method": method,
                 "params": params,
             }
-            if hasattr(self._event_bus, "append") and asyncio.iscoroutinefunction(self._event_bus.append):
+            if hasattr(self._event_bus, "append") and asyncio.iscoroutinefunction(
+                self._event_bus.append
+            ):
                 await self._event_bus.append(payload)
             else:
                 self._event_bus.append(payload)
@@ -537,14 +549,16 @@ class AppServerClient:
                 "method": request.method,
                 "params": request.params,
             }
-            if hasattr(self._event_bus, "append") and asyncio.iscoroutinefunction(self._event_bus.append):
+            if hasattr(self._event_bus, "append") and asyncio.iscoroutinefunction(
+                self._event_bus.append
+            ):
                 await self._event_bus.append(payload)
             else:
                 self._event_bus.append(payload)
 
         # Auto-approve for Phase 1
         if self._auto_approve:
-            if isinstance(request, FileChangeRequestApproval):
+            if isinstance(request, FileChangeRequestApproval):  # noqa: SIM114
                 return {"decision": Decision.AcceptForSession.value}
             elif isinstance(request, CommandExecutionRequestApproval):
                 return {"decision": Decision.AcceptForSession.value}
@@ -609,6 +623,7 @@ class AppServerClient:
 
 # --- Async JSON-RPC Peer (Phase 2) ---
 
+
 class AsyncJsonRpcPeer:
     """
     Async version of JsonRpcPeer using asyncio for subprocess communication.
@@ -620,7 +635,12 @@ class AsyncJsonRpcPeer:
     - await stream.readline() instead of blocking readline()
     """
 
-    def __init__(self, stdin: asyncio.StreamWriter, stdout: asyncio.StreamReader, callbacks: JsonRpcCallbacks | None = None):
+    def __init__(
+        self,
+        stdin: asyncio.StreamWriter,
+        stdout: asyncio.StreamReader,
+        callbacks: JsonRpcCallbacks | None = None,
+    ):
         self._stdin = stdin
         self._stdout = stdout
         self._callbacks = callbacks or JsonRpcCallbacks()
@@ -642,7 +662,7 @@ class AsyncJsonRpcPeer:
         if self._reader_task:
             try:
                 await asyncio.wait_for(self._reader_task, timeout=5)
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError:  # noqa: UP041
                 self._reader_task.cancel()
 
     async def next_request_id(self) -> int:
@@ -651,7 +671,9 @@ class AsyncJsonRpcPeer:
             self._id_counter += 1
             return self._id_counter
 
-    async def send(self, method: str, params: dict | None = None, request_id: int | None = None) -> bool:
+    async def send(
+        self, method: str, params: dict | None = None, request_id: int | None = None
+    ) -> bool:
         """Send a JSON-RPC request or notification."""
         if request_id is None:
             payload = {
@@ -690,8 +712,8 @@ class AsyncJsonRpcPeer:
             await self.send(method, params, request_id)
             try:
                 await asyncio.wait_for(evt.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
-                raise TimeoutError(f"Request {method} timed out after {timeout}s")
+            except asyncio.TimeoutError:  # noqa: UP041
+                raise TimeoutError(f"Request {method} timed out after {timeout}s")  # noqa: B904
 
             if request_id in self._pending_errors:
                 error = self._pending_errors.pop(request_id)
@@ -707,11 +729,12 @@ class AsyncJsonRpcPeer:
     async def _async_reader_loop(self):
         """Async main loop that reads and dispatches JSON-RPC messages."""
         import sys
+
         try:
             while not self._shutdown.is_set():
                 try:
                     raw_line = await asyncio.wait_for(self._stdout.readline(), timeout=1)
-                except asyncio.TimeoutError:
+                except asyncio.TimeoutError:  # noqa: UP041
                     continue
                 except Exception:
                     break
@@ -772,7 +795,7 @@ class AsyncJsonRpcPeer:
             msg_type = "error"
         elif "method" in parsed:
             msg_id = parsed.get("id")
-            if msg_id is None:
+            if msg_id is None:  # noqa: SIM108
                 msg_type = "notification"
             else:
                 msg_type = "request"
@@ -814,7 +837,6 @@ class AsyncJsonRpcPeer:
             # Create a proper ServerRequest object
             method = msg.method or ""
             params = msg.params or {}
-            
             if method == "file_change/request_approval":
                 request = FileChangeRequestApproval(
                     request_id=msg.request_id,
@@ -840,7 +862,6 @@ class AsyncJsonRpcPeer:
                 response = await cb(request)
             else:
                 response = cb(request)
-                
             if response is not None:
                 await self.send_response(msg.request_id, response)
 

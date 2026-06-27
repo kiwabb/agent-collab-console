@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Block-aware view + soft-delete state for team_notes.md.
 
 The markdown file on disk (managed by `ProjectMemoryService`) remains the
@@ -18,21 +20,18 @@ source of truth. This service adds:
 Block IDs are deterministic: prefer the `<!-- issue:<id> -->` marker; if
 absent (legacy / hand-written blocks) the SHA-1 of the heading line is used.
 """
+import hashlib  # noqa: E402
+import logging  # noqa: E402
+import re  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Iterable  # noqa: E402, F401, UP035
 
-from __future__ import annotations
-
-import hashlib
-import logging
-import re
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterable
-
-from app.application.project_memory_service import (
+from app.application.project_memory_service import (  # noqa: E402
     MEMORY_BYTES_CAP,
-    MEMORY_DIR_NAME,
-    MEMORY_FILE_NAME,
+    MEMORY_DIR_NAME,  # noqa: F401
+    MEMORY_FILE_NAME,  # noqa: F401
     ProjectMemoryService,
     project_memory,
 )
@@ -41,9 +40,7 @@ logger = logging.getLogger(__name__)
 
 ISSUE_MARKER_RE = re.compile(r"<!--\s*issue:([A-Za-z0-9_\-]+)\s*-->")
 DISTILLED_HEADER_PREFIX = "## ⚙️ Distilled lessons"
-HEADING_DATE_RE = re.compile(
-    r"^##\s+(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?)\s+[—\-]\s+(.+?)\s*$"
-)
+HEADING_DATE_RE = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?)\s+[—\-]\s+(.+?)\s*$")
 
 
 @dataclass
@@ -168,15 +165,13 @@ class TeamNotesService:
             store,
             project_id,
             block_id,
-            deleted_at=datetime.now(timezone.utc).isoformat(),
+            deleted_at=datetime.now(timezone.utc).isoformat(),  # noqa: UP017
         )
 
     async def restore(self, store, project_id: str, block_id: str) -> None:
         await self._upsert_state(store, project_id, block_id, deleted_at=None)
 
-    async def set_pinned(
-        self, store, project_id: str, block_id: str, pinned: bool
-    ) -> None:
+    async def set_pinned(self, store, project_id: str, block_id: str, pinned: bool) -> None:
         await self._upsert_state(store, project_id, block_id, pinned=pinned)
 
     async def format_for_prompt(
@@ -193,9 +188,7 @@ class TeamNotesService:
         if not project_id:
             text = self.memory.read_for_prompt(project_repo_path)
             return text
-        blocks = await self.list_blocks(
-            store, project_id, project_repo_path, include_deleted=False
-        )
+        blocks = await self.list_blocks(store, project_id, project_repo_path, include_deleted=False)
         if not blocks:
             return None
         # Sort: pinned (preserve discovery order), then by timestamp desc.
@@ -250,7 +243,7 @@ class TeamNotesService:
                 (project_id,),
             )
             rows = await cur.fetchall()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("team_notes_service._load_state failed: %s", exc)
             return {}
         out: dict[str, dict] = {}

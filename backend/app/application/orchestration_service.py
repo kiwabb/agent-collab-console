@@ -1,4 +1,6 @@
-from datetime import datetime
+from __future__ import annotations  # noqa: I001
+
+from datetime import datetime  # noqa: I001, RUF100
 from uuid import uuid4
 
 from app.domain.models import Task, Message, Artifact, AgentRun
@@ -53,7 +55,9 @@ class OrchestrationService:
             for task in session.tasks:
                 if task.id == task_id:
                     # Construct handoff payload with task_id, task_title, plan, session_id
-                    plan_artifacts = [a for a in session.artifacts if a.kind == "plan" and a.task_id == task_id]
+                    plan_artifacts = [
+                        a for a in session.artifacts if a.kind == "plan" and a.task_id == task_id
+                    ]
                     plan = None
                     if plan_artifacts:
                         plan_artifact = plan_artifacts[0]
@@ -103,7 +107,9 @@ class OrchestrationService:
                     session.messages.append(message)
                     await self.session_service.update_session(session)
                     event_type = "run.completed" if run_status == "completed" else "run.failed"
-                    await self.event_bus.append({"type": event_type, "task_id": task.id, "agent_id": result["agent_id"]})
+                    await self.event_bus.append(
+                        {"type": event_type, "task_id": task.id, "agent_id": result["agent_id"]}
+                    )
                     return result
         raise KeyError(task_id)
 
