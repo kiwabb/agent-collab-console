@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Phase 0 是纯卫生 PR, 需确认 'no drive-by / no 顺手修 bug' 原则, 任何发现的小问题走 follow-up"}
+{"file": ".trellis/spec/vibe-kanban/backend/directory-structure.md", "reason": "确认 backend 模块组织, 防止误删 backend/app/ 内文件(本任务只动 tracked 一次性脚本, 不动 app/)"}
+{"file": "CLAUDE.md", "reason": "dev-local.sh 端口(前 4000 / 后 9000) + 启动命令, 用于复核 README.md 是否一致"}
+{"file": "REFACTORING_PLAN.md", "reason": "父任务已写的 Phase 0 详细方案, 12 个待删文件清单 + 验收 + 风险"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "判断某个一次性脚本是否真有诊断价值, 决定是删还是迁到 backend/scripts/diagnostics/"}

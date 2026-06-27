@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Code Review Checklist: scope-limited / no drive-by reformatting / 行为不变 / 测试绿"}
+{"file": "REFACTORING_PLAN.md", "reason": "附录 A 审计测量命令 + Phase 0 验收点 (AC1-AC5), 用于 self-check"}
+{"file": "CLAUDE.md", "reason": "Commands 段: 跑 pytest -v / npm run build && npm run lint 确认卫生 PR 不破坏任何测试"}
+{"file": ".trellis/tasks/06-27-refactor-backend-frontend-to-standard/prd.md", "reason": "父任务 DoD + Out of Scope, 防止本 PR 越界"}
