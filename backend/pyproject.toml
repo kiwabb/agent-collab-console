@@ -84,6 +84,20 @@ disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = false
 
+# Phase 5 burn-down: per-module strict list. Each entry must be 0-error
+# under `mypy --strict` (see scripts/mypy_burndown.sh). Modules graduate
+# from this list by being removed once the wider app.* surface reaches
+# 0 errors under the same flags.
+[[tool.mypy.overrides]]
+module = [
+    "app.application.conductor_state_machine",
+    "app.interfaces.common",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_unused_ignores = true
+
 # --- Pytest ---
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

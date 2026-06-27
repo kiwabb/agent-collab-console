@@ -35,6 +35,7 @@ jobs:
           pip install ruff mypy
 
       - name: Ruff check
+        # Phase 5: hard gate (baseline is 0; new code cannot introduce violations).
         run: ruff check .
 
       - name: Ruff format check
