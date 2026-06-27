@@ -32,6 +32,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install ruff mypy
+
+      - name: Ruff check
+        run: ruff check .
+
+      - name: Ruff format check
+        # Phase 1: baseline informational. Phase 5 turn into a hard gate.
+        run: ruff format --check . || true
+
+      - name: Mypy (baseline)
+        # Phase 1: mypy is informational. Phase 5 burn-down turns it into
+        # a hard gate. continue-on-error so a non-zero baseline doesn't
+        # block every PR.
+        run: mypy app || true
 
       - name: Run tests
         run: pytest
@@ -55,6 +69,10 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Prettier check
+        # Phase 1: baseline informational. Phase 5 turn into a hard gate.
+        run: npx prettier --check 'src/**/*.{ts,tsx}' || true
 
       - name: Typecheck
         run: npx tsc --noEmit --pretty false
