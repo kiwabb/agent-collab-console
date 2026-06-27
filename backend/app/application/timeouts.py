@@ -138,6 +138,22 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_str(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    return raw if raw else default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_optional_str(name: str) -> str | None:
+    return os.getenv(name)
+
+
 # --- Conductor lease / recovery --------------------------------------------
 def lease_ttl_s() -> int:
     return _env_int("CONDUCTOR_LEASE_TTL_S", DEFAULT_LEASE_TTL_S)
@@ -407,3 +423,218 @@ def validate(*, strict: bool = False) -> list[str]:
     if strict and violations:
         raise TimeoutConfigError("; ".join(violations))
     return violations
+
+
+# --- Runtime / executor / cost knobs (Phase 2b) ------------------------
+# These were scattered ``os.getenv`` calls in feature code. Per spec
+# ('feature code never reaches into env vars directly'), all reads go
+# through the accessors below. The accessor is the only place that knows
+# the env-var name; callers pass the typed value into services.
+
+
+def real_cli_enabled() -> bool:
+    return _env_bool("REAL_CLI", True)
+
+
+def codex_launch_enabled() -> bool:
+    return _env_bool("CODEX_LAUNCH_ENABLED", True)
+
+
+def use_sqlite() -> bool:
+    return _env_bool("USE_SQLITE", True)
+
+
+def sqlite_db_path() -> str:
+    return _env_str("SQLITE_DB_PATH", "console.db")
+
+
+def sqlite_db_path_configured() -> bool:
+    return bool(os.getenv("SQLITE_DB_PATH"))
+
+
+def codex_workspace_root_configured() -> bool:
+    return bool(os.getenv("CODEX_WORKSPACE_ROOT"))
+
+
+def codex_workspace_root() -> str | None:
+    return os.getenv("CODEX_WORKSPACE_ROOT")
+
+
+def codex_data_dir() -> str:
+    return _env_str("CODEX_DATA_DIR", "/tmp")
+
+
+def codex_cmd() -> str:
+    return _env_str("CODEX_CMD", "codex")
+
+
+def claude_cmd() -> str:
+    return _env_str("CLAUDE_CMD", "claude")
+
+
+def codex_app_server_cmd() -> str | None:
+    return os.getenv("CODEX_APP_SERVER_CMD")
+
+
+def codex_app_server_model() -> str | None:
+    return os.getenv("CODEX_APP_SERVER_MODEL")
+
+
+def codex_auto_approve() -> bool:
+    return _env_bool("CODEX_AUTO_APPROVE", False)
+
+
+def workflow_dag_enabled() -> bool:
+    return _env_bool("WORKFLOW_DAG_ENABLED", True)
+
+
+def workflow_orchestrator_executor_id() -> str | None:
+    return os.getenv("WORKFLOW_ORCHESTRATOR_EXECUTOR_ID")
+
+
+def workflow_orchestrator_model() -> str | None:
+    return os.getenv("WORKFLOW_ORCHESTRATOR_MODEL")
+
+
+def workflow_orchestrator_max_tokens() -> int | None:
+    raw = os.getenv("WORKFLOW_ORCHESTRATOR_MAX_TOKENS")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def workflow_orchestrator_timeout() -> float | None:
+    raw = os.getenv("WORKFLOW_ORCHESTRATOR_TIMEOUT")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def cost_usd_per_m_input() -> float:
+    return _env_float("COST_USD_PER_M_INPUT", 0.30)
+
+
+def cost_usd_per_m_output() -> float:
+    return _env_float("COST_USD_PER_M_OUTPUT", 1.20)
+
+
+def cost_usd_per_m_cache_read() -> float:
+    return _env_float("COST_USD_PER_M_CACHE_READ", 0.075)
+
+
+def openai_api_key() -> str | None:
+    return os.getenv("OPENAI_API_KEY")
+
+
+def openai_base_url() -> str | None:
+    return os.getenv("OPENAI_BASE_URL")
+
+
+def anthropic_api_key() -> str | None:
+    return os.getenv("ANTHROPIC_API_KEY")
+
+
+def anthropic_base_url() -> str | None:
+    return os.getenv("ANTHROPIC_BASE_URL")
+
+
+def conductor_max_dispatches_per_role() -> int:
+    return _env_int("CONDUCTOR_MAX_DISPATCHES_PER_ROLE", 3)
+
+
+def conductor_max_relaunches() -> int:
+    return _env_int("CONDUCTOR_MAX_RELAUNCHES", 3)
+
+
+def conductor_recovery_enabled() -> bool:
+    return _env_bool("CONDUCTOR_RECOVERY_ENABLED", True)
+
+
+def conductor_llm_executor_id() -> str | None:
+    return os.getenv("CONDUCTOR_LLM_EXECUTOR_ID")
+
+
+def conductor_llm_model() -> str | None:
+    return os.getenv("CONDUCTOR_LLM_MODEL")
+
+
+def conductor_llm_protocol() -> str | None:
+    return os.getenv("CONDUCTOR_LLM_PROTOCOL")
+
+
+def conductor_llm_max_tokens() -> int | None:
+    raw = os.getenv("CONDUCTOR_LLM_MAX_TOKENS")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def conductor_llm_timeout() -> float | None:
+    raw = os.getenv("CONDUCTOR_LLM_TIMEOUT")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def embedding_provider_type() -> str | None:
+    return os.getenv("EMBEDDING_PROVIDER_TYPE")
+
+
+def embedding_model() -> str | None:
+    return os.getenv("EMBEDDING_MODEL")
+
+
+def embedding_api_endpoint() -> str | None:
+    return os.getenv("EMBEDDING_API_ENDPOINT")
+
+
+def embedding_api_key() -> str | None:
+    return os.getenv("EMBEDDING_API_KEY")
+
+
+def embedding_disabled() -> bool:
+    return _env_bool("EMBEDDING_DISABLED", False)
+
+
+def embedding_timeout_s() -> float:
+    return _env_float("EMBEDDING_TIMEOUT_S", 30.0)
+
+
+def event_bus_buffer_size() -> int:
+    return _env_int("EVENT_BUS_BUFFER_SIZE", 1024)
+
+
+def process_idle_timeout() -> float:
+    return _env_float("PROCESS_IDLE_TIMEOUT", 1800.0)
+
+
+def process_max_timeout() -> float:
+    return _env_float("PROCESS_MAX_TIMEOUT", 14400.0)
+
+
+def qa_execute_commands() -> bool:
+    return _env_bool("QA_EXECUTE_COMMANDS", True)
+
+
+def qa_command_timeout_s() -> float:
+    return _env_float("QA_COMMAND_TIMEOUT_S", 120.0)
+
+
+def qa_total_budget_s() -> float:
+    return _env_float("QA_TOTAL_BUDGET_S", 300.0)
+
+
+def audit_log_max_queue() -> int:
+    return _env_int("AUDIT_LOG_MAX_QUEUE", 4096)
