@@ -69,35 +69,15 @@ logger = logging.getLogger(__name__)
 # --- Custom Exception Classes ---
 
 
-class APIError(Exception):
-    """Base API error with status_code and message."""
-
-    def __init__(self, status_code: int, message: str, detail: str | None = None):
-        self.status_code = status_code
-        self.message = message
-        self.detail = detail or message
-
-
-class NotFoundError(APIError):
-    def __init__(self, resource: str, identifier: str):
-        super().__init__(404, f"{resource} '{identifier}' not found")
-
-
-class ValidationError(APIError):
-    def __init__(self, message: str, field: str | None = None):
-        detail = f"Validation error: {message}" if field else message
-        super().__init__(400, message, detail)
-
-
-class ConflictError(APIError):
-    def __init__(self, message: str):
-        super().__init__(409, message)
-
-
-class RateLimitError(APIError):
-    def __init__(self, message: str, retry_after: int = 60):
-        super().__init__(429, message)
-        self.retry_after = retry_after
+# Typed error hierarchy lives in app.interfaces.common so future router
+# modules can raise the same exceptions without importing api.py.
+from app.interfaces.common import (  # noqa: E402
+    APIError,  # noqa: F401
+    ConflictError,  # noqa: F401
+    NotFoundError,  # noqa: F401
+    RateLimitError,  # noqa: F401
+    ValidationError,  # noqa: F401
+)
 
 
 class ProjectConductorAskRequest(BaseModel):

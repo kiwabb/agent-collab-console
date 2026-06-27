@@ -29,6 +29,10 @@ from app.application.conductor_policy import render_issue_orchestration_policy_b
 from app.application.conductor_tools import build_conductor_tools
 from app.application.conductor_lease import get_conductor_lease_owner, get_conductor_lease_ttl_s
 from app.application.conductor_pause_registry import ConductorPauseRegistry
+from app.application.conductor_state_machine import (
+    LEGAL_TRANSITIONS,
+    TERMINAL_PHASES,
+)
 from app.application.conductor_policy import (
     ConductorPolicyDecision,
     decide_conductor_policy,
@@ -193,45 +197,10 @@ _TRACEBACK_LIMIT = 8_000
 # `conductor_heartbeat_degraded` event (GAP A): the pulse keeps retrying, but a
 # sustained failure means the lease is at risk of expiring, so make it visible.
 HEARTBEAT_DEGRADED_ALERT_AFTER = 3
-# Terminal phases: once a conductor reaches one of these its run is over.
-# A transition *out* of a terminal phase is a resurrection bug and is blocked
-# (GAP C) rather than silently reviving a finished run.
-_TERMINAL_PHASES: frozenset[str] = frozenset({"done", "failed", "stalled"})
-LEGAL_TRANSITIONS: dict[str, set[str]] = {
-    "awaiting_llm": {
-        "streaming_llm",
-        "dispatching_subagent",
-        "awaiting_user_clarification",
-        "paused",
-        "done",
-        "failed",
-        "stalled",
-    },
-    "streaming_llm": {
-        "dispatching_subagent",
-        "awaiting_user_clarification",
-        "paused",
-        "done",
-        "failed",
-        "stalled",
-    },
-    "dispatching_subagent": {"awaiting_subagent", "awaiting_llm", "paused", "failed", "stalled"},
-    "awaiting_subagent": {"awaiting_llm", "paused", "failed", "stalled"},
-    "awaiting_user_clarification": {"awaiting_llm", "paused", "failed", "stalled"},
-    "paused": {
-        "awaiting_llm",
-        "streaming_llm",
-        "dispatching_subagent",
-        "awaiting_subagent",
-        "awaiting_user_clarification",
-        "done",
-        "failed",
-        "stalled",
-    },
-    "done": set(),
-    "failed": set(),
-    "stalled": set(),
-}
+# LEGAL_TRANSITIONS and TERMINAL_PHASES now live in
+# `app.application.conductor_state_machine` so the table and its predicates
+# are testable in isolation. Re-exported via the import above for callers
+# that still pull the names from this module (e.g. test_conductor_state_machine).
 
 
 @dataclass
@@ -1369,7 +1338,7 @@ async def transition_conductor_phase(
     # would resurrect a finished conductor into active work — corrupt state that
     # we must not apply. Block it (keep the run terminal) and surface it. Other
     # illegal transitions keep the historical warn-and-apply behaviour below.
-    if not is_legal and current_phase in _TERMINAL_PHASES:
+    if not is_legal and current_phase in TERMINAL_PHASES:
         logging.getLogger(__name__).error(
             "Blocked illegal resurrection of terminal conductor for issue %s: %s -> %s",
             issue_id,
