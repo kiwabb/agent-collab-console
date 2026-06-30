@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/ccgui/frontend/directory-structure.md", "reason": "module organization + file layout 规约, 决定 lib/api/<domain>.ts 与 lib/types/<domain>.ts 的目录结构"}
+{"file": ".trellis/spec/ccgui/frontend/type-safety.md", "reason": "domain types / no-any / 类型端到端规约, 拆 types.ts 时保持类型契约不变"}
+{"file": ".trellis/spec/ccgui/frontend/quality-guidelines.md", "reason": "forbidden/required patterns + no drive-by + review checklist"}
+{"file": "REFACTORING_PLAN.md", "reason": "§4.2/§4.3 lib/api.ts 与 lib/types.ts 拆分的详细方案 + 验收"}
