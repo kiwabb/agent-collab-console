@@ -11,7 +11,9 @@ function readSource(relativePath: string): string {
 
 test("useExecutionProcesses uses global websocket resume instead of EventSource", () => {
   const source = readSource("hooks/useExecutionProcesses.ts");
-  const apiSource = readSource("lib/api.ts");
+  // Phase 4: api.ts split by domain — global events url builder + last_event_id
+  // live in api/health.ts.
+  const apiSource = readSource("lib/api/health.ts");
 
   assert.match(source, /getGlobalEventsStreamUrl/);
   assert.match(source, /LAST_EVENT_ID_KEY/);
@@ -33,7 +35,8 @@ test("execution process context exposes resume gap state", () => {
 });
 
 test("api exports a global events websocket url builder", () => {
-  const source = readSource("lib/api.ts");
+  // Phase 4: api.ts split by domain — getGlobalEventsStreamUrl lives in api/health.ts.
+  const source = readSource("lib/api/health.ts");
 
   assert.match(source, /export function getGlobalEventsStreamUrl/);
   assert.match(source, /\/api\/ws\/events/);

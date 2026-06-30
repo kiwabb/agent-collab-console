@@ -72,10 +72,7 @@ export async function handleResponse<T>(response: Response): Promise<T> {
     let errorMessage = `HTTP ${response.status}`;
     try {
       const err = await response.json();
-      errorMessage = formatApiErrorDetail(
-        (err as { detail?: unknown }).detail,
-        errorMessage,
-      );
+      errorMessage = formatApiErrorDetail((err as { detail?: unknown }).detail, errorMessage);
     } catch {
       // If JSON parsing fails, try reading as text
       try {

@@ -41,7 +41,8 @@ test("knowledge components read i18n keys", () => {
 });
 
 test("api.ts exposes knowledge surface", () => {
-  const api = readSource("lib/api.ts");
+  // Phase 4: api.ts split by domain — knowledge wrappers live in api/knowledge.ts.
+  const api = readSource("lib/api/knowledge.ts");
   assert.match(api, /export async function searchKnowledge\b/);
   assert.match(api, /export async function getSimilarIssues\b/);
   assert.match(api, /export async function getTeamNotes\b/);
