@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 34
-- **Last Active**: 2026-06-28
+- **Total Sessions**: 35
+- **Last Active**: 2026-06-30
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1192 | Active |
+| `journal-1.md` | ~1227 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 35 | 2026-06-30 | frontend lib split by domain (types.ts + api.ts) | `9ed91fcc`, `61c12cdd` | `main` |
 | 34 | 2026-06-28 | refactor: align backend + frontend to industry-standard conventions | `b2ffecee`, `4ba1697d`, `99305418`, `f4ec0af1`, `bfd1beab`, `7de9614f`, `29ed904a`, `a3aa5529`, `8c3d23a8`, `19747d79` | `main` |
 | 33 | 2026-06-27 | refactor: align backend + frontend to industry-standard conventions | `b2ffecee`, `4ba1697d`, `99305418`, `f4ec0af1`, `bfd1beab`, `7de9614f` | `main` |
 | 32 | 2026-06-09 | Schedule self-improvement proposal activation | `a686186` | `codex/archive-self-improvement-proposal-scheduler` |

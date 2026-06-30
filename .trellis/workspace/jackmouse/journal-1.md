@@ -1190,3 +1190,38 @@ Ten-commit refactor of agent-collab-console (06-27-refactor-backend-frontend-to-
 ### Next Steps
 
 - None - task complete
+
+
+## Session 35: frontend lib split by domain (types.ts + api.ts)
+
+**Date**: 2026-06-30
+**Task**: frontend lib split by domain (types.ts + api.ts)
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Continue 06-27 refactor Phase 4: split the two largest frontend lib files by resource domain, zero behavior change, pure mechanical move. (1) lib/types.ts 999->18 lines: 97 interface/type exports moved to 11 per-domain files (common/session/projects/prototypes/issues/tasks/benchmarks/runtime/agents/workflow/skills); types.ts becomes export-* aggregator; two explicit cross-domain imports (GitMergeStatus, CodexTask), no circular. (2) lib/api.ts 2061->21 lines: 164 wrapper functions + 34 inline response types moved to 15 per-domain files (health/workspaces/projects/stats/benchmarks/audit/issues/tasks/runtime/approvals/agents/conductors/knowledge/skills/prototypes); api.ts becomes export-* aggregator over those + the existing fetch.ts helpers. Export parity verified: all 198 original exported names reachable via aggregator; each domain file imports only ./fetch + ../types. 3 source-reading tests repointed to new per-domain files (knowledgeI18n->api/knowledge, executionProcessesTransport->api/health, conductorLogPanelStreaming->api/conductors with layout-agnostic union assertion). All 68 'from @/lib/api' + every 'from @/lib/types' call site unchanged. Verified: tsc 0 non-WIP errors, npm test 278/279 (1 fail = pre-existing WIP projectsPageMotion), lint clean, prettier clean. File-domain isolated from WIP 06-27-audit-* (backend audit refactor in another window) throughout. Deferred: large component hook extraction (SkillsLibraryPage 1412 / ConductorLogPanel 992 / InboxDashboard 984); call-site deep-import migration; backend api.py 184-route split; mypy 481-baseline burn-down.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9ed91fcc` | (see git log) |
+| `61c12cdd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
