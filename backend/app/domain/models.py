@@ -108,6 +108,30 @@ class Project(BaseModel):
     updated_at: datetime | None = None
 
 
+class Prototype(BaseModel):
+    """A low-risk prototype artifact and its current generated version pointer."""
+
+    id: str
+    project_id: str
+    title: str
+    framework: str
+    current_version: int
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class PrototypeVersion(BaseModel):
+    """A stored HTML iteration of a prototype."""
+
+    id: str
+    prototype_id: str
+    version_no: int
+    instruction: str
+    html: str
+    disk_path: str | None = None
+    created_at: datetime | None = None
+
+
 class Skill(BaseModel):
     """A reusable skill reference: pointer to an externally hosted markdown
     playbook (frontmatter + body) that an agent could later be configured to use.
