@@ -1,10 +1,11 @@
-import { WorkbenchShell } from "@/features/workbench/WorkbenchShell";
-import { InboxDashboard } from "@/features/inbox/InboxDashboard";
+import WorkbenchPage from "@/features/workbench/WorkbenchPage";
+import { HelloWorld } from "@/components/HelloWorld";
 
 export default function Home() {
   return (
-    <WorkbenchShell breadcrumbs={[{ label: "Inbox" }]}>
-      <InboxDashboard />
-    </WorkbenchShell>
+    <>
+      <HelloWorld />
+      <WorkbenchPage />
+    </>
   );
 }
