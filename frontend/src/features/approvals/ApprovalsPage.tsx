@@ -22,17 +22,9 @@ import {
 import type { Approval, CodexIssue, CodexTask } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  EmptyStateAction,
-  InteractionEmptyState,
-} from "@/components/ui/interaction-empty-state";
-import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useToast } from "@/components/ui/toast";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
-import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
-import { PageFrame } from "@/features/workbench/components/PageFrame";
-import { useI18n } from "@/providers/I18nProvider";
 
 const CLARIFY_PREFIX = "[CLARIFY] ";
 
@@ -47,7 +39,6 @@ interface RowAction {
 export function ApprovalsPage() {
   const router = useRouter();
   const { addToast } = useToast();
-  const { t } = useI18n();
   const [issues, setIssues] = useState<CodexIssue[]>([]);
   const [tasks, setTasks] = useState<CodexTask[]>([]);
   const [tools, setTools] = useState<Approval[]>([]);
@@ -72,7 +63,7 @@ export function ApprovalsPage() {
       } catch (err) {
         addToast({
           type: "error",
-          title: t("approvals.toast.loadFailed"),
+          title: "Failed to load approvals",
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
@@ -80,34 +71,14 @@ export function ApprovalsPage() {
         setRefreshing(false);
       }
     },
-    [addToast, t],
+    [addToast],
   );
 
   useEffect(() => {
     void load("initial");
-    // Fallback poll, lengthened now that events do most of the heavy lifting.
-    const id = window.setInterval(() => void load("refresh"), 30000);
+    const id = window.setInterval(() => void load("refresh"), 8000);
     return () => window.clearInterval(id);
   }, [load]);
-
-  // Event-driven refresh. Approvals page has no workspace scope, so
-  // ExecutionProcessesProvider now consumes the global WS event stream
-  // (/api/ws/events) which surfaces every event_bus event. Refetch whenever
-  // anything that could land in our inbox happens.
-  useBusEventEffect({
-    match: busEventMatchers.typeIn(
-      "task_status",
-      "task_created",
-      "approval_required",
-      "approval_resolved",
-      "issue_updated",
-      "issue_created",
-      "issue_merged",
-      "issue_abandoned",
-    ),
-    onEvent: () => { void load("refresh"); },
-    throttleMs: 800,
-  });
 
   const issueApprovals = useMemo(
     () =>
@@ -165,33 +136,33 @@ export function ApprovalsPage() {
         await reviewCodexTask(task.id, decision, null);
         addToast({
           type: "success",
-          title: decision === "approve" ? t("approvals.toast.approved") : t("approvals.toast.sentBack"),
+          title: decision === "approve" ? "Approved" : "Sent back for rework",
         });
         await load("refresh");
       } catch (err) {
         addToast({
           type: "error",
-          title: t("approvals.toast.reviewFailed"),
+          title: "Review failed",
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setBusyId(null);
       }
     },
-    [addToast, load, t],
+    [addToast, load],
   );
 
   const handleAnswerQuestion = useCallback(
     async (task: CodexTask, answer: string) => {
       const trimmed = answer.trim();
       if (!trimmed) {
-        addToast({ type: "error", title: t("approvals.toast.answerEmpty") });
+        addToast({ type: "error", title: "Answer cannot be empty" });
         return;
       }
       setBusyId(task.id);
       try {
         await answerCodexTaskClarification(task.id, trimmed);
-        addToast({ type: "success", title: t("approvals.toast.answerSent") });
+        addToast({ type: "success", title: "Answer sent — agent re-dispatched" });
         // D2: hop back to the issue so the user can watch the agent
         // re-run with their answer threaded in, instead of staying on
         // the approvals inbox.
@@ -206,14 +177,14 @@ export function ApprovalsPage() {
       } catch (err) {
         addToast({
           type: "error",
-          title: t("approvals.toast.answerFailed"),
+          title: "Failed to send answer",
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setBusyId(null);
       }
     },
-    [addToast, load, router, t],
+    [addToast, load, router],
   );
 
   const handleResolveTool = useCallback(
@@ -223,94 +194,101 @@ export function ApprovalsPage() {
         await resolveApproval(approval.id, decision, null);
         addToast({
           type: "success",
-          title: decision === "accept" ? t("approvals.toast.approved") : t("approvals.toast.declined"),
+          title: decision === "accept" ? "Approved" : "Declined",
         });
         await load("refresh");
       } catch (err) {
         addToast({
           type: "error",
-          title: t("approvals.toast.resolveFailed"),
+          title: "Resolve failed",
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setBusyId(null);
       }
     },
-    [addToast, load, t],
+    [addToast, load],
   );
 
   return (
-    <PageFrame
-      eyebrow={t("approvals.eyebrow")}
-      title={t("approvals.title")}
-      description={t("approvals.description")}
-      actions={(
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={refreshing}
-          data-density={refreshing ? "approvals-refresh-tool" : "approvals-refresh"}
-          className={cn(refreshing && "motion-essential")}
-          onClick={() => void load("refresh")}
-        >
-          {refreshing ? (
-            <AgentThinkingIndicator phase="tool" size={12} />
-          ) : (
-            <RefreshCw size={12} />
-          )}
-          {t("approvals.refresh")}
-        </Button>
-      )}
-      contentClassName="space-y-5"
-    >
-      <div className="space-y-5">
-        <div className="enterprise-card flex items-center gap-1 overflow-x-auto rounded-2xl px-2">
+    <div className="min-h-full">
+      <div className="relative overflow-hidden border-b border-border-subtle">
+        <div
+          aria-hidden
+          className="absolute inset-0 opacity-[0.35] pointer-events-none"
+          style={{
+            background:
+              "radial-gradient(900px 300px at 12% -10%, rgba(96,165,250,0.25), transparent 60%), radial-gradient(700px 240px at 90% -10%, rgba(230,149,82,0.18), transparent 60%)",
+          }}
+        />
+        <div className="relative px-8 pt-7 pb-6 max-w-[1280px] mx-auto">
+          <div className="flex items-center gap-3 mb-2">
+            <span className="size-9 rounded-xl bg-gradient-to-br from-info to-info/60 flex items-center justify-center shadow-lg shadow-info/30">
+              <ShieldCheck size={18} className="text-black" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-2xl font-bold tracking-tight">Approvals</h1>
+              <p className="text-[12px] text-text-muted">
+                Review the things waiting on you across every project.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={refreshing}
+              onClick={() => void load("refresh")}
+            >
+              <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
+              Refresh
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-8 py-6 max-w-[1280px] mx-auto space-y-5">
+        <div className="flex items-center gap-1 border-b border-border-subtle">
           <TabBtn active={tab === "all"} onClick={() => setTab("all")}>
-            {t("approvals.tab.all")} <Pill>{total}</Pill>
+            All <Pill>{total}</Pill>
           </TabBtn>
           <TabBtn active={tab === "issues"} onClick={() => setTab("issues")}>
-            {t("approvals.tab.issues")} <Pill>{totals.issues}</Pill>
+            Issues <Pill>{totals.issues}</Pill>
           </TabBtn>
           <TabBtn active={tab === "reviews"} onClick={() => setTab("reviews")}>
-            {t("approvals.tab.reviews")} <Pill>{totals.reviews}</Pill>
+            Task reviews <Pill>{totals.reviews}</Pill>
           </TabBtn>
           <TabBtn active={tab === "questions"} onClick={() => setTab("questions")}>
-            {t("approvals.tab.questions")} <Pill>{totals.questions}</Pill>
+            Agent questions <Pill>{totals.questions}</Pill>
           </TabBtn>
           <TabBtn active={tab === "qa_passed"} onClick={() => setTab("qa_passed")}>
-            {t("approvals.tab.qaPassed")} <Pill>{totals.qa_passed}</Pill>
+            QA passed <Pill>{totals.qa_passed}</Pill>
           </TabBtn>
           <TabBtn active={tab === "tools"} onClick={() => setTab("tools")}>
-            {t("approvals.tab.tools")} <Pill>{totals.tools}</Pill>
+            Tool calls <Pill>{totals.tools}</Pill>
           </TabBtn>
         </div>
 
         {loading ? (
-          <InteractionEmptyState
-            tone="loading"
-            title={t("approvals.loadingTitle")}
-            description={t("approvals.loadingDescription")}
-          />
+          <div className="py-16 text-center text-sm text-text-muted">Loading…</div>
         ) : total === 0 ? (
-          <InteractionEmptyState
-            title={t("approvals.emptyTitle")}
-            description={t("approvals.emptyDescription")}
-            action={
-              <EmptyStateAction onClick={() => router.push("/")}>
-                {t("approvals.openInbox")}
-              </EmptyStateAction>
-            }
-          />
+          <div className="py-20 text-center">
+            <div className="inline-flex size-12 rounded-full bg-success/10 items-center justify-center mb-3">
+              <CheckCircle2 size={20} className="text-success" />
+            </div>
+            <h2 className="text-base font-semibold">Inbox zero</h2>
+            <p className="text-sm text-text-muted mt-1">
+              Nothing is waiting on a human right now.
+            </p>
+          </div>
         ) : (
           <div className="space-y-6">
             {visible.length > 0 && (
-              <Section title={t("approvals.section.issues")} count={visible.length}>
-                <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
+              <Section title="Issues awaiting approval" count={visible.length}>
+                <ul className="divide-y divide-border-subtle rounded-xl border border-border-subtle overflow-hidden">
                   {visible.map((issue) => (
                     <RowCard
                       key={issue.id}
                       title={issue.title || issue.id.slice(0, 8)}
-                      subtitle={t("approvals.issueSubtitle", { phase: issue.current_phase ?? "—" })}
+                      subtitle={`Issue · phase ${issue.current_phase ?? "—"}`}
                       kindLabel={(issue.status ?? "—").replace(/_/g, " ")}
                       kind={inferStatusKind(issue.status)}
                       meta={
@@ -331,17 +309,17 @@ export function ApprovalsPage() {
             )}
 
             {visibleQuestions.length > 0 && (
-              <Section title={t("approvals.section.questions")} count={visibleQuestions.length}>
+              <Section title="Agent questions awaiting your answer" count={visibleQuestions.length}>
                 <ul className="space-y-2">
                   {visibleQuestions.map((task) => {
                     const question = (task.review_comment || "").slice(CLARIFY_PREFIX.length);
                     return (
                       <li
                         key={task.id}
-                        className="enterprise-card rounded-2xl border-brand/40 bg-brand/5 p-4"
+                        className="rounded-xl border border-brand/40 bg-brand/5 p-4"
                       >
                         <div className="flex items-baseline gap-2">
-                          <StatusBadge kind="awaiting" label={t("approvals.agentAsks", { role: task.role ?? "agent" })} />
+                          <StatusBadge kind="awaiting" label={`${task.role ?? "agent"} asks`} />
                           <span className="text-[13px] font-semibold truncate flex-1">
                             {task.title || task.id.slice(0, 8)}
                           </span>
@@ -351,7 +329,7 @@ export function ApprovalsPage() {
                               onClick={() => router.push(`/issues/${task.issue_id}?tab=tasks&taskId=${task.id}`)}
                               className="text-[11px] text-brand hover:underline"
                             >
-                              {t("approvals.openTask")}
+                              open task →
                             </button>
                           )}
                         </div>
@@ -370,14 +348,14 @@ export function ApprovalsPage() {
             )}
 
             {visibleReviews.length > 0 && (
-              <Section title={t("approvals.section.reviews")} count={visibleReviews.length}>
-                <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
+              <Section title="Tasks awaiting review" count={visibleReviews.length}>
+                <ul className="divide-y divide-border-subtle rounded-xl border border-border-subtle overflow-hidden">
                   {visibleReviews.map((task) => (
                     <RowCard
                       key={task.id}
                       title={task.title || task.id.slice(0, 8)}
-                      subtitle={t("approvals.taskSubtitle", { role: task.role ?? "general", executor: task.executor ?? "—" })}
-                      kindLabel={t("approvals.kindAwaitingReview")}
+                      subtitle={`Task · ${task.role ?? "general"} · ${task.executor ?? "—"}`}
+                      kindLabel="awaiting review"
                       kind="awaiting"
                       busy={busyId === task.id}
                       action={{
@@ -394,13 +372,13 @@ export function ApprovalsPage() {
             )}
 
             {visibleQaPassed.length > 0 && (
-              <Section title={t("approvals.section.qaPassed")} count={visibleQaPassed.length}>
-                <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
+              <Section title="QA passed" count={visibleQaPassed.length}>
+                <ul className="divide-y divide-border-subtle rounded-xl border border-border-subtle overflow-hidden">
                   {visibleQaPassed.map((issue) => (
                     <RowCard
                       key={issue.id}
                       title={issue.title || issue.id.slice(0, 8)}
-                      subtitle={t("approvals.issueSubtitle", { phase: issue.current_phase ?? "—" })}
+                      subtitle={`Issue · phase ${issue.current_phase ?? "—"}`}
                       kindLabel={(issue.status ?? "—").replace(/_/g, " ")}
                       kind={inferStatusKind(issue.status)}
                       meta={
@@ -421,18 +399,18 @@ export function ApprovalsPage() {
             )}
 
             {visibleTools.length > 0 && (
-              <Section title={t("approvals.section.tools")} count={visibleTools.length}>
-                <ul className="enterprise-panel divide-y divide-border-subtle rounded-2xl overflow-hidden">
+              <Section title="Tool calls awaiting permission" count={visibleTools.length}>
+                <ul className="divide-y divide-border-subtle rounded-xl border border-border-subtle overflow-hidden">
                   {visibleTools.map((approval) => (
                     <RowCard
                       key={approval.id}
-                      title={approval.action || t("approvals.toolActionFallback")}
-                      subtitle={t("approvals.toolSubtitle", { session: approval.session_id.slice(0, 8) })}
-                      kindLabel={t("approvals.kindNeedsPermission")}
+                      title={approval.action || "Tool action"}
+                      subtitle={`Codex · session ${approval.session_id.slice(0, 8)}`}
+                      kindLabel="needs permission"
                       kind="awaiting"
                       meta={
                         <span className="font-mono text-[11px] text-text-muted">
-                          {t("approvals.toolMeta", { task: approval.task_id.slice(0, 8) })}
+                          task {approval.task_id.slice(0, 8)}
                         </span>
                       }
                       busy={busyId === approval.id}
@@ -449,7 +427,7 @@ export function ApprovalsPage() {
           </div>
         )}
       </div>
-    </PageFrame>
+    </div>
   );
 }
 
@@ -525,8 +503,6 @@ function RowCard({
   busy: boolean;
   action: RowAction;
 }) {
-  const { t } = useI18n();
-
   return (
     <li className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3 items-center hover:bg-surface-hover transition-colors">
       <div className="min-w-0">
@@ -545,15 +521,10 @@ function RowCard({
             size="sm"
             disabled={busy}
             onClick={() => void action.approve!()}
-            data-density={busy ? "approvals-row-approve-tool" : "approvals-row-approve"}
-            className={cn("bg-success text-black hover:bg-success/90", busy && "motion-essential")}
+            className="bg-success text-black hover:bg-success/90"
           >
-            {busy ? (
-              <AgentThinkingIndicator phase="tool" size={12} />
-            ) : (
-              <CheckCircle2 size={12} />
-            )}
-            <span className="ml-1">{t("approvals.approve")}</span>
+            {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+            <span className="ml-1">Approve</span>
           </Button>
         )}
         {action.reject && (
@@ -562,20 +533,14 @@ function RowCard({
             disabled={busy}
             variant="outline"
             onClick={() => void action.reject!()}
-            data-density={busy ? "approvals-row-reject-tool" : "approvals-row-reject"}
-            className={cn(busy && "motion-essential")}
           >
-            {busy ? (
-              <AgentThinkingIndicator phase="tool" size={12} />
-            ) : (
-              <XCircle size={12} />
-            )}
-            <span className="ml-1">{t("approvals.reject")}</span>
+            <XCircle size={12} />
+            <span className="ml-1">Reject</span>
           </Button>
         )}
         {action.open && (
           <Button size="sm" variant="ghost" onClick={action.open}>
-            {t("approvals.open")}
+            Open
           </Button>
         )}
       </div>
@@ -590,7 +555,6 @@ function AnswerInline({
   disabled: boolean;
   onSubmit: (answer: string) => void;
 }) {
-  const { t } = useI18n();
   const [draft, setDraft] = useState("");
   return (
     <form
@@ -605,7 +569,7 @@ function AnswerInline({
       <Input
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder={t("approvals.answerPlaceholder")}
+        placeholder="Type your answer and press enter…"
         className="bg-surface-input border-border-subtle h-9 text-[13px]"
         disabled={disabled}
         autoFocus={false}
@@ -614,14 +578,9 @@ function AnswerInline({
         type="submit"
         size="sm"
         disabled={disabled || !draft.trim()}
-        data-density={disabled ? "approvals-answer-thinking" : "approvals-answer"}
-        className={cn("bg-brand hover:bg-brand-strong text-black font-semibold", disabled && "motion-essential")}
+        className="bg-brand hover:bg-brand-strong text-black font-semibold"
       >
-        {disabled ? (
-          <AgentThinkingIndicator phase="thinking" size={12} />
-        ) : (
-          t("approvals.sendAnswer")
-        )}
+        {disabled ? <Loader2 size={12} className="animate-spin" /> : "Send answer"}
       </Button>
     </form>
   );

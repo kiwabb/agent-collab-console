@@ -23,8 +23,6 @@ test("filterQaPassedIssues returns only issues with status awaiting_review", () 
       git_worktree_path: null,
       git_merge_status: "open",
       git_last_commit_sha: "abc123",
-      created_at: null,
-      updated_at: null,
     },
     {
       id: "issue-2",
@@ -39,8 +37,6 @@ test("filterQaPassedIssues returns only issues with status awaiting_review", () 
       git_worktree_path: null,
       git_merge_status: "open",
       git_last_commit_sha: "def456",
-      created_at: null,
-      updated_at: null,
     },
     {
       id: "issue-3",
@@ -55,8 +51,6 @@ test("filterQaPassedIssues returns only issues with status awaiting_review", () 
       git_worktree_path: null,
       git_merge_status: "open",
       git_last_commit_sha: null,
-      created_at: null,
-      updated_at: null,
     },
     {
       id: "issue-4",
@@ -71,8 +65,6 @@ test("filterQaPassedIssues returns only issues with status awaiting_review", () 
       git_worktree_path: null,
       git_merge_status: "open",
       git_last_commit_sha: "ghi789",
-      created_at: null,
-      updated_at: null,
     },
   ];
 
@@ -99,8 +91,6 @@ test("filterQaPassedIssues returns empty array when no awaiting_review issues ex
       git_worktree_path: null,
       git_merge_status: "open",
       git_last_commit_sha: null,
-      created_at: null,
-      updated_at: null,
     },
   ];
 
