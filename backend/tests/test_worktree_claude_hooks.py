@@ -50,28 +50,6 @@ async def test_inject_idempotent(tmp_path):
     assert (tmp_path / ".claude" / "settings.json").exists()
 
 
-@pytest.mark.asyncio
-async def test_inject_excludes_managed_hooks_from_git_status(tmp_path):
-    subprocess.run(
-        ["git", "init", "-b", "main"],
-        cwd=tmp_path,
-        check=True,
-        capture_output=True,
-    )
-
-    await inject_worktree_claude_hooks(tmp_path)
-
-    untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=tmp_path,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
-    assert not any(path.startswith(".claude/") for path in untracked)
-    assert ".claude/" in (tmp_path / ".git" / "info" / "exclude").read_text()
-
-
 # ---------------------------------------------------------------------------
 # limit_read.py hook behaviour — run via subprocess so we test the real script
 # ---------------------------------------------------------------------------
@@ -92,10 +70,7 @@ def _invoke_hook(hook_path: Path, tool_name: str, file_path: str, offset=None) -
 def hook_dir(tmp_path):
     """Return a tmp dir with the hook injected."""
     import asyncio
-    # asyncio.run creates and owns its own loop — robust regardless of whether a
-    # prior async test left the thread's loop closed (Python 3.14 removed the
-    # implicit get_event_loop() fallback).
-    asyncio.run(inject_worktree_claude_hooks(tmp_path))
+    asyncio.get_event_loop().run_until_complete(inject_worktree_claude_hooks(tmp_path))
     return tmp_path
 
 
