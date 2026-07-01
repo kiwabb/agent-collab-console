@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -40,7 +38,6 @@ class Approval(BaseModel):
 
 class ApprovalEvent(BaseModel):
     """Tracks individual state transitions in an approval lifecycle."""
-
     id: str
     session_id: str
     task_id: str
@@ -87,7 +84,6 @@ class Session(BaseModel):
 
 class CodexMessage(BaseModel):
     """A single message in a Codex chat session (user or assistant)."""
-
     id: str
     session_id: str
     role: str  # "user" or "assistant"
@@ -102,53 +98,14 @@ class Project(BaseModel):
     Tasks created under a project run inside per-task git worktrees branched
     off `default_branch`.
     """
-
     id: str
     name: str
     repo_path: str
     default_branch: str = "main"
     origin_url: str | None = None  # Set when project was created via `git clone`
-    setup_script: str | None = (
-        None  # Optional shell snippet run after worktree creation (e.g. `npm install`)
-    )
-    run_command: str | None = (
-        None  # Optional dev-server command run in repo_path (e.g. `npm run dev`)
-    )
+    setup_script: str | None = None  # Optional shell snippet run after worktree creation (e.g. `npm install`)
     created_at: datetime | None = None
     updated_at: datetime | None = None
-
-
-class Prototype(BaseModel):
-    """A Claude-Design-style prototype under a Project.
-
-    Holds metadata only — each generated version is a separate
-    `PrototypeVersion` row so iterations (v1→v2→…) are reproducible.
-    """
-
-    id: str
-    project_id: str
-    title: str
-    framework: str = "html"  # reserved for future multi-file scaffolds
-    current_version: int = 0
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
-class PrototypeVersion(BaseModel):
-    """A single generated HTML version of a Prototype.
-
-    `html` is stored in DB so the UI can hydrate the iframe preview without
-    re-reading disk; `disk_path` records the on-disk mirror for downstream
-    tooling (e.g. external prototype indexing).
-    """
-
-    id: str
-    prototype_id: str
-    version_no: int
-    instruction: str | None = None  # user brief for v1, refinement text for vN+1
-    html: str
-    disk_path: str | None = None
-    created_at: datetime | None = None
 
 
 class Skill(BaseModel):
@@ -157,7 +114,6 @@ class Skill(BaseModel):
     Body is intentionally NOT persisted — the right-side preview fetches `link`
     on demand via the backend proxy.
     """
-
     id: str
     name: str
     link: str
@@ -170,7 +126,6 @@ class Skill(BaseModel):
 
 class GitBranch(BaseModel):
     """A branch listing entry surfaced by the branches API."""
-
     name: str
     is_current: bool = False
     is_remote: bool = False
@@ -185,13 +140,10 @@ class CodexSession(BaseModel):
     Each user message triggers one isolated `codex exec --json <prompt>` job.
     The session does not own a persistent process between turns.
     """
-
     id: str
     title: str
     cwd: str
-    project_id: str | None = (
-        None  # Required for new sessions; nullable for back-compat with legacy rows
-    )
+    project_id: str | None = None  # Required for new sessions; nullable for back-compat with legacy rows
     # Status is request-oriented (not process-oriented):
     # "idle" = ready for input, "responding" = turn in progress,
     # "done" = turn completed, "failed" = turn errored
@@ -200,9 +152,7 @@ class CodexSession(BaseModel):
     last_active_at: datetime | None = None
     log_path: str | None = None
     thread_id: str | None = None  # Codex app-server thread id, used for Codex resume
-    claude_thread_id: str | None = (
-        None  # Claude session id, stored separately to avoid cross-executor pollution
-    )
+    claude_thread_id: str | None = None  # Claude session id, stored separately to avoid cross-executor pollution
     settings: dict[str, bool] = Field(default_factory=lambda: {"plan_first_pm": True})
     messages: list[CodexMessage] = []  # Persisted chat history
 
@@ -259,7 +209,6 @@ class CodexTask(BaseModel):
     The task owns its prompt, execution status, result, and resumable
     conversation metadata for follow-up runs.
     """
-
     id: str
     session_id: str  # The workspace this task belongs to
     project_id: str | None = None  # Git project this task runs against (None only for legacy rows)
@@ -268,26 +217,22 @@ class CodexTask(BaseModel):
     title: str
     prompt: str
     role: str = "general"
-    executor: str = "codex"  # "codex" or "claude"
+    executor: str = "codex" # "codex" or "claude"
     provider: str | None = None  # Provider override (e.g., "anthropic", "openai")
-    model: str | None = None  # Model override (e.g., "claude-sonnet-4-6", "gpt-4o")
+    model: str | None = None     # Model override (e.g., "claude-sonnet-4-6", "gpt-4o")
     status: str = "pending"
     result: str | None = None
     result_json: str | None = None
     parent_task_id: str | None = None  # Task this was continued from, if any
     task_kind: str = "normal"
     blocked_by_help_id: str | None = None
-    workspace_path: str | None = (
-        None  # Dedicated workspace directory for this task (legacy ephemeral path)
-    )
+    workspace_path: str | None = None  # Dedicated workspace directory for this task (legacy ephemeral path)
     git_branch: str | None = None  # Per-task branch name (e.g. task/abc12345-add-foo)
     git_base_branch: str | None = None  # Branch this task was forked from
     git_worktree_path: str | None = None  # Absolute path to this task's git worktree (executor cwd)
     git_merge_status: str = "open"  # "open" | "merged" | "abandoned"
     git_last_commit_sha: str | None = None  # HEAD sha at the worktree, recorded on merge
-    resume_session_id: str | None = (
-        None  # Agent-native conversation/thread id for follow-up (passed to agent)
-    )
+    resume_session_id: str | None = None  # Agent-native conversation/thread id for follow-up (passed to agent)
     resume_message_id: str | None = None  # Optional last assistant message id for targeted resume
     last_execution_process_id: str | None = None  # FK → ExecutionProcess.id of most recent run
     sequence_index: int | None = None  # Position in development task sequence (0-based)
@@ -332,7 +277,6 @@ class CodexTaskMessage(BaseModel):
     These are stored separately from session-level CodexMessages because
     they belong to a specific task workspace and can trigger follow-up runs.
     """
-
     id: str
     task_id: str
     execution_process_id: str | None = None
@@ -345,7 +289,6 @@ class CodexTaskMessage(BaseModel):
 
 class LogEvent(BaseModel):
     """A single log line from a Codex session or task run (raw JSONL for debugging)."""
-
     id: str
     session_id: str
     stream: str = "stdout"  # "stdout" or "stderr"
@@ -365,7 +308,6 @@ class ExecutionProcess(BaseModel):
     ExecutionProcess is the primary live runtime entity for streaming state,
     logs, messages, approvals, and lifecycle updates.
     """
-
     id: str
     task_id: str
     session_id: str
@@ -373,7 +315,7 @@ class ExecutionProcess(BaseModel):
     exit_code: int | None = None
     executor: str | None = None  # Resolved executor at run time
     provider: str | None = None  # Resolved provider at run time
-    model: str | None = None  # Resolved model at run time
+    model: str | None = None     # Resolved model at run time
     input_tokens: int | None = None
     output_tokens: int | None = None
     cache_read_tokens: int | None = None
@@ -417,10 +359,8 @@ class HelpRequest(BaseModel):
 
 # --- Runtime Catalog Models ---
 
-
 class RuntimeModelConfig(BaseModel):
     """Configuration for a single model within a provider."""
-
     id: str  # Unique ID within the catalog (e.g., "claude-sonnet-4-6")
     label: str  # Human-readable label (e.g., "Claude Sonnet 4.6")
     enabled: bool = True
@@ -435,7 +375,6 @@ class RuntimeModelConfig(BaseModel):
 
 class RuntimeProviderConfig(BaseModel):
     """Configuration for a provider that belongs to an executor."""
-
     id: str  # Unique ID within the catalog (e.g., "anthropic")
     label: str  # Human-readable label (e.g., "Anthropic")
     enabled: bool = True
@@ -449,7 +388,6 @@ class RuntimeProviderConfig(BaseModel):
 
 class RuntimeExecutorConfig(BaseModel):
     """Configuration for a top-level executor (e.g., codex, claude)."""
-
     id: str  # Unique ID (e.g., "codex", "claude")
     label: str  # Human-readable label
     enabled: bool = True
@@ -473,7 +411,6 @@ class ConductorLLMConfig(BaseModel):
     references a RuntimeExecutorConfig in the same catalog (whose `protocol`
     decides the wire format); `model` overrides that executor's default model.
     """
-
     executor_id: str | None = None
     model: str | None = None
     max_tokens: int = 8192
@@ -488,17 +425,14 @@ class ConductorLLMConfig(BaseModel):
 
 class RuntimeCatalog(BaseModel):
     """Global runtime catalog containing all executor/provider/model configurations."""
-
     executors: list[RuntimeExecutorConfig] = Field(default_factory=list)
     conductor_llm: ConductorLLMConfig = Field(default_factory=ConductorLLMConfig)
 
 
 # --- Template Models ---
 
-
 class IssueTemplate(BaseModel):
     """Template for creating recurring issues."""
-
     id: str
     workspace_id: str | None = None  # None = global template
     title: str
@@ -513,23 +447,13 @@ class IssueTemplate(BaseModel):
 # legacy behavior; the orchestrator/scheduler land in later PRs.
 
 NodeStatus = Literal[
-    "pending",
-    "blocked",
-    "ready",
-    "running",
-    "done",
-    "failed",
-    "skipped",
-    "needs_rework",
+    "pending", "blocked", "ready", "running",
+    "done", "failed", "skipped", "needs_rework",
 ]
 
 EdgeType = Literal[
-    "sequence",
-    "parallel-fanout",
-    "refine-loop",
-    "retry-on-fail",
-    "conditional",
-    "critique-loop",
+    "sequence", "parallel-fanout", "refine-loop",
+    "retry-on-fail", "conditional", "critique-loop",
 ]
 
 
@@ -539,7 +463,6 @@ class Agent(BaseModel):
     Replaces hardcoded role dispatch in role_workflow_service.py. Each Agent
     owns its system prompt template, input/output schema, and runtime defaults.
     """
-
     id: str
     workspace_id: str | None = None  # None = global agent
     name: str
@@ -553,9 +476,7 @@ class Agent(BaseModel):
     default_executor: str | None = None
     default_provider: str | None = None
     default_model: str | None = None
-    artifact_subdir: str | None = (
-        None  # legacy subdir (pm/architect/...) or "node_<key>" for custom
-    )
+    artifact_subdir: str | None = None  # legacy subdir (pm/architect/...) or "node_<key>" for custom
     persist_kind: str | None = None  # Hooks RoleWorkflowService.persist_result()
     agent_tier: Literal["managed", "specialist", "custom"] = "managed"
     triggers_replan_on_done: bool = False  # PM/architect set this true
@@ -567,7 +488,6 @@ class Agent(BaseModel):
 
 class WorkflowNode(BaseModel):
     """One node in a workflow graph (an agent invocation slot)."""
-
     id: str
     graph_id: str
     node_key: str  # Stable key within the graph (used by edges)
@@ -580,9 +500,7 @@ class WorkflowNode(BaseModel):
     retries: int = 0
     max_retries: int = 1
     instance_index: int = 0  # For multi-instance same-role nodes: engineer#0, engineer#1, etc.
-    batch_key: str | None = (
-        None  # Shared key for nodes dispatched together via dispatch_batch (parallel swarm fan-out); None for serial dispatches
-    )
+    batch_key: str | None = None  # Shared key for nodes dispatched together via dispatch_batch (parallel swarm fan-out); None for serial dispatches
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime | None = None
@@ -591,7 +509,6 @@ class WorkflowNode(BaseModel):
 
 class WorkflowEdge(BaseModel):
     """An edge connecting two nodes within the same graph."""
-
     id: str
     graph_id: str
     from_node_key: str
@@ -607,7 +524,6 @@ class WorkflowGraph(BaseModel):
     `dag_json` is the editable source of truth. The nodes/edges lists are
     derived/materialized views that the scheduler queries directly.
     """
-
     id: str
     issue_id: str
     preset_id: str | None = None
@@ -624,7 +540,6 @@ class WorkflowGraph(BaseModel):
 
 class WorkflowPreset(BaseModel):
     """A reusable graph template (e.g. legacy 4-phase, bug-fix, docs-only)."""
-
     id: str
     name: str
     description: str | None = None
@@ -639,7 +554,6 @@ class GraphReplanPending(BaseModel):
     Emitted by the scheduler when a node with triggers_replan_on_done/fail
     completes; suspends downstream dispatch until resolved.
     """
-
     id: str
     graph_id: str
     triggered_by_node_key: str
@@ -679,9 +593,7 @@ class ProjectConductorState:
 
 
 ConductorTaskKind = Literal["issue", "qa_question", "scheduled_review", "ad_hoc"]
-ConductorTurnKind = Literal[
-    "llm_request", "llm_response", "tool_use", "tool_result", "user_message", "error", "finalize"
-]
+ConductorTurnKind = Literal["llm_request", "llm_response", "tool_use", "tool_result", "user_message", "error", "finalize"]
 
 
 @dataclass
@@ -791,27 +703,7 @@ class SelfImprovementProposal:
     updated_at: datetime | None = None
 
 
-@dataclass
-class SelfImprovementApplicationEvent:
-    """Durable audit row for reviewed self-improvement apply/rollback attempts."""
-
-    id: str
-    proposal_id: str
-    project_id: str
-    issue_id: str
-    target_kind: str
-    action: str
-    status: str
-    path: str | None = None
-    content_sha256: str | None = None
-    result_json: str = "{}"
-    error: str | None = None
-    created_at: datetime | None = None
-
-
-AgentMessageType = Literal[
-    "handoff", "critique", "clarification", "answer", "specialist_call", "specialist_result"
-]
+AgentMessageType = Literal["handoff", "critique", "clarification", "answer", "specialist_call", "specialist_result"]
 
 
 class AgentMessage(BaseModel):
@@ -819,7 +711,6 @@ class AgentMessage(BaseModel):
 
     Persisted so the Collab Feed tab can replay the full inter-agent conversation.
     """
-
     id: str
     issue_id: str
     graph_id: str
@@ -835,7 +726,6 @@ class ConductorDecision(BaseModel):
 
     Persisted so the conductor-log endpoint can replay the full decision history.
     """
-
     id: str
     issue_id: str
     task_id: str

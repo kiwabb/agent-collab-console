@@ -7397,6 +7397,51 @@ async def codex_project_self_improvement_proposal_rollback(project_id: str, prop
     }
 
 
+def _self_improvement_proposal_to_dict(proposal) -> dict:
+    try:
+        evidence = json.loads(proposal.evidence_json or "[]")
+    except json.JSONDecodeError:
+        evidence = []
+    if not isinstance(evidence, list):
+        evidence = []
+    return {
+        "id": proposal.id,
+        "project_id": proposal.project_id,
+        "issue_id": proposal.issue_id,
+        "target_kind": proposal.target_kind,
+        "title": proposal.title,
+        "recommendation": proposal.recommendation,
+        "evidence": evidence,
+        "severity": proposal.severity,
+        "confidence": proposal.confidence,
+        "status": proposal.status,
+        "fingerprint": proposal.fingerprint,
+        "created_at": proposal.created_at.isoformat() if proposal.created_at else None,
+        "updated_at": proposal.updated_at.isoformat() if proposal.updated_at else None,
+    }
+
+
+@router.get("/codex/projects/{project_id}/self-improvement-proposals")
+async def codex_project_self_improvement_proposals(
+    project_id: str,
+    issue_id: str | None = None,
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    project = await codex_store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proposals = await codex_store.list_self_improvement_proposals(
+        project_id=project_id,
+        issue_id=issue_id,
+        status=status,
+        limit=limit,
+    )
+    return {"proposals": [_self_improvement_proposal_to_dict(proposal) for proposal in proposals]}
+
+
 @router.get("/codex/projects/{project_id}/conductor-state")
 async def codex_project_conductor_state(project_id: str):
     """Return ProjectConductor tiered-memory state for a project."""
