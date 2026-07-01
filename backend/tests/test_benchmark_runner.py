@@ -10,22 +10,23 @@ orchestration contract:
   - Honors ``--epochs``, ``--fixture-ids``, ``--is-baseline``.
   - Returns the right error on missing fixtures / executor raise.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import json
-from typing import Iterable
+from typing import Iterable  # noqa: F401, UP035
 
 import pytest
 
 from benchmark.runner import (
     BenchmarkRunner,
-    ExecutorResult,
+    ExecutorResult,  # noqa: F401
     FakeExecutor,
     RunOptions,
 )
 from benchmark.store import (
-    BenchmarkEpoch,
-    BenchmarkRun,
+    BenchmarkEpoch,  # noqa: F401
+    BenchmarkRun,  # noqa: F401
     InMemoryStore,
 )
 from benchmark.types import CommandResult, IssueArtifacts
@@ -73,8 +74,7 @@ def _mixed_results() -> dict[str, list[IssueArtifacts]]:
 
     fixtures = load_all()
     return {
-        f.id: [_fail_artifacts(f.id), _ok_artifacts(f.id), _ok_artifacts(f.id)]
-        for f in fixtures
+        f.id: [_fail_artifacts(f.id), _ok_artifacts(f.id), _ok_artifacts(f.id)] for f in fixtures
     }
 
 
@@ -171,11 +171,16 @@ async def test_run_records_cost_and_tokens():
     )
     runner = BenchmarkRunner(store, executor)
 
-    run = await runner.run(RunOptions(epochs=1, fixture_ids=[
-        "add-backend-echo-endpoint",
-        "add-backend-ping-endpoint",
-    ]))
-    # Sum = 0.30 across 2 fixtures × 1 epoch.
+    run = await runner.run(
+        RunOptions(
+            epochs=1,
+            fixture_ids=[
+                "add-backend-echo-endpoint",
+                "add-backend-ping-endpoint",
+            ],
+        )
+    )
+    # Sum = 0.30 across 2 fixtures × 1 epoch.  # noqa: RUF003
     assert run.cost_total_usd == pytest.approx(0.30)
     assert run.cost_per_issue_usd == pytest.approx(0.15)
 
@@ -209,7 +214,7 @@ async def test_run_fake_executor_sees_one_call_per_epoch():
 
     fixtures = _all_pass_results()
     await runner.run(RunOptions(epochs=2, fixture_ids=list(fixtures)[:3]))
-    # 3 fixtures × 2 epochs = 6 calls.
+    # 3 fixtures × 2 epochs = 6 calls.  # noqa: RUF003
     assert len(executor.calls) == 6
     # Every call has a (fixture_id, epoch_index) tuple.
     for fid, idx in executor.calls:
@@ -224,9 +229,7 @@ async def test_run_with_no_fixtures_raises():
     runner = BenchmarkRunner(store, executor)
 
     with pytest.raises(ValueError):
-        await runner.run(
-            RunOptions(epochs=1, fixture_ids=["does-not-exist"])
-        )
+        await runner.run(RunOptions(epochs=1, fixture_ids=["does-not-exist"]))
 
 
 @pytest.mark.asyncio
@@ -251,7 +254,9 @@ async def test_run_artifacts_json_is_persisted():
 async def test_run_persists_executor_error_as_failed_epoch():
     store = InMemoryStore()
     executor = FakeExecutor(
-        per_fixture_results={"add-backend-echo-endpoint": [_ok_artifacts("add-backend-echo-endpoint")]},
+        per_fixture_results={
+            "add-backend-echo-endpoint": [_ok_artifacts("add-backend-echo-endpoint")]
+        },
         per_fixture_errors={"add-backend-ping-endpoint": "boom: conductor crashed"},
     )
     runner = BenchmarkRunner(store, executor)

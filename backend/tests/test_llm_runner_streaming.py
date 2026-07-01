@@ -35,7 +35,7 @@ class _FakeAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    def stream(self, method, url, headers=None, json=None):  # noqa: ANN001
+    def stream(self, method, url, headers=None, json=None):  # noqa: ANN001, RUF100
         lines = [
             'data: {"type":"message_start","message":{"usage":{"input_tokens":12}}}',
             'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
@@ -79,7 +79,12 @@ async def test_call_llm_with_tools_streaming_reconstructs_message_and_batches(mo
     assert result["usage"] == {"output_tokens": 7}
     assert result["content"] == [
         {"type": "text", "text": "Hello"},
-        {"type": "tool_use", "id": "toolu_1", "name": "dispatch_subagent", "input": {"role": "engineer"}},
+        {
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "dispatch_subagent",
+            "input": {"role": "engineer"},
+        },
     ]
 
 

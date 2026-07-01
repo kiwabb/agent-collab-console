@@ -28,6 +28,7 @@ from .paths import DIR_WORKFLOW, get_repo_root
 def _workflow_md_path():
     return get_repo_root() / DIR_WORKFLOW / "workflow.md"
 
+
 # Match a line that *is* a platform marker: "[A, B, C]" or "[/A, B, C]"
 _MARKER_RE = re.compile(r"^\[(/?)([A-Za-z][^\[\]]*)\]\s*$")
 
@@ -93,6 +94,7 @@ def get_phase_index() -> str:
     # Strip [workflow-state:STATUS]...[/workflow-state:STATUS] blocks since
     # they're injected separately by inject-workflow-state.py per-turn.
     import re as _re
+
     tag_re = _re.compile(
         r"\[workflow-state:([A-Za-z0-9_-]+)\]\s*\n.*?\n\s*\[/workflow-state:\1\]\n?",
         _re.DOTALL,

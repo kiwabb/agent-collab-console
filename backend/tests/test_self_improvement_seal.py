@@ -48,10 +48,17 @@ def _issue():
 @pytest.mark.asyncio
 async def test_done_seal_records_memory_then_self_improvement():
     store = SealStore()
-    with patch("app.application.conductor_main_loop.record_project_memory", new=AsyncMock()) as memory, patch(
-        "app.application.conductor_main_loop.record_issue_self_improvement", new=AsyncMock()
-    ) as improve:
-        await cml._seal_graph_and_issue_status(store=store, issue=_issue(), event_bus=None, result_status="done")
+    with (
+        patch(
+            "app.application.conductor_main_loop.record_project_memory", new=AsyncMock()
+        ) as memory,
+        patch(
+            "app.application.conductor_main_loop.record_issue_self_improvement", new=AsyncMock()
+        ) as improve,
+    ):
+        await cml._seal_graph_and_issue_status(
+            store=store, issue=_issue(), event_bus=None, result_status="done"
+        )
 
     memory.assert_awaited_once_with("graph-1", store)
     improve.assert_awaited_once()
@@ -63,11 +70,16 @@ async def test_done_seal_records_memory_then_self_improvement():
 @pytest.mark.asyncio
 async def test_self_improvement_failure_does_not_block_terminal_status():
     store = SealStore()
-    with patch("app.application.conductor_main_loop.record_project_memory", new=AsyncMock()), patch(
-        "app.application.conductor_main_loop.record_issue_self_improvement",
-        new=AsyncMock(side_effect=RuntimeError("proposal store down")),
+    with (
+        patch("app.application.conductor_main_loop.record_project_memory", new=AsyncMock()),
+        patch(
+            "app.application.conductor_main_loop.record_issue_self_improvement",
+            new=AsyncMock(side_effect=RuntimeError("proposal store down")),
+        ),
     ):
-        await cml._seal_graph_and_issue_status(store=store, issue=_issue(), event_bus=None, result_status="done")
+        await cml._seal_graph_and_issue_status(
+            store=store, issue=_issue(), event_bus=None, result_status="done"
+        )
 
     assert store.saved_graph.status == "done"
     assert store.saved_issue.status == "completed"

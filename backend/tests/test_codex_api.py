@@ -1,4 +1,5 @@
 """FastAPI integration tests for Codex global endpoints."""
+
 from __future__ import annotations
 
 import shutil
@@ -13,7 +14,9 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git binary 
 def _make_git_repo(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("hello")
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)
@@ -36,11 +39,11 @@ def test_codex_stats_returns_basic_counts_across_projects(client, tmp_path):
     proj_a = _create_project(client, tmp_path, name="stats-proj-a")
     proj_b = _create_project(client, tmp_path, name="stats-proj-b")
 
-    ws_a = client.post(
+    ws_a = client.post(  # noqa: F841
         "/api/codex/workspaces",
         json={"title": "WA", "project_id": proj_a["id"]},
     ).json()
-    ws_b = client.post(
+    ws_b = client.post(  # noqa: F841
         "/api/codex/workspaces",
         json={"title": "WB", "project_id": proj_b["id"]},
     ).json()
@@ -59,6 +62,7 @@ def test_codex_stats_returns_basic_counts_across_projects(client, tmp_path):
 def test_codex_stats_returns_503_when_store_unavailable(client, monkeypatch):
     """When codex_store is None the endpoint must return 503."""
     from app.interfaces import api as api_module
+
     original = api_module.codex_store
 
     api_module.codex_store = None

@@ -7,7 +7,7 @@ Covers:
 - RuntimeModelConfig price-field serialization round-trip through the JSON store.
 """
 
-import json
+import json  # noqa: I001
 from pathlib import Path
 
 import pytest
@@ -23,6 +23,7 @@ from app.adapters.async_sqlite_store import AsyncSQLiteStore
 
 
 # --- pricing math ---
+
 
 def test_price_tokens_uses_explicit_model_prices():
     model = RuntimeModelConfig(
@@ -64,8 +65,11 @@ def test_price_tokens_cache_rate_isolated():
 
 def test_price_tokens_for_model_wrapper_matches():
     model = RuntimeModelConfig(
-        id="m", label="m",
-        input_usd_per_m=2.0, output_usd_per_m=8.0, cache_read_usd_per_m=0.5,
+        id="m",
+        label="m",
+        input_usd_per_m=2.0,
+        output_usd_per_m=8.0,
+        cache_read_usd_per_m=0.5,
     )
     a = price_tokens_for_model(model, 1000, 2000, 3000)
     b = price_tokens(1000, 2000, 3000, pricing=model)
@@ -73,6 +77,7 @@ def test_price_tokens_for_model_wrapper_matches():
 
 
 # --- fallback / backward compatibility ---
+
 
 def test_unpriced_model_falls_back_to_env_rates():
     """A model with no prices must equal the legacy global-rate result."""
@@ -115,6 +120,7 @@ def test_dict_pricing_supported():
 
 # --- pricing-arg robustness (must never raise; fall back to env) ---
 
+
 def test_dict_missing_key_falls_back_to_env():
     """A dict without the requested rate key falls back to env, not a crash."""
     cost = price_tokens(input_tokens=1_000_000, pricing={"output_usd_per_m": 9.0})
@@ -130,6 +136,7 @@ def test_empty_model_config_falls_back_to_env():
 
 def test_object_without_price_attrs_falls_back_to_env():
     """An arbitrary object lacking the price attrs must not raise."""
+
     class Bare:
         pass
 
@@ -149,6 +156,7 @@ def test_empty_dict_pricing_falls_back_to_env():
 
 
 # --- catalog serialization round-trip ---
+
 
 @pytest.fixture
 async def store():
@@ -212,6 +220,7 @@ def test_model_dump_includes_price_fields():
 
 
 # --- public GET serialization whitelist carries price fields ---
+
 
 @pytest.mark.slow
 def test_public_runtime_catalog_get_exposes_price_fields(client):

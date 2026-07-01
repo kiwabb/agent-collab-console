@@ -31,7 +31,8 @@ which requires ``--project-id`` and ``--workspace-id`` and will spend
 real CLI cycles. Operators run it manually; the benchmark harness
 is offline batch, not CI (per the task PRD's hard constraint).
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import argparse
 import asyncio
@@ -111,9 +112,7 @@ def _build_argparser() -> argparse.ArgumentParser:
 
 async def _async_main(args: argparse.Namespace) -> int:
     fixture_ids = (
-        [s.strip() for s in args.fixture_ids.split(",") if s.strip()]
-        if args.fixture_ids
-        else None
+        [s.strip() for s in args.fixture_ids.split(",") if s.strip()] if args.fixture_ids else None
     )
     catalog_snapshot: str | None = None
     if args.catalog_snapshot:
@@ -126,14 +125,11 @@ async def _async_main(args: argparse.Namespace) -> int:
     else:
         if not (args.project_id and args.workspace_id):
             print(
-                "error: --project-id and --workspace-id are required "
-                "for real (non --dry-run) runs",
+                "error: --project-id and --workspace-id are required for real (non --dry-run) runs",
                 file=sys.stderr,
             )
             return 2
-        executor = RealConductorExecutor(
-            project_id=args.project_id, workspace_id=args.workspace_id
-        )
+        executor = RealConductorExecutor(project_id=args.project_id, workspace_id=args.workspace_id)
 
     with SqliteStore(args.db) as store:
         runner = BenchmarkRunner(store, executor, registry=default_registry())

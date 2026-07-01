@@ -1,4 +1,5 @@
 """Tests for run_issue_conductor_loop in conductor_main_loop.py."""
+
 from __future__ import annotations
 
 import asyncio
@@ -92,7 +93,7 @@ def _make_store(issue: CodexIssue, graph: WorkflowGraph) -> MagicMock:
 
 def _make_noop_conductor_tools_registry():
     """Build a minimal ConductorToolRegistry for testing."""
-    from app.application.conductor_main_loop import ConductorLoopResult
+    from app.application.conductor_main_loop import ConductorLoopResult  # noqa: F401
 
     async def finalize_tool(inp):
         return {"status": str(inp.get("status", "done")), "answer": str(inp.get("answer", ""))}
@@ -129,12 +130,15 @@ async def test_loop_calls_finalize():
     mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=None), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=None
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=None)
 
         result = await run_issue_conductor_loop(
@@ -150,7 +154,11 @@ async def test_loop_calls_finalize():
     assert store.save_conductor_task.call_count >= 2
     final_task = store.save_conductor_task.call_args_list[-1][0][0]
     assert final_task.status == "done"
-    status_events = [call.args[0] for call in event_bus.append.call_args_list if call.args and call.args[0].get("type") == "conductor_status"]
+    status_events = [
+        call.args[0]
+        for call in event_bus.append.call_args_list
+        if call.args and call.args[0].get("type") == "conductor_status"
+    ]
     assert status_events[0]["phase"] == "awaiting_llm"
     assert status_events[-1]["phase"] == "done"
 
@@ -172,12 +180,15 @@ async def test_loop_records_durable_conductor_lease():
     mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=None), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=None
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=None)
 
         await run_issue_conductor_loop(
@@ -213,7 +224,12 @@ async def test_loop_dispatches_pm():
         """Fake dispatch_subagent that records calls and returns success."""
         role = tool_input.get("role", "")
         dispatched_roles.append(role)
-        return {"task_id": str(uuid4()), "role": role, "status": "done", "summary": f"{role} completed"}
+        return {
+            "task_id": str(uuid4()),
+            "role": role,
+            "status": "done",
+            "summary": f"{role} completed",
+        }
 
     async def finalize_tool(inp):
         return {"status": str(inp.get("status", "done")), "answer": str(inp.get("answer", ""))}
@@ -251,6 +267,7 @@ async def test_loop_dispatches_pm():
                         }
                     ],
                 }
+
         return stub_llm
 
     registry = MagicMock()
@@ -264,13 +281,19 @@ async def test_loop_dispatches_pm():
     mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=make_stub_llm()), \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch(
+            "app.application.conductor_main_loop.call_conductor_llm", side_effect=make_stub_llm()
+        ),
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=MagicMock(),
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=None)
 
         result = await run_issue_conductor_loop(
@@ -326,20 +349,24 @@ async def test_loop_injects_project_conductor_memory_into_llm_prompt():
         return_value=ProjectConductorState(
             project_id=issue.project_id,
             pinned_text="Pinned: keep conductor decisions source-informed.",
-            warm_summaries_json=json.dumps([
-                {"summary": "Recent run: parallel agents conflicted without clear prompts."}
-            ]),
+            warm_summaries_json=json.dumps(
+                [{"summary": "Recent run: parallel agents conflicted without clear prompts."}]
+            ),
         )
     )
     mock_conductor.append_hot_event = AsyncMock()
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm), \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm),
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=MagicMock(),
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
 
         result = await run_issue_conductor_loop(
@@ -376,12 +403,19 @@ async def test_loop_marks_failed_and_emits_failure_event():
     mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=RuntimeError("boom")), \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch(
+            "app.application.conductor_main_loop.call_conductor_llm",
+            side_effect=RuntimeError("boom"),
+        ),
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=MagicMock(),
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
 
         result = await run_issue_conductor_loop(
@@ -395,8 +429,10 @@ async def test_loop_marks_failed_and_emits_failure_event():
     assert result.status == "failed"
     final_task = store.save_conductor_task.call_args_list[-1][0][0]
     assert final_task.status == "failed"
-    assert "\"status\": \"failed\"" in (final_task.result_json or "")
-    assert any(call.args[0]["type"] == "conductor_failed" for call in event_bus.append.call_args_list)
+    assert '"status": "failed"' in (final_task.result_json or "")
+    assert any(
+        call.args[0]["type"] == "conductor_failed" for call in event_bus.append.call_args_list
+    )
 
 
 @pytest.mark.asyncio
@@ -438,13 +474,17 @@ async def test_loop_pause_resume_cancels_inflight_llm_and_retries():
             ],
         }
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=fake_llm), \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=fake_llm),
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=MagicMock(),
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
         loop_task = asyncio.create_task(
             run_issue_conductor_loop(
@@ -465,10 +505,14 @@ async def test_loop_pause_resume_cancels_inflight_llm_and_retries():
         assert await registry_instance.request_pause(conductor_task.id) is True
 
         for _ in range(50):
-            if any(call.args[0].status == "paused" for call in store.save_conductor_task.call_args_list):
+            if any(
+                call.args[0].status == "paused" for call in store.save_conductor_task.call_args_list
+            ):
                 break
             await asyncio.sleep(0.01)
-        assert any(call.args[0].status == "paused" for call in store.save_conductor_task.call_args_list)
+        assert any(
+            call.args[0].status == "paused" for call in store.save_conductor_task.call_args_list
+        )
 
         assert await registry_instance.resume(conductor_task.id) is True
         result = await asyncio.wait_for(loop_task, timeout=3)
@@ -523,14 +567,18 @@ async def test_loop_records_policy_decision_and_injects_prompt_hint():
         evidence=[{"kind": "test"}],
     )
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm), \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock), \
-         patch("app.application.conductor_main_loop.decide_conductor_policy", return_value=policy):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm),
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=MagicMock(),
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+        patch("app.application.conductor_main_loop.decide_conductor_policy", return_value=policy),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
 
         result = await run_issue_conductor_loop(
@@ -582,14 +630,20 @@ async def test_loop_safe_skip_avoids_conductor_llm_call():
         evidence=[{"kind": "recent_finalize_count", "count": 2}],
     )
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_conductor_llm", new_callable=AsyncMock) as mock_llm, \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock), \
-         patch("app.application.conductor_main_loop.decide_conductor_policy", return_value=policy):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch(
+            "app.application.conductor_main_loop.call_conductor_llm", new_callable=AsyncMock
+        ) as mock_llm,
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=MagicMock(),
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+        patch("app.application.conductor_main_loop.decide_conductor_policy", return_value=policy),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
 
         result = await run_issue_conductor_loop(

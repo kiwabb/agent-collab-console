@@ -4,6 +4,7 @@ The reader loop must ALWAYS reap its subprocess and finalize the task when it
 exits — for any reason (EOF, idle timeout, readline exception) — and must never
 deadlock on the finally-block stderr drain.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,7 +35,9 @@ class StoreStub:
     async def save_codex_workspace(self, workspace):
         self.workspace = workspace
 
-    async def update_execution_process_status(self, process_id, status, exit_code=None, completed_at=None):
+    async def update_execution_process_status(
+        self, process_id, status, exit_code=None, completed_at=None
+    ):
         p = self.processes.get(process_id)
         if p:
             p.status = status
@@ -109,24 +112,44 @@ class FakeProc:
 def _fixture(returncode=None, stdout=None, stderr=None):
     now = datetime.now()
     process = ExecutionProcess(
-        id="ep-1", task_id="task-1", session_id="workspace-1",
-        status="Running", created_at=now, updated_at=now,
+        id="ep-1",
+        task_id="task-1",
+        session_id="workspace-1",
+        status="Running",
+        created_at=now,
+        updated_at=now,
     )
     task = CodexTask(
-        id="task-1", session_id="workspace-1", title="t", prompt="p",
-        status="responding", executor="claude", last_execution_process_id="ep-1",
-        created_at=now, updated_at=now,
+        id="task-1",
+        session_id="workspace-1",
+        title="t",
+        prompt="p",
+        status="responding",
+        executor="claude",
+        last_execution_process_id="ep-1",
+        created_at=now,
+        updated_at=now,
     )
     workspace = CodexSession(
-        id="workspace-1", title="W", cwd="/tmp", created_at=now, last_active_at=now,
+        id="workspace-1",
+        title="W",
+        cwd="/tmp",
+        created_at=now,
+        last_active_at=now,
     )
     store = StoreStub(task, workspace, process)
     bus = EventBusStub()
     runtime = _Runtime(codex_store=store, log_store=None, event_bus=bus, refresh_task_result=None)
     proc = FakeProc(stdout, stderr, returncode=returncode)
     entry = AsyncProcessEntry(
-        proc=proc, output_task=None, alive=True, session_id="workspace-1",
-        executor="claude", cwd="/tmp", resume_session_id=None, task_id="task-1",
+        proc=proc,
+        output_task=None,
+        alive=True,
+        session_id="workspace-1",
+        executor="claude",
+        cwd="/tmp",
+        resume_session_id=None,
+        task_id="task-1",
     )
     return runtime, store, entry, proc
 
@@ -135,6 +158,7 @@ def _fixture(returncode=None, stdout=None, stderr=None):
 async def test_reader_loop_reaps_process_on_readline_exception(monkeypatch):
     """A >64KB line (LimitOverrunError) must NOT orphan the process: the loop
     reaps it and finalizes the task as failed."""
+
     async def raise_overrun():
         raise asyncio.LimitOverrunError("line too long", 100)
 
@@ -144,32 +168,29 @@ async def test_reader_loop_reaps_process_on_readline_exception(monkeypatch):
         stderr=FakeStderr(data=b""),
     )
 
-    await asyncio.wait_for(
-        runtime._reader_loop("workspace-1", entry, "task-1"), timeout=5
-    )
+    await asyncio.wait_for(runtime._reader_loop("workspace-1", entry, "task-1"), timeout=5)
 
-    assert proc.terminated is True          # 5a: process reaped
-    assert entry.had_error is True          # 5c: overrun recorded as error
-    assert store.task.status == "failed"    # task finalized, not left "responding"
+    assert proc.terminated is True  # 5a: process reaped
+    assert entry.had_error is True  # 5c: overrun recorded as error
+    assert store.task.status == "failed"  # task finalized, not left "responding"
 
 
 @pytest.mark.asyncio
 async def test_reader_loop_stderr_drain_is_bounded(monkeypatch):
     """A hanging stderr.read must not deadlock the finally — it is bounded by
     a wait_for, so the reader loop returns promptly."""
+
     async def eof():
         return b""  # immediate EOF → loop breaks normally
 
-    runtime, store, entry, proc = _fixture(
-        returncode=0,                        # already exited → finally skips terminate
+    runtime, store, entry, proc = _fixture(  # noqa: RUF059
+        returncode=0,  # already exited → finally skips terminate
         stdout=FakeStdout(eof),
-        stderr=FakeStderr(hang=True),        # read() would hang forever
+        stderr=FakeStderr(hang=True),  # read() would hang forever
     )
 
     start = time.monotonic()
-    await asyncio.wait_for(
-        runtime._reader_loop("workspace-1", entry, "task-1"), timeout=5
-    )
+    await asyncio.wait_for(runtime._reader_loop("workspace-1", entry, "task-1"), timeout=5)
     elapsed = time.monotonic() - start
     assert elapsed < 4  # bounded by the 2s stderr wait_for, not the 3600s hang
 
@@ -178,16 +199,15 @@ async def test_reader_loop_stderr_drain_is_bounded(monkeypatch):
 async def test_reader_loop_terminates_process_even_when_not_idle(monkeypatch):
     """5a regression: a normal EOF exit with a still-live process (returncode
     None) must still reap the subprocess."""
+
     async def eof():
         return b""
 
-    runtime, store, entry, proc = _fixture(
-        returncode=None,                     # still "alive" at loop exit
+    runtime, store, entry, proc = _fixture(  # noqa: RUF059
+        returncode=None,  # still "alive" at loop exit
         stdout=FakeStdout(eof),
         stderr=FakeStderr(data=b""),
     )
 
-    await asyncio.wait_for(
-        runtime._reader_loop("workspace-1", entry, "task-1"), timeout=5
-    )
-    assert proc.terminated is True           # reaped despite not being idle-timed-out
+    await asyncio.wait_for(runtime._reader_loop("workspace-1", entry, "task-1"), timeout=5)
+    assert proc.terminated is True  # reaped despite not being idle-timed-out

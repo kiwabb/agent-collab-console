@@ -3,7 +3,8 @@
 A slow / half-open subscriber must NEVER block the producer that fans out to
 the other subscribers, and must be evicted (force-reconnect) on overflow.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 
@@ -15,7 +16,7 @@ from app.interfaces.codex_ws import (
     ExecutionProcessMessageStreamManager,
     WsSubscriber,
     _PONG,
-    _QUEUE_CLOSED,
+    _QUEUE_CLOSED,  # noqa: F401
     _send_workspace_initial_snapshot,
 )
 

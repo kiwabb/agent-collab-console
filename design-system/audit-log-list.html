@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Audit Log · 审计日志</title>
+<style>
+  /* ── Design system: project theme (agent-collab-console globals.css) ───── */
+  :root {
+    --bg:            #0b0b0c;
+    --surface:       #0f1115;
+    --card:          #161a21;
+    --card-hover:    #181e29;
+    --muted:         #1b2230;
+    --border:        #2e3647;
+    --border-soft:   #232a38;
+    --border-strong: #3d4961;
+
+    --fg:            #f4f4f5;
+    --fg-dim:        #b0bac8;
+    --fg-muted:      #7f8a99;
+    --fg-faint:      #596579;
+
+    --brand:         #e69552;
+    --brand-strong:  #f0a567;
+    --brand-muted:   rgba(230,149,82,0.16);
+    --brand-ring:    rgba(230,149,82,0.32);
+
+    --info:          #60a5fa;  /* status-info — models / ids */
+    --done:          #4ade80;  /* status-done */
+    --run:           #e69552;  /* status-running (orange) */
+    --warn:          #eab308;  /* status-awaiting */
+    --error:         #f87171;
+    --tool:          #c084fc;  /* status-tool */
+
+    --radius:        12px;
+    --radius-sm:     8px;
+
+    --mono: "Fira Code", ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: "Fira Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  ::selection { background: rgba(230,149,82,0.30); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  button { font-family: inherit; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+
+  .app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+
+  /* ── Header ───────────────────────────────────────────────────────────── */
+  header.topbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 22px; height: 56px; flex: none;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand .logo {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--brand), var(--brand-strong));
+    box-shadow: 0 0 14px rgba(230,149,82,0.35);
+  }
+  .brand .logo svg { width: 17px; height: 17px; color: #fff; }
+  .brand h1 { font-size: 15px; margin: 0; letter-spacing: .2px; font-weight: 600; }
+  .brand .sub { font-size: 11px; color: var(--fg-muted); }
+  .spacer { flex: 1; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--card); border: 1px solid var(--border); color: var(--fg-dim);
+    padding: 7px 13px; border-radius: var(--radius-sm); font-size: 12.5px; font-weight: 500;
+    transition: background .16s, border-color .16s, color .16s;
+  }
+  .btn:hover { background: var(--card-hover); border-color: var(--border-strong); color: var(--fg); }
+  .btn svg { width: 14px; height: 14px; }
+  .btn.primary { background: var(--brand-muted); border-color: var(--brand-ring); color: var(--brand-strong); }
+  .btn.primary:hover { background: rgba(230,149,82,0.24); }
+
+  /* ── Body split: filter rail + main ───────────────────────────────────── */
+  .body { display: flex; flex: 1; min-height: 0; }
+
+  /* Left filter rail */
+  .rail {
+    width: 232px; flex: none; display: flex; flex-direction: column;
+    background: var(--surface); border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 16px 14px 40px;
+  }
+  .rail-sec { margin-bottom: 22px; }
+  .rail-sec > .lbl {
+    display: block; font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .6px; color: var(--fg-faint); margin-bottom: 9px;
+  }
+  .cat-list { display: flex; flex-direction: column; gap: 2px; }
+  .cat {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    padding: 7px 9px; border-radius: var(--radius-sm); border: 1px solid transparent;
+    background: none; color: var(--fg-dim); text-align: left; font-size: 12.5px;
+    transition: background .14s, color .14s;
+  }
+  .cat:hover { background: var(--card); color: var(--fg); }
+  .cat[aria-pressed="true"] { background: var(--card); border-color: var(--border); color: var(--fg); }
+  .cat .dot { width: 8px; height: 8px; border-radius: 2.5px; flex: none; }
+  .cat .nm { flex: 1; min-width: 0; }
+  .cat .ct { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
+  .cat[aria-pressed="true"] .ct { color: var(--brand); }
+
+  .field { margin-bottom: 11px; }
+  .field label { display: block; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--fg-faint); margin-bottom: 5px; }
+  .field input {
+    width: 100%; background: var(--muted); border: 1px solid var(--border);
+    color: var(--fg); border-radius: var(--radius-sm); padding: 7px 10px;
+    font-size: 12.5px; font-family: var(--mono); outline: none;
+  }
+  .field input::placeholder { color: var(--fg-faint); }
+  .field input:focus { border-color: var(--brand-ring); }
+  .clear-link { font-size: 12px; color: var(--brand); background: none; border: none; padding: 4px 0; display: inline-flex; align-items: center; gap: 5px; }
+  .clear-link svg { width: 12px; height: 12px; }
+
+  /* Main column */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+
+  /* Top: search + stats strip */
+  .toolbar {
+    display: flex; align-items: center; gap: 12px; flex: none;
+    padding: 12px 20px; border-bottom: 1px solid var(--border-soft);
+  }
+  .search {
+    display: flex; align-items: center; gap: 9px; flex: 1; max-width: 520px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 8px 12px;
+  }
+  .search svg { width: 15px; height: 15px; color: var(--fg-faint); flex: none; }
+  .search input { background: none; border: none; color: var(--fg); flex: 1; font-size: 13px; font-family: var(--mono); outline: none; }
+  .search input::placeholder { color: var(--fg-faint); }
+  .toolbar .meta { margin-left: auto; font-size: 12px; color: var(--fg-muted); font-family: var(--mono); }
+  .toolbar .meta b { color: var(--fg-dim); font-weight: 600; }
+
+  .stats { display: flex; gap: 0; flex: none; border-bottom: 1px solid var(--border-soft); background: var(--surface); }
+  .stat { padding: 9px 18px; border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; gap: 1px; }
+  .stat .v { font-family: var(--mono); font-size: 16px; font-weight: 600; }
+  .stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--fg-faint); font-weight: 600; }
+  .stat.err .v { color: var(--error); }
+  .stat.run .v { color: var(--run); }
+  .stat.tok .v { color: var(--info); }
+
+  /* List */
+  .list-head {
+    display: flex; align-items: center; gap: 12px; flex: none;
+    padding: 7px 20px 7px 44px; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .6px; color: var(--fg-faint);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .list-head .c-time { width: 132px; flex: none; }
+  .list-head .c-cat  { width: 116px; flex: none; }
+  .list-head .c-actor{ width: 124px; flex: none; }
+  .list-head .c-sum  { flex: 1; }
+  .list-head .c-trace{ width: 168px; flex: none; }
+  .list-head .c-dur  { width: 64px; flex: none; text-align: right; }
+
+  .scroll { overflow-y: auto; flex: 1; padding-bottom: 60px; }
+
+  .row {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    padding: 0 20px 0 0; min-height: 46px; text-align: left;
+    background: none; border: none; border-bottom: 1px solid var(--border-soft);
+    border-left: 3px solid transparent; color: var(--fg-dim);
+    transition: background .12s;
+  }
+  .row:hover { background: var(--card); }
+  .row.open { background: var(--card); }
+  .row .chev { width: 26px; flex: none; display: grid; place-items: center; color: var(--fg-faint); }
+  .row .chev svg { width: 13px; height: 13px; transition: transform .15s; }
+  .row.open .chev svg { transform: rotate(90deg); color: var(--brand); }
+
+  .c-time { width: 132px; flex: none; font-family: var(--mono); font-size: 11.5px; color: var(--fg-muted); }
+  .c-cat  { width: 116px; flex: none; }
+  .cat-badge {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+    border-radius: 6px; font-size: 10.5px; font-weight: 600; font-family: var(--mono);
+    border: 1px solid; letter-spacing: .2px;
+  }
+  .cat-badge i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .c-actor { width: 124px; flex: none; display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .role-pill { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font-size: 9px; font-weight: 700; color: var(--bg); flex: none; }
+  .c-actor .nm { font-family: var(--mono); font-size: 11.5px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-sum { flex: 1; min-width: 0; font-size: 12.5px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-sum .err-txt { color: var(--error); }
+  .c-trace { width: 168px; flex: none; display: flex; gap: 5px; flex-wrap: nowrap; overflow: hidden; }
+  .tchip {
+    font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 5px;
+    background: var(--muted); color: var(--fg-muted); border: 1px solid var(--border-soft);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80px;
+  }
+  .tchip.issue { color: var(--brand); border-color: var(--brand-ring); background: var(--brand-muted); }
+  .c-dur { width: 64px; flex: none; text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--fg-muted); }
+  .stat-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; margin-left: 2px; }
+  .sd-ok  { background: var(--done); }
+  .sd-err { background: var(--error); box-shadow: 0 0 6px rgba(248,113,113,.5); }
+  .sd-run { background: var(--run); box-shadow: 0 0 6px rgba(230,149,82,.5); animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  /* Expanded detail */
+  .detail { border-bottom: 1px solid var(--border-soft); border-left: 3px solid var(--brand); background: var(--surface); padding: 14px 20px 18px 44px; }
+  .meta-grid { display: flex; flex-wrap: wrap; gap: 7px 8px; margin-bottom: 12px; }
+  .meta-grid .m { font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 6px; background: var(--muted); border: 1px solid var(--border-soft); color: var(--fg-muted); }
+  .meta-grid .m b { color: var(--fg-faint); font-weight: 600; }
+  .meta-grid .m .val { color: var(--fg-dim); }
+  .meta-grid .m.id .val { color: var(--info); }
+  .meta-grid .m.issue .val { color: var(--brand); }
+  .err-box { border: 1px solid rgba(248,113,113,.4); background: rgba(248,113,113,.10); color: #fca5a5; border-radius: var(--radius-sm); padding: 9px 12px; font-family: var(--mono); font-size: 12px; margin-bottom: 12px; }
+  .io-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--fg-muted); }
+  .io-head .copy { margin-left: auto; font-size: 11px; color: var(--fg-faint); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; display: inline-flex; gap: 5px; align-items: center; text-transform: none; letter-spacing: 0; }
+  .io-head .copy:hover { background: var(--card-hover); color: var(--fg-dim); }
+  .io-head .copy svg { width: 12px; height: 12px; }
+  pre.code {
+    margin: 0; background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 13px 15px;
+    font-family: var(--mono); font-size: 12px; line-height: 1.65; color: var(--fg-dim);
+    overflow-x: auto; white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow-y: auto;
+  }
+  pre.code .key { color: var(--info); }
+  pre.code .str { color: #86efac; }
+  pre.code .num { color: var(--warn); }
+  pre.code .cmt { color: var(--fg-faint); }
+
+  .load-more { display: flex; justify-content: center; padding: 18px; }
+
+  /* category color helpers */
+  .cc-llm   { color: var(--brand); border-color: var(--brand-ring); background: var(--brand-muted); }
+  .cc-llm i { background: var(--brand); }
+  .cc-tool  { color: var(--tool); border-color: rgba(192,132,252,.35); background: rgba(192,132,252,.12); }
+  .cc-tool i{ background: var(--tool); }
+  .cc-cmd   { color: var(--done); border-color: rgba(74,222,128,.32); background: rgba(74,222,128,.10); }
+  .cc-cmd i { background: var(--done); }
+  .cc-cli   { color: var(--info); border-color: rgba(96,165,250,.35); background: rgba(96,165,250,.12); }
+  .cc-cli i { background: var(--info); }
+  .cc-evt   { color: var(--fg-muted); border-color: var(--border); background: var(--muted); }
+  .cc-evt i { background: var(--fg-faint); }
+  .cc-fin   { color: var(--brand-strong); border-color: var(--brand-ring); background: var(--brand-muted); }
+  .cc-fin i { background: var(--brand-strong); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span>
+      <div>
+        <h1>Audit Log</h1>
+        <div class="sub">审计日志 · 全量可追溯</div>
+      </div>
+    </div>
+    <span class="spacer"></span>
+    <button class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.7 3M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.7-3"/><path d="M21 3v6h-6M3 21v-6h6"/></svg>刷新</button>
+    <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>导出</button>
+  </header>
+
+  <div class="body">
+    <!-- Filter rail -->
+    <aside class="rail">
+      <div class="rail-sec">
+        <span class="lbl">分类 Category</span>
+        <div class="cat-list">
+          <button class="cat" aria-pressed="true"><span class="dot" style="background:var(--brand)"></span><span class="nm">llm_call</span><span class="ct">312</span></button>
+          <button class="cat"><span class="dot" style="background:var(--brand)"></span><span class="nm">llm_return</span><span class="ct">298</span></button>
+          <button class="cat" aria-pressed="true"><span class="dot" style="background:var(--tool)"></span><span class="nm">tool_use</span><span class="ct">1.2k</span></button>
+          <button class="cat"><span class="dot" style="background:var(--tool)"></span><span class="nm">tool_result</span><span class="ct">1.1k</span></button>
+          <button class="cat"><span class="dot" style="background:var(--done)"></span><span class="nm">command_exec</span><span class="ct">204</span></button>
+          <button class="cat"><span class="dot" style="background:var(--done)"></span><span class="nm">git_command</span><span class="ct">88</span></button>
+          <button class="cat"><span class="dot" style="background:var(--info)"></span><span class="nm">cli_spawn</span><span class="ct">47</span></button>
+          <button class="cat"><span class="dot" style="background:var(--fg-faint)"></span><span class="nm">event</span><span class="ct">512</span></button>
+          <button class="cat"><span class="dot" style="background:var(--brand-strong)"></span><span class="nm">agent_finalize</span><span class="ct">31</span></button>
+        </div>
+      </div>
+
+      <div class="rail-sec">
+        <span class="lbl">链路过滤 Scope</span>
+        <div class="field"><label>Issue ID</label><input placeholder="issue id" value="142" /></div>
+        <div class="field"><label>Task ID</label><input placeholder="task id" /></div>
+      </div>
+
+      <div class="rail-sec">
+        <span class="lbl">时间范围 Range</span>
+        <div class="field"><label>Since</label><input placeholder="2026-06-29 00:00" /></div>
+        <div class="field"><label>Until</label><input placeholder="now" /></div>
+      </div>
+
+      <button class="clear-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>清除全部筛选</button>
+    </aside>
+
+    <!-- Main -->
+    <div class="main">
+      <div class="toolbar">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input placeholder="搜索 actor / 摘要 / 命令 / 模型…" />
+        </div>
+        <span class="meta">筛选命中 <b>1,514</b> 条 · 显示前 <b>50</b></span>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><span class="v">1,514</span><span class="k">命中</span></div>
+        <div class="stat run"><span class="v">3</span><span class="k">运行中</span></div>
+        <div class="stat err"><span class="v">7</span><span class="k">错误</span></div>
+        <div class="stat tok"><span class="v">251K</span><span class="k">tokens</span></div>
+        <div class="stat"><span class="v">$1.83</span><span class="k">成本</span></div>
+      </div>
+
+      <div class="list-head">
+        <span style="width:26px;flex:none"></span>
+        <span class="c-time">时间</span>
+        <span class="c-cat">分类</span>
+        <span class="c-actor">Actor</span>
+        <span class="c-sum">摘要</span>
+        <span class="c-trace">链路</span>
+        <span class="c-dur">耗时</span>
+      </div>
+
+      <div class="scroll">
+        <!-- Row: cli_spawn (expanded) -->
+        <button class="row open" data-issue="142" data-span="sp-e2" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:14:08.214</span>
+          <span class="c-cat"><span class="cat-badge cc-cli"><i></i>cli_spawn</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--done)">E</span><span class="nm">engineer</span></span>
+          <span class="c-sum">claude · claude-opus-4-8 · sess-b2d4e8</span>
+          <span class="c-trace"><span class="tchip issue">#142</span><span class="tchip">task-9f</span></span>
+          <span class="c-dur">12ms<span class="stat-dot sd-ok"></span></span>
+        </button>
+        <div class="detail">
+          <div class="meta-grid">
+            <span class="m id"><b>id:</b> <span class="val">ae-7f3a91c2</span></span>
+            <span class="m issue"><b>issue:</b> <span class="val">142</span></span>
+            <span class="m"><b>task:</b> <span class="val">task-9f2c</span></span>
+            <span class="m"><b>conductor:</b> <span class="val">ct-44a1</span></span>
+            <span class="m id"><b>exec_proc:</b> <span class="val">ep-b2d4e8</span></span>
+            <span class="m"><b>corr:</b> <span class="val">trace-issue-142</span></span>
+          </div>
+          <div class="io-head">Payload<button class="copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>复制</button></div>
+<pre class="code"><span class="key">"argv"</span>: [<span class="str">"claude"</span>, <span class="str">"--print"</span>, <span class="str">"--output-format"</span>, <span class="str">"stream-json"</span>, <span class="str">"--verbose"</span>, <span class="str">"--model"</span>, <span class="str">"claude-opus-4-8"</span>, <span class="cmt">"&lt;prompt redacted&gt;"</span>],
+<span class="key">"cwd"</span>: <span class="str">"/work/swarm/142-engineer"</span>,
+<span class="key">"model"</span>: <span class="str">"claude-opus-4-8"</span>,
+<span class="key">"provider"</span>: <span class="str">"anthropic"</span>,
+<span class="key">"resume_session_id"</span>: <span class="str">"sess-b2d4e8"</span>,
+<span class="key">"pid"</span>: <span class="num">48213</span></pre>
+        </div>
+
+        <!-- Row: llm_call -->
+        <button class="row" data-issue="142" data-span="sp-e1" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:14:08.910</span>
+          <span class="c-cat"><span class="cat-badge cc-llm"><i></i>llm_call</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--done)">E</span><span class="nm">engineer</span></span>
+          <span class="c-sum">claude-opus-4-8 · 实现 trace_id 透传到 runtime</span>
+          <span class="c-trace"><span class="tchip issue">#142</span><span class="tchip">task-9f</span></span>
+          <span class="c-dur">—<span class="stat-dot sd-run"></span></span>
+        </button>
+
+        <!-- Row: tool_use Read -->
+        <button class="row" data-issue="142" data-span="sp-e3" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:14:11.302</span>
+          <span class="c-cat"><span class="cat-badge cc-tool"><i></i>tool_use</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--done)">E</span><span class="nm">engineer</span></span>
+          <span class="c-sum">Read · claude_process_runtime.py</span>
+          <span class="c-trace"><span class="tchip issue">#142</span><span class="tchip">task-9f</span></span>
+          <span class="c-dur">310ms<span class="stat-dot sd-ok"></span></span>
+        </button>
+
+        <!-- Row: tool_use Edit -->
+        <button class="row" data-issue="142" data-span="sp-e4" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:14:13.880</span>
+          <span class="c-cat"><span class="cat-badge cc-tool"><i></i>tool_use</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--done)">E</span><span class="nm">engineer</span></span>
+          <span class="c-sum">Edit · process_runtime_common.py · + trace_id 透传 _append_log</span>
+          <span class="c-trace"><span class="tchip issue">#142</span><span class="tchip">task-9f</span></span>
+          <span class="c-dur">140ms<span class="stat-dot sd-ok"></span></span>
+        </button>
+
+        <!-- Row: command_exec FAILED -->
+        <button class="row" data-issue="142" data-span="sp-e5" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:14:22.514</span>
+          <span class="c-cat"><span class="cat-badge cc-cmd"><i></i>command_exec</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--done)">E</span><span class="nm">engineer</span></span>
+          <span class="c-sum"><span class="err-txt">pytest test_audit_logger.py — exit 1 · AssertionError trace_id None</span></span>
+          <span class="c-trace"><span class="tchip issue">#142</span><span class="tchip">task-9f</span></span>
+          <span class="c-dur">8.4s<span class="stat-dot sd-err"></span></span>
+        </button>
+
+        <!-- Row: tool_use WebSearch (architect) -->
+        <button class="row" data-issue="142" data-span="sp-a2" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:09:41.027</span>
+          <span class="c-cat"><span class="cat-badge cc-tool"><i></i>tool_use</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--info)">A</span><span class="nm">architect</span></span>
+          <span class="c-sum">WebSearch · "opentelemetry span parent context propagation"</span>
+          <span class="c-trace"><span class="tchip issue">#142</span><span class="tchip">task-7a</span></span>
+          <span class="c-dur">1.2s<span class="stat-dot sd-ok"></span></span>
+        </button>
+
+        <!-- Row: llm_return architect -->
+        <button class="row" data-issue="142" data-span="sp-a2" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:09:55.640</span>
+          <span class="c-cat"><span class="cat-badge cc-llm"><i></i>llm_return</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--info)">A</span><span class="nm">architect</span></span>
+          <span class="c-sum">设计 trace 数据模型 · 6,820 tok · $0.21</span>
+          <span class="c-trace"><span class="tchip issue">#142</span><span class="tchip">task-7a</span></span>
+          <span class="c-dur">6m52s<span class="stat-dot sd-ok"></span></span>
+        </button>
+
+        <!-- Row: event conductor turn -->
+        <button class="row" data-issue="142" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:09:38.110</span>
+          <span class="c-cat"><span class="cat-badge cc-evt"><i></i>event</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--fg-muted)">C</span><span class="nm">conductor</span></span>
+          <span class="c-sum">turn 2 · dispatch_subagent(architect)</span>
+          <span class="c-trace"><span class="tchip issue">#142</span></span>
+          <span class="c-dur">—<span class="stat-dot sd-ok"></span></span>
+        </button>
+
+        <!-- Row: agent_finalize -->
+        <button class="row" data-issue="142" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:08:02.430</span>
+          <span class="c-cat"><span class="cat-badge cc-fin"><i></i>agent_finalize</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--role-pm,#f472b6)">P</span><span class="nm">pm</span></span>
+          <span class="c-sum">PRD 完成 · 3 acceptance criteria · handoff → architect</span>
+          <span class="c-trace"><span class="tchip issue">#142</span><span class="tchip">task-01</span></span>
+          <span class="c-dur">2m11s<span class="stat-dot sd-ok"></span></span>
+        </button>
+
+        <!-- Row: git_command -->
+        <button class="row" data-issue="142" data-corr="trace-issue-142">
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="c-time">22:07:50.901</span>
+          <span class="c-cat"><span class="cat-badge cc-cmd"><i></i>git_command</span></span>
+          <span class="c-actor"><span class="role-pill" style="background:var(--fg-muted)">C</span><span class="nm">conductor</span></span>
+          <span class="c-sum">git squash-merge swarm/142-architect → issue/142</span>
+          <span class="c-trace"><span class="tchip issue">#142</span></span>
+          <span class="c-dur">240ms<span class="stat-dot sd-ok"></span></span>
+        </button>
+
+        <div class="load-more"><button class="btn">加载更多 50 条</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Cross-view linking ────────────────────────────────────────────────────
+ * Audit list ⇄ Trace detail share one dataset, keyed by issue_id / correlation_id.
+ * Each row carries data-issue, data-corr, and (when it maps to a span) data-span.
+ *   · row click        → open trace detail, deep-linked to the matching span
+ *   · issue chip click → open trace detail scoped to the issue (no span focus)
+ *   · chevron click    → expand the row's payload inline (stay on the list)
+ */
+const TRACE_PAGE = "agent-trace-log.html";
+
+function gotoTrace({ issue, span }) {
+  const q = new URLSearchParams();
+  if (issue) q.set("issue", issue);
+  if (span) q.set("span", span);
+  window.location.href = `${TRACE_PAGE}?${q.toString()}`;
+}
+
+/* Inline expand/collapse: the row's detail panel is its immediate next sibling. */
+function toggleRow(row) {
+  const detail = row.nextElementSibling;
+  const willOpen = !row.classList.contains("open");
+  row.classList.toggle("open", willOpen);
+  if (detail && detail.classList.contains("detail")) {
+    detail.style.display = willOpen ? "" : "none";
+  }
+}
+
+document.querySelectorAll(".row").forEach((row) => {
+  const detail = row.nextElementSibling;
+  const hasDetail = detail && detail.classList.contains("detail");
+
+  // Start collapsed unless the row was authored open.
+  if (hasDetail && !row.classList.contains("open")) detail.style.display = "none";
+
+  row.addEventListener("click", (e) => {
+    // Chevron → inline expand (only meaningful when the row has a payload).
+    if (e.target.closest(".chev")) {
+      if (hasDetail) { toggleRow(row); return; }
+    }
+    // Issue chip → scope trace to the issue, no span focus.
+    if (e.target.closest(".tchip.issue")) {
+      gotoTrace({ issue: row.dataset.issue });
+      return;
+    }
+    // Row body → open trace, deep-link to the mapped span when present.
+    gotoTrace({ issue: row.dataset.issue, span: row.dataset.span });
+  });
+});
+
+/* Issue chips get a pointer affordance + tooltip distinct from the row. */
+document.querySelectorAll(".tchip.issue").forEach((chip) => {
+  chip.style.cursor = "pointer";
+  chip.title = "在调用链中查看该 issue";
+});
+</script>
+</body>
+</html>

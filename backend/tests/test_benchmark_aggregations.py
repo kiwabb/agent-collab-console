@@ -11,7 +11,8 @@ Covers:
     improved/regressed/unchanged, aggregate_status uses stderr
     not byte equality.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import math
 
@@ -166,9 +167,7 @@ def test_aggregate_stderr_sample_stdev():
     ]
     agg = aggregate(stats)
     mean = (0.0 + 1 / 3 + 2 / 3 + 1.0) / 4
-    sample_stdev = math.sqrt(
-        sum((x - mean) ** 2 for x in [0.0, 1 / 3, 2 / 3, 1.0]) / 3
-    )
+    sample_stdev = math.sqrt(sum((x - mean) ** 2 for x in [0.0, 1 / 3, 2 / 3, 1.0]) / 3)
     expected_stderr = sample_stdev / 2  # sqrt(4) = 2
     assert agg.aggregate_pass_at_1 == pytest.approx(mean)
     assert agg.aggregate_pass_at_1_stderr == pytest.approx(expected_stderr)

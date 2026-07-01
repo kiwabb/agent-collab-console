@@ -5,6 +5,7 @@ WorkflowGraph / mesh UI can render them as a single parallel swimlane. It must
 survive a save_workflow_graph / add_workflow_node → load_workflow_graph_for_issue
 round-trip through the SQLite store, and default to None for legacy/serial nodes.
 """
+
 from __future__ import annotations
 
 import asyncio

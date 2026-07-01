@@ -1,4 +1,5 @@
 """Integration tests for the project dev-server runner endpoints."""
+
 from __future__ import annotations
 
 import shutil
@@ -19,7 +20,9 @@ _TICK_CMD = "sh -c 'i=0; while [ $i -lt 100 ]; do echo tick-$i; i=$((i+1)); slee
 def _make_git_repo(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("hello")
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)

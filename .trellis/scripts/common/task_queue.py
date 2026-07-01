@@ -26,6 +26,7 @@ from .tasks import iter_active_tasks
 # Internal helper
 # =============================================================================
 
+
 def _task_to_dict(t) -> dict:
     """Convert TaskInfo to the dict format callers expect."""
     return {
@@ -44,9 +45,9 @@ def _task_to_dict(t) -> dict:
 # Public Functions
 # =============================================================================
 
+
 def list_tasks_by_status(
-    filter_status: str | None = None,
-    repo_root: Path | None = None
+    filter_status: str | None = None, repo_root: Path | None = None
 ) -> list[dict]:
     """List tasks by status.
 
@@ -84,9 +85,7 @@ def list_pending_tasks(repo_root: Path | None = None) -> list[dict]:
 
 
 def list_tasks_by_assignee(
-    assignee: str,
-    filter_status: str | None = None,
-    repo_root: Path | None = None
+    assignee: str, filter_status: str | None = None, repo_root: Path | None = None
 ) -> list[dict]:
     """List tasks assigned to a specific developer.
 
@@ -115,8 +114,7 @@ def list_tasks_by_assignee(
 
 
 def list_my_tasks(
-    filter_status: str | None = None,
-    repo_root: Path | None = None
+    filter_status: str | None = None, repo_root: Path | None = None
 ) -> list[dict]:
     """List tasks assigned to current developer.
 
@@ -185,4 +183,6 @@ if __name__ == "__main__":
     print()
     print("Pending tasks:")
     for task in list_pending_tasks():
-        print(f"  {task['priority']}|{task['id']}|{task['title']}|{task['status']}|{task['assignee']}")
+        print(
+            f"  {task['priority']}|{task['id']}|{task['title']}|{task['status']}|{task['assignee']}"
+        )

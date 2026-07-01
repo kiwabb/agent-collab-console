@@ -43,13 +43,17 @@ class _Store:
         self.issues[issue.id] = issue
         self.saved_issues.append(issue)
 
-    async def list_codex_issues(self, project_id: str | None = None, **kwargs) -> list[dict[str, object]]:
+    async def list_codex_issues(
+        self, project_id: str | None = None, **kwargs
+    ) -> list[dict[str, object]]:
         issues = list(self.issues.values())
         if project_id is not None:
             issues = [issue for issue in issues if issue.project_id == project_id]
         return [issue.model_dump() for issue in issues]
 
-    async def list_codex_tasks(self, issue_id: str | None = None, **kwargs) -> list[dict[str, object]]:
+    async def list_codex_tasks(
+        self, issue_id: str | None = None, **kwargs
+    ) -> list[dict[str, object]]:
         tasks = list(self.tasks.values())
         if issue_id is not None:
             tasks = [task for task in tasks if task.issue_id == issue_id]
@@ -111,7 +115,9 @@ def _issue(issue_id: str, **overrides) -> CodexIssue:
     return CodexIssue(**data)
 
 
-def _task(task_id: str, *, issue_id: str, role: str = "engineer", status: str = "done") -> CodexTask:
+def _task(
+    task_id: str, *, issue_id: str, role: str = "engineer", status: str = "done"
+) -> CodexTask:
     return CodexTask(
         id=task_id,
         session_id="session-1",
@@ -202,7 +208,10 @@ async def test_refresh_changes_requested_requeues_latest_engineer_task():
     assert store.saved_tasks[-1].status == "pending"
     assert "please add a regression test" in (store.saved_tasks[-1].review_comment or "")
     assert store.audit_events[-1]["event"] == "github_pr_followup_changes_requested"
-    assert any(event.get("type") == "task_status" and event.get("status") == "pending" for event in bus.events)
+    assert any(
+        event.get("type") == "task_status" and event.get("status") == "pending"
+        for event in bus.events
+    )
 
 
 @pytest.mark.asyncio
@@ -281,7 +290,9 @@ async def test_sweep_status_records_failure_and_reraises():
     reset_github_pr_followup_status()
 
     class BrokenStore(_Store):
-        async def list_codex_issues(self, project_id: str | None = None, **kwargs) -> list[dict[str, object]]:
+        async def list_codex_issues(
+            self, project_id: str | None = None, **kwargs
+        ) -> list[dict[str, object]]:
             raise RuntimeError("database temporarily unavailable")
 
     store = BrokenStore(issues=[])
@@ -326,7 +337,11 @@ async def test_sweep_auto_merges_approved_green_mergeable_pr():
                     merge_status="CLEAN",
                     checks=[
                         {"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
-                        {"name": "Frontend quality", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                        {
+                            "name": "Frontend quality",
+                            "status": "COMPLETED",
+                            "conclusion": "SUCCESS",
+                        },
                     ],
                 ),
             )
@@ -482,7 +497,9 @@ async def test_sweep_auto_merge_failure_is_isolated():
                     state="OPEN",
                     decision="APPROVED",
                     merge_status="CLEAN",
-                    checks=[{"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    checks=[
+                        {"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                    ],
                 ),
             )
         if args[3].endswith("/6"):
@@ -517,7 +534,9 @@ async def test_sweep_auto_merge_exception_is_merge_failed_and_isolated():
                     state="OPEN",
                     decision="APPROVED",
                     merge_status="CLEAN",
-                    checks=[{"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    checks=[
+                        {"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                    ],
                 ),
             )
         if args[3].endswith("/6"):
@@ -598,7 +617,9 @@ async def test_project_followup_endpoint_auto_merge_opt_in(monkeypatch):
                     state="OPEN",
                     decision="APPROVED",
                     merge_status="CLEAN",
-                    checks=[{"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    checks=[
+                        {"name": "Backend tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                    ],
                 ),
             )
         return _Proc(0, stdout="Merged")

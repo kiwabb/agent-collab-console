@@ -7,6 +7,7 @@ Covers:
   - issue spend aggregation: only completed runs are summed
   - timeouts knob invariants
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -205,28 +206,63 @@ async def test_aggregate_issue_spend_sums_only_completed_runs(tmp_path):
 
         now = datetime.now()
         # Completed runs: counted.
-        await store.save_execution_process(ExecutionProcess(
-            id="ep-done-1", task_id=task.id, session_id=issue.session_id,
-            status="Completed", total_cost_usd=1.50, created_at=now, updated_at=now,
-        ))
-        await store.save_execution_process(ExecutionProcess(
-            id="ep-failed-1", task_id=task.id, session_id=issue.session_id,
-            status="Failed", total_cost_usd=0.25, created_at=now, updated_at=now,
-        ))
-        await store.save_execution_process(ExecutionProcess(
-            id="ep-killed-1", task_id=task.id, session_id=issue.session_id,
-            status="Killed", total_cost_usd=0.25, created_at=now, updated_at=now,
-        ))
+        await store.save_execution_process(
+            ExecutionProcess(
+                id="ep-done-1",
+                task_id=task.id,
+                session_id=issue.session_id,
+                status="Completed",
+                total_cost_usd=1.50,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        await store.save_execution_process(
+            ExecutionProcess(
+                id="ep-failed-1",
+                task_id=task.id,
+                session_id=issue.session_id,
+                status="Failed",
+                total_cost_usd=0.25,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        await store.save_execution_process(
+            ExecutionProcess(
+                id="ep-killed-1",
+                task_id=task.id,
+                session_id=issue.session_id,
+                status="Killed",
+                total_cost_usd=0.25,
+                created_at=now,
+                updated_at=now,
+            )
+        )
         # Running run: NOT counted (cost not yet final).
-        await store.save_execution_process(ExecutionProcess(
-            id="ep-running-1", task_id=task.id, session_id=issue.session_id,
-            status="Running", total_cost_usd=99.0, created_at=now, updated_at=now,
-        ))
+        await store.save_execution_process(
+            ExecutionProcess(
+                id="ep-running-1",
+                task_id=task.id,
+                session_id=issue.session_id,
+                status="Running",
+                total_cost_usd=99.0,
+                created_at=now,
+                updated_at=now,
+            )
+        )
         # Completed run with no cost recorded: contributes 0.
-        await store.save_execution_process(ExecutionProcess(
-            id="ep-done-nocost", task_id=task.id, session_id=issue.session_id,
-            status="Completed", total_cost_usd=None, created_at=now, updated_at=now,
-        ))
+        await store.save_execution_process(
+            ExecutionProcess(
+                id="ep-done-nocost",
+                task_id=task.id,
+                session_id=issue.session_id,
+                status="Completed",
+                total_cost_usd=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
 
         spend = await aggregate_issue_spend_usd(store, issue.id)
         assert spend == pytest.approx(2.0)
@@ -274,8 +310,11 @@ def test_budget_status_no_ceiling_when_budget_zero():
     from app.application.budget_service import IssueBudgetStatus
 
     status = IssueBudgetStatus(
-        issue_id="i", spent_usd=3.0, budget_usd=0.0,
-        budget_source="default", soft_warn_ratio=0.8,
+        issue_id="i",
+        spent_usd=3.0,
+        budget_usd=0.0,
+        budget_source="default",
+        soft_warn_ratio=0.8,
     )
     assert not status.has_ceiling
     assert status.remaining_usd is None
@@ -287,11 +326,15 @@ def test_budget_status_no_ceiling_when_budget_zero():
 def test_budget_status_soft_warn_and_over_budget_flags():
     from app.application.budget_service import IssueBudgetStatus
 
-    warn = IssueBudgetStatus("i", spent_usd=8.5, budget_usd=10.0, budget_source="issue", soft_warn_ratio=0.8)
+    warn = IssueBudgetStatus(
+        "i", spent_usd=8.5, budget_usd=10.0, budget_source="issue", soft_warn_ratio=0.8
+    )
     assert warn.soft_warn
     assert not warn.over_budget
 
-    over = IssueBudgetStatus("i", spent_usd=10.0, budget_usd=10.0, budget_source="issue", soft_warn_ratio=0.8)
+    over = IssueBudgetStatus(
+        "i", spent_usd=10.0, budget_usd=10.0, budget_source="issue", soft_warn_ratio=0.8
+    )
     assert over.soft_warn
     assert over.over_budget
 
@@ -299,7 +342,9 @@ def test_budget_status_soft_warn_and_over_budget_flags():
 def test_render_budget_summary_includes_spend_budget_remaining():
     from app.application.budget_service import IssueBudgetStatus, render_budget_summary
 
-    status = IssueBudgetStatus("i", spent_usd=2.0, budget_usd=10.0, budget_source="issue", soft_warn_ratio=0.8)
+    status = IssueBudgetStatus(
+        "i", spent_usd=2.0, budget_usd=10.0, budget_source="issue", soft_warn_ratio=0.8
+    )
     text = render_budget_summary(status)
     assert "COST / BUDGET" in text
     assert "$2.0000" in text
@@ -310,7 +355,9 @@ def test_render_budget_summary_includes_spend_budget_remaining():
 def test_render_budget_summary_no_ceiling():
     from app.application.budget_service import IssueBudgetStatus, render_budget_summary
 
-    status = IssueBudgetStatus("i", spent_usd=1.0, budget_usd=0.0, budget_source="default", soft_warn_ratio=0.8)
+    status = IssueBudgetStatus(
+        "i", spent_usd=1.0, budget_usd=0.0, budget_source="default", soft_warn_ratio=0.8
+    )
     text = render_budget_summary(status)
     assert "unlimited" in text.lower()
 

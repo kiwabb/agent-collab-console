@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import shutil
 import subprocess
@@ -45,8 +45,12 @@ def manager() -> WorktreeManager:
 
 
 @pytest.mark.asyncio
-async def test_prepare_issue_worktree_creates_branch_and_path(project: Project, manager: WorktreeManager):
-    issue = CodexIssue(id="issue-deadbeef", session_id="s1", project_id=project.id, title="Add foo feature")
+async def test_prepare_issue_worktree_creates_branch_and_path(
+    project: Project, manager: WorktreeManager
+):
+    issue = CodexIssue(
+        id="issue-deadbeef", session_id="s1", project_id=project.id, title="Add foo feature"
+    )
     branch, path, base = await manager.prepare_issue_worktree(project, issue)
     assert branch.startswith(f"issue/{issue.id[:8]}-")
     assert "add-foo" in branch
@@ -65,7 +69,9 @@ async def test_prepare_issue_worktree_is_idempotent(project: Project, manager: W
 
 
 @pytest.mark.asyncio
-async def test_merge_issue_squashes_changes_back_to_base(project: Project, manager: WorktreeManager):
+async def test_merge_issue_squashes_changes_back_to_base(
+    project: Project, manager: WorktreeManager
+):
     issue = CodexIssue(id="issue-bbbb2222", session_id="s1", project_id=project.id, title="feat")
     _, path, _ = await manager.prepare_issue_worktree(project, issue)
     issue.git_branch = f"issue/{issue.id[:8]}-feat"
@@ -76,7 +82,11 @@ async def test_merge_issue_squashes_changes_back_to_base(project: Project, manag
     _git("-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "work", cwd=Path(path))
     result = await manager.merge_issue(project, issue, message="merge feat")
     log = subprocess.run(
-        ["git", "log", "--oneline", "main"], cwd=project.repo_path, capture_output=True, text=True, check=True
+        ["git", "log", "--oneline", "main"],
+        cwd=project.repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert "merge feat" in log
     assert issue.git_merge_status == "merged"
@@ -94,7 +104,9 @@ async def test_cleanup_issue_worktree_removes_directory(project: Project, manage
 
 @pytest.mark.asyncio
 async def test_prepare_chat_task_worktree(project: Project, manager: WorktreeManager):
-    task = CodexTask(id="task-dddd4444", session_id="s1", project_id=project.id, title="quick fix", prompt="...")
+    task = CodexTask(
+        id="task-dddd4444", session_id="s1", project_id=project.id, title="quick fix", prompt="..."
+    )
     branch, path, base = await manager.prepare_chat_task_worktree(project, task)
     assert branch.startswith("chat/task-ddd")
     assert Path(path).exists()
@@ -104,7 +116,9 @@ async def test_prepare_chat_task_worktree(project: Project, manager: WorktreeMan
 # ---- Per-agent (swarm) worktree ----
 
 
-async def _issue_with_worktree(project: Project, manager: WorktreeManager, issue_id: str) -> CodexIssue:
+async def _issue_with_worktree(
+    project: Project, manager: WorktreeManager, issue_id: str
+) -> CodexIssue:
     issue = CodexIssue(id=issue_id, session_id="s1", project_id=project.id, title="swarm work")
     branch, path, base = await manager.prepare_issue_worktree(project, issue)
     issue.git_branch = branch
@@ -114,7 +128,9 @@ async def _issue_with_worktree(project: Project, manager: WorktreeManager, issue
 
 
 @pytest.mark.asyncio
-async def test_prepare_agent_worktree_forks_from_issue_branch(project: Project, manager: WorktreeManager):
+async def test_prepare_agent_worktree_forks_from_issue_branch(
+    project: Project, manager: WorktreeManager
+):
     issue = await _issue_with_worktree(project, manager, "issue-swrm0001")
     branch, path, base = await manager.prepare_agent_worktree(project, issue, "engineerA")
     assert branch == f"swarm/{issue.id[:8]}-engineera"
@@ -125,8 +141,12 @@ async def test_prepare_agent_worktree_forks_from_issue_branch(project: Project, 
 
 
 @pytest.mark.asyncio
-async def test_prepare_agent_worktree_requires_issue_branch(project: Project, manager: WorktreeManager):
-    issue = CodexIssue(id="issue-swrm0002", session_id="s1", project_id=project.id, title="no branch yet")
+async def test_prepare_agent_worktree_requires_issue_branch(
+    project: Project, manager: WorktreeManager
+):
+    issue = CodexIssue(
+        id="issue-swrm0002", session_id="s1", project_id=project.id, title="no branch yet"
+    )
     with pytest.raises(WorktreeError):
         await manager.prepare_agent_worktree(project, issue, "engineerA")
 
@@ -153,7 +173,9 @@ async def test_prepare_agent_worktree_is_idempotent(project: Project, manager: W
 
 
 @pytest.mark.asyncio
-async def test_cleanup_agent_worktree_removes_and_is_idempotent(project: Project, manager: WorktreeManager):
+async def test_cleanup_agent_worktree_removes_and_is_idempotent(
+    project: Project, manager: WorktreeManager
+):
     issue = await _issue_with_worktree(project, manager, "issue-swrm0005")
     _, path, _ = await manager.prepare_agent_worktree(project, issue, "engineerA")
     assert Path(path).exists()
@@ -164,7 +186,9 @@ async def test_cleanup_agent_worktree_removes_and_is_idempotent(project: Project
 
 
 @pytest.mark.asyncio
-async def test_cleanup_issue_swarm_worktrees_noop_when_no_swarm(project: Project, manager: WorktreeManager):
+async def test_cleanup_issue_swarm_worktrees_noop_when_no_swarm(
+    project: Project, manager: WorktreeManager
+):
     """Terminal-state sweep is a safe no-op on an issue that never ran a swarm
     batch: no worktrees/branches to remove, no raise, idempotent."""
     issue = await _issue_with_worktree(project, manager, "issue-swrm0006")
@@ -187,7 +211,9 @@ async def test_cleanup_issue_swarm_worktrees_noop_when_no_swarm(project: Project
 
 
 @pytest.mark.asyncio
-async def test_cleanup_issue_swarm_worktrees_removes_residual_agents(project: Project, manager: WorktreeManager):
+async def test_cleanup_issue_swarm_worktrees_removes_residual_agents(
+    project: Project, manager: WorktreeManager
+):
     """Removes residual per-agent swarm worktrees + `swarm/*` branch refs while
     leaving the shared issue worktree/branch and main untouched."""
     issue = await _issue_with_worktree(project, manager, "issue-swrm0007")
@@ -270,7 +296,9 @@ def _commit(path: Path, name: str, content: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_commit_issue_worktree_flushes_uncommitted(project: Project, manager: WorktreeManager):
+async def test_commit_issue_worktree_flushes_uncommitted(
+    project: Project, manager: WorktreeManager
+):
     issue = await _issue_with_worktree(project, manager, "issue-flsh0001")
     # Upstream artifact left uncommitted in the shared issue worktree.
     (Path(issue.git_worktree_path) / "prd.md").write_text("requirements")
@@ -278,7 +306,10 @@ async def test_commit_issue_worktree_flushes_uncommitted(project: Project, manag
     assert sha is not None
     # Clean tree afterwards.
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=issue.git_worktree_path, capture_output=True, text=True
+        ["git", "status", "--porcelain"],
+        cwd=issue.git_worktree_path,
+        capture_output=True,
+        text=True,
     ).stdout
     assert status.strip() == ""
     # Idempotent: nothing to commit now.
@@ -286,7 +317,9 @@ async def test_commit_issue_worktree_flushes_uncommitted(project: Project, manag
 
 
 @pytest.mark.asyncio
-async def test_agent_worktree_sees_committed_upstream_artifacts(project: Project, manager: WorktreeManager):
+async def test_agent_worktree_sees_committed_upstream_artifacts(
+    project: Project, manager: WorktreeManager
+):
     """Upstream-visibility fix: after flushing the issue worktree, a per-agent
     worktree forked from the issue branch can see the upstream artifact."""
     issue = await _issue_with_worktree(project, manager, "issue-flsh0002")
@@ -303,7 +336,9 @@ async def _merge_candidate(project, manager, issue, agent_key, filename, content
 
 
 @pytest.mark.asyncio
-async def test_merge_agent_worktrees_sequential_no_conflict(project: Project, manager: WorktreeManager):
+async def test_merge_agent_worktrees_sequential_no_conflict(
+    project: Project, manager: WorktreeManager
+):
     issue = await _issue_with_worktree(project, manager, "issue-mrg00001")
     a = await _merge_candidate(project, manager, issue, "engineerA", "a.txt", "AAA")
     b = await _merge_candidate(project, manager, issue, "engineerB", "b.txt", "BBB")
@@ -315,8 +350,11 @@ async def test_merge_agent_worktrees_sequential_no_conflict(project: Project, ma
 
     # Both files landed on the issue branch (verify in a fresh detached worktree).
     log = subprocess.run(
-        ["git", "log", "--oneline", issue.git_branch], cwd=project.repo_path,
-        capture_output=True, text=True, check=True,
+        ["git", "log", "--oneline", issue.git_branch],
+        cwd=project.repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert "merge swarm agent engineerA" in log
     assert "merge swarm agent engineerB" in log
@@ -328,7 +366,9 @@ async def test_merge_agent_worktrees_sequential_no_conflict(project: Project, ma
 
 
 @pytest.mark.asyncio
-async def test_merge_agent_worktrees_conflict_stops_and_keeps_worktree(project: Project, manager: WorktreeManager):
+async def test_merge_agent_worktrees_conflict_stops_and_keeps_worktree(
+    project: Project, manager: WorktreeManager
+):
     issue = await _issue_with_worktree(project, manager, "issue-mrg00002")
     # Two agents edit the SAME file with different content → conflict.
     a = await _merge_candidate(project, manager, issue, "engineerA", "shared.txt", "from A\n")
@@ -352,15 +392,20 @@ async def test_merge_agent_worktrees_conflict_stops_and_keeps_worktree(project: 
     assert Path(b["worktree_path"]).exists()
     # Already-merged agent A's commit was not rolled back.
     log = subprocess.run(
-        ["git", "log", "--oneline", issue.git_branch], cwd=project.repo_path,
-        capture_output=True, text=True, check=True,
+        ["git", "log", "--oneline", issue.git_branch],
+        cwd=project.repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert "merge swarm agent engineerA" in log
     assert "merge swarm agent engineerB" not in log
 
 
 @pytest.mark.asyncio
-async def test_merge_agent_worktrees_does_not_pollute_default_branch(project: Project, manager: WorktreeManager):
+async def test_merge_agent_worktrees_does_not_pollute_default_branch(
+    project: Project, manager: WorktreeManager
+):
     """Regression: merge-back must NOT advance the project default branch.
 
     The issue branch descends from `main`, so `main` is an ancestor of the
@@ -371,8 +416,11 @@ async def test_merge_agent_worktrees_does_not_pollute_default_branch(project: Pr
     """
     issue = await _issue_with_worktree(project, manager, "issue-pollu001")
     main_before = subprocess.run(
-        ["git", "rev-parse", "main"], cwd=project.repo_path,
-        capture_output=True, text=True, check=True,
+        ["git", "rev-parse", "main"],
+        cwd=project.repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
 
     a = await _merge_candidate(project, manager, issue, "engineerA", "a.txt", "AAA")
@@ -382,28 +430,40 @@ async def test_merge_agent_worktrees_does_not_pollute_default_branch(project: Pr
 
     # main must be byte-for-byte unchanged.
     main_after = subprocess.run(
-        ["git", "rev-parse", "main"], cwd=project.repo_path,
-        capture_output=True, text=True, check=True,
+        ["git", "rev-parse", "main"],
+        cwd=project.repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     assert main_after == main_before
     # main must not contain the agent files.
     main_tree = subprocess.run(
-        ["git", "ls-tree", "--name-only", "main"], cwd=project.repo_path,
-        capture_output=True, text=True, check=True,
+        ["git", "ls-tree", "--name-only", "main"],
+        cwd=project.repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert "a.txt" not in main_tree
     assert "b.txt" not in main_tree
     # The issue branch DID accumulate both agents' files.
     issue_tree = subprocess.run(
-        ["git", "ls-tree", "--name-only", issue.git_branch], cwd=project.repo_path,
-        capture_output=True, text=True, check=True,
+        ["git", "ls-tree", "--name-only", issue.git_branch],
+        cwd=project.repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert "a.txt" in issue_tree and "b.txt" in issue_tree
     # The shared issue worktree is consistent with the moved branch ref (no
     # stale index reporting phantom deletions) and has both files on disk.
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=issue.git_worktree_path,
-        capture_output=True, text=True, check=True,
+        ["git", "status", "--porcelain"],
+        cwd=issue.git_worktree_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert status.strip() == ""
     assert (Path(issue.git_worktree_path) / "a.txt").exists()
@@ -423,7 +483,9 @@ async def _noop_candidate(project, manager, issue, agent_key):
 
 
 @pytest.mark.asyncio
-async def test_merge_agent_worktrees_noop_agent_is_not_conflict(project: Project, manager: WorktreeManager):
+async def test_merge_agent_worktrees_noop_agent_is_not_conflict(
+    project: Project, manager: WorktreeManager
+):
     """Core regression: an agent that produced NO changes must not be treated as
     a conflict. Its branch has nothing ahead of the issue branch, so the squash
     merge would fail at the empty commit; that must be a clean no-op (worktree
@@ -442,7 +504,9 @@ async def test_merge_agent_worktrees_noop_agent_is_not_conflict(project: Project
 
 
 @pytest.mark.asyncio
-async def test_merge_agent_worktrees_mixed_noop_does_not_stop_others(project: Project, manager: WorktreeManager):
+async def test_merge_agent_worktrees_mixed_noop_does_not_stop_others(
+    project: Project, manager: WorktreeManager
+):
     """[changed A, no-op B, changed C] → A and C merge, B is a clean no-op, no
     conflict, no worktree leak, B does not stop C."""
     issue = await _issue_with_worktree(project, manager, "issue-noop0002")
@@ -464,14 +528,19 @@ async def test_merge_agent_worktrees_mixed_noop_does_not_stop_others(project: Pr
 
     # Both changed agents landed on the issue branch.
     issue_tree = subprocess.run(
-        ["git", "ls-tree", "--name-only", issue.git_branch], cwd=project.repo_path,
-        capture_output=True, text=True, check=True,
+        ["git", "ls-tree", "--name-only", issue.git_branch],
+        cwd=project.repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert "a.txt" in issue_tree and "c.txt" in issue_tree
 
 
 @pytest.mark.asyncio
-async def test_merge_agent_worktrees_real_conflict_still_stops_after_noop(project: Project, manager: WorktreeManager):
+async def test_merge_agent_worktrees_real_conflict_still_stops_after_noop(
+    project: Project, manager: WorktreeManager
+):
     """A real conflict (two agents editing the same file) must STILL stop-on-first
     and keep the conflicting worktree, even when a no-op agent precedes it — the
     no-op handling must not weaken real-conflict semantics."""

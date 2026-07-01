@@ -61,12 +61,20 @@ class _Store:
         self.events = events or {}
         self.list_calls: list[dict] = []
 
-    async def list_self_improvement_proposals(self, *, project_id=None, issue_id=None, status=None, limit=None):
-        self.list_calls.append({"project_id": project_id, "issue_id": issue_id, "status": status, "limit": limit})
-        rows = [proposal for proposal in self.proposals if status is None or proposal.status == status]
+    async def list_self_improvement_proposals(
+        self, *, project_id=None, issue_id=None, status=None, limit=None
+    ):
+        self.list_calls.append(
+            {"project_id": project_id, "issue_id": issue_id, "status": status, "limit": limit}
+        )
+        rows = [
+            proposal for proposal in self.proposals if status is None or proposal.status == status
+        ]
         return rows[:limit] if limit is not None else rows
 
-    async def list_self_improvement_application_events(self, *, project_id=None, proposal_id=None, limit=None):
+    async def list_self_improvement_application_events(
+        self, *, project_id=None, proposal_id=None, limit=None
+    ):
         rows = list(self.events.get(proposal_id, []))
         return rows[:limit] if limit is not None else rows
 
@@ -80,7 +88,9 @@ async def test_self_improvement_proposal_tick_activates_eligible_accepted_non_me
         calls.append((project_id, proposal_id, start_conductor))
         return {"activation": {"conductor": {"started": True, "already_running": False}}}
 
-    summary = await run_self_improvement_proposal_tick(_Store([proposal]), activate_fn=activate, limit=10)
+    summary = await run_self_improvement_proposal_tick(
+        _Store([proposal]), activate_fn=activate, limit=10
+    )
 
     assert calls == [("project-1", "proposal-1", True)]
     assert summary.to_dict()["counts"] == {"started": 1}
@@ -96,7 +106,9 @@ async def test_self_improvement_proposal_tick_skips_project_memory_proposals():
         calls.append(proposal_id)
         return {}
 
-    summary = await run_self_improvement_proposal_tick(_Store([proposal]), activate_fn=activate, limit=10)
+    summary = await run_self_improvement_proposal_tick(
+        _Store([proposal]), activate_fn=activate, limit=10
+    )
 
     assert calls == []
     assert summary.to_dict()["counts"] == {"skipped_project_memory": 1}
@@ -132,7 +144,9 @@ async def test_self_improvement_proposal_tick_isolates_activation_failures_and_c
             raise RuntimeError("synthetic activation failure")
         return {"activation": {"conductor": {"started": True, "already_running": False}}}
 
-    summary = await run_self_improvement_proposal_tick(_Store([first, second]), activate_fn=activate, limit=10)
+    summary = await run_self_improvement_proposal_tick(
+        _Store([first, second]), activate_fn=activate, limit=10
+    )
 
     assert calls == ["proposal-fail", "proposal-ok"]
     assert summary.to_dict()["counts"] == {"failed": 1, "started": 1}
@@ -153,7 +167,9 @@ async def test_self_improvement_proposal_tick_honors_limit():
 
     summary = await run_self_improvement_proposal_tick(store, activate_fn=activate, limit=2)
 
-    assert store.list_calls == [{"project_id": None, "issue_id": None, "status": "accepted", "limit": 2}]
+    assert store.list_calls == [
+        {"project_id": None, "issue_id": None, "status": "accepted", "limit": 2}
+    ]
     assert calls == ["proposal-1", "proposal-2"]
     assert summary.to_dict()["counts"] == {"already_running": 2}
 

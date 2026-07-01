@@ -7,9 +7,10 @@ clamped to at least 1, with unlimited budget leaving the cap untouched and over
 budget squeezing to 1. These tests pin the algorithm so the knob stays
 explainable.
 """
+
 from __future__ import annotations
 
-import pytest
+import pytest  # noqa: F401
 
 from app.application import timeouts
 

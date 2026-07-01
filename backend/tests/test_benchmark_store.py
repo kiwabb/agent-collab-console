@@ -7,7 +7,8 @@ Covers:
   - The two stores are API-equivalent (run the same scenario
     against both).
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import json
 from pathlib import Path

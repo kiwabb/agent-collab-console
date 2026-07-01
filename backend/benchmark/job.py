@@ -22,15 +22,16 @@ side — the *BenchmarkRun* row that survives a restart — is in
 :mod:`benchmark.store`; the *Job* here is the ephemeral "I am
 running this run right now" record, which is fine to lose.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import asyncio
-import time
+import time  # noqa: F401
 import traceback
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional  # noqa: F401, UP035
 
 
 # Status lifecycle:
@@ -136,7 +137,7 @@ async def start_job(
     async def _runner() -> None:
         try:
             result = await coro()
-        except BaseException as exc:  # noqa: BLE001 — 边界 catch
+        except BaseException as exc:  # noqa: BLE001, RUF100
             job.status = JOB_STATUS_FAILED
             job.completed_at = _now()
             job.error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
@@ -156,7 +157,7 @@ async def start_job(
     # + the benchmark store. (For a production deployment with
     # lease-based recovery, we'd keep the task in a set and
     # restart on boot; out of scope for PR3.)
-    asyncio.create_task(_runner())
+    asyncio.create_task(_runner())  # noqa: RUF006
 
 
 # ---------------------------------------------------------------------------
@@ -164,9 +165,7 @@ async def start_job(
 # ---------------------------------------------------------------------------
 
 
-def make_progress_updater(
-    registry: JobRegistry, job: Job
-) -> Callable[[int, int], None]:
+def make_progress_updater(registry: JobRegistry, job: Job) -> Callable[[int, int], None]:
     """Return a ``(epoch_index, total_epochs) -> None`` callback the
     runner can call after every epoch to update the job's
     progress. Stored in the runner's ``options.meta['progress_cb']``

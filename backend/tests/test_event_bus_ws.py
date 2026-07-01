@@ -44,7 +44,9 @@ def test_global_events_ws_streams_envelopes_and_resume_gap(client):
     event_bus._event_seq = 0
 
     with client.websocket_connect("/api/ws/events") as ws:
-        asyncio.run(event_bus.append({"type": "issue_updated", "issue_id": "issue-1", "status": "open"}))
+        asyncio.run(
+            event_bus.append({"type": "issue_updated", "issue_id": "issue-1", "status": "open"})
+        )
         message = ws.receive_json()
         assert message["type"] == "issue_updated"
         assert message["event_id"] == "evt-00000001"
@@ -64,7 +66,9 @@ def test_global_events_ws_replays_then_streams_live_without_duplicate(client):
     asyncio.run(event_bus.append({"type": "issue_created", "issue_id": "issue-1"}))
 
     with client.websocket_connect("/api/ws/events?last_event_id=evt-00000001") as ws:
-        asyncio.run(event_bus.append({"type": "issue_updated", "issue_id": "issue-1", "status": "open"}))
+        asyncio.run(
+            event_bus.append({"type": "issue_updated", "issue_id": "issue-1", "status": "open"})
+        )
         message = ws.receive_json()
         assert message["event_id"] == "evt-00000002"
         assert message["type"] == "issue_updated"

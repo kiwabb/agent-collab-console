@@ -4,6 +4,7 @@ The Claude CLI emits multiple "assistant" type messages during a single turn
 (via --include-partial-messages), each carrying the growing content array.
 Backend must compute the increment vs. last emission and broadcast a
 "message_delta" event so the frontend can render a typewriter effect."""
+
 from datetime import datetime
 
 import pytest
@@ -38,17 +39,34 @@ async def _seed_db(tmp_path, ep_id="ep-stream-1"):
 
     db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
     now = datetime.now()
-    session = CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
+    session = CodexSession(
+        id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now
+    )
     await db.save_codex_session(session)
     task = CodexTask(
-        id="task-1", session_id="ws-1", phase="requirements", title="t", prompt="p",
-        role="product_manager", executor="claude", status="running",
-        workspace_path=str(tmp_path), last_execution_process_id=ep_id,
-        created_at=now, updated_at=now,
+        id="task-1",
+        session_id="ws-1",
+        phase="requirements",
+        title="t",
+        prompt="p",
+        role="product_manager",
+        executor="claude",
+        status="running",
+        workspace_path=str(tmp_path),
+        last_execution_process_id=ep_id,
+        created_at=now,
+        updated_at=now,
     )
     await db.save_codex_task(task)
-    ep = ExecutionProcess(id=ep_id, task_id="task-1", session_id="ws-1",
-                          status="Running", kind="initial", created_at=now, updated_at=now)
+    ep = ExecutionProcess(
+        id=ep_id,
+        task_id="task-1",
+        session_id="ws-1",
+        status="Running",
+        kind="initial",
+        created_at=now,
+        updated_at=now,
+    )
     await db.save_execution_process(ep)
     return db
 
@@ -59,14 +77,22 @@ async def test_assistant_partials_emit_message_delta_events(tmp_path):
     db = await _seed_db(tmp_path)
     try:
         bus = _EventBusSpy()
-        runtime = BaseProcessRuntime(codex_store=db, log_store=db, data_dir=str(tmp_path), event_bus=bus, refresh_task_result=None)
+        runtime = BaseProcessRuntime(
+            codex_store=db,
+            log_store=db,
+            data_dir=str(tmp_path),
+            event_bus=bus,
+            refresh_task_result=None,
+        )
         entry = _make_entry("task-1")
 
         # Simulate 3 progressive partial-message lines from claude (--include-partial-messages)
         import json as _json
 
         async def _claude_assistant(text: str):
-            line = _json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+            line = _json.dumps(
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+            )
             await runtime._capture_on_reader("ws-1", line, entry, "task-1")
 
         await _claude_assistant("Hello")
@@ -79,7 +105,9 @@ async def test_assistant_partials_emit_message_delta_events(tmp_path):
         assert deltas[1]["delta_text"] == ", world"
         assert deltas[2]["delta_text"] == "!"
         seqs = [d["seq"] for d in deltas]
-        assert seqs == sorted(seqs) and len(set(seqs)) == 3, f"seq must be strictly monotonic: {seqs}"
+        assert seqs == sorted(seqs) and len(set(seqs)) == 3, (
+            f"seq must be strictly monotonic: {seqs}"
+        )
         for d in deltas:
             assert d["execution_process_id"] == "ep-stream-1"
             assert d["task_id"] == "task-1"
@@ -93,12 +121,21 @@ async def test_assistant_unchanged_text_emits_no_delta(tmp_path):
     db = await _seed_db(tmp_path)
     try:
         bus = _EventBusSpy()
-        runtime = BaseProcessRuntime(codex_store=db, log_store=db, data_dir=str(tmp_path), event_bus=bus, refresh_task_result=None)
+        runtime = BaseProcessRuntime(
+            codex_store=db,
+            log_store=db,
+            data_dir=str(tmp_path),
+            event_bus=bus,
+            refresh_task_result=None,
+        )
         entry = _make_entry("task-1")
 
         import json as _json
+
         async def _emit(text):
-            line = _json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+            line = _json.dumps(
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+            )
             await runtime._capture_on_reader("ws-1", line, entry, "task-1")
 
         await _emit("Hello")
@@ -118,12 +155,21 @@ async def test_assistant_non_prefix_change_emits_full_text_as_delta(tmp_path):
     db = await _seed_db(tmp_path)
     try:
         bus = _EventBusSpy()
-        runtime = BaseProcessRuntime(codex_store=db, log_store=db, data_dir=str(tmp_path), event_bus=bus, refresh_task_result=None)
+        runtime = BaseProcessRuntime(
+            codex_store=db,
+            log_store=db,
+            data_dir=str(tmp_path),
+            event_bus=bus,
+            refresh_task_result=None,
+        )
         entry = _make_entry("task-1")
 
         import json as _json
+
         async def _emit(text):
-            line = _json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+            line = _json.dumps(
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+            )
             await runtime._capture_on_reader("ws-1", line, entry, "task-1")
 
         await _emit("Hello there")
@@ -144,11 +190,20 @@ async def test_message_delta_event_includes_execution_process_id_from_task(tmp_p
     db = await _seed_db(tmp_path, ep_id="ep-custom-42")
     try:
         bus = _EventBusSpy()
-        runtime = BaseProcessRuntime(codex_store=db, log_store=db, data_dir=str(tmp_path), event_bus=bus, refresh_task_result=None)
+        runtime = BaseProcessRuntime(
+            codex_store=db,
+            log_store=db,
+            data_dir=str(tmp_path),
+            event_bus=bus,
+            refresh_task_result=None,
+        )
         entry = _make_entry("task-1")
 
         import json as _json
-        line = _json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello"}]}})
+
+        line = _json.dumps(
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello"}]}}
+        )
         await runtime._capture_on_reader("ws-1", line, entry, "task-1")
 
         deltas = [e for e in bus.events if e.get("type") == "message_delta"]
@@ -179,6 +234,7 @@ async def test_codex_item_delta_emits_message_delta_events(tmp_path):
         bus = _EventBusSpy()
 
         from app.application.codex_app_server_runtime import CodexAppServerRuntime
+
         # CodexAppServerRuntime requires several dependencies; we build a minimal
         # instance by constructing manually and only exercising the notification path.
         runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
@@ -231,6 +287,7 @@ async def test_codex_item_delta_ignored_for_non_agent_message_item(tmp_path):
     try:
         bus = _EventBusSpy()
         from app.application.codex_app_server_runtime import CodexAppServerRuntime
+
         runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
         runtime.codex_store = db
         runtime._log_store = db
@@ -241,8 +298,14 @@ async def test_codex_item_delta_ignored_for_non_agent_message_item(tmp_path):
         runtime.refresh_task_result = None
 
         entry = AsyncProcessEntry(
-            proc=None, output_task=None, alive=True, session_id="ws-1",  # type: ignore[arg-type]
-            task_id="task-1", executor="codex", cwd=str(tmp_path), resume_session_id=None,
+            proc=None,
+            output_task=None,
+            alive=True,
+            session_id="ws-1",  # type: ignore[arg-type]
+            task_id="task-1",
+            executor="codex",
+            cwd=str(tmp_path),
+            resume_session_id=None,
         )
         runtime._processes["task-1"] = entry
 
@@ -266,6 +329,7 @@ async def test_codex_failed_turn_uses_turn_error_not_prior_final_answer(tmp_path
         bus = _EventBusSpy()
 
         from app.application.codex_app_server_runtime import CodexAppServerRuntime
+
         runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
         runtime.codex_store = db
         runtime._log_store = db
@@ -290,22 +354,28 @@ async def test_codex_failed_turn_uses_turn_error_not_prior_final_answer(tmp_path
 
         callback = runtime._make_app_server_notification_callback("ws-1", "task-1")
 
-        await callback("item.completed", {
-            "item": {
-                "type": "agent_message",
-                "phase": "final_answer",
-                "text": "{\"language\":\"zh-CN\"}",
-            }
-        })
-        await callback("turn.completed", {
-            "status": "failed",
-            "turn": {
+        await callback(
+            "item.completed",
+            {
+                "item": {
+                    "type": "agent_message",
+                    "phase": "final_answer",
+                    "text": '{"language":"zh-CN"}',
+                }
+            },
+        )
+        await callback(
+            "turn.completed",
+            {
                 "status": "failed",
-                "error": {
-                    "message": "ProductManager 返回了无效的 PRD 格式",
+                "turn": {
+                    "status": "failed",
+                    "error": {
+                        "message": "ProductManager 返回了无效的 PRD 格式",
+                    },
                 },
             },
-        })
+        )
 
         task = await db.load_codex_task("task-1")
         assert task is not None
@@ -327,8 +397,10 @@ async def test_event_bus_routes_message_delta_to_message_stream_manager(monkeypa
     class _MgrStub:
         async def publish_delta(self, ep_id, event):
             captured.append((ep_id, event))
+
         async def publish_message(self, *a, **kw):
             pass
+
         async def publish_finished(self, *a, **kw):
             pass
 

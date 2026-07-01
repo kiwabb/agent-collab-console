@@ -1,5 +1,6 @@
 """Tests for /api/codex/tasks/{id}/rerun endpoint (P4)."""
-from datetime import datetime
+
+from datetime import datetime  # noqa: I001
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +20,9 @@ def _make_session(tmp_path):
     return CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
 
 
-def _make_task(*, status="done", phase="requirements", sequence_index=None, sequence_group=None, tmp_path=None):
+def _make_task(
+    *, status="done", phase="requirements", sequence_index=None, sequence_group=None, tmp_path=None
+):
     now = datetime.now()
     return CodexTask(
         id="task-1",
@@ -61,9 +64,17 @@ class RerunStoreStub:
 
     async def list_codex_tasks(self, session_id=None, issue_id=None):
         return [
-            {"id": t.id, "session_id": t.session_id, "issue_id": t.issue_id, "status": t.status,
-             "phase": t.phase, "role": t.role, "executor": t.executor,
-             "sequence_index": t.sequence_index, "sequence_group": t.sequence_group}
+            {
+                "id": t.id,
+                "session_id": t.session_id,
+                "issue_id": t.issue_id,
+                "status": t.status,
+                "phase": t.phase,
+                "role": t.role,
+                "executor": t.executor,
+                "sequence_index": t.sequence_index,
+                "sequence_group": t.sequence_group,
+            }
             for t in self.tasks.values()
         ]
 
@@ -93,12 +104,28 @@ def _install_runner_stub(monkeypatch, store):
     captured = {}
 
     class _RunnerStub:
-        async def start_task_run(self, task, *, kind="initial", triggering_message_id=None,
-                                  prompt_override=None, run_executor=None, run_provider=None, run_model=None, **_):
-            captured.update({
-                "kind": kind, "prompt_override": prompt_override, "task_prompt": task.prompt,
-                "run_executor": run_executor, "run_provider": run_provider, "run_model": run_model,
-            })
+        async def start_task_run(
+            self,
+            task,
+            *,
+            kind="initial",
+            triggering_message_id=None,
+            prompt_override=None,
+            run_executor=None,
+            run_provider=None,
+            run_model=None,
+            **_,
+        ):
+            captured.update(
+                {
+                    "kind": kind,
+                    "prompt_override": prompt_override,
+                    "task_prompt": task.prompt,
+                    "run_executor": run_executor,
+                    "run_provider": run_provider,
+                    "run_model": run_model,
+                }
+            )
             ep = ExecutionProcess(
                 id=f"ep-rerun-{len(store.execution_processes) + 1}",
                 task_id=task.id,
@@ -163,10 +190,14 @@ def test_rerun_rejects_running_task(isolated_client, monkeypatch, tmp_path):
 def test_rerun_blocked_by_development_sequencing(isolated_client, monkeypatch, tmp_path):
     """Rerun for development task with sequence_index>0 must check prev task done."""
     session = _make_session(tmp_path)
-    prev = _make_task(tmp_path=tmp_path, phase="development", sequence_index=0, sequence_group="issue-1")
+    prev = _make_task(
+        tmp_path=tmp_path, phase="development", sequence_index=0, sequence_group="issue-1"
+    )
     prev.id = "task-prev"
     prev.status = "pending"  # NOT done
-    me = _make_task(tmp_path=tmp_path, phase="development", sequence_index=1, sequence_group="issue-1")
+    me = _make_task(
+        tmp_path=tmp_path, phase="development", sequence_index=1, sequence_group="issue-1"
+    )
     store = RerunStoreStub(session=session, tasks=[prev, me])
     monkeypatch.setattr(api_module, "codex_store", store)
     _install_runner_stub(monkeypatch, store)

@@ -211,7 +211,7 @@ async def test_git_command_audit(tmp_path, monkeypatch):
 def test_cli_spawn_audit_redacts_prompt(monkeypatch):
     """claude_process_runtime._audit_cli_spawn records cli_spawn with the
     trailing prompt arg redacted."""
-    from app.application.claude_process_runtime import ClaudeProcessRuntime
+    from app.application.claude_process_runtime import ClaudeProcessRuntime  # noqa: I001
     from app.application import audit_logger as audit_mod
 
     captured = []
@@ -242,7 +242,7 @@ def test_cli_spawn_audit_redacts_prompt(monkeypatch):
 
 def test_qa_command_exec_audit(monkeypatch):
     """QAWorkflow._audit_command_execs mirrors each command into command_exec."""
-    from app.application.qa_workflow import QAWorkflow
+    from app.application.qa_workflow import QAWorkflow  # noqa: I001
     from app.application import audit_logger as audit_mod
 
     captured = []
@@ -255,7 +255,14 @@ def test_qa_command_exec_audit(monkeypatch):
     QAWorkflow._audit_command_execs(
         [
             {"command": "pytest", "exit_code": 0, "stdout": "ok", "stderr": "", "duration_s": 1.5},
-            {"command": "rm -rf /", "exit_code": -1, "stdout": "", "stderr": "x", "duration_s": 0.0, "refused": "danger"},
+            {
+                "command": "rm -rf /",
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": "x",
+                "duration_s": 0.0,
+                "refused": "danger",
+            },
         ],
         "issue-1",
         "task-1",
@@ -271,7 +278,7 @@ def test_qa_command_exec_audit(monkeypatch):
 
 
 def test_qa_command_exec_audit_none_records_nothing(monkeypatch):
-    from app.application.qa_workflow import QAWorkflow
+    from app.application.qa_workflow import QAWorkflow  # noqa: I001
     from app.application import audit_logger as audit_mod
 
     captured = []
@@ -288,7 +295,7 @@ def test_qa_command_exec_audit_none_records_nothing(monkeypatch):
 def test_conductor_turn_audit_maps_kinds(monkeypatch):
     """_audit_conductor_turn maps conductor turn kinds to audit categories and
     skips unknown kinds."""
-    from app.application import conductor_main_loop as cml
+    from app.application import conductor_main_loop as cml  # noqa: I001
     from app.application import audit_logger as audit_mod
 
     captured = []
@@ -349,7 +356,7 @@ def test_conductor_turn_audit_maps_kinds(monkeypatch):
 async def test_event_bus_mirrors_event_and_skips_conductor_turn(monkeypatch):
     """event_bus.append mirrors generic events into audit_log `event` but skips
     conductor_turn / per-line log / delta / heartbeat to avoid double-write."""
-    from app.application.event_bus import EventBus
+    from app.application.event_bus import EventBus  # noqa: I001
     from app.application import audit_logger as audit_mod
 
     captured = []
@@ -379,7 +386,7 @@ async def test_event_bus_mirrors_event_and_skips_conductor_turn(monkeypatch):
 @pytest.mark.asyncio
 async def test_autoplan_llm_audit(monkeypatch):
     """llm_runner._audit_autoplan records llm_call / llm_return."""
-    from app.application import llm_runner
+    from app.application import llm_runner  # noqa: I001
     from app.application import audit_logger as audit_mod
 
     captured = []
@@ -417,9 +424,7 @@ def test_sync_store_save_and_list_audit_log(tmp_path):
     store.save_audit_log(
         AuditLog(id="a1", category="git_command", issue_id="i1", payload_json='{"x":1}')
     )
-    store.save_audit_log(
-        AuditLog(id="a2", category="llm_call", issue_id="i2", payload_json="{}")
-    )
+    store.save_audit_log(AuditLog(id="a2", category="llm_call", issue_id="i2", payload_json="{}"))
     rows = store.list_audit_logs(category="git_command")
     assert len(rows) == 1
     assert rows[0].id == "a1"

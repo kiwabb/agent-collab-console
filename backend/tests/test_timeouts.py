@@ -1,4 +1,5 @@
 """Timeout ladder single-source-of-truth: defaults + invariant assertions."""
+
 from __future__ import annotations
 
 import pytest
@@ -51,7 +52,10 @@ def test_self_improvement_proposal_scheduler_knobs(monkeypatch):
 
     monkeypatch.setenv("SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S", "0")
     monkeypatch.setenv("SELF_IMPROVEMENT_PROPOSAL_LIMIT", "0")
-    assert timeouts.self_improvement_proposal_interval_s() == timeouts.DEFAULT_SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S
+    assert (
+        timeouts.self_improvement_proposal_interval_s()
+        == timeouts.DEFAULT_SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S
+    )
     assert timeouts.self_improvement_proposal_limit() == 1
 
 

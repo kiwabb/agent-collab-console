@@ -16,9 +16,16 @@ from app.application.engineer_workflow import EngineerWorkflow, EngineerWorkflow
 
 
 class _FakeTask:
-    def __init__(self, *, workspace_path: str, issue_id: str = "issue-1",
-                 title: str = "Issue title", prompt: str = "Add /api/ping",
-                 result: str = "{}", review_comment: str | None = None):
+    def __init__(
+        self,
+        *,
+        workspace_path: str,
+        issue_id: str = "issue-1",
+        title: str = "Issue title",
+        prompt: str = "Add /api/ping",
+        result: str = "{}",
+        review_comment: str | None = None,
+    ):
         self.workspace_path = workspace_path
         self.issue_id = issue_id
         self.id = "task-id"

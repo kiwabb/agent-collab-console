@@ -29,11 +29,12 @@ The production code path plugs in the project's model catalog
 fake. This keeps the scorer deterministic in CI without mocking
 the LLM client.
 """
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Callable, Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable  # noqa: F401, UP035
 
 from .scorers import ScorerRegistry
 from .types import IssueArtifacts, Score
@@ -90,9 +91,7 @@ addressed with high quality.
 # number does not win. We capture the sign separately so a model
 # that emits a negative probe ("-0.1") is recognised as a negative
 # intent and clamped to 0 below.
-_SCORE_LINE = re.compile(
-    r"^\s*(?P<sign>-?)(?P<score>(?:0(?:\.\d+)?|1(?:\.0+)?|0?\.\d+|[01]))\b"
-)
+_SCORE_LINE = re.compile(r"^\s*(?P<sign>-?)(?P<score>(?:0(?:\.\d+)?|1(?:\.0+)?|0?\.\d+|[01]))\b")
 
 
 def _parse_score(raw: str) -> JudgeResult:
@@ -122,7 +121,7 @@ def _parse_score(raw: str) -> JudgeResult:
             # (model looseness with the "between 0.0 and 1.0"
             # instruction).
             v = max(0.0, min(1.0, v))
-            explanation = raw[raw.index(line) + len(line):].strip() or None
+            explanation = raw[raw.index(line) + len(line) :].strip() or None
             return JudgeResult(raw=raw, value=v, explanation=explanation)
     return JudgeResult(raw=raw, value=None, explanation="no parseable score line")
 
@@ -133,7 +132,7 @@ def _parse_score(raw: str) -> JudgeResult:
 # Default: the judge self-deactivates below this |Pearson r| threshold
 # against the calibration set. The 0.7 floor matches the project
 # research's "non-trivial correlation" cutoff (the standard "use
-# LLM-as-judge" literature uses 0.5–0.7; we pick the upper end
+# LLM-as-judge" literature uses 0.5–0.7; we pick the upper end  # noqa: RUF003
 # because the alternative is silent garbage on the leaderboard).
 DEFAULT_CORRELATION_FLOOR = 0.7
 
@@ -177,9 +176,7 @@ class LLMJudgeScorer:
             or "(no rubric provided)",
             issue_title=self._issue_title,
             task_titles=", ".join(artifacts.completed_engineer_tasks) or "(none)",
-            qa_results=", ".join(
-                f"{r.command}->exit={r.exit_code}" for r in artifacts.qa_results
-            )
+            qa_results=", ".join(f"{r.command}->exit={r.exit_code}" for r in artifacts.qa_results)
             or "(no qa runs)",
         )
         raw = self._backend(prompt)

@@ -29,7 +29,8 @@ the issue branch (never the primary repo's checked-out ``main``). The tests
 assert ``main``'s ref is byte-for-byte unchanged at the end, per the
 Worktree-Scoped Branch Merge (Swarm-Safe) contract.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import json
 import shutil
@@ -198,9 +199,7 @@ def _commit_code_change(worktree: Path, rel: str, content: str = "changed\n") ->
 
 
 @pytest.mark.asyncio
-async def test_serial_hard_mismatch_skips_llm_and_reworks_parent(
-    monkeypatch, store, manager, repo
-):
+async def test_serial_hard_mismatch_skips_llm_and_reworks_parent(monkeypatch, store, manager, repo):
     """Engineer report claims changed_files=[X] but the issue worktree has ZERO
     real code changes -> compute_review_guard == hard_mismatch, and the
     submit-for-review endpoint deterministically rejects WITHOUT calling the LLM
@@ -208,7 +207,7 @@ async def test_serial_hard_mismatch_skips_llm_and_reworks_parent(
     """
     import app.interfaces.api as api_module
 
-    project, issue = await _seed_project_and_issue(store, manager, repo)
+    project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
     wt = issue.git_worktree_path
 
     # Report claims a file landed; no actual code file is committed/created.
@@ -269,9 +268,7 @@ async def test_serial_hard_mismatch_skips_llm_and_reworks_parent(
 
 
 @pytest.mark.asyncio
-async def test_serial_legal_empty_diff_dispatches_llm(
-    monkeypatch, store, manager, repo
-):
+async def test_serial_legal_empty_diff_dispatches_llm(monkeypatch, store, manager, repo):
     """Honest already-implemented report (changed_files=[], but completed_tasks
     listed) + genuinely ZERO real diff -> NOT hard_mismatch, the normal LLM
     review path runs (run_codex_task called). Locks AC4: 'already implemented,
@@ -279,7 +276,7 @@ async def test_serial_legal_empty_diff_dispatches_llm(
     """
     import app.interfaces.api as api_module
 
-    project, issue = await _seed_project_and_issue(store, manager, repo)
+    project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
     wt = issue.git_worktree_path
 
     _write_engineer_report(
@@ -340,19 +337,22 @@ async def test_serial_plan_drift_is_soft_with_real_diff(store, manager, repo):
     expected_files -> verdict=plan_drift (SOFT). The guard carries missing/extra
     + a real diff summary, and does NOT short-circuit.
     """
-    project, issue = await _seed_project_and_issue(store, manager, repo)
+    project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
     wt = Path(issue.git_worktree_path)
 
     _commit_code_change(wt, "app/actual.py")
     _write_engineer_report(str(wt), status="completed", changed_files=["app/actual.py"])
-    _write_plan(str(wt), [
-        {
-            "title": "t1",
-            "description": "d",
-            "priority": "P1",
-            "expected_files": ["app/expected.py"],
-        }
-    ])
+    _write_plan(
+        str(wt),
+        [
+            {
+                "title": "t1",
+                "description": "d",
+                "priority": "P1",
+                "expected_files": ["app/expected.py"],
+            }
+        ],
+    )
 
     guard = compute_review_guard(str(wt), issue.id)
     assert guard.verdict == "plan_drift", guard
@@ -376,19 +376,22 @@ async def test_serial_plan_drift_is_soft_with_real_diff(store, manager, repo):
 @pytest.mark.asyncio
 async def test_serial_ok_when_actual_matches_expected(store, manager, repo):
     """Actual changed file == expected_files -> ok; no drift, no short-circuit."""
-    project, issue = await _seed_project_and_issue(store, manager, repo)
+    project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
     wt = Path(issue.git_worktree_path)
 
     _commit_code_change(wt, "app/feature.py")
     _write_engineer_report(str(wt), status="completed", changed_files=["app/feature.py"])
-    _write_plan(str(wt), [
-        {
-            "title": "t1",
-            "description": "d",
-            "priority": "P1",
-            "expected_files": ["app/feature.py"],
-        }
-    ])
+    _write_plan(
+        str(wt),
+        [
+            {
+                "title": "t1",
+                "description": "d",
+                "priority": "P1",
+                "expected_files": ["app/feature.py"],
+            }
+        ],
+    )
 
     guard = compute_review_guard(str(wt), issue.id)
     assert guard.verdict == "ok", guard
@@ -406,9 +409,7 @@ async def test_serial_ok_when_actual_matches_expected(store, manager, repo):
 
 
 @pytest.mark.asyncio
-async def test_swarm_agent_worktree_base_fallback_sees_real_change(
-    store, manager, repo
-):
+async def test_swarm_agent_worktree_base_fallback_sees_real_change(store, manager, repo):
     """An Engineer changing files inside a real per-agent swarm worktree (forked
     from the issue branch) is correctly detected by git_changed_files /
     compute_review_guard via the base fallback. The guard must NOT misjudge it as
@@ -421,7 +422,7 @@ async def test_swarm_agent_worktree_base_fallback_sees_real_change(
     main_before = _git("rev-parse", "main", cwd=repo).strip()
 
     # Real per-agent swarm worktree forked from the issue branch.
-    branch, agent_wt, base = await manager.prepare_agent_worktree(
+    branch, agent_wt, base = await manager.prepare_agent_worktree(  # noqa: RUF059
         project, issue, "engineer"
     )
     assert base == issue.git_branch
@@ -430,9 +431,7 @@ async def test_swarm_agent_worktree_base_fallback_sees_real_change(
     try:
         # Engineer does real work + writes the report INSIDE the isolated worktree.
         _commit_code_change(agent_path, "app/swarm_feature.py")
-        _write_engineer_report(
-            agent_wt, status="completed", changed_files=["app/swarm_feature.py"]
-        )
+        _write_engineer_report(agent_wt, status="completed", changed_files=["app/swarm_feature.py"])
 
         # git_changed_files inside the forked worktree must see the real change
         # via base fallback (origin/main absent -> main -> HEAD~1).
@@ -460,9 +459,7 @@ async def test_swarm_agent_worktree_base_fallback_sees_real_change(
 
 
 @pytest.mark.asyncio
-async def test_swarm_agent_worktree_claim_with_zero_change_is_hard_mismatch(
-    store, manager, repo
-):
+async def test_swarm_agent_worktree_claim_with_zero_change_is_hard_mismatch(store, manager, repo):
     """Symmetric guard for the swarm path: an Engineer that claims a file but
     produces ZERO real change inside the per-agent worktree is still caught as
     hard_mismatch (the base fallback computing [] is the correct, not a spurious,
@@ -470,14 +467,12 @@ async def test_swarm_agent_worktree_claim_with_zero_change_is_hard_mismatch(
     project, issue = await _seed_project_and_issue(store, manager, repo)
     main_before = _git("rev-parse", "main", cwd=repo).strip()
 
-    branch, agent_wt, base = await manager.prepare_agent_worktree(
+    branch, agent_wt, base = await manager.prepare_agent_worktree(  # noqa: RUF059
         project, issue, "engineer"
     )
     try:
         # Claim a file but make NO real change in the worktree.
-        _write_engineer_report(
-            agent_wt, status="completed", changed_files=["app/ghost.py"]
-        )
+        _write_engineer_report(agent_wt, status="completed", changed_files=["app/ghost.py"])
         assert git_changed_files(agent_wt) == []
         guard = compute_review_guard(agent_wt, issue.id)
         assert guard.verdict == "hard_mismatch", guard
@@ -496,15 +491,13 @@ async def test_swarm_agent_worktree_claim_with_zero_change_is_hard_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_untracked_new_file_counts_as_change_no_false_mismatch(
-    store, manager, repo
-):
+async def test_untracked_new_file_counts_as_change_no_false_mismatch(store, manager, repo):
     """git diff --name-only does NOT list untracked files; git_changed_files
     backstops with git status --porcelain. A brand-new uncommitted file claimed
     by the Engineer must therefore be counted as a real change, so the guard does
     NOT false-positive hard_mismatch on a legitimately-new-file implementation.
     """
-    project, issue = await _seed_project_and_issue(store, manager, repo)
+    project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
     wt = Path(issue.git_worktree_path)
 
     # The `app/` package already exists & is tracked (commit it first), so an

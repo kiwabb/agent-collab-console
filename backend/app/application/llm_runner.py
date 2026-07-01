@@ -48,23 +48,17 @@ def _audit_autoplan(
     audits actor + executor/model + a small payload only. Never raises into the
     runner, which already swallows its own errors and falls back to heuristics.
     """
-    try:
-        from app.application.audit_logger import audit_logger
+    from app.application import audit
 
-        body = {"executor_id": executor_id, "model": model}
-        if payload:
-            body.update(payload)
-        duration_ms = int((time.monotonic() - started) * 1000) if started is not None else None
-        audit_logger.record(
-            category,
-            actor="auto_plan",
-            status=status,
-            duration_ms=duration_ms,
-            payload=body,
-            error=error,
-        )
-    except Exception:  # noqa: BLE001, RUF100
-        pass
+    audit.record_autoplan(
+        category,
+        executor_id=executor_id,
+        model=model,
+        payload=payload,
+        status=status,
+        started=started,
+        error=error,
+    )
 
 
 def _sanitize_http_error(status_code: int, body: str) -> str:

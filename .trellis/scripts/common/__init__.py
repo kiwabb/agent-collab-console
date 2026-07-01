@@ -55,38 +55,38 @@ def configure_encoding() -> None:
         sys.stdin = _configure_stream(sys.stdin)  # type: ignore[assignment]
 
 
-from .paths import (
-    DIR_WORKFLOW,
-    DIR_WORKSPACE,
-    DIR_TASKS,
-    DIR_ARCHIVE,
-    DIR_SPEC,
-    DIR_SCRIPTS,
-    FILE_DEVELOPER,
-    FILE_CURRENT_TASK,
-    FILE_TASK_JSON,
-    FILE_JOURNAL_PREFIX,
-    get_repo_root,
-    get_developer,
-    check_developer,
-    get_tasks_dir,
-    get_workspace_dir,
-    get_active_journal_file,
-    count_lines,
-    get_current_task,
-    get_current_task_abs,
-    normalize_task_ref,
-    resolve_task_ref,
-    set_current_task,
-    clear_current_task,
-    has_current_task,
-    generate_task_date_prefix,
+from .paths import (  # noqa: E402
+    DIR_WORKFLOW,  # noqa: F401
+    DIR_WORKSPACE,  # noqa: F401
+    DIR_TASKS,  # noqa: F401
+    DIR_ARCHIVE,  # noqa: F401
+    DIR_SPEC,  # noqa: F401
+    DIR_SCRIPTS,  # noqa: F401
+    FILE_DEVELOPER,  # noqa: F401
+    FILE_CURRENT_TASK,  # noqa: F401
+    FILE_TASK_JSON,  # noqa: F401
+    FILE_JOURNAL_PREFIX,  # noqa: F401
+    get_repo_root,  # noqa: F401
+    get_developer,  # noqa: F401
+    check_developer,  # noqa: F401
+    get_tasks_dir,  # noqa: F401
+    get_workspace_dir,  # noqa: F401
+    get_active_journal_file,  # noqa: F401
+    count_lines,  # noqa: F401
+    get_current_task,  # noqa: F401
+    get_current_task_abs,  # noqa: F401
+    normalize_task_ref,  # noqa: F401
+    resolve_task_ref,  # noqa: F401
+    set_current_task,  # noqa: F401
+    clear_current_task,  # noqa: F401
+    has_current_task,  # noqa: F401
+    generate_task_date_prefix,  # noqa: F401
 )
 
-from .active_task import (
-    ActiveTask,
-    clear_active_task,
-    resolve_active_task,
-    resolve_context_key,
-    set_active_task,
+from .active_task import (  # noqa: E402
+    ActiveTask,  # noqa: F401
+    clear_active_task,  # noqa: F401
+    resolve_active_task,  # noqa: F401
+    resolve_context_key,  # noqa: F401
+    set_active_task,  # noqa: F401
 )

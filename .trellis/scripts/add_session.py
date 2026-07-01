@@ -57,6 +57,7 @@ from common.config import (
 # Helper Functions
 # =============================================================================
 
+
 def get_latest_journal_info(dev_dir: Path) -> tuple[Path | None, int, int]:
     """Get latest journal file info.
 
@@ -112,7 +113,7 @@ def count_journal_files(dev_dir: Path, active_num: int) -> str:
     files = sorted(
         [f for f in dev_dir.glob(f"{FILE_JOURNAL_PREFIX}*.md") if f.is_file()],
         key=lambda f: _extract_journal_num(f.stem),
-        reverse=True
+        reverse=True,
     )
 
     for f in files:
@@ -125,7 +126,11 @@ def count_journal_files(dev_dir: Path, active_num: int) -> str:
 
 
 def create_new_journal_file(
-    dev_dir: Path, num: int, developer: str, today: str, max_lines: int = 2000,
+    dev_dir: Path,
+    num: int,
+    developer: str,
+    today: str,
+    max_lines: int = 2000,
 ) -> Path:
     """Create a new journal file."""
     prev_num = num - 1
@@ -229,7 +234,10 @@ def update_index(
     content = index_file.read_text(encoding="utf-8")
 
     if "@@@auto:current-status" not in content:
-        print("Error: Markers not found in index.md. Please ensure markers exist.", file=sys.stderr)
+        print(
+            "Error: Markers not found in index.md. Please ensure markers exist.",
+            file=sys.stderr,
+        )
         return False
 
     # Process sections
@@ -293,15 +301,22 @@ def update_index(
             ):
                 new_lines.append("| # | Date | Title | Commits | Branch |")
                 continue
-            if re.match(r"^\|\s*#\s*\|\s*Date\s*\|\s*Title\s*\|\s*Commits\s*\|\s*Branch\s*\|\s*$", line):
+            if re.match(
+                r"^\|\s*#\s*\|\s*Date\s*\|\s*Title\s*\|\s*Commits\s*\|\s*Branch\s*\|\s*$",
+                line,
+            ):
                 new_lines.append("| # | Date | Title | Commits | Branch |")
                 continue
-            if re.match(r"^\|\s*#\s*\|\s*Date\s*\|\s*Title\s*\|\s*Commits\s*\|\s*$", line):
+            if re.match(
+                r"^\|\s*#\s*\|\s*Date\s*\|\s*Title\s*\|\s*Commits\s*\|\s*$", line
+            ):
                 new_lines.append("| # | Date | Title | Commits | Branch |")
                 continue
             if re.match(r"^\|[-| ]+\|\s*$", line) and not header_written:
                 new_lines.append("|---|------|-------|---------|--------|")
-                new_lines.append(f"| {new_session} | {today} | {title} | {commit_display} | `{branch or '-'}` |")
+                new_lines.append(
+                    f"| {new_session} | {today} | {title} | {commit_display} | `{branch or '-'}` |"
+                )
                 header_written = True
                 continue
             new_lines.append(line)
@@ -317,6 +332,7 @@ def update_index(
 # =============================================================================
 # Main Function
 # =============================================================================
+
 
 def _auto_commit_workspace(repo_root: Path) -> None:
     """Stage Trellis-owned workspace + task paths and commit.
@@ -355,9 +371,7 @@ def _auto_commit_workspace(repo_root: Path) -> None:
         return
 
     # Check if there are staged changes for the paths we just staged.
-    rc, _, _ = run_git(
-        ["diff", "--cached", "--quiet", "--", *paths], cwd=repo_root
-    )
+    rc, _, _ = run_git(["diff", "--cached", "--quiet", "--", *paths], cwd=repo_root)
     if rc == 0:
         print("[OK] No workspace changes to commit.", file=sys.stderr)
         return
@@ -405,7 +419,13 @@ def add_session(
     new_session = current_session + 1
 
     session_content = generate_session_content(
-        new_session, title, commit, summary, extra_content, today, package,
+        new_session,
+        title,
+        commit,
+        summary,
+        extra_content,
+        today,
+        package,
         branch,
     )
     content_lines = len(session_content.splitlines())
@@ -418,7 +438,9 @@ def add_session(
     print(f"Title: {title}", file=sys.stderr)
     print(f"Commit: {commit}", file=sys.stderr)
     print("", file=sys.stderr)
-    print(f"Current journal file: {FILE_JOURNAL_PREFIX}{current_num}.md", file=sys.stderr)
+    print(
+        f"Current journal file: {FILE_JOURNAL_PREFIX}{current_num}.md", file=sys.stderr
+    )
     print(f"Current lines: {current_lines}", file=sys.stderr)
     print(f"New content lines: {content_lines}", file=sys.stderr)
     print(f"Total after append: {current_lines + content_lines}", file=sys.stderr)
@@ -429,8 +451,13 @@ def add_session(
 
     if current_lines + content_lines > max_lines:
         target_num = current_num + 1
-        print(f"[!] Exceeds {max_lines} lines, creating {FILE_JOURNAL_PREFIX}{target_num}.md", file=sys.stderr)
-        target_file = create_new_journal_file(dev_dir, target_num, developer, today, max_lines)
+        print(
+            f"[!] Exceeds {max_lines} lines, creating {FILE_JOURNAL_PREFIX}{target_num}.md",
+            file=sys.stderr,
+        )
+        target_file = create_new_journal_file(
+            dev_dir, target_num, developer, today, max_lines
+        )
         print(f"Created: {target_file}", file=sys.stderr)
 
     # Append session content
@@ -476,6 +503,7 @@ def add_session(
 # Main Entry
 # =============================================================================
 
+
 def main() -> int:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -487,10 +515,14 @@ def main() -> int:
     parser.add_argument("--content-file", help="Path to file with detailed content")
     parser.add_argument("--package", help="Package name tag (e.g., cli, docs-site)")
     parser.add_argument("--branch", help="Branch name (auto-detected if omitted)")
-    parser.add_argument("--no-commit", action="store_true",
-                        help="Skip auto-commit of workspace changes")
-    parser.add_argument("--stdin", action="store_true",
-                        help="Read extra content from stdin (explicit opt-in)")
+    parser.add_argument(
+        "--no-commit", action="store_true", help="Skip auto-commit of workspace changes"
+    )
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read extra content from stdin (explicit opt-in)",
+    )
 
     args = parser.parse_args()
 
@@ -516,7 +548,10 @@ def main() -> int:
         elif not validate_package(package, repo_root):
             packages = get_packages(repo_root)
             available = ", ".join(sorted(packages.keys())) if packages else "(none)"
-            print(f"Error: unknown package '{package}'. Available: {available}", file=sys.stderr)
+            print(
+                f"Error: unknown package '{package}'. Available: {available}",
+                file=sys.stderr,
+            )
             return 1
     else:
         # Inferred: active task's task.json.package → default_package → None
@@ -536,7 +571,10 @@ def main() -> int:
                 branch = detected
 
     return add_session(
-        args.title, args.commit, args.summary, extra_content,
+        args.title,
+        args.commit,
+        args.summary,
+        extra_content,
         auto_commit=not args.no_commit,
         package=package,
         branch=branch,

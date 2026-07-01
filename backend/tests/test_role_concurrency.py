@@ -1,4 +1,5 @@
 """Tests for the process-wide per-role concurrency limiter."""
+
 from __future__ import annotations
 
 import asyncio
@@ -54,7 +55,7 @@ async def test_acquire_unblocks_when_slot_freed(monkeypatch):
         await asyncio.sleep(0.02)
         lim.release("engineer")
 
-    asyncio.create_task(_release_soon())
+    asyncio.create_task(_release_soon())  # noqa: RUF006
     assert await lim.acquire("engineer", timeout=2.0)
 
 

@@ -1,4 +1,5 @@
 """Recovery watchdog must not reap or duplicate a live in-process conductor."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +7,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-import pytest
+import pytest  # noqa: F401
 
 from app.application import conductor_recovery
 from app.application.conductor_lease import get_conductor_lease_owner
@@ -48,26 +49,32 @@ def test_is_stale_false_for_live_same_process_session():
         task=MagicMock(done=MagicMock(return_value=False)),
     )
     try:
-        assert _is_stale(
-            ct,
-            now=datetime.now(),
-            stale_after_s=180,
-            current_owner=get_conductor_lease_owner(),
-            recover_foreign_owner=False,
-        ) is False
+        assert (
+            _is_stale(
+                ct,
+                now=datetime.now(),
+                stale_after_s=180,
+                current_owner=get_conductor_lease_owner(),
+                recover_foreign_owner=False,
+            )
+            is False
+        )
     finally:
         reg._sessions.pop(issue_id, None)
 
 
 def test_is_stale_true_for_expired_lease_without_live_session():
     ct = _make_ct(issue_id="issue-dead", expired=True)
-    assert _is_stale(
-        ct,
-        now=datetime.now(),
-        stale_after_s=180,
-        current_owner=get_conductor_lease_owner(),
-        recover_foreign_owner=False,
-    ) is True
+    assert (
+        _is_stale(
+            ct,
+            now=datetime.now(),
+            stale_after_s=180,
+            current_owner=get_conductor_lease_owner(),
+            recover_foreign_owner=False,
+        )
+        is True
+    )
 
 
 def _make_stall(issue_id: str) -> ConductorTask:
@@ -117,9 +124,13 @@ async def test_relaunch_circuit_breaker_trips_after_max(monkeypatch):
     event_bus = MagicMock()
     event_bus.append = AsyncMock(side_effect=lambda e: events.append(e))
 
-    with patch.object(conductor_recovery, "transition_conductor_phase", new=AsyncMock()), \
-         patch.object(conductor_recovery, "get_phase_duration_estimator", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.run_issue_conductor_loop", new=AsyncMock()) as relaunch:
+    with (
+        patch.object(conductor_recovery, "transition_conductor_phase", new=AsyncMock()),
+        patch.object(conductor_recovery, "get_phase_duration_estimator", return_value=MagicMock()),
+        patch(
+            "app.application.conductor_main_loop.run_issue_conductor_loop", new=AsyncMock()
+        ) as relaunch,
+    ):
         await recover_orphaned_conductors(
             store,
             event_bus=event_bus,
@@ -135,9 +146,7 @@ async def test_relaunch_circuit_breaker_trips_after_max(monkeypatch):
     assert exhausted["relaunch_attempts"] == 3
     assert exhausted["max_relaunches"] == 3
     # Issue sealed failed.
-    assert any(
-        e.get("type") == "issue_updated" and e.get("status") == "failed" for e in events
-    )
+    assert any(e.get("type") == "issue_updated" and e.get("status") == "failed" for e in events)
     store.save_codex_issue.assert_awaited()
 
 
@@ -154,12 +163,16 @@ async def test_recover_marks_stalled_but_skips_relaunch_when_live_session_exists
 
     reg = ConductorSessionRegistry.instance()
     # A live session exists for the issue under a DIFFERENT conductor_task id.
-    handle = await reg.try_start(issue_id, _sleep_forever)
+    handle = await reg.try_start(issue_id, _sleep_forever)  # noqa: F841
     await reg.bind_conductor_task(issue_id, "ct-NEW-and-live")
 
-    with patch.object(conductor_recovery, "transition_conductor_phase", new=AsyncMock()), \
-         patch.object(conductor_recovery, "get_phase_duration_estimator", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.run_issue_conductor_loop", new=AsyncMock()) as relaunch:
+    with (
+        patch.object(conductor_recovery, "transition_conductor_phase", new=AsyncMock()),
+        patch.object(conductor_recovery, "get_phase_duration_estimator", return_value=MagicMock()),
+        patch(
+            "app.application.conductor_main_loop.run_issue_conductor_loop", new=AsyncMock()
+        ) as relaunch,
+    ):
         recovered = await recover_orphaned_conductors(
             store,
             current_owner=get_conductor_lease_owner(),

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime  # noqa: I001
 
 import pytest
 
@@ -69,7 +69,9 @@ class AsyncStoreStub:
         assert reverse is False
         return self.logs
 
-    async def list_execution_processes(self, session_id: str | None = None, task_id: str | None = None):
+    async def list_execution_processes(
+        self, session_id: str | None = None, task_id: str | None = None
+    ):
         assert session_id == self.task.session_id
         assert task_id is None
         return [self.process]

@@ -275,38 +275,24 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         resume_session_id: str | None,
         pid: int | None,
     ) -> None:
-        """Record a CLI subprocess launch into the unified audit_log (PR2).
+        """Record a CLI subprocess launch into the unified audit_log.
 
-        Best-effort + fire-and-forget. Captures the full argv with the trailing
-        prompt argument redacted (the prompt can be large/sensitive and is
-        already persisted as the role artifact). cwd/model/provider/resume id and
-        pid round out HOW the agent process was launched.
+        Thin forwarding shell over `audit.record_cli_spawn` — the shaping
+        (trailing-prompt redaction, payload layout) lives in the audit package
+        now. Kept as a static method so existing tests call it directly.
         """
-        try:
-            from app.application.audit_logger import audit_logger
+        from app.application import audit
 
-            # Redact a trailing non-flag arg (the prompt text appended by
-            # _build_claude_command). Everything else is structural flags.
-            argv = [str(a) for a in cmd]
-            if argv and not argv[-1].startswith("-"):
-                argv = [*argv[:-1], "<prompt redacted>"]
-            audit_logger.record(
-                "cli_spawn",
-                actor="claude",
-                task_id=task_id,
-                payload={
-                    "argv": argv,
-                    "cwd": cwd,
-                    "workspace_id": workspace_id,
-                    "executor": "claude",
-                    "provider": provider,
-                    "model": model,
-                    "resume_session_id": resume_session_id,
-                    "pid": pid,
-                },
-            )
-        except Exception:  # noqa: BLE001, RUF100
-            pass
+        audit.record_cli_spawn(
+            cmd=cmd,
+            cwd=cwd,
+            task_id=task_id,
+            workspace_id=workspace_id,
+            provider=provider,
+            model=model,
+            resume_session_id=resume_session_id,
+            pid=pid,
+        )
 
     def _build_claude_command(
         self,

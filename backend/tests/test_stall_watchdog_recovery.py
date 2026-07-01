@@ -1,6 +1,7 @@
 """GAP F: the stall-watchdog nudge result must be recovered + persisted,
 not silently dropped because the nudge ran as kind="chat"."""
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 from datetime import datetime
 

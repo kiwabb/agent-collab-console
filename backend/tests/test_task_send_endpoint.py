@@ -1,5 +1,6 @@
 """Tests for /api/codex/tasks/{id}/send endpoint (P3) — auto chat/refine routing."""
-import json
+
+import json  # noqa: I001
 from datetime import datetime
 
 import pytest
@@ -88,8 +89,9 @@ def _install_runner_stub(monkeypatch, store):
     captured = {}
 
     class _RunnerStub:
-        async def start_task_run(self, task, *, kind="initial", triggering_message_id=None,
-                                  prompt_override=None, **_):
+        async def start_task_run(
+            self, task, *, kind="initial", triggering_message_id=None, prompt_override=None, **_
+        ):
             captured.update({"kind": kind, "content": prompt_override})
             ep = ExecutionProcess(
                 id=f"ep-send-{len(store.execution_processes) + 1}",
@@ -113,10 +115,24 @@ def _install_runner_stub(monkeypatch, store):
 def _write_pm_artifact(tmp_path, issue_id):
     docs = IssueArtifactDocuments()
     docs.pm_prd_json_path(str(tmp_path), issue_id).write_text(
-        json.dumps({"language": "zh-CN", "project_name": "p", "issue_id": issue_id, "issue_title": "t",
-                    "original_requirements": "...", "product_goals": ["g"], "user_stories": [],
-                    "requirement_analysis": "x", "requirement_pool": [], "acceptance_criteria": [],
-                    "constraints": [], "open_questions": [], "risks": []}, ensure_ascii=False),
+        json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "p",
+                "issue_id": issue_id,
+                "issue_title": "t",
+                "original_requirements": "...",
+                "product_goals": ["g"],
+                "user_stories": [],
+                "requirement_analysis": "x",
+                "requirement_pool": [],
+                "acceptance_criteria": [],
+                "constraints": [],
+                "open_questions": [],
+                "risks": [],
+            },
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
 
@@ -150,7 +166,8 @@ def test_send_auto_routes_refine_input_to_refine(isolated_client, monkeypatch, t
     captured = _install_runner_stub(monkeypatch, store)
 
     response = isolated_client.post(
-        "/api/codex/tasks/task-1/send", json={"content": "把 product_goals 加一条 X"},
+        "/api/codex/tasks/task-1/send",
+        json={"content": "把 product_goals 加一条 X"},
     )
     assert response.status_code == 201, response.text
     payload = response.json()
@@ -170,7 +187,8 @@ def test_send_auto_refine_without_artifact_degrades_to_chat(isolated_client, mon
     captured = _install_runner_stub(monkeypatch, store)
 
     response = isolated_client.post(
-        "/api/codex/tasks/task-1/send", json={"content": "加一条 risk"},
+        "/api/codex/tasks/task-1/send",
+        json={"content": "加一条 risk"},
     )
     assert response.status_code == 201, response.text
     payload = response.json()
@@ -195,7 +213,9 @@ def test_send_force_mode_chat_ignores_refine_keyword(isolated_client, monkeypatc
     assert response.json()["resolved_mode"] == "chat"
 
 
-def test_send_force_mode_refine_strict_rejects_when_no_artifact(isolated_client, monkeypatch, tmp_path):
+def test_send_force_mode_refine_strict_rejects_when_no_artifact(
+    isolated_client, monkeypatch, tmp_path
+):
     """force_mode=refine is strict: 409 if no canonical artifact, unlike auto mode."""
     session = _make_session(tmp_path)
     task = _make_task(tmp_path=tmp_path)
@@ -218,6 +238,7 @@ def test_send_unknown_task_404(isolated_client, monkeypatch, tmp_path):
     _install_runner_stub(monkeypatch, store)
 
     response = isolated_client.post(
-        "/api/codex/tasks/missing/send", json={"content": "hi"},
+        "/api/codex/tasks/missing/send",
+        json={"content": "hi"},
     )
     assert response.status_code == 404

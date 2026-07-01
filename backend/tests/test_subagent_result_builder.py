@@ -1,10 +1,10 @@
-from datetime import datetime
+from datetime import datetime  # noqa: I001
 from pathlib import Path
 
 from app.application.subagent_result_builder import build_subagent_result
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
 from app.adapters.sqlite_store import SQLiteStore
-from app.domain.models import CodexTask, WorkflowGraph, WorkflowNode
+from app.domain.models import CodexTask, WorkflowGraph, WorkflowNode  # noqa: F401
 
 
 class FakeDoc:
@@ -91,7 +91,9 @@ def _node(node_key: str) -> WorkflowNode:
 def test_build_subagent_result_preserves_pm_structured_artifact(tmp_path: Path):
     artifact_path = tmp_path / "issues" / "issue-1" / "pm" / "prd.json"
     artifact_path.parent.mkdir(parents=True)
-    artifact_path.write_text('{"issue_title":"Add export","product_goals":["Export reports"]}', encoding="utf-8")
+    artifact_path.write_text(
+        '{"issue_title":"Add export","product_goals":["Export reports"]}', encoding="utf-8"
+    )
     markdown_path = artifact_path.with_suffix(".md")
     markdown_path.write_text("# PRD\n\nExport reports", encoding="utf-8")
 
@@ -116,10 +118,12 @@ def test_build_subagent_result_preserves_pm_structured_artifact(tmp_path: Path):
         retries=1,
         max_retries=3,
     )
-    doc = FakeDoc([
-        {"name": "pm/prd.json", "path": str(artifact_path), "kind": "product"},
-        {"name": "pm/prd.md", "path": str(markdown_path), "kind": "product"},
-    ])
+    doc = FakeDoc(
+        [
+            {"name": "pm/prd.json", "path": str(artifact_path), "kind": "product"},
+            {"name": "pm/prd.md", "path": str(markdown_path), "kind": "product"},
+        ]
+    )
 
     result = build_subagent_result(task=task, node=node, doc=doc)
 
@@ -194,9 +198,6 @@ def test_build_subagent_result_preserves_qa_commands_and_clarification():
     assert result.clarification_question == "Should QA run browser tests too?"
 
 
-
-
-
 def test_sqlite_store_persists_raw_task_result_json(tmp_path: Path):
     store = SQLiteStore(tmp_path / "console.db")
     task = CodexTask(
@@ -239,4 +240,5 @@ def test_async_sqlite_store_persists_raw_task_result_json(tmp_path: Path):
         assert loaded.result_json == '{"full": true}'
 
     import asyncio
+
     asyncio.run(run())

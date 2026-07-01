@@ -4,18 +4,19 @@ CRUD + the SSE `/stream` endpoint. The SSE test monkeypatches
 `PrototypeService._stream_html` to drive the prompt assembly + version
 bookkeeping + DB + disk mirror pipeline without hitting a real LLM.
 """
+
 from __future__ import annotations
 
 import shutil
 import subprocess
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator  # noqa: F401, UP035
 
 import pytest
 
-from app.adapters.async_sqlite_store import AsyncSQLiteStore
-from app.application.prototype_service import PrototypeService
-from app.domain.models import Project, RuntimeExecutorConfig
+from app.adapters.async_sqlite_store import AsyncSQLiteStore  # noqa: F401
+from app.application.prototype_service import PrototypeService  # noqa: F401
+from app.domain.models import Project, RuntimeExecutorConfig  # noqa: F401
 
 
 def _make_git_repo(path: Path) -> Path:
@@ -23,7 +24,9 @@ def _make_git_repo(path: Path) -> Path:
         pytest.skip("git binary not available")
     path.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("hello")
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)
@@ -34,8 +37,9 @@ def _make_git_repo(path: Path) -> Path:
 @pytest.fixture
 async def seeded_project(tmp_path: Path):
     """Stand up a Project row in the live test store, then return its id."""
-    import app.bootstrap as bootstrap_module
+    import app.bootstrap as bootstrap_module  # noqa: I001
     from datetime import datetime
+
     repo = _make_git_repo(tmp_path / "demo")
     store = bootstrap_module.async_store
     assert store is not None
@@ -54,7 +58,7 @@ async def seeded_project(tmp_path: Path):
 def _patch_stream(monkeypatch):
     """Wire PrototypeService._stream_html to a fixed-shape fake."""
 
-    async def fake_stream(prompt, ctx):  # noqa: ARG001
+    async def fake_stream(prompt, ctx):  # noqa: ARG001, RUF100
         yield "```html\n"
         yield "<!DOCTYPE html>\n"
         yield "<html><body><h1>Pricing</h1>"
@@ -71,7 +75,7 @@ def _patch_stream(monkeypatch):
     # so the SSE endpoint can drive the meta event + the prompt flow.
     from app.application.llm_runner import StreamingPlanContext
 
-    def fake_ctx(catalog):  # noqa: ARG001
+    def fake_ctx(catalog):  # noqa: ARG001, RUF100
         return StreamingPlanContext(
             executor_id="claude",
             executor_label="claude",
@@ -176,6 +180,7 @@ def _consume_sse(response) -> list[dict]:
                 ev_type = line.split(":", 1)[1].strip()
             elif line.startswith("data:"):
                 import json as _json
+
                 ev_data = _json.loads(line.split(":", 1)[1].strip())
         if ev_type and ev_data is not None:
             events.append({"event": ev_type, "data": ev_data})
@@ -193,6 +198,7 @@ def test_stream_generates_v1_with_meta_delta_done(client, seeded_project, monkey
     with client.stream("GET", f"/api/prototypes/{created['id']}/stream") as response:
         # FastAPI returns 200 + text/event-stream; collect the body.
         from starlette.responses import StreamingResponse as _SSR  # noqa: F401
+
         body = b"".join(response.iter_bytes())
         # Re-shape into the same event list as the sync helper.
         text = body.decode("utf-8")
@@ -212,9 +218,7 @@ def test_stream_generates_v1_with_meta_delta_done(client, seeded_project, monkey
     assert done["disk_path"] is not None
 
 
-def test_stream_with_instruction_iterates_to_v2(
-    client, seeded_project, monkeypatch
-):
+def test_stream_with_instruction_iterates_to_v2(client, seeded_project, monkeypatch):
     _patch_stream(monkeypatch)
     pid = seeded_project
     created = client.post(
@@ -265,6 +269,7 @@ def test_version_html_endpoint_returns_body(client, seeded_project, monkeypatch)
 def _consume_sse_response(text: str) -> list[dict]:
     events: list[dict] = []
     import json as _json
+
     for block in text.split("\n\n"):
         block = block.strip()
         if not block:
@@ -300,9 +305,7 @@ def test_regenerate_all_stream_emits_batch_envelope_and_per_prototype_done(
         json={"title": "B", "brief": "brief b"},
     ).json()
 
-    with client.stream(
-        "GET", f"/api/projects/{pid}/prototypes/regenerate-all/stream"
-    ) as response:
+    with client.stream("GET", f"/api/projects/{pid}/prototypes/regenerate-all/stream") as response:
         text = b"".join(response.iter_bytes()).decode("utf-8")
     events = _consume_sse_response(text)
     types = [e["event"] for e in events]
@@ -327,9 +330,7 @@ def test_regenerate_all_stream_emits_batch_envelope_and_per_prototype_done(
 
 
 def test_regenerate_all_stream_returns_404_for_unknown_project(client):
-    resp = client.get(
-        "/api/projects/no-such-project/prototypes/regenerate-all/stream"
-    )
+    resp = client.get("/api/projects/no-such-project/prototypes/regenerate-all/stream")
     assert resp.status_code == 404
 
 
@@ -338,9 +339,7 @@ def test_regenerate_all_stream_with_no_prototypes_emits_zero_summary(
 ):
     _patch_stream(monkeypatch)
     pid = seeded_project
-    with client.stream(
-        "GET", f"/api/projects/{pid}/prototypes/regenerate-all/stream"
-    ) as response:
+    with client.stream("GET", f"/api/projects/{pid}/prototypes/regenerate-all/stream") as response:
         text = b"".join(response.iter_bytes()).decode("utf-8")
     events = _consume_sse_response(text)
     assert [e["event"] for e in events] == ["batch_meta", "all_done"]

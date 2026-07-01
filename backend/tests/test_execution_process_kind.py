@@ -1,4 +1,5 @@
 """Tests for ExecutionProcess.kind / triggering_message_id (P1 Foundation)."""
+
 from datetime import datetime
 
 import pytest
@@ -21,7 +22,7 @@ def test_execution_process_accepts_all_four_kinds():
 
 def test_execution_process_kind_invalid_value_rejected():
     """Pydantic Literal rejects unknown kind values."""
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         ExecutionProcess(id="ep", task_id="t", session_id="s", kind="bogus")
 
 
@@ -77,7 +78,9 @@ def test_sync_store_defaults_kind_to_initial_on_load(tmp_path):
     db_path = tmp_path / "test.db"
     store = SQLiteStore(str(db_path))
     now = datetime.now()
-    ep = ExecutionProcess(id="ep-2", task_id="t-1", session_id="s-1", created_at=now, updated_at=now)
+    ep = ExecutionProcess(
+        id="ep-2", task_id="t-1", session_id="s-1", created_at=now, updated_at=now
+    )
     store.save_execution_process(ep)
     loaded = store.load_execution_process("ep-2")
     assert loaded.kind == "initial"
@@ -100,7 +103,9 @@ def test_sync_store_keeps_completed_at_null_for_running_status(tmp_path):
     )
     store.save_execution_process(ep)
 
-    store.update_execution_process_status("ep-running-sync", "Running", exit_code=None, completed_at=None)
+    store.update_execution_process_status(
+        "ep-running-sync", "Running", exit_code=None, completed_at=None
+    )
     loaded = store.load_execution_process("ep-running-sync")
 
     assert loaded is not None
@@ -137,6 +142,7 @@ def test_sync_store_migrates_legacy_rows_to_initial(tmp_path):
 
     # Now open via SQLiteStore which should run idempotent migration
     from app.adapters.sqlite_store import SQLiteStore
+
     store = SQLiteStore(str(db_path))
     loaded = store.load_execution_process("legacy-ep")
     assert loaded is not None
@@ -185,7 +191,9 @@ async def test_async_store_defaults_kind_to_initial_on_load(tmp_path):
     store = AsyncSQLiteStore(str(db_path))
     try:
         now = datetime.now()
-        ep = ExecutionProcess(id="ep-async-2", task_id="t-1", session_id="s-1", created_at=now, updated_at=now)
+        ep = ExecutionProcess(
+            id="ep-async-2", task_id="t-1", session_id="s-1", created_at=now, updated_at=now
+        )
         await store.save_execution_process(ep)
         loaded = await store.load_execution_process("ep-async-2")
         assert loaded.kind == "initial"
@@ -212,7 +220,9 @@ async def test_async_store_keeps_completed_at_null_for_running_status(tmp_path):
         )
         await store.save_execution_process(ep)
 
-        await store.update_execution_process_status("ep-running-async", "Running", exit_code=None, completed_at=None)
+        await store.update_execution_process_status(
+            "ep-running-async", "Running", exit_code=None, completed_at=None
+        )
         loaded = await store.load_execution_process("ep-running-async")
 
         assert loaded is not None

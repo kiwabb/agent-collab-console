@@ -4,7 +4,8 @@ GAP I: stall lifecycle events on the bus.
 GAP K: codex app-server that fails to start is detected fast (not after the
 full turn budget) and emits a structured `executor_failed_to_start` event.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 
@@ -43,27 +44,30 @@ async def test_initialize_or_fail_fast_detects_early_exit():
 
     # initialize() never returns (simulates waiting for a dead process).
     client = MagicMock()
+
     async def _hang():
         await asyncio.Event().wait()
+
     client.initialize = AsyncMock(side_effect=_hang)
     client.initialized = AsyncMock()
 
     # proc already exited with a non-zero code; stderr has the crash reason.
     proc = MagicMock()
     proc.returncode = 2
+
     async def _wait():
         return 2
+
     proc.wait = _wait
     proc.stderr = MagicMock()
     proc.stderr.read = AsyncMock(return_value=b"error: unexpected argument '--bad'")
 
-    with patch("app.application.timeouts.codex_handshake_timeout_s", return_value=1):
+    with patch("app.application.timeouts.codex_handshake_timeout_s", return_value=1):  # noqa: SIM117
         with pytest.raises(RuntimeError, match="failed to start"):
             await runtime._initialize_or_fail_fast(client, proc, "ws-1", "task-1")
 
     assert any(
-        e.get("type") == "executor_failed_to_start" and e.get("reason") == "exited"
-        for e in events
+        e.get("type") == "executor_failed_to_start" and e.get("reason") == "exited" for e in events
     )
     evt = next(e for e in events if e.get("type") == "executor_failed_to_start")
     assert evt["returncode"] == 2
@@ -86,8 +90,10 @@ async def test_initialize_or_fail_fast_happy_path():
 
     proc = MagicMock()
     proc.returncode = None
+
     async def _wait_forever():
         await asyncio.Event().wait()
+
     proc.wait = _wait_forever
     proc.stderr = MagicMock()
 

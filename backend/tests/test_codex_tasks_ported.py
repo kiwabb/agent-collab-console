@@ -4,7 +4,8 @@ Each session in the new model needs a project_id, and every issue automatically
 gets a git worktree. These tests use a fresh temp git repo per test so they
 don't share state across runs.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import shutil
 import subprocess
@@ -22,7 +23,9 @@ pytestmark = [
 def _init_repo(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("seed")
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)

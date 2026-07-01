@@ -1,4 +1,4 @@
-import pytest
+import pytest  # noqa: I001
 from datetime import datetime
 import json
 from pathlib import Path
@@ -42,22 +42,24 @@ class TaskRunStoreStub:
                 continue
             if issue_id is not None and task.issue_id != issue_id:
                 continue
-            result.append({
-                "id": task.id,
-                "session_id": task.session_id,
-                "issue_id": task.issue_id,
-                "phase": task.phase,
-                "title": task.title,
-                "prompt": task.prompt,
-                "role": task.role,
-                "executor": task.executor,
-                "status": task.status,
-                "workspace_path": task.workspace_path,
-                "sequence_index": task.sequence_index,
-                "sequence_group": task.sequence_group,
-                "created_at": task.created_at.isoformat() if task.created_at else None,
-                "updated_at": task.updated_at.isoformat() if task.updated_at else None,
-            })
+            result.append(
+                {
+                    "id": task.id,
+                    "session_id": task.session_id,
+                    "issue_id": task.issue_id,
+                    "phase": task.phase,
+                    "title": task.title,
+                    "prompt": task.prompt,
+                    "role": task.role,
+                    "executor": task.executor,
+                    "status": task.status,
+                    "workspace_path": task.workspace_path,
+                    "sequence_index": task.sequence_index,
+                    "sequence_group": task.sequence_group,
+                    "created_at": task.created_at.isoformat() if task.created_at else None,
+                    "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+                }
+            )
         return result
 
     async def update_execution_process_status(self, *args, **kwargs):
@@ -73,12 +75,13 @@ class TaskRunStoreStub:
         pass
 
 
-
 class TestCodexTaskAPI:
     """Tests for /api/codex/tasks endpoints."""
 
     def test_create_and_list_issues_for_workspace(self, client):
-        session_resp = client.post("/api/codex/sessions", json={"title": "Issue Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Issue Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
         create_resp = client.post(
@@ -103,7 +106,9 @@ class TestCodexTaskAPI:
         assert items[0]["id"] == created["id"]
 
     def test_create_task_can_link_to_issue(self, client):
-        session = client.post("/api/codex/sessions", json={"title": "Task Issue Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Task Issue Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -127,14 +132,18 @@ class TestCodexTaskAPI:
         task = task_resp.json()
         assert task["issue_id"] == issue["id"]
 
-        tasks_resp = client.get(f"/api/codex/tasks?session_id={session['id']}&issue_id={issue['id']}")
+        tasks_resp = client.get(
+            f"/api/codex/tasks?session_id={session['id']}&issue_id={issue['id']}"
+        )
         assert tasks_resp.status_code == 200
         items = tasks_resp.json()
         assert len(items) == 1
         assert items[0]["id"] == task["id"]
 
     def test_create_task_can_set_phase(self, client):
-        session = client.post("/api/codex/sessions", json={"title": "Phase Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Phase Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -160,7 +169,9 @@ class TestCodexTaskAPI:
         assert task["phase"] == "architecture"
 
     def test_create_task_defaults_phase_from_role(self, client):
-        session = client.post("/api/codex/sessions", json={"title": "Role Phase Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Role Phase Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -184,15 +195,20 @@ class TestCodexTaskAPI:
         assert task_resp.status_code == 201
         assert task_resp.json()["phase"] == "development"
 
-    @pytest.mark.parametrize("role,expected_phase", [
-        ("product_manager", "requirements"),
-        ("architect", "architecture"),
-        ("engineer", "development"),
-        ("qa", "testing"),
-    ])
+    @pytest.mark.parametrize(
+        "role,expected_phase",
+        [
+            ("product_manager", "requirements"),
+            ("architect", "architecture"),
+            ("engineer", "development"),
+            ("qa", "testing"),
+        ],
+    )
     def test_create_task_defaults_phase_for_each_role(self, client, role, expected_phase):
         """Each role defaults to the correct phase."""
-        session = client.post("/api/codex/sessions", json={"title": "Role Phase Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Role Phase Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -216,19 +232,24 @@ class TestCodexTaskAPI:
         assert task_resp.status_code == 201
         assert task_resp.json()["phase"] == expected_phase
 
-    @pytest.mark.parametrize("role,phase,should_fail", [
-        ("product_manager", "architecture", True),
-        ("architect", "development", True),
-        ("engineer", "requirements", True),
-        ("qa", "architecture", True),
-        ("product_manager", "requirements", False),
-        ("architect", "architecture", False),
-        ("engineer", "development", False),
-        ("qa", "testing", False),
-    ])
+    @pytest.mark.parametrize(
+        "role,phase,should_fail",
+        [
+            ("product_manager", "architecture", True),
+            ("architect", "development", True),
+            ("engineer", "requirements", True),
+            ("qa", "architecture", True),
+            ("product_manager", "requirements", False),
+            ("architect", "architecture", False),
+            ("engineer", "development", False),
+            ("qa", "testing", False),
+        ],
+    )
     def test_create_task_rejects_mismatched_role_and_phase(self, client, role, phase, should_fail):
         """Role/phase mismatch validation for all roles."""
-        session = client.post("/api/codex/sessions", json={"title": "Role Guard Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Role Guard Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -257,7 +278,9 @@ class TestCodexTaskAPI:
             assert task_resp.status_code == 201
 
     def test_update_issue_phase(self, client):
-        session = client.post("/api/codex/sessions", json={"title": "Issue Phase Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Issue Phase Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -276,7 +299,9 @@ class TestCodexTaskAPI:
         assert updated["current_phase"] == "development"
 
     def test_update_issue_phase_rejects_invalid_phase(self, client):
-        session = client.post("/api/codex/sessions", json={"title": "Issue Phase Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Issue Phase Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -292,7 +317,9 @@ class TestCodexTaskAPI:
         )
         assert response.status_code == 400
 
-    def test_delete_issue_cascades_issue_related_records_without_deleting_workspace_source(self, client, tmp_path):
+    def test_delete_issue_cascades_issue_related_records_without_deleting_workspace_source(
+        self, client, tmp_path
+    ):
         from app.domain.models import CodexTaskMessage, ExecutionProcess, HelpRequest, LogEvent
 
         store = bootstrap_module.store
@@ -408,15 +435,20 @@ class TestCodexTaskAPI:
     def test_create_task(self, client):
         """Create a task within an existing workspace."""
         # First create a workspace
-        session_resp = client.post("/api/codex/sessions", json={"title": "Task Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Task Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
         # Create a task
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "My Task",
-            "prompt": "print hello world",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "My Task",
+                "prompt": "print hello world",
+            },
+        )
         assert task_resp.status_code == 201
         data = task_resp.json()
         assert data["title"] == "My Task"
@@ -431,42 +463,59 @@ class TestCodexTaskAPI:
 
     def test_create_task_with_executor(self, client):
         """Create a task with an explicit executor."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Executor Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Executor Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Claude Task",
-            "prompt": "summarize the repo",
-            "executor": "claude",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Claude Task",
+                "prompt": "summarize the repo",
+                "executor": "claude",
+            },
+        )
         assert task_resp.status_code == 201
         data = task_resp.json()
         assert data["executor"] == "claude"
 
     def test_create_task_with_role(self, client):
-        session_resp = client.post("/api/codex/sessions", json={"title": "PM Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "PM Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Write PRD",
-            "prompt": "分析需求并输出PRD",
-            "role": "product_manager",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Write PRD",
+                "prompt": "分析需求并输出PRD",
+                "role": "product_manager",
+            },
+        )
         assert task_resp.status_code == 201
         data = task_resp.json()
         assert data["role"] == "product_manager"
 
-    def test_product_manager_task_uses_workspace_root_instead_of_copied_task_workspace(self, client):
-        session_resp = client.post("/api/codex/sessions", json={"title": "PM Workspace", "cwd": "/tmp/project-root"}).json()
+    def test_product_manager_task_uses_workspace_root_instead_of_copied_task_workspace(
+        self, client
+    ):
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "PM Workspace", "cwd": "/tmp/project-root"}
+        ).json()
 
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_resp["id"],
-            "title": "Write PRD",
-            "prompt": "分析需求并输出PRD",
-            "role": "product_manager",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_resp["id"],
+                "title": "Write PRD",
+                "prompt": "分析需求并输出PRD",
+                "role": "product_manager",
+            },
+        )
 
         assert task_resp.status_code == 201
         assert task_resp.json()["workspace_path"] == "/tmp/project-root"
@@ -474,14 +523,19 @@ class TestCodexTaskAPI:
     def test_product_manager_task_without_workspace_cwd_uses_source_root(self, client):
         from app.bootstrap import workspace_manager
 
-        session_resp = client.post("/api/codex/sessions", json={"title": "PM Workspace", "cwd": ""}).json()
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "PM Workspace", "cwd": ""}
+        ).json()
 
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_resp["id"],
-            "title": "Write PRD",
-            "prompt": "分析需求并输出PRD",
-            "role": "product_manager",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_resp["id"],
+                "title": "Write PRD",
+                "prompt": "分析需求并输出PRD",
+                "role": "product_manager",
+            },
+        )
 
         assert task_resp.status_code == 201
         assert task_resp.json()["workspace_path"] == str(workspace_manager.source_root)
@@ -489,14 +543,19 @@ class TestCodexTaskAPI:
     @pytest.mark.parametrize("role", ["product_manager", "architect"])
     def test_role_uses_workspace_root(self, client, role):
         """Product Manager and Architect use workspace root (session.cwd)."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Root Workspace", "cwd": "/tmp/root"}).json()
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Root Workspace", "cwd": "/tmp/root"}
+        ).json()
 
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_resp["id"],
-            "title": f"{role} task",
-            "prompt": f"{role} work",
-            "role": role,
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_resp["id"],
+                "title": f"{role} task",
+                "prompt": f"{role} work",
+                "role": role,
+            },
+        )
 
         assert task_resp.status_code == 201
         assert task_resp.json()["workspace_path"] == "/tmp/root"
@@ -504,21 +563,28 @@ class TestCodexTaskAPI:
     @pytest.mark.parametrize("role", ["engineer", "qa"])
     def test_role_uses_task_workspace(self, client, role):
         """Engineer and QA use a dedicated task workspace (not session.cwd)."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Task Workspace", "cwd": "/tmp/root"}).json()
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Task Workspace", "cwd": "/tmp/root"}
+        ).json()
 
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_resp["id"],
-            "title": f"{role} task",
-            "prompt": f"{role} work",
-            "role": role,
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_resp["id"],
+                "title": f"{role} task",
+                "prompt": f"{role} work",
+                "role": role,
+            },
+        )
 
         assert task_resp.status_code == 201
         workspace_path = task_resp.json()["workspace_path"]
         assert workspace_path != "/tmp/root", f"{role} should not use workspace root"
 
     def test_create_help_child_task_persists_task_kind_and_block_link(self, client):
-        session = client.post("/api/codex/sessions", json={"title": "Child Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Child Workspace", "cwd": "/tmp"}
+        ).json()
 
         response = client.post(
             "/api/codex/tasks",
@@ -539,22 +605,30 @@ class TestCodexTaskAPI:
 
     def test_create_task_workspace_not_found(self, client):
         """Creating a task with a nonexistent workspace returns 404."""
-        resp = client.post("/api/codex/tasks", json={
-            "session_id": "nonexistent",
-            "title": "Orphan Task",
-            "prompt": "does this matter",
-        })
+        resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": "nonexistent",
+                "title": "Orphan Task",
+                "prompt": "does this matter",
+            },
+        )
         assert resp.status_code == 404
 
     def test_get_task(self, client):
         """Get a task by ID."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Get Task Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Get Task Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Fetch Me",
-            "prompt": "echo fetched",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Fetch Me",
+                "prompt": "echo fetched",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         get_resp = client.get(f"/api/codex/tasks/{task_id}")
@@ -574,24 +648,32 @@ class TestCodexTaskAPI:
 
     def test_list_tasks_filtered_by_workspace(self, client):
         """List tasks filtered by workspace id."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Filter Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Filter Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
         # Create task in this workspace
-        client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "In Workspace",
-            "prompt": "in workspace prompt",
-        })
+        client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "In Workspace",
+                "prompt": "in workspace prompt",
+            },
+        )
 
         # Create task in different workspace
         other_resp = client.post("/api/codex/sessions", json={"title": "Other", "cwd": "/tmp"})
         other_id = other_resp.json()["id"]
-        client.post("/api/codex/tasks", json={
-            "session_id": other_id,
-            "title": "Other Workspace",
-            "prompt": "other",
-        })
+        client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": other_id,
+                "title": "Other Workspace",
+                "prompt": "other",
+            },
+        )
 
         # Filter by our workspace
         resp = client.get(f"/api/codex/tasks?session_id={session_id}")
@@ -603,13 +685,18 @@ class TestCodexTaskAPI:
     def test_run_task_updates_status_and_result(self, client):
         """Running a task marks it completed and extracts result from assistant message."""
         # Create workspace and task
-        session_resp = client.post("/api/codex/sessions", json={"title": "Run Task Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Run Task Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Run Test Task",
-            "prompt": "print(1+1)",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Run Test Task",
+                "prompt": "print(1+1)",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         # Verify initial status is pending
@@ -630,36 +717,45 @@ class TestCodexTaskAPI:
     def test_product_manager_refresh_persists_prd_artifacts_and_summary(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}
+        ).json()
         task = client.post(
             "/api/codex/tasks",
             json={
                 "session_id": session["id"],
                 "title": "实现 ProductManager",
-                "prompt": "做一个 ProductManager，输出 PRD",
+                "prompt": "做一个 ProductManager，输出 PRD",  # noqa: RUF001
                 "role": "product_manager",
             },
         ).json()
 
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "zh-CN",
-            "project_name": "agent-collab-console",
-            "issue_id": task_model.id,
-            "issue_title": task_model.title,
-            "original_requirements": task_model.prompt,
-            "product_goals": ["让 PM 能稳定输出 PRD"],
-            "user_stories": ["作为用户，我希望系统先输出结构化 PRD"],
-            "requirement_analysis": "先实现最小 ProductManager 闭环。",
-            "requirement_pool": [
-                {"priority": "P0", "title": "输出 PRD", "description": "生成 prd.json 和 prd.md"}
-            ],
-            "acceptance_criteria": ["生成两个文件"],
-            "constraints": ["兼容现有 codex task 流程"],
-            "open_questions": ["Issue 模型后续再引入"],
-            "risks": ["旧 UI 仍然 task-first"],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "agent-collab-console",
+                "issue_id": task_model.id,
+                "issue_title": task_model.title,
+                "original_requirements": task_model.prompt,
+                "product_goals": ["让 PM 能稳定输出 PRD"],
+                "user_stories": ["作为用户，我希望系统先输出结构化 PRD"],  # noqa: RUF001
+                "requirement_analysis": "先实现最小 ProductManager 闭环。",
+                "requirement_pool": [
+                    {
+                        "priority": "P0",
+                        "title": "输出 PRD",
+                        "description": "生成 prd.json 和 prd.md",
+                    }
+                ],
+                "acceptance_criteria": ["生成两个文件"],
+                "constraints": ["兼容现有 codex task 流程"],
+                "open_questions": ["Issue 模型后续再引入"],
+                "risks": ["旧 UI 仍然 task-first"],
+            },
+            ensure_ascii=False,
+        )
         api_module.role_workflow_service.persist_result(task_model)
 
         issue_root = Path(task_model.workspace_path) / "issues" / task_model.id
@@ -678,7 +774,9 @@ class TestCodexTaskAPI:
     def test_product_manager_persists_prd_under_issue_id(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -693,30 +791,37 @@ class TestCodexTaskAPI:
                 "session_id": session["id"],
                 "issue_id": issue["id"],
                 "title": "实现 ProductManager",
-                "prompt": "做一个 ProductManager，输出 PRD",
+                "prompt": "做一个 ProductManager，输出 PRD",  # noqa: RUF001
                 "role": "product_manager",
             },
         ).json()
 
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "zh-CN",
-            "project_name": "agent-collab-console",
-            "issue_id": issue["id"],
-            "issue_title": task_model.title,
-            "original_requirements": task_model.prompt,
-            "product_goals": ["让 PM 能稳定输出 PRD"],
-            "user_stories": ["作为用户，我希望系统先输出结构化 PRD"],
-            "requirement_analysis": "先实现最小 ProductManager 闭环。",
-            "requirement_pool": [
-                {"priority": "P0", "title": "输出 PRD", "description": "生成 prd.json 和 prd.md"}
-            ],
-            "acceptance_criteria": ["生成两个文件"],
-            "constraints": ["兼容现有 codex task 流程"],
-            "open_questions": [],
-            "risks": [],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "agent-collab-console",
+                "issue_id": issue["id"],
+                "issue_title": task_model.title,
+                "original_requirements": task_model.prompt,
+                "product_goals": ["让 PM 能稳定输出 PRD"],
+                "user_stories": ["作为用户，我希望系统先输出结构化 PRD"],  # noqa: RUF001
+                "requirement_analysis": "先实现最小 ProductManager 闭环。",
+                "requirement_pool": [
+                    {
+                        "priority": "P0",
+                        "title": "输出 PRD",
+                        "description": "生成 prd.json 和 prd.md",
+                    }
+                ],
+                "acceptance_criteria": ["生成两个文件"],
+                "constraints": ["兼容现有 codex task 流程"],
+                "open_questions": [],
+                "risks": [],
+            },
+            ensure_ascii=False,
+        )
         api_module.role_workflow_service.persist_result(task_model)
 
         issue_root = Path(task_model.workspace_path) / "issues" / issue["id"]
@@ -726,7 +831,9 @@ class TestCodexTaskAPI:
     def test_get_issue_artifacts_reads_prd_files(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -747,21 +854,30 @@ class TestCodexTaskAPI:
         ).json()
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "zh-CN",
-            "project_name": "agent-collab-console",
-            "issue_id": issue["id"],
-            "issue_title": task_model.title,
-            "original_requirements": task_model.prompt,
-            "product_goals": ["Goal"],
-            "user_stories": ["Story"],
-            "requirement_analysis": "Analysis",
-            "requirement_pool": [{"priority": "P0", "title": "输出 PRD", "description": "生成 prd.json 和 prd.md"}],
-            "acceptance_criteria": ["生成两个文件"],
-            "constraints": [],
-            "open_questions": [],
-            "risks": [],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "agent-collab-console",
+                "issue_id": issue["id"],
+                "issue_title": task_model.title,
+                "original_requirements": task_model.prompt,
+                "product_goals": ["Goal"],
+                "user_stories": ["Story"],
+                "requirement_analysis": "Analysis",
+                "requirement_pool": [
+                    {
+                        "priority": "P0",
+                        "title": "输出 PRD",
+                        "description": "生成 prd.json 和 prd.md",
+                    }
+                ],
+                "acceptance_criteria": ["生成两个文件"],
+                "constraints": [],
+                "open_questions": [],
+                "risks": [],
+            },
+            ensure_ascii=False,
+        )
         api_module.role_workflow_service.persist_result(task_model)
 
         response = client.get(f"/api/codex/issues/{issue['id']}/artifacts")
@@ -771,10 +887,14 @@ class TestCodexTaskAPI:
         assert "pm/prd.json" in names
         assert "pm/prd.md" in names
 
-    def test_get_issue_artifacts_backfills_missing_prd_files_from_done_product_manager_task(self, client):
-        from app.interfaces import api as api_module
+    def test_get_issue_artifacts_backfills_missing_prd_files_from_done_product_manager_task(
+        self, client
+    ):
+        from app.interfaces import api as api_module  # noqa: F401
 
-        session = client.post("/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -795,21 +915,30 @@ class TestCodexTaskAPI:
         ).json()
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "zh-CN",
-            "project_name": "agent-collab-console",
-            "issue_id": issue["id"],
-            "issue_title": task_model.title,
-            "original_requirements": task_model.prompt,
-            "product_goals": ["Goal"],
-            "user_stories": ["Story"],
-            "requirement_analysis": "Analysis",
-            "requirement_pool": [{"priority": "P0", "title": "输出 PRD", "description": "生成 prd.json 和 prd.md"}],
-            "acceptance_criteria": ["生成两个文件"],
-            "constraints": [],
-            "open_questions": [],
-            "risks": [],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "agent-collab-console",
+                "issue_id": issue["id"],
+                "issue_title": task_model.title,
+                "original_requirements": task_model.prompt,
+                "product_goals": ["Goal"],
+                "user_stories": ["Story"],
+                "requirement_analysis": "Analysis",
+                "requirement_pool": [
+                    {
+                        "priority": "P0",
+                        "title": "输出 PRD",
+                        "description": "生成 prd.json 和 prd.md",
+                    }
+                ],
+                "acceptance_criteria": ["生成两个文件"],
+                "constraints": [],
+                "open_questions": [],
+                "risks": [],
+            },
+            ensure_ascii=False,
+        )
         bootstrap_module.store.save_codex_task(task_model)
 
         issue_root = Path(task_model.workspace_path) / "issues" / issue["id"]
@@ -826,10 +955,16 @@ class TestCodexTaskAPI:
     def test_get_issue_artifacts_backfills_architect_design_artifacts(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
-            json={"session_id": session["id"], "title": "Design Issue", "description": "Architect artifact backfill"},
+            json={
+                "session_id": session["id"],
+                "title": "Design Issue",
+                "description": "Architect artifact backfill",
+            },
         ).json()
         task = client.post(
             "/api/codex/tasks",
@@ -843,24 +978,31 @@ class TestCodexTaskAPI:
         ).json()
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "en",
-            "project_name": "agent-collab-console",
-            "issue_id": issue["id"],
-            "issue_title": "Design the system",
-            "architecture_summary": "REST API service",
-            "components": ["API", "Service"],
-            "data_models": ["User"],
-            "interfaces": ["REST"],
-            "data_flow": "Client -> API -> DB",
-            "implementation_tasks": [{"title": "Setup", "description": "Init", "priority": "P0"}],
-            "development_task_list": ["Setup"],
-            "risks": [],
-            "open_questions": [],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "en",
+                "project_name": "agent-collab-console",
+                "issue_id": issue["id"],
+                "issue_title": "Design the system",
+                "architecture_summary": "REST API service",
+                "components": ["API", "Service"],
+                "data_models": ["User"],
+                "interfaces": ["REST"],
+                "data_flow": "Client -> API -> DB",
+                "implementation_tasks": [
+                    {"title": "Setup", "description": "Init", "priority": "P0"}
+                ],
+                "development_task_list": ["Setup"],
+                "risks": [],
+                "open_questions": [],
+            },
+            ensure_ascii=False,
+        )
         bootstrap_module.store.save_codex_task(task_model)
         # New architecture: persist at task completion, not on reads
-        api_module.role_workflow_service.persist_result(task_model, workspace_title=session["title"])
+        api_module.role_workflow_service.persist_result(
+            task_model, workspace_title=session["title"]
+        )
 
         response = client.get(f"/api/codex/issues/{issue['id']}/artifacts")
         assert response.status_code == 200
@@ -871,10 +1013,16 @@ class TestCodexTaskAPI:
     def test_get_issue_artifacts_backfills_engineer_implementation_report(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
-            json={"session_id": session["id"], "title": "Impl Issue", "description": "Engineer artifact backfill"},
+            json={
+                "session_id": session["id"],
+                "title": "Impl Issue",
+                "description": "Engineer artifact backfill",
+            },
         ).json()
         task = client.post(
             "/api/codex/tasks",
@@ -888,23 +1036,30 @@ class TestCodexTaskAPI:
         ).json()
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "en",
-            "project_name": "agent-collab-console",
-            "issue_id": issue["id"],
-            "issue_title": "Implement login",
-            "status": "completed",
-            "summary": "Implemented login",
-            "changed_files": ["src/auth.py"],
-            "completed_tasks": [{"title": "Add handler", "description": "Created", "priority": "P0"}],
-            "deferred_tasks": [],
-            "risks": [],
-            "verification_commands": ["pytest"],
-            "qa_notes": [],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "en",
+                "project_name": "agent-collab-console",
+                "issue_id": issue["id"],
+                "issue_title": "Implement login",
+                "status": "completed",
+                "summary": "Implemented login",
+                "changed_files": ["src/auth.py"],
+                "completed_tasks": [
+                    {"title": "Add handler", "description": "Created", "priority": "P0"}
+                ],
+                "deferred_tasks": [],
+                "risks": [],
+                "verification_commands": ["pytest"],
+                "qa_notes": [],
+            },
+            ensure_ascii=False,
+        )
         bootstrap_module.store.save_codex_task(task_model)
         # New architecture: persist at task completion, not on reads
-        api_module.role_workflow_service.persist_result(task_model, workspace_title=session["title"])
+        api_module.role_workflow_service.persist_result(
+            task_model, workspace_title=session["title"]
+        )
 
         response = client.get(f"/api/codex/issues/{issue['id']}/artifacts")
         assert response.status_code == 200
@@ -915,10 +1070,16 @@ class TestCodexTaskAPI:
     def test_get_issue_artifacts_backfills_qa_report(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
-            json={"session_id": session["id"], "title": "QA Issue", "description": "QA artifact backfill"},
+            json={
+                "session_id": session["id"],
+                "title": "QA Issue",
+                "description": "QA artifact backfill",
+            },
         ).json()
         task = client.post(
             "/api/codex/tasks",
@@ -932,25 +1093,30 @@ class TestCodexTaskAPI:
         ).json()
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "en",
-            "project_name": "agent-collab-console",
-            "issue_id": issue["id"],
-            "issue_title": "Test login",
-            "status": "passed",
-            "test_scope": "API tests",
-            "acceptance_coverage": ["User can login"],
-            "commands_run": ["pytest"],
-            "recommended_commands": ["pytest -v"],
-            "manual_scenarios": [],
-            "bugs_found": [],
-            "risks": [],
-            "test_gaps": [],
-            "final_recommendation": "Ready",
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "en",
+                "project_name": "agent-collab-console",
+                "issue_id": issue["id"],
+                "issue_title": "Test login",
+                "status": "passed",
+                "test_scope": "API tests",
+                "acceptance_coverage": ["User can login"],
+                "commands_run": ["pytest"],
+                "recommended_commands": ["pytest -v"],
+                "manual_scenarios": [],
+                "bugs_found": [],
+                "risks": [],
+                "test_gaps": [],
+                "final_recommendation": "Ready",
+            },
+            ensure_ascii=False,
+        )
         bootstrap_module.store.save_codex_task(task_model)
         # New architecture: persist at task completion, not on reads
-        api_module.role_workflow_service.persist_result(task_model, workspace_title=session["title"])
+        api_module.role_workflow_service.persist_result(
+            task_model, workspace_title=session["title"]
+        )
 
         response = client.get(f"/api/codex/issues/{issue['id']}/artifacts")
         assert response.status_code == 200
@@ -961,12 +1127,18 @@ class TestCodexTaskAPI:
 
     def test_get_issue_artifacts_no_duplicate_names(self, client):
         """Multiple tasks with same artifact names should not return duplicates."""
-        from app.interfaces import api as api_module
+        from app.interfaces import api as api_module  # noqa: F401
 
-        session = client.post("/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Artifacts Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
-            json={"session_id": session["id"], "title": "Multi Role Issue", "description": "Duplicate name test"},
+            json={
+                "session_id": session["id"],
+                "title": "Multi Role Issue",
+                "description": "Duplicate name test",
+            },
         ).json()
 
         for role in ["product_manager", "architect", "engineer", "qa"]:
@@ -983,37 +1155,83 @@ class TestCodexTaskAPI:
             task_model = bootstrap_module.store.load_codex_task(task["id"])
             task_model.status = "done"
             if role == "product_manager":
-                task_model.result = json.dumps({
-                    "language": "en", "project_name": "test", "issue_id": issue["id"],
-                    "issue_title": f"{role} task", "original_requirements": f"{role} work",
-                    "product_goals": [], "user_stories": [], "requirement_analysis": "test",
-                    "requirement_pool": [], "acceptance_criteria": [], "constraints": [],
-                    "open_questions": [], "risks": [],
-                }, ensure_ascii=False)
+                task_model.result = json.dumps(
+                    {
+                        "language": "en",
+                        "project_name": "test",
+                        "issue_id": issue["id"],
+                        "issue_title": f"{role} task",
+                        "original_requirements": f"{role} work",
+                        "product_goals": [],
+                        "user_stories": [],
+                        "requirement_analysis": "test",
+                        "requirement_pool": [],
+                        "acceptance_criteria": [],
+                        "constraints": [],
+                        "open_questions": [],
+                        "risks": [],
+                    },
+                    ensure_ascii=False,
+                )
             elif role == "architect":
-                task_model.result = json.dumps({
-                    "language": "en", "project_name": "test", "issue_id": issue["id"],
-                    "issue_title": f"{role} task", "architecture_summary": "test",
-                    "components": [], "data_models": [], "interfaces": [], "data_flow": "",
-                    "implementation_tasks": [{"title": "Task", "description": "Do it", "priority": "P0"}],
-                    "development_task_list": ["Task"],
-                    "risks": [], "open_questions": [],
-                }, ensure_ascii=False)
+                task_model.result = json.dumps(
+                    {
+                        "language": "en",
+                        "project_name": "test",
+                        "issue_id": issue["id"],
+                        "issue_title": f"{role} task",
+                        "architecture_summary": "test",
+                        "components": [],
+                        "data_models": [],
+                        "interfaces": [],
+                        "data_flow": "",
+                        "implementation_tasks": [
+                            {"title": "Task", "description": "Do it", "priority": "P0"}
+                        ],
+                        "development_task_list": ["Task"],
+                        "risks": [],
+                        "open_questions": [],
+                    },
+                    ensure_ascii=False,
+                )
             elif role == "engineer":
-                task_model.result = json.dumps({
-                    "language": "en", "project_name": "test", "issue_id": issue["id"],
-                    "issue_title": f"{role} task", "status": "completed", "summary": "test",
-                    "changed_files": [], "completed_tasks": [], "deferred_tasks": [],
-                    "risks": [], "verification_commands": [], "qa_notes": [],
-                }, ensure_ascii=False)
+                task_model.result = json.dumps(
+                    {
+                        "language": "en",
+                        "project_name": "test",
+                        "issue_id": issue["id"],
+                        "issue_title": f"{role} task",
+                        "status": "completed",
+                        "summary": "test",
+                        "changed_files": [],
+                        "completed_tasks": [],
+                        "deferred_tasks": [],
+                        "risks": [],
+                        "verification_commands": [],
+                        "qa_notes": [],
+                    },
+                    ensure_ascii=False,
+                )
             elif role == "qa":
-                task_model.result = json.dumps({
-                    "language": "en", "project_name": "test", "issue_id": issue["id"],
-                    "issue_title": f"{role} task", "status": "passed", "test_scope": "test",
-                    "acceptance_coverage": [], "commands_run": [], "recommended_commands": [],
-                    "manual_scenarios": [], "bugs_found": [], "risks": [], "test_gaps": [],
-                    "final_recommendation": "test",
-                }, ensure_ascii=False)
+                task_model.result = json.dumps(
+                    {
+                        "language": "en",
+                        "project_name": "test",
+                        "issue_id": issue["id"],
+                        "issue_title": f"{role} task",
+                        "status": "passed",
+                        "test_scope": "test",
+                        "acceptance_coverage": [],
+                        "commands_run": [],
+                        "recommended_commands": [],
+                        "manual_scenarios": [],
+                        "bugs_found": [],
+                        "risks": [],
+                        "test_gaps": [],
+                        "final_recommendation": "test",
+                    },
+                    ensure_ascii=False,
+                )
             bootstrap_module.store.save_codex_task(task_model)
 
         response = client.get(f"/api/codex/issues/{issue['id']}/artifacts")
@@ -1025,7 +1243,9 @@ class TestCodexTaskAPI:
     def test_product_manager_bugfix_creates_bugfix_artifact(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Bugfix Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Bugfix Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -1048,18 +1268,21 @@ class TestCodexTaskAPI:
 
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "zh-CN",
-            "project_name": "agent-collab-console",
-            "issue_id": issue["id"],
-            "issue_title": task_model.title,
-            "original_requirements": task_model.prompt,
-            "problem_statement": "The flow creates an extra codex task during blocking help.",
-            "suspected_impact": "Users see duplicate codex tasks and lose trust in the workflow.",
-            "reproduction_notes": ["Run blocking help", "Observe duplicate codex task entries"],
-            "acceptance_criteria": [],
-            "risks": [],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "agent-collab-console",
+                "issue_id": issue["id"],
+                "issue_title": task_model.title,
+                "original_requirements": task_model.prompt,
+                "problem_statement": "The flow creates an extra codex task during blocking help.",
+                "suspected_impact": "Users see duplicate codex tasks and lose trust in the workflow.",
+                "reproduction_notes": ["Run blocking help", "Observe duplicate codex task entries"],
+                "acceptance_criteria": [],
+                "risks": [],
+            },
+            ensure_ascii=False,
+        )
         api_module.role_workflow_service.persist_result(task_model)
 
         artifacts = client.get(f"/api/codex/issues/{issue['id']}/artifacts").json()
@@ -1071,7 +1294,9 @@ class TestCodexTaskAPI:
     def test_product_manager_requirement_update_keeps_existing_prd_content_shape(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Update Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Update Workspace", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={
@@ -1093,21 +1318,24 @@ class TestCodexTaskAPI:
         ).json()
         first_model = bootstrap_module.store.load_codex_task(first_task["id"])
         first_model.status = "done"
-        first_model.result = json.dumps({
-            "language": "zh-CN",
-            "project_name": "agent-collab-console",
-            "issue_id": issue["id"],
-            "issue_title": first_model.title,
-            "original_requirements": first_model.prompt,
-            "product_goals": ["initial goal"],
-            "user_stories": [],
-            "requirement_analysis": "initial analysis",
-            "requirement_pool": [],
-            "acceptance_criteria": [],
-            "constraints": [],
-            "open_questions": [],
-            "risks": [],
-        }, ensure_ascii=False)
+        first_model.result = json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "agent-collab-console",
+                "issue_id": issue["id"],
+                "issue_title": first_model.title,
+                "original_requirements": first_model.prompt,
+                "product_goals": ["initial goal"],
+                "user_stories": [],
+                "requirement_analysis": "initial analysis",
+                "requirement_pool": [],
+                "acceptance_criteria": [],
+                "constraints": [],
+                "open_questions": [],
+                "risks": [],
+            },
+            ensure_ascii=False,
+        )
         api_module.role_workflow_service.persist_result(first_model)
 
         update_task = client.post(
@@ -1123,21 +1351,24 @@ class TestCodexTaskAPI:
         ).json()
         update_model = bootstrap_module.store.load_codex_task(update_task["id"])
         update_model.status = "done"
-        update_model.result = json.dumps({
-            "language": "zh-CN",
-            "project_name": "agent-collab-console",
-            "issue_id": issue["id"],
-            "issue_title": update_model.title,
-            "original_requirements": update_model.prompt,
-            "product_goals": ["updated goal"],
-            "user_stories": [],
-            "requirement_analysis": "updated analysis",
-            "requirement_pool": [],
-            "acceptance_criteria": ["new criterion"],
-            "constraints": [],
-            "open_questions": [],
-            "risks": [],
-        }, ensure_ascii=False)
+        update_model.result = json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "agent-collab-console",
+                "issue_id": issue["id"],
+                "issue_title": update_model.title,
+                "original_requirements": update_model.prompt,
+                "product_goals": ["updated goal"],
+                "user_stories": [],
+                "requirement_analysis": "updated analysis",
+                "requirement_pool": [],
+                "acceptance_criteria": ["new criterion"],
+                "constraints": [],
+                "open_questions": [],
+                "risks": [],
+            },
+            ensure_ascii=False,
+        )
         api_module.role_workflow_service.persist_result(update_model)
 
         artifacts = client.get(f"/api/codex/issues/{issue['id']}/artifacts").json()
@@ -1147,14 +1378,19 @@ class TestCodexTaskAPI:
         assert payload["acceptance_criteria"] == ["new criterion"]
 
     def test_request_help_endpoint_blocks_parent_and_creates_help_child(self, client):
-        session_resp = client.post("/api/codex/sessions", json={"title": "Help Button Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Help Button Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Parent Task",
-            "prompt": "Need help",
-            "executor": "codex",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Parent Task",
+                "prompt": "Need help",
+                "executor": "codex",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         response = client.post(
@@ -1170,7 +1406,9 @@ class TestCodexTaskAPI:
         assert body["child_task"]["parent_task_id"] == task_id
 
     def test_request_help_endpoint_auto_completes_help_child_in_mock_mode(self, client):
-        session = client.post("/api/codex/sessions", json={"title": "Mock Help Workspace", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Mock Help Workspace", "cwd": "/tmp"}
+        ).json()
         parent = client.post(
             "/api/codex/tasks",
             json={
@@ -1196,17 +1434,26 @@ class TestCodexTaskAPI:
 
         assert parent_after["status"] == "done"
         assert any(request["status"] in {"completed", "consumed"} for request in help_requests)
-        assert not any("Claude help result:" in message["content"] for message in messages if message["role"] == "assistant")
+        assert not any(
+            "Claude help result:" in message["content"]
+            for message in messages
+            if message["role"] == "assistant"
+        )
 
     def test_get_workspace_execution_processes_returns_execution_process_root(self, client):
         """Workspace execution-process snapshot is rooted at execution_processes."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Process Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Process Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Process Task",
-            "prompt": "print(1+1)",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Process Task",
+                "prompt": "print(1+1)",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         process_resp = client.post(f"/api/codex/tasks/{task_id}/run")
@@ -1223,13 +1470,18 @@ class TestCodexTaskAPI:
 
     def test_run_task_creates_new_execution_process_on_repeat_run(self, client):
         """Each explicit task run creates and rebinds a fresh execution process."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Repeat Run Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Repeat Run Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Repeat Task",
-            "prompt": "print(1+1)",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Repeat Task",
+                "prompt": "print(1+1)",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         first = client.post(f"/api/codex/tasks/{task_id}/run").json()
@@ -1243,7 +1495,9 @@ class TestCodexTaskAPI:
 
     def test_workspace_input_creates_execution_process_for_spawned_task(self, client):
         """Workspace input should create a task already bound to a fresh execution process."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Input Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Input Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
         input_resp = client.post(
@@ -1252,7 +1506,9 @@ class TestCodexTaskAPI:
         )
         body = input_resp.json()
         task = client.get(f"/api/codex/tasks/{body['task_id']}").json()
-        process = client.get(f"/api/codex/execution-processes/{body['execution_process_id']}").json()
+        process = client.get(
+            f"/api/codex/execution-processes/{body['execution_process_id']}"
+        ).json()
 
         assert input_resp.status_code == 200
         assert task["last_execution_process_id"] == body["execution_process_id"]
@@ -1265,6 +1521,7 @@ class TestCodexTaskAPI:
 
         class NonBlockingManager:
             """Simulates real CodexProcessManager with wait=False (non-blocking)."""
+
             def __init__(self, codex_store, log_store, data_dir=None, event_bus=None):
                 self.codex_store = codex_store
                 self.log_store = log_store
@@ -1281,17 +1538,24 @@ class TestCodexTaskAPI:
                 pass
 
         # Create workspace and task
-        session_resp = client.post("/api/codex/sessions", json={"title": "Immediate Run Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Immediate Run Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Immediate Task",
-            "prompt": "hello",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Immediate Task",
+                "prompt": "hello",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         # Patch get_codex_process_manager to return non-blocking manager
-        monkeypatch.setattr(api_module, "get_codex_process_manager", lambda: NonBlockingManager(None, None))
+        monkeypatch.setattr(
+            api_module, "get_codex_process_manager", lambda: NonBlockingManager(None, None)
+        )
 
         run_resp = client.post(f"/api/codex/tasks/{task_id}/run")
         assert run_resp.status_code == 200
@@ -1299,7 +1563,9 @@ class TestCodexTaskAPI:
         assert run_resp.json()["status"] == "Running"
         assert run_resp.json()["task_id"] == task_id
 
-    def test_run_claude_task_does_not_reuse_workspace_thread_id_without_parent_resume(self, client, monkeypatch):
+    def test_run_claude_task_does_not_reuse_workspace_thread_id_without_parent_resume(
+        self, client, monkeypatch
+    ):
         import app.interfaces.api as api_module
 
         captured = {}
@@ -1308,14 +1574,18 @@ class TestCodexTaskAPI:
             def check_availability(self):
                 return True
 
-            async def write_input_async(self, session_id=None, input_text="", wait=True, task_id=None, **kwargs):
+            async def write_input_async(
+                self, session_id=None, input_text="", wait=True, task_id=None, **kwargs
+            ):
                 captured["session_id"] = session_id
                 captured["task_id"] = task_id
                 captured["resume_session_id"] = kwargs.get("resume_session_id")
                 captured["executor"] = kwargs.get("executor")
                 return "responding"
 
-        session_resp = client.post("/api/codex/sessions", json={"title": "Claude Resume Isolation", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Claude Resume Isolation", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
         store = bootstrap_module.store
@@ -1323,12 +1593,15 @@ class TestCodexTaskAPI:
         session.thread_id = "stale-codex-thread"
         store.save_codex_session(session)
 
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Claude Task",
-            "prompt": "ping",
-            "executor": "claude",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Claude Task",
+                "prompt": "ping",
+                "executor": "claude",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         monkeypatch.setattr(api_module, "get_codex_process_manager", lambda: CapturingManager())
@@ -1343,7 +1616,7 @@ class TestCodexTaskAPI:
         """A callback that marks the task done before write_input returns should not be overwritten."""
         import app.interfaces.api as api_module
 
-        store = bootstrap_module.store
+        store = bootstrap_module.store  # noqa: F841
 
         class RacingManager:
             def __init__(self, codex_store):
@@ -1352,23 +1625,32 @@ class TestCodexTaskAPI:
             def check_availability(self):
                 return True
 
-            async def write_input_async(self, session_id=None, input_text="", wait=True, task_id=None, **kwargs):
+            async def write_input_async(
+                self, session_id=None, input_text="", wait=True, task_id=None, **kwargs
+            ):
                 task = await self.codex_store.load_codex_task(task_id)
                 task.status = "done"
                 task.result = "callback result"
                 await self.codex_store.save_codex_task(task)
                 return "responding"
 
-        session_resp = client.post("/api/codex/sessions", json={"title": "Race Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Race Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Race Task",
-            "prompt": "hello",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Race Task",
+                "prompt": "hello",
+            },
+        )
         task_id = task_resp.json()["id"]
 
-        monkeypatch.setattr(api_module, "get_codex_process_manager", lambda: RacingManager(api_module.codex_store))
+        monkeypatch.setattr(
+            api_module, "get_codex_process_manager", lambda: RacingManager(api_module.codex_store)
+        )
 
         run_resp = client.post(f"/api/codex/tasks/{task_id}/run")
         assert run_resp.status_code == 200
@@ -1385,13 +1667,18 @@ class TestCodexTaskAPI:
 
     def test_run_task_already_running(self, client):
         """Running an already-running task returns 409."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Conflict Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Conflict Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Already Running",
-            "prompt": "sleep 999",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Already Running",
+                "prompt": "sleep 999",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         # Manually set to running to simulate in-progress state
@@ -1406,13 +1693,18 @@ class TestCodexTaskAPI:
 
     def test_get_task_logs(self, client):
         """Get logs for a specific task."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Logs Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Logs Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Logs Task",
-            "prompt": "echo logs",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Logs Task",
+                "prompt": "echo logs",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         resp = client.get(f"/api/codex/tasks/{task_id}/logs")
@@ -1422,13 +1714,18 @@ class TestCodexTaskAPI:
 
     def test_delete_task(self, client):
         """Delete a task."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Delete Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Delete Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
-        task_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "To Delete",
-            "prompt": "delete me",
-        })
+        task_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "To Delete",
+                "prompt": "delete me",
+            },
+        )
         task_id = task_resp.json()["id"]
 
         del_resp = client.delete(f"/api/codex/tasks/{task_id}")
@@ -1446,10 +1743,16 @@ class TestCodexTaskAPI:
     def test_architect_refresh_persists_design_artifacts(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
-            json={"session_id": session["id"], "title": "Design the system", "description": "Architecture task"},
+            json={
+                "session_id": session["id"],
+                "title": "Design the system",
+                "description": "Architecture task",
+            },
         ).json()
         task = client.post(
             "/api/codex/tasks",
@@ -1464,24 +1767,31 @@ class TestCodexTaskAPI:
 
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "en",
-            "project_name": "agent-collab-console",
-            "issue_id": task_model.issue_id or task_model.id,
-            "issue_title": "Design the system",
-            "architecture_summary": "REST API service",
-            "components": ["API", "Service", "DB"],
-            "data_models": ["User", "Session"],
-            "interfaces": ["REST"],
-            "data_flow": "Client -> API -> Service -> DB",
-            "implementation_tasks": [{"title": "Setup project", "description": "Init", "priority": "P0"}],
-            "development_task_list": ["Setup project"],
-            "risks": ["Scalability"],
-            "open_questions": ["Which DB?"],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "en",
+                "project_name": "agent-collab-console",
+                "issue_id": task_model.issue_id or task_model.id,
+                "issue_title": "Design the system",
+                "architecture_summary": "REST API service",
+                "components": ["API", "Service", "DB"],
+                "data_models": ["User", "Session"],
+                "interfaces": ["REST"],
+                "data_flow": "Client -> API -> Service -> DB",
+                "implementation_tasks": [
+                    {"title": "Setup project", "description": "Init", "priority": "P0"}
+                ],
+                "development_task_list": ["Setup project"],
+                "risks": ["Scalability"],
+                "open_questions": ["Which DB?"],
+            },
+            ensure_ascii=False,
+        )
         api_module.role_workflow_service.persist_result(task_model)
 
-        issue_root = Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
+        issue_root = (
+            Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
+        )
         assert (issue_root / "architect" / "system_design.json").exists()
         assert (issue_root / "architect" / "system_design.md").exists()
         assert (issue_root / "architect" / "implementation_plan.json").exists()
@@ -1490,10 +1800,16 @@ class TestCodexTaskAPI:
     def test_engineer_refresh_persists_implementation_md(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
-            json={"session_id": session["id"], "title": "Implement login", "description": "Engineer task"},
+            json={
+                "session_id": session["id"],
+                "title": "Implement login",
+                "description": "Engineer task",
+            },
         ).json()
         task = client.post(
             "/api/codex/tasks",
@@ -1508,23 +1824,30 @@ class TestCodexTaskAPI:
 
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "en",
-            "project_name": "agent-collab-console",
-            "issue_id": task_model.issue_id or task_model.id,
-            "issue_title": "Implement login",
-            "status": "completed",
-            "summary": "Implemented login feature",
-            "changed_files": ["src/auth.py"],
-            "completed_tasks": [{"title": "Add handler", "description": "Created handler", "priority": "P0"}],
-            "deferred_tasks": [],
-            "risks": [],
-            "verification_commands": ["pytest"],
-            "qa_notes": [],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "en",
+                "project_name": "agent-collab-console",
+                "issue_id": task_model.issue_id or task_model.id,
+                "issue_title": "Implement login",
+                "status": "completed",
+                "summary": "Implemented login feature",
+                "changed_files": ["src/auth.py"],
+                "completed_tasks": [
+                    {"title": "Add handler", "description": "Created handler", "priority": "P0"}
+                ],
+                "deferred_tasks": [],
+                "risks": [],
+                "verification_commands": ["pytest"],
+                "qa_notes": [],
+            },
+            ensure_ascii=False,
+        )
         api_module.role_workflow_service.persist_result(task_model)
 
-        issue_root = Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
+        issue_root = (
+            Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
+        )
         # Check that implementation file with task ID exists
         impl_file = issue_root / "engineer" / f"implementation-{task_model.id}.md"
         assert impl_file.exists()
@@ -1533,7 +1856,9 @@ class TestCodexTaskAPI:
     def test_qa_refresh_persists_qa_artifacts(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={"session_id": session["id"], "title": "Test login", "description": "QA task"},
@@ -1551,25 +1876,30 @@ class TestCodexTaskAPI:
 
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "done"
-        task_model.result = json.dumps({
-            "language": "en",
-            "project_name": "agent-collab-console",
-            "issue_id": task_model.issue_id or task_model.id,
-            "issue_title": "Test login",
-            "status": "passed",
-            "test_scope": "API tests",
-            "acceptance_coverage": ["User can login"],
-            "commands_run": ["pytest"],
-            "recommended_commands": ["pytest -v"],
-            "manual_scenarios": [],
-            "bugs_found": [],
-            "risks": [],
-            "test_gaps": [],
-            "final_recommendation": "Ready",
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "en",
+                "project_name": "agent-collab-console",
+                "issue_id": task_model.issue_id or task_model.id,
+                "issue_title": "Test login",
+                "status": "passed",
+                "test_scope": "API tests",
+                "acceptance_coverage": ["User can login"],
+                "commands_run": ["pytest"],
+                "recommended_commands": ["pytest -v"],
+                "manual_scenarios": [],
+                "bugs_found": [],
+                "risks": [],
+                "test_gaps": [],
+                "final_recommendation": "Ready",
+            },
+            ensure_ascii=False,
+        )
         api_module.role_workflow_service.persist_result(task_model)
 
-        issue_root = Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
+        issue_root = (
+            Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
+        )
         assert (issue_root / "qa" / "qa_plan.json").exists()
         assert (issue_root / "qa" / "qa_report.md").exists()
         assert "qa_plan.json" in task_model.result
@@ -1577,7 +1907,9 @@ class TestCodexTaskAPI:
     def test_general_task_refresh_does_not_persist_structured_artifacts(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}
+        ).json()
         task = client.post(
             "/api/codex/tasks",
             json={
@@ -1600,7 +1932,9 @@ class TestCodexTaskAPI:
     def test_refresh_only_runs_for_done_tasks(self, client):
         from app.interfaces import api as api_module
 
-        session = client.post("/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}).json()
+        session = client.post(
+            "/api/codex/sessions", json={"title": "Agent Console", "cwd": "/tmp"}
+        ).json()
         issue = client.post(
             "/api/codex/issues",
             json={"session_id": session["id"], "title": "Test refresh", "description": "Test"},
@@ -1618,24 +1952,30 @@ class TestCodexTaskAPI:
 
         task_model = bootstrap_module.store.load_codex_task(task["id"])
         task_model.status = "pending"
-        task_model.result = json.dumps({
-            "language": "en",
-            "project_name": "test",
-            "issue_id": task_model.issue_id or task_model.id,
-            "issue_title": "Test",
-            "architecture_summary": "Test",
-            "components": [],
-            "data_models": [],
-            "interfaces": [],
-            "data_flow": "",
-            "implementation_tasks": [],
-            "risks": [],
-            "open_questions": [],
-        }, ensure_ascii=False)
+        task_model.result = json.dumps(
+            {
+                "language": "en",
+                "project_name": "test",
+                "issue_id": task_model.issue_id or task_model.id,
+                "issue_title": "Test",
+                "architecture_summary": "Test",
+                "components": [],
+                "data_models": [],
+                "interfaces": [],
+                "data_flow": "",
+                "implementation_tasks": [],
+                "risks": [],
+                "open_questions": [],
+            },
+            ensure_ascii=False,
+        )
         import asyncio
+
         asyncio.run(api_module._refresh_task_result(task_model))
 
-        issue_root = Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
+        issue_root = (
+            Path(task_model.workspace_path) / "issues" / (task_model.issue_id or task_model.id)
+        )
         assert not (issue_root / "architect" / "system_design.json").exists()
 
 
@@ -1645,46 +1985,62 @@ class TestCodexTaskContinuation:
     def test_create_continuation_task_has_parent_id(self, client):
         """A continuation task created with parent_task_id stores the lineage reference."""
         # Create workspace
-        session_resp = client.post("/api/codex/sessions", json={"title": "Continuation Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Continuation Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
         # Create original task
-        orig_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Original Task",
-            "prompt": "write a hello world",
-        })
+        orig_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Original Task",
+                "prompt": "write a hello world",
+            },
+        )
         orig_id = orig_resp.json()["id"]
 
         # Create follow-up task with parent_task_id
-        follow_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Continue: Original Task",
-            "prompt": "now add tests",
-            "parent_task_id": orig_id,
-        })
+        follow_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Continue: Original Task",
+                "prompt": "now add tests",
+                "parent_task_id": orig_id,
+            },
+        )
         assert follow_resp.status_code == 201
         follow_data = follow_resp.json()
         assert follow_data["parent_task_id"] == orig_id
 
     def test_continuation_requires_parent_resume_metadata(self, client):
         """Strict resume mode rejects continuation when parent has no resume metadata."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Strict Resume Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Strict Resume Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
-        orig_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "First Task",
-            "prompt": "echo ORIGINAL_RESULT",
-        })
+        orig_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "First Task",
+                "prompt": "echo ORIGINAL_RESULT",
+            },
+        )
         orig_id = orig_resp.json()["id"]
 
-        follow_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Follow-up Task",
-            "prompt": "echo FOLLOWUP_RESULT",
-            "parent_task_id": orig_id,
-        })
+        follow_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Follow-up Task",
+                "prompt": "echo FOLLOWUP_RESULT",
+                "parent_task_id": orig_id,
+            },
+        )
         follow_id = follow_resp.json()["id"]
 
         store = bootstrap_module.store
@@ -1699,24 +2055,32 @@ class TestCodexTaskContinuation:
     def test_run_original_then_continuation_separate_results(self, client):
         """Running original and continuation tasks produces separate, separable results."""
         # Create workspace
-        session_resp = client.post("/api/codex/sessions", json={"title": "Result Sep Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Result Sep Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
         # Create original task
-        orig_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "First Task",
-            "prompt": "echo ORIGINAL_RESULT",
-        })
+        orig_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "First Task",
+                "prompt": "echo ORIGINAL_RESULT",
+            },
+        )
         orig_id = orig_resp.json()["id"]
 
         # Create continuation task
-        follow_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Follow-up Task",
-            "prompt": "echo FOLLOWUP_RESULT",
-            "parent_task_id": orig_id,
-        })
+        follow_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Follow-up Task",
+                "prompt": "echo FOLLOWUP_RESULT",
+                "parent_task_id": orig_id,
+            },
+        )
         follow_id = follow_resp.json()["id"]
 
         # Run original task
@@ -1740,32 +2104,42 @@ class TestCodexTaskContinuation:
         # Each task owns its own result
         assert orig_get["id"] == orig_id
         assert follow_get["id"] == follow_id
-        assert orig_get["result"] != follow_get["result"] or (orig_get["result"] is None and follow_get["result"] is None)
+        assert orig_get["result"] != follow_get["result"] or (
+            orig_get["result"] is None and follow_get["result"] is None
+        )
         # Lineage is maintained
         assert follow_get["parent_task_id"] == orig_id
 
     def test_continuation_task_logs_are_not_mixed(self, client):
         """Logs from a continuation task do not contain logs from the original task."""
         # Create workspace
-        session_resp = client.post("/api/codex/sessions", json={"title": "Log Sep Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Log Sep Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
         # Create and run original task
-        orig_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Original Log Task",
-            "prompt": "echo ORIG_LOG_LINE",
-        })
+        orig_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Original Log Task",
+                "prompt": "echo ORIG_LOG_LINE",
+            },
+        )
         orig_id = orig_resp.json()["id"]
         client.post(f"/api/codex/tasks/{orig_id}/run")
 
         # Create and run continuation task
-        follow_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Continuation Log Task",
-            "prompt": "echo FOLLOW_LOG_LINE",
-            "parent_task_id": orig_id,
-        })
+        follow_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Continuation Log Task",
+                "prompt": "echo FOLLOW_LOG_LINE",
+                "parent_task_id": orig_id,
+            },
+        )
         follow_id = follow_resp.json()["id"]
         client.post(f"/api/codex/tasks/{follow_id}/run")
 
@@ -1780,26 +2154,36 @@ class TestCodexTaskContinuation:
 
         # Verify task IDs are correct and distinct
         orig_log_task_ids = {log.get("task_id") for log in orig_logs}
-        follow_log_task_ids = {log.get("task_id") for log in follow_logs}
+        follow_log_task_ids = {log.get("task_id") for log in follow_logs}  # noqa: F841
         # task_id in logs should be the task's own id or None; continuation logs should not leak
         assert orig_id in orig_log_task_ids or None in orig_log_task_ids
 
     def test_list_tasks_shows_lineage(self, client):
         """Listing tasks shows parent_task_id on continuation tasks."""
-        session_resp = client.post("/api/codex/sessions", json={"title": "Lineage List Workspace", "cwd": "/tmp"})
+        session_resp = client.post(
+            "/api/codex/sessions", json={"title": "Lineage List Workspace", "cwd": "/tmp"}
+        )
         session_id = session_resp.json()["id"]
 
-        orig_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id, "title": "Parent", "prompt": "parent prompt",
-        })
+        orig_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Parent",
+                "prompt": "parent prompt",
+            },
+        )
         orig_id = orig_resp.json()["id"]
 
-        follow_resp = client.post("/api/codex/tasks", json={
-            "session_id": session_id,
-            "title": "Child",
-            "prompt": "child prompt",
-            "parent_task_id": orig_id,
-        })
+        follow_resp = client.post(
+            "/api/codex/tasks",
+            json={
+                "session_id": session_id,
+                "title": "Child",
+                "prompt": "child prompt",
+                "parent_task_id": orig_id,
+            },
+        )
         follow_id = follow_resp.json()["id"]
 
         tasks = client.get(f"/api/codex/tasks?session_id={session_id}").json()
@@ -2031,10 +2415,21 @@ class TestTaskExecutorWiring:
 
         # Mock task runner to capture which executor is passed
         captured_executor = []
+
         class MockTaskRunner:
-            async def start_task_run(self, task, resume_session_id=None, resume_message_id=None, prompt_override=None, run_executor=None, run_provider=None, run_model=None):
+            async def start_task_run(
+                self,
+                task,
+                resume_session_id=None,
+                resume_message_id=None,
+                prompt_override=None,
+                run_executor=None,
+                run_provider=None,
+                run_model=None,
+            ):
                 captured_executor.append(task.executor)
                 from app.domain.models import ExecutionProcess
+
                 return ExecutionProcess(
                     id="proc-1",
                     task_id=task.id,
@@ -2104,9 +2499,18 @@ class TestTaskExecutorWiring:
         monkeypatch.setattr(api_module, "codex_store", store)
 
         class MockTaskRunner:
-            async def start_task_run(self, task, resume_session_id=None, resume_message_id=None, prompt_override=None):
+            async def start_task_run(
+                self, task, resume_session_id=None, resume_message_id=None, prompt_override=None
+            ):
                 from app.domain.models import ExecutionProcess
-                return ExecutionProcess(id="proc-2", task_id=task.id, session_id=task.session_id, status="Running", created_at=now)
+
+                return ExecutionProcess(
+                    id="proc-2",
+                    task_id=task.id,
+                    session_id=task.session_id,
+                    status="Running",
+                    created_at=now,
+                )
 
         def mock_get_task_runner():
             return MockTaskRunner()

@@ -1,5 +1,6 @@
 """Tests for /api/codex/tasks/{id}/chat endpoint (P2)."""
-from datetime import datetime
+
+from datetime import datetime  # noqa: I001
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,13 +36,15 @@ class ChatStoreStub:
         return []
 
     async def save_codex_task_message(self, message):
-        self.messages.append({
-            "id": message.id,
-            "task_id": message.task_id,
-            "execution_process_id": message.execution_process_id,
-            "role": message.role,
-            "content": message.content,
-        })
+        self.messages.append(
+            {
+                "id": message.id,
+                "task_id": message.task_id,
+                "execution_process_id": message.execution_process_id,
+                "role": message.role,
+                "content": message.content,
+            }
+        )
 
     async def list_codex_task_messages(self, task_id: str, execution_process_id: str | None = None):
         result = [m for m in self.messages if m["task_id"] == task_id]
@@ -65,7 +68,13 @@ class ChatStoreStub:
         pass
 
 
-def _make_task(*, workspace_path, status="done", result="canonical task result", resume_session_id="cli-session-7"):
+def _make_task(
+    *,
+    workspace_path,
+    status="done",
+    result="canonical task result",
+    resume_session_id="cli-session-7",
+):
     now = datetime.now()
     return CodexTask(
         id="task-1",
@@ -88,7 +97,9 @@ def _make_task(*, workspace_path, status="done", result="canonical task result",
 
 def _make_session(workspace_path):
     now = datetime.now()
-    return CodexSession(id="ws-1", title="Workspace", cwd=workspace_path, created_at=now, last_active_at=now)
+    return CodexSession(
+        id="ws-1", title="Workspace", cwd=workspace_path, created_at=now, last_active_at=now
+    )
 
 
 @pytest.fixture
@@ -111,8 +122,15 @@ def test_chat_endpoint_creates_user_message_and_returns_ep(isolated_client, monk
     # real runner should do). Captures kwargs so we can assert kind propagation.
     captured = {}
 
-    async def _fake_start_task_run(t, *, prompt_override=None, resume_session_id=None,
-                                   resume_message_id=None, kind="initial", triggering_message_id=None):
+    async def _fake_start_task_run(
+        t,
+        *,
+        prompt_override=None,
+        resume_session_id=None,
+        resume_message_id=None,
+        kind="initial",
+        triggering_message_id=None,
+    ):
         captured["task_id"] = t.id
         captured["kind"] = kind
         captured["triggering_message_id"] = triggering_message_id
@@ -140,16 +158,16 @@ def test_chat_endpoint_creates_user_message_and_returns_ep(isolated_client, monk
 
     response = isolated_client.post(
         "/api/codex/tasks/task-1/chat",
-        json={"content": "你好，麻烦解释一下需求里的第3点"},
+        json={"content": "你好，麻烦解释一下需求里的第3点"},  # noqa: RUF001
     )
     assert response.status_code == 201, response.text
     payload = response.json()
     assert payload["message"]["role"] == "user"
-    assert payload["message"]["content"] == "你好，麻烦解释一下需求里的第3点"
+    assert payload["message"]["content"] == "你好，麻烦解释一下需求里的第3点"  # noqa: RUF001
     assert payload["execution_process"]["kind"] == "chat"
     assert payload["execution_process"]["triggering_message_id"] == payload["message"]["id"]
     assert captured["kind"] == "chat"
-    assert captured["prompt_override"] == "你好，麻烦解释一下需求里的第3点"
+    assert captured["prompt_override"] == "你好，麻烦解释一下需求里的第3点"  # noqa: RUF001
     # Chat should resume the existing CLI session for context continuity
     assert captured["resume_session_id"] == "cli-session-7"
 
@@ -220,14 +238,16 @@ def test_legacy_messages_endpoint_routes_to_chat(isolated_client, monkeypatch, t
 async def test_mark_task_done_skips_refresh_for_chat_ep(tmp_path):
     """For EP.kind == 'chat', _mark_task_done must keep task.result unchanged
     and skip refresh_task_result (which is what runs persist_result)."""
-    from app.application.process_runtime_common import ProcessEntry
+    from app.application.process_runtime_common import ProcessEntry  # noqa: F401, I001
 
     from app.adapters.async_sqlite_store import AsyncSQLiteStore
 
     db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
 
     now = datetime.now()
-    session = CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
+    session = CodexSession(
+        id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now
+    )
     await db.save_codex_session(session)
 
     task = CodexTask(
@@ -276,7 +296,7 @@ async def test_mark_task_done_skips_refresh_for_chat_ep(tmp_path):
         refresh_task_result=_refresh,
     )
 
-    entry = type("E", (), {"result_text": "你好！我是 Codex", "help_requested": False})()
+    entry = type("E", (), {"result_text": "你好！我是 Codex", "help_requested": False})()  # noqa: RUF001
 
     await runtime._mark_task_done("task-1", entry)
 
@@ -292,13 +312,15 @@ async def test_mark_task_done_skips_refresh_for_chat_ep(tmp_path):
 @pytest.mark.asyncio
 async def test_mark_task_done_runs_refresh_for_initial_ep(tmp_path):
     """For EP.kind == 'initial', behavior is unchanged: task.result is updated and refresh runs."""
-    from app.application.process_runtime_common import ProcessEntry, BaseProcessRuntime
+    from app.application.process_runtime_common import ProcessEntry, BaseProcessRuntime  # noqa: F401, I001
     from app.adapters.async_sqlite_store import AsyncSQLiteStore
 
     db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
 
     now = datetime.now()
-    session = CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
+    session = CodexSession(
+        id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now
+    )
     await db.save_codex_session(session)
 
     task = CodexTask(
@@ -356,12 +378,14 @@ async def test_mark_task_done_persists_assistant_summary_for_initial_run(tmp_pat
     """For initial runs the role workflow rewrites task.result to a human summary.
     The assistant message saved to the chat thread must use that summary, NOT
     the raw JSON the agent emitted (which lives in entry.result_text)."""
-    from app.application.process_runtime_common import BaseProcessRuntime
+    from app.application.process_runtime_common import BaseProcessRuntime  # noqa: I001
     from app.adapters.async_sqlite_store import AsyncSQLiteStore
 
     db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
     now = datetime.now()
-    session = CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
+    session = CodexSession(
+        id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now
+    )
     await db.save_codex_session(session)
 
     task = CodexTask(
@@ -382,8 +406,13 @@ async def test_mark_task_done_persists_assistant_summary_for_initial_run(tmp_pat
     await db.save_codex_task(task)
 
     ep = ExecutionProcess(
-        id="ep-init-y", task_id="task-1", session_id="ws-1",
-        status="Running", kind="initial", created_at=now, updated_at=now,
+        id="ep-init-y",
+        task_id="task-1",
+        session_id="ws-1",
+        status="Running",
+        kind="initial",
+        created_at=now,
+        updated_at=now,
     )
     await db.save_execution_process(ep)
 
@@ -392,13 +421,20 @@ async def test_mark_task_done_persists_assistant_summary_for_initial_run(tmp_pat
         t.result = "PRD generated. Files: prd.json, prd.md."
 
     runtime = BaseProcessRuntime(
-        codex_store=db, log_store=db, data_dir=str(tmp_path),
-        event_bus=None, refresh_task_result=_refresh_rewrites_to_summary,
+        codex_store=db,
+        log_store=db,
+        data_dir=str(tmp_path),
+        event_bus=None,
+        refresh_task_result=_refresh_rewrites_to_summary,
     )
-    entry = type("E", (), {
-        "result_text": '{"language":"zh","project_name":"x","product_goals":["g"]}',
-        "help_requested": False,
-    })()
+    entry = type(
+        "E",
+        (),
+        {
+            "result_text": '{"language":"zh","project_name":"x","product_goals":["g"]}',
+            "help_requested": False,
+        },
+    )()
 
     await runtime._mark_task_done("task-1", entry)
 
@@ -416,32 +452,57 @@ async def test_mark_task_done_replaces_json_chat_reply_with_hint(tmp_path):
     even when asked to chat. The chat-mode persist path must detect this and
     swap the raw JSON for a friendly hint instead of dumping a JSON blob into
     the conversation thread."""
-    from app.application.process_runtime_common import BaseProcessRuntime
+    from app.application.process_runtime_common import BaseProcessRuntime  # noqa: I001
     from app.adapters.async_sqlite_store import AsyncSQLiteStore
 
     db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
     now = datetime.now()
-    session = CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
+    session = CodexSession(
+        id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now
+    )
     await db.save_codex_session(session)
     task = CodexTask(
-        id="task-1", session_id="ws-1", phase="requirements", title="t", prompt="p",
-        role="product_manager", executor="codex", status="running",
-        result="OLD_CANONICAL_SUMMARY", workspace_path=str(tmp_path),
-        last_execution_process_id="ep-chat-json", created_at=now, updated_at=now,
+        id="task-1",
+        session_id="ws-1",
+        phase="requirements",
+        title="t",
+        prompt="p",
+        role="product_manager",
+        executor="codex",
+        status="running",
+        result="OLD_CANONICAL_SUMMARY",
+        workspace_path=str(tmp_path),
+        last_execution_process_id="ep-chat-json",
+        created_at=now,
+        updated_at=now,
     )
     await db.save_codex_task(task)
     ep = ExecutionProcess(
-        id="ep-chat-json", task_id="task-1", session_id="ws-1",
-        status="Running", kind="chat", created_at=now, updated_at=now,
+        id="ep-chat-json",
+        task_id="task-1",
+        session_id="ws-1",
+        status="Running",
+        kind="chat",
+        created_at=now,
+        updated_at=now,
     )
     await db.save_execution_process(ep)
 
-    runtime = BaseProcessRuntime(codex_store=db, log_store=db, data_dir=str(tmp_path),
-                                  event_bus=None, refresh_task_result=None)
-    entry = type("E", (), {
-        "result_text": '{"language":"zh","project_name":"x","product_goals":["g"],"user_stories":[]}',
-        "help_requested": False,
-    })()
+    runtime = BaseProcessRuntime(
+        codex_store=db,
+        log_store=db,
+        data_dir=str(tmp_path),
+        event_bus=None,
+        refresh_task_result=None,
+    )
+    entry = type(
+        "E",
+        (),
+        {
+            "result_text": '{"language":"zh","project_name":"x","product_goals":["g"],"user_stories":[]}',
+            "help_requested": False,
+        },
+    )()
     await runtime._mark_task_done("task-1", entry)
 
     msgs = await db.list_codex_task_messages("task-1")
@@ -456,36 +517,59 @@ async def test_mark_task_done_replaces_json_chat_reply_with_hint(tmp_path):
 @pytest.mark.asyncio
 async def test_mark_task_done_persists_assistant_raw_text_for_chat_run(tmp_path):
     """For chat runs the agent reply is plain natural language; pass it through verbatim."""
-    from app.application.process_runtime_common import BaseProcessRuntime
+    from app.application.process_runtime_common import BaseProcessRuntime  # noqa: I001
     from app.adapters.async_sqlite_store import AsyncSQLiteStore
 
     db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
     now = datetime.now()
-    session = CodexSession(id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now)
+    session = CodexSession(
+        id="ws-1", title="W", cwd=str(tmp_path), created_at=now, last_active_at=now
+    )
     await db.save_codex_session(session)
 
     task = CodexTask(
-        id="task-1", session_id="ws-1", phase="requirements", title="t", prompt="p",
-        role="product_manager", executor="codex", status="running",
-        result="OLD_CANONICAL_SUMMARY", workspace_path=str(tmp_path),
-        last_execution_process_id="ep-chat-y", created_at=now, updated_at=now,
+        id="task-1",
+        session_id="ws-1",
+        phase="requirements",
+        title="t",
+        prompt="p",
+        role="product_manager",
+        executor="codex",
+        status="running",
+        result="OLD_CANONICAL_SUMMARY",
+        workspace_path=str(tmp_path),
+        last_execution_process_id="ep-chat-y",
+        created_at=now,
+        updated_at=now,
     )
     await db.save_codex_task(task)
 
     ep = ExecutionProcess(
-        id="ep-chat-y", task_id="task-1", session_id="ws-1",
-        status="Running", kind="chat", created_at=now, updated_at=now,
+        id="ep-chat-y",
+        task_id="task-1",
+        session_id="ws-1",
+        status="Running",
+        kind="chat",
+        created_at=now,
+        updated_at=now,
     )
     await db.save_execution_process(ep)
 
     runtime = BaseProcessRuntime(
-        codex_store=db, log_store=db, data_dir=str(tmp_path),
-        event_bus=None, refresh_task_result=None,
+        codex_store=db,
+        log_store=db,
+        data_dir=str(tmp_path),
+        event_bus=None,
+        refresh_task_result=None,
     )
-    entry = type("E", (), {
-        "result_text": "你好！需要我帮你做什么？",
-        "help_requested": False,
-    })()
+    entry = type(
+        "E",
+        (),
+        {
+            "result_text": "你好！需要我帮你做什么？",  # noqa: RUF001
+            "help_requested": False,
+        },
+    )()
 
     await runtime._mark_task_done("task-1", entry)
 
@@ -493,7 +577,7 @@ async def test_mark_task_done_persists_assistant_raw_text_for_chat_run(tmp_path)
     assistants = [m for m in msgs if m.role == "assistant"]
     assert len(assistants) == 1
     # Chat should show the agent's natural-language reply, NOT the prior task.result.
-    assert assistants[0].content == "你好！需要我帮你做什么？"
+    assert assistants[0].content == "你好！需要我帮你做什么？"  # noqa: RUF001
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +594,9 @@ async def test_build_prompt_text_chat_branch_is_minimal_and_does_not_use_role_te
 
     runner = CodexTaskRunner.__new__(CodexTaskRunner)
     # only the bits we need
-    runner._role_workflow_service = type("S", (), {"is_managed_role": staticmethod(lambda r: True)})()
+    runner._role_workflow_service = type(
+        "S", (), {"is_managed_role": staticmethod(lambda r: True)}
+    )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
 
     fake_task = type("T", (), {"role": "product_manager", "executor": "codex"})()

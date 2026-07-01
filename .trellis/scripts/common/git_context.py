@@ -16,8 +16,8 @@ import json
 
 from .git import run_git
 from .session_context import (
-    get_context_json,
-    get_context_text,
+    get_context_json,  # noqa: F401
+    get_context_text,  # noqa: F401
     get_context_record_json,
     get_context_text_record,
     output_json,
@@ -42,6 +42,7 @@ _run_git_command = run_git
 # =============================================================================
 # Main Entry
 # =============================================================================
+
 
 def main() -> None:
     """CLI entry point."""
@@ -90,9 +91,7 @@ def main() -> None:
             else:
                 parser.exit(2, "Phase Index section not found in workflow.md\n")
         if args.platform:
-            effective = resolve_effective_platform(
-                args.platform, read_trellis_config()
-            )
+            effective = resolve_effective_platform(args.platform, read_trellis_config())
             content = filter_platform(content, effective)
         print(content, end="")
     else:

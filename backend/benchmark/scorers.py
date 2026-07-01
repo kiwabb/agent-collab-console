@@ -19,6 +19,7 @@ Why a Protocol and not an ABC: scorers are stateless value-in-value-out
 functions; the protocol lets tests pass plain functions or lambdas as
 ``Scorer`` instances when the full class is overkill.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -68,9 +69,7 @@ class ScorerRegistry:
             raise ValueError("scorer.name must be non-empty")
         w = weight if weight is not None else scorer.weight
         if w < 0:
-            raise ValueError(
-                f"scorer {scorer.name!r} weight must be >= 0, got {w}"
-            )
+            raise ValueError(f"scorer {scorer.name!r} weight must be >= 0, got {w}")
         self._entries[scorer.name] = ScorerEntry(scorer=scorer, weight=w)
 
     def get(self, name: str) -> ScorerEntry:
@@ -78,8 +77,7 @@ class ScorerRegistry:
             return self._entries[name]
         except KeyError as exc:
             raise KeyError(
-                f"no scorer registered under {name!r}; "
-                f"known: {sorted(self._entries)}"
+                f"no scorer registered under {name!r}; known: {sorted(self._entries)}"
             ) from exc
 
     def all(self) -> list[ScorerEntry]:

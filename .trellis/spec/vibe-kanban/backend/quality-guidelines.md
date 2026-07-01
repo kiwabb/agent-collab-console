@@ -86,6 +86,122 @@ store gets a real-async-store migration test.
 
 <!-- Patterns that must always be used -->
 
+### Scenario: Unified Audit Log Role-Chain Read Contract
+
+#### 1. Scope / Trigger
+
+- Trigger: changing `GET /api/codex/audit-log`, `audit_log` serialization,
+  Conductor turn audit writes, or frontend audit-log role-chain rendering.
+- The audit page is a cross-layer observability contract: `audit_log` rows stay
+  generic, while API serialization derives role and turn metadata for the UI.
+
+#### 2. Signatures
+
+- Writer helper: `_audit_conductor_turn(..., kind, payload, turn_index=None, sub_index=None)`.
+- LLM runner helper: `build_llm_runner(..., audit_actor="auto_plan", audit_role="system_planner")`.
+- Store helper: `list_codex_task_roles(task_ids: list[str]) -> dict[str, str]`.
+- API: `GET /api/codex/audit-log` returns each item with the original audit row
+  fields plus derived optional fields:
+  `role`, `role_label`, `turn_index`, `sub_index`, `call_name`,
+  `call_input`, `call_output`, `call_summary`.
+
+#### 3. Contracts
+
+- Existing audit fields and filters remain backwards compatible.
+- Rows with `task_id` derive `role` from `codex_tasks.role`.
+- Conductor `tool_use` rows derive target role from `payload.input.role`.
+- Conductor `tool_result` rows derive target role from `payload.result.role` or
+  `payload.result.task_id -> codex_tasks.role`.
+- Conductor audit payloads must include `turn_index` and `sub_index` when the
+  turn recorder knows them.
+- Rows without a target role but with `conductor_task_id` group under
+  `role="conductor"`.
+- Taskless LLM rows must still have an intelligible role. `auto_plan` derives
+  `role="system_planner"`, while project script suggestion / operations agent
+  calls use `actor="operations_engineer"` and `role="operations"`.
+- Successful `llm_return` payloads must include the final assistant text in
+  `content` when available; the API exposes that text as `call_output`.
+- Taskless `git_command` / `command_exec` rows group under `role="system"`,
+  never the generic Agent fallback. If a command row has `task_id`, the task
+  role wins.
+- Command audit rows split command/cwd into `call_input` and
+  `exit_code`/`stdout`/`stderr`/duration/refusal into `call_output`; stdout and
+  stderr are outputs, not inputs.
+
+#### 4. Validation & Error Matrix
+
+- Missing or malformed `payload_json` -> derived fields are `null`/fallbacks;
+  the row still returns.
+- Unknown task id -> no task-derived role; conductor rows fall back to
+  `conductor` only when appropriate.
+- Unknown role key -> `role_label` is a title-cased fallback, not an error.
+- Legacy taskless `auto_plan` row with no payload role -> API derives
+  `role="system_planner"`; legacy rows cannot synthesize missing response
+  text that was never persisted.
+- LLM 200 response with no text content -> record `llm_return` with
+  `status="error"` and `error="empty_content"`.
+- Taskless command row -> `role="system"` and `role_label="System"` so the UI
+  does not present operational git noise as an Agent call chain.
+- Store unavailable -> existing audit endpoint `503` behavior remains.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `dispatch_subagent` tool use/result in turn 3 both render under the
+  Architect role with input/output visible.
+- Good: clicking project "AI fill commands" records operations LLM rows under
+  Operations Engineer, and the LLM response text appears in output details.
+- Base: a raw `git_command` audit row with no task still appears in the raw
+  list, groups under System, and exposes stdout/stderr in `call_output`.
+- Base: legacy `auto_plan` LLM rows without task or role group as System
+  Planner rather than Unassigned.
+- Bad: auditing only `usage` / `stop_reason` for `llm_return` and dropping the
+  assistant text operators need to inspect.
+- Bad: putting `stdout`, `stderr`, or `exit_code` inside `call_input`, which
+  makes the details drawer look like commands have no output.
+- Bad: adding audit table role columns when the value can be derived from task
+  and conductor payloads.
+- Bad: frontend re-parsing raw `payload_json` to infer role differently from
+  the backend.
+
+#### 6. Tests Required
+
+- Backend endpoint test: task-linked row returns `role` / `role_label` and
+  input details.
+- Backend endpoint test: taskless `git_command` returns `role="system"`,
+  command/cwd as `call_input`, and stdout/stderr/exit code as `call_output`.
+- Backend endpoint test: task-linked `command_exec` preserves the task role and
+  splits input/output fields.
+- Backend endpoint test: operations `llm_return` returns
+  `role="operations"`, `role_label="Operations Engineer"`, and model text as
+  `call_output`.
+- LLM runner test: successful Anthropic-compatible response records
+  `llm_return.payload.content` after the prefilled `{` normalization.
+- Backend endpoint test: conductor dispatch `tool_use` / `tool_result` returns
+  role, turn index, input, output, and summary.
+- Writer test: `_audit_conductor_turn` preserves `turn_index` and `sub_index`
+  in the audit payload.
+- Frontend pure helper test: audit records group by role and turn in call
+  order, and taskless rows group as System / derived role rather than Agent or
+  Unassigned.
+- Frontend source or component test: audit page mounts the role-chain view while
+  preserving raw rows.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+return {"items": [entry.__dict__ for entry in page]}
+```
+
+Correct:
+
+```python
+payloads = {entry.id: _audit_payload_object(entry.payload_json) for entry in page}
+task_roles = await _load_audit_task_roles(page, payloads)
+return {"items": [{**serialize_row(entry), **_derive_audit_call_metadata(entry, payloads[entry.id], task_roles)} for entry in page]}
+```
+
 ### Scenario: Safe Operational Diagnostics API
 
 #### 1. Scope / Trigger

@@ -5,6 +5,7 @@ small remaining budget shrinks the EFFECTIVE concurrency. We measure the peak
 number of agents running at once and assert it is bounded by the budget-allowed
 value — and unchanged (= configured cap) when the budget is comfortable.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,23 +31,36 @@ def _reset_singletons():
 
 def _issue(budget_usd):
     return CodexIssue(
-        id="issue-deadbeef", session_id="s1", project_id="p1", title="t",
-        git_branch="issue/deadbeef-t", budget_usd=budget_usd,
+        id="issue-deadbeef",
+        session_id="s1",
+        project_id="p1",
+        title="t",
+        git_branch="issue/deadbeef-t",
+        budget_usd=budget_usd,
     )
 
 
 def _project():
     return Project(
-        id="p1", name="demo", repo_path="/tmp/repo", default_branch="main",
-        created_at=datetime.now(), updated_at=datetime.now(),
+        id="p1",
+        name="demo",
+        repo_path="/tmp/repo",
+        default_branch="main",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
     )
 
 
 def _ep(cost):
     now = datetime.now()
     return ExecutionProcess(
-        id="ep", task_id="task-1", session_id="s1", status="Completed",
-        total_cost_usd=cost, created_at=now, updated_at=now,
+        id="ep",
+        task_id="task-1",
+        session_id="s1",
+        status="Completed",
+        total_cost_usd=cost,
+        created_at=now,
+        updated_at=now,
     )
 
 
@@ -90,9 +104,12 @@ class _WorktreeManagerStub:
 
 def _build(store, wm):
     return ct.build_conductor_tools(
-        project_id="p1", store=store, event_bus=None,
+        project_id="p1",
+        store=store,
+        event_bus=None,
         task_dispatcher_fn=lambda task: None,
-        issue_id="issue-deadbeef", worktree_manager=wm,
+        issue_id="issue-deadbeef",
+        worktree_manager=wm,
     )
 
 
@@ -100,9 +117,19 @@ async def _measure_peak_concurrency(reg, n_agents):
     """Run a batch of n_agents and return the peak simultaneous in-flight count."""
     state = {"current": 0, "peak": 0}
 
-    async def fake_dispatch_role(*, issue, role, prompt_override, store, task_dispatcher_fn,
-                                 event_bus, prev_node_key, agent_worktree_path=None, batch_key=None,
-                                 register_completion=False):
+    async def fake_dispatch_role(
+        *,
+        issue,
+        role,
+        prompt_override,
+        store,
+        task_dispatcher_fn,
+        event_bus,
+        prev_node_key,
+        agent_worktree_path=None,
+        batch_key=None,
+        register_completion=False,
+    ):
         fake_dispatch_role.n += 1
         return f"task-{fake_dispatch_role.n}", f"node-{fake_dispatch_role.n}"
 
@@ -116,13 +143,14 @@ async def _measure_peak_concurrency(reg, n_agents):
         state["current"] -= 1
         return {"status": "done", "task_id": task_id}
 
-    import app.application.task_completion_registry as tcr_mod
+    import app.application.task_completion_registry as tcr_mod  # noqa: F401
+
     orig_dispatch = task_dispatcher.dispatch_role
     orig_wait = TaskCompletionRegistry.wait_for_active
     task_dispatcher.dispatch_role = fake_dispatch_role
     TaskCompletionRegistry.wait_for_active = fake_wait
     try:
-        agents = [{"role": f"engineer", "prompt": str(i)} for i in range(n_agents)]
+        agents = [{"role": f"engineer", "prompt": str(i)} for i in range(n_agents)]  # noqa: F541
         # Distinct roles so the per-role limiter (default 3) never masks the
         # budget downscale we are measuring.
         agents = [{"role": f"role{i}", "prompt": str(i)} for i in range(n_agents)]
@@ -201,6 +229,6 @@ async def test_unlimited_budget_does_not_downscale(monkeypatch):
     store = _Store(_issue(budget_usd=0.0), _project(), spent_cost=999.0)
     reg = _build(store, _WorktreeManagerStub())
 
-    out, peak = await _measure_peak_concurrency(reg, n_agents=4)
+    out, peak = await _measure_peak_concurrency(reg, n_agents=4)  # noqa: RUF059
 
     assert peak == 3  # configured cap, not compressed

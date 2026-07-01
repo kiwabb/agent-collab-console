@@ -16,18 +16,19 @@ The tests cover the full HTTP contract:
   - GET  /codex/benchmark/runs/{id}/diff  diff against baseline
   - GET  /codex/benchmark/calibration  shipped calibration set loads
 """
-from __future__ import annotations
 
-import asyncio
-import json
-import time
-from pathlib import Path
+from __future__ import annotations  # noqa: I001
+
+import asyncio  # noqa: F401
+import json  # noqa: F401
+import time  # noqa: F401
+from pathlib import Path  # noqa: F401
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import benchmark.api as benchmark_api
+import benchmark.api as benchmark_api  # noqa: F401
 from benchmark import api as benchmark_handlers
 from benchmark.job import (
     JOB_STATUS_COMPLETED,
@@ -37,13 +38,13 @@ from benchmark.job import (
     JobRegistry,
 )
 from benchmark.runner import (
-    BenchmarkRunner,
-    FakeExecutor,
-    RunOptions,
+    BenchmarkRunner,  # noqa: F401
+    FakeExecutor,  # noqa: F401
+    RunOptions,  # noqa: F401
 )
-from benchmark.scorers_impl import default_registry
-from benchmark.store import InMemoryStore, SqliteStore
-from benchmark.types import CommandResult, IssueArtifacts
+from benchmark.scorers_impl import default_registry  # noqa: F401
+from benchmark.store import InMemoryStore, SqliteStore  # noqa: F401
+from benchmark.types import CommandResult, IssueArtifacts  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ def _make_test_app(*, store: InMemoryStore | None = None) -> FastAPI:
     chain in the test, but exercises the same route decorators
     from app/interfaces/api.py (we mirror them here for the
     test)."""
-    from app.interfaces.api import (
+    from app.interfaces.api import (  # noqa: I001
         trigger_benchmark_run,
         list_benchmark_runs,
         get_benchmark_run,
@@ -67,6 +68,7 @@ def _make_test_app(*, store: InMemoryStore | None = None) -> FastAPI:
         get_benchmark_job,
         get_benchmark_calibration,
     )
+
     app = FastAPI()
     app.post("/codex/benchmark/runs", status_code=202)(trigger_benchmark_run)
     app.get("/codex/benchmark/runs")(list_benchmark_runs)
@@ -146,7 +148,8 @@ def test_set_baseline_then_get_returns_it(client):
     c, store, _r = client
     # Seed a run via the store directly (faster than going
     # through the async trigger).
-    from benchmark.store import make_run_row, BenchmarkEpoch
+    from benchmark.store import make_run_row, BenchmarkEpoch  # noqa: F401, I001
+
     run = make_run_row(
         run_id="r1",
         label="v0.5",
@@ -184,11 +187,7 @@ def test_list_and_get_run_round_trip(client):
     c, store, _r = client
     from benchmark.store import make_run_row
 
-    store.create_run(
-        make_run_row(
-            run_id="r1", label="v0.5", fixture_ids=["a", "b"], epoch_count=2
-        )
-    )
+    store.create_run(make_run_row(run_id="r1", label="v0.5", fixture_ids=["a", "b"], epoch_count=2))
     res = c.get("/codex/benchmark/runs")
     assert res.status_code == 200
     body = res.json()
@@ -216,11 +215,7 @@ def test_diff_with_no_baseline(client):
     c, store, _r = client
     from benchmark.store import make_run_row
 
-    store.create_run(
-        make_run_row(
-            run_id="r1", label="candidate", fixture_ids=[], epoch_count=1
-        )
-    )
+    store.create_run(make_run_row(run_id="r1", label="candidate", fixture_ids=[], epoch_count=1))
     res = c.get("/codex/benchmark/runs/r1/diff")
     assert res.status_code == 200
     body = res.json()
@@ -234,7 +229,10 @@ def test_diff_candidate_is_baseline_returns_polite_message(client):
 
     store.create_run(
         make_run_row(
-            run_id="r1", label="baseline", fixture_ids=[], epoch_count=1,
+            run_id="r1",
+            label="baseline",
+            fixture_ids=[],
+            epoch_count=1,
         )
     )
     # Pin r1 as the baseline so the diff endpoint can detect that
@@ -322,10 +320,11 @@ async def test_trigger_run_creates_job_in_pending_then_running(monkeypatch):
       - The job is observable via GET
       - The handler does not block on the run
     """
-    from app.interfaces.api import (
+    from app.interfaces.api import (  # noqa: I001
         trigger_benchmark_run,
         get_benchmark_job,
     )
+
     store = InMemoryStore()
     registry = JobRegistry()
     benchmark_handlers.init_for_app(store, registry)

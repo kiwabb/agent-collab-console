@@ -12,6 +12,7 @@ backend/**/__pycache__/
 /console.db
 /console.db-shm
 /console.db-wal
+backend/:memory:
 backend/console.db
 backend/console.db-shm
 backend/console.db-wal
@@ -28,6 +29,7 @@ backend/*.db-wal
 .agents/
 .claude/
 .codex/
+.agent-collab/
 
 # IDE
 .idea/
@@ -38,6 +40,7 @@ backend/*.db-wal
 # OS
 .DS_Store
 **/.DS_Store
+**/*.tsbuildinfo
 
 # Task workspaces
 .task-workspaces/

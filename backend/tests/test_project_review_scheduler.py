@@ -65,7 +65,9 @@ async def test_project_review_tick_runs_scheduled_review_for_each_project():
     assert [result.project_id for result in summary.results] == ["project-1", "project-2"]
     assert [task.project_id for task in calls] == ["project-1", "project-2"]
     assert all(task.task_kind == "scheduled_review" for task in calls)
-    assert all(task.payload == {"question": "Run a scheduled project health review."} for task in calls)
+    assert all(
+        task.payload == {"question": "Run a scheduled project health review."} for task in calls
+    )
 
 
 @pytest.mark.asyncio

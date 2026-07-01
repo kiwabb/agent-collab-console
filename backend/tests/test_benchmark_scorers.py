@@ -5,11 +5,12 @@ These tests pin the determinism contract: given a fixed
 ``Score``. The PR2 runner relies on this property to assert
 "regression" without flakiness.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import pytest
 
-from benchmark.scorers import Scorer, ScorerEntry, ScorerRegistry
+from benchmark.scorers import Scorer, ScorerEntry, ScorerRegistry  # noqa: F401
 from benchmark.scorers_impl import (
     AcceptanceCoverageScorer,
     ExecutionScorer,
@@ -106,9 +107,7 @@ def test_execution_does_not_count_expected_nonzero_as_pass():
     A pinned command with expected_exit_code=2 that returns 2 is
     STILL scored as failure here. The match-with-expected logic is
     the runner's job (PR2); PR1 just provides the raw pass-rate."""
-    artifacts = _artifacts(
-        qa_results=[CommandResult(command="a", exit_code=2, duration_s=0.1)]
-    )
+    artifacts = _artifacts(qa_results=[CommandResult(command="a", exit_code=2, duration_s=0.1)])
     s = ExecutionScorer().score(artifacts)
     assert s.value == 0.0
     assert s.passed is False

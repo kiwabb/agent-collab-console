@@ -2,7 +2,7 @@
 command execution + reconcile, safety-filter blocklist, and the new
 clarification_question pass-through."""
 
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import json
 import tempfile
@@ -20,9 +20,15 @@ from app.application.qa_workflow import QAWorkflow, QAWorkflowError
 class _FakeTask:
     """Minimal stand-in for CodexTask the workflow needs."""
 
-    def __init__(self, *, workspace_path: str, issue_id: str = "issue-1",
-                 title: str = "Issue title", prompt: str = "user prompt",
-                 result: str = "{}"):
+    def __init__(
+        self,
+        *,
+        workspace_path: str,
+        issue_id: str = "issue-1",
+        title: str = "Issue title",
+        prompt: str = "user prompt",
+        result: str = "{}",
+    ):
         self.workspace_path = workspace_path
         self.issue_id = issue_id
         self.id = "task-id"
@@ -225,7 +231,9 @@ def test_passed_verdict_leaves_task_status_untouched(workflow, workspace, valid_
     assert getattr(task, "review_comment", None) is None
 
 
-def test_blocked_verdict_sets_review_comment_no_task_status_failed(workflow, workspace, valid_qa_payload):
+def test_blocked_verdict_sets_review_comment_no_task_status_failed(
+    workflow, workspace, valid_qa_payload
+):
     """blocked verdict surfaces a review_comment but does NOT mark task.status='failed'."""
     valid_qa_payload["status"] = "blocked"
     valid_qa_payload["bugs_found"] = ["missing dep"]
@@ -291,10 +299,10 @@ def test_d1_implies_implementation_zero_diff_no_commands_promotes_follow_up(
     valid_qa_payload["recommended_commands"] = []
     _write_engineer_report(workspace, status="completed")
     task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
-    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True), \
-         mock.patch(
-             "app.application.engineer_workflow.git_changed_files", return_value=[]
-         ):
+    with (
+        mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True),
+        mock.patch("app.application.engineer_workflow.git_changed_files", return_value=[]),
+    ):
         doc = workflow.persist_result(task)
     assert doc.status == "needs_follow_up"
     assert any("Independent git cross-check" in g for g in doc.test_gaps)
@@ -305,10 +313,10 @@ def test_d1_real_changes_do_not_trigger(workflow, workspace, valid_qa_payload):
     valid_qa_payload["recommended_commands"] = []
     _write_engineer_report(workspace, status="completed")
     task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
-    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True), \
-         mock.patch(
-             "app.application.engineer_workflow.git_changed_files", return_value=["a.py"]
-         ):
+    with (
+        mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True),
+        mock.patch("app.application.engineer_workflow.git_changed_files", return_value=["a.py"]),
+    ):
         doc = workflow.persist_result(task)
     assert doc.status == "passed"
     assert not any("Independent git cross-check" in g for g in doc.test_gaps)
@@ -320,10 +328,10 @@ def test_d1_blocked_engineer_does_not_trigger(workflow, workspace, valid_qa_payl
     valid_qa_payload["recommended_commands"] = []
     _write_engineer_report(workspace, status="blocked", completed=False)
     task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
-    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True), \
-         mock.patch(
-             "app.application.engineer_workflow.git_changed_files", return_value=[]
-         ):
+    with (
+        mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True),
+        mock.patch("app.application.engineer_workflow.git_changed_files", return_value=[]),
+    ):
         doc = workflow.persist_result(task)
     assert doc.status == "passed"
     assert not any("Independent git cross-check" in g for g in doc.test_gaps)
@@ -336,10 +344,10 @@ def test_d1_does_not_override_command_failure(workflow, workspace, valid_qa_payl
     valid_qa_payload["recommended_commands"] = ["false"]  # exits 1 → failed
     _write_engineer_report(workspace, status="completed")
     task = _FakeTask(workspace_path=workspace, result=json.dumps(valid_qa_payload))
-    with mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True), \
-         mock.patch(
-             "app.application.engineer_workflow.git_changed_files", return_value=[]
-         ):
+    with (
+        mock.patch("app.application.qa_workflow.QA_EXECUTE_COMMANDS", True),
+        mock.patch("app.application.engineer_workflow.git_changed_files", return_value=[]),
+    ):
         doc = workflow.persist_result(task)
     assert doc.status == "failed"
     assert getattr(task, "status", None) == "failed"

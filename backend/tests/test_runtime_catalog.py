@@ -1,15 +1,15 @@
 """Tests for runtime catalog service and provider/model functionality."""
 
-import pytest
-from datetime import datetime
+import pytest  # noqa: I001
+from datetime import datetime  # noqa: F401
 from pathlib import Path
-import tempfile
+import tempfile  # noqa: F401
 import asyncio
 import json
 
 pytestmark = pytest.mark.slow
 
-from app.domain.models import (
+from app.domain.models import (  # noqa: E402, I001
     RuntimeCatalog,
     RuntimeExecutorConfig,
     RuntimeProviderConfig,
@@ -17,8 +17,11 @@ from app.domain.models import (
     CodexTask,
     ExecutionProcess,
 )
-from app.adapters.async_sqlite_store import AsyncSQLiteStore
-from app.application.runtime_catalog_service import RuntimeCatalogService, RuntimeCatalogValidationError
+from app.adapters.async_sqlite_store import AsyncSQLiteStore  # noqa: E402
+from app.application.runtime_catalog_service import (  # noqa: E402
+    RuntimeCatalogService,
+    RuntimeCatalogValidationError,
+)  # noqa: E402, RUF100
 
 
 def test_runtime_catalog_api_never_returns_raw_api_keys(client):
@@ -87,6 +90,7 @@ def test_runtime_catalog_update_preserves_omitted_api_key(client):
     assert resp.json()["executors"][0]["api_key_configured"] is True
 
     import app.bootstrap as bootstrap_module
+
     stored = bootstrap_module.store.load_runtime_catalog()
     assert stored.executors[0].api_key == secret
 
@@ -131,8 +135,12 @@ class TestRuntimeCatalogService:
                             label="Anthropic",
                             enabled=True,
                             models=[
-                                RuntimeModelConfig(id="claude-sonnet-4-6", label="Claude Sonnet 4.6", enabled=True),
-                                RuntimeModelConfig(id="claude-opus-4-7", label="Claude Opus 4.7", enabled=True),
+                                RuntimeModelConfig(
+                                    id="claude-sonnet-4-6", label="Claude Sonnet 4.6", enabled=True
+                                ),
+                                RuntimeModelConfig(
+                                    id="claude-opus-4-7", label="Claude Opus 4.7", enabled=True
+                                ),
                             ],
                             default_model_id="claude-sonnet-4-6",
                         ),
@@ -149,7 +157,9 @@ class TestRuntimeCatalogService:
                             label="Anthropic",
                             enabled=True,
                             models=[
-                                RuntimeModelConfig(id="claude-sonnet-4-6", label="Claude Sonnet 4.6", enabled=True),
+                                RuntimeModelConfig(
+                                    id="claude-sonnet-4-6", label="Claude Sonnet 4.6", enabled=True
+                                ),
                             ],
                             default_model_id="claude-sonnet-4-6",
                         ),
@@ -200,7 +210,9 @@ class TestRuntimeCatalogService:
             service.validate_catalog(default_catalog)
 
     @pytest.mark.asyncio
-    async def test_validate_catalog_rejects_invalid_default_provider(self, service, default_catalog):
+    async def test_validate_catalog_rejects_invalid_default_provider(
+        self, service, default_catalog
+    ):
         """Validation fails when default_provider_id references non-existent provider."""
         codex = next(e for e in default_catalog.executors if e.id == "codex")
         codex.default_provider_id = "nonexistent"
@@ -219,7 +231,7 @@ class TestRuntimeCatalogService:
     @pytest.mark.asyncio
     async def test_resolve_effective_config_uses_defaults(self, service, default_catalog):
         """When no provider/model specified, uses executor defaults."""
-        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(
+        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(  # noqa: RUF059
             default_catalog, "codex", provider=None, model=None
         )
         assert executor == "codex"
@@ -229,7 +241,7 @@ class TestRuntimeCatalogService:
     @pytest.mark.asyncio
     async def test_resolve_effective_config_uses_explicit(self, service, default_catalog):
         """When provider/model specified, uses them directly."""
-        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(
+        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(  # noqa: RUF059
             default_catalog, "codex", provider="anthropic", model="claude-opus-4-7"
         )
         assert executor == "codex"
@@ -237,9 +249,11 @@ class TestRuntimeCatalogService:
         assert model == "claude-opus-4-7"
 
     @pytest.mark.asyncio
-    async def test_resolve_effective_config_falls_back_from_unknown_executor(self, service, default_catalog):
+    async def test_resolve_effective_config_falls_back_from_unknown_executor(
+        self, service, default_catalog
+    ):
         """Unknown executor falls back to the first enabled executor."""
-        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(
+        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(  # noqa: RUF059
             default_catalog, "unknown", provider=None, model=None
         )
         assert executor == "codex"
@@ -247,11 +261,13 @@ class TestRuntimeCatalogService:
         assert model == "claude-sonnet-4-6"
 
     @pytest.mark.asyncio
-    async def test_resolve_effective_config_falls_back_from_disabled_executor(self, service, default_catalog):
+    async def test_resolve_effective_config_falls_back_from_disabled_executor(
+        self, service, default_catalog
+    ):
         """Disabled executor falls back to the next enabled executor."""
         codex = next(e for e in default_catalog.executors if e.id == "codex")
         codex.enabled = False
-        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(
+        executor, provider, model, env_overrides, executor_type = service.resolve_effective_config(  # noqa: RUF059
             default_catalog, "codex", provider=None, model=None
         )
         assert executor == "claude"
@@ -262,7 +278,12 @@ class TestRuntimeCatalogService:
     async def test_render_template_valid_placeholders(self, service):
         """Template rendering works with valid placeholders."""
         template = "model={model} provider={provider}"
-        context = {"model": "claude-sonnet-4-6", "provider": "anthropic", "workspace_cwd": "/tmp", "task_id": "123"}
+        context = {
+            "model": "claude-sonnet-4-6",
+            "provider": "anthropic",
+            "workspace_cwd": "/tmp",
+            "task_id": "123",
+        }
         result = service.render_template(template, context)
         assert result == "model=claude-sonnet-4-6 provider=anthropic"
 
@@ -270,7 +291,12 @@ class TestRuntimeCatalogService:
     async def test_render_template_rejects_invalid_placeholders(self, service):
         """Template rendering rejects invalid placeholders."""
         template = "unknown={unknown_var}"
-        context = {"model": "claude-sonnet-4-6", "provider": "anthropic", "workspace_cwd": "/tmp", "task_id": "123"}
+        context = {
+            "model": "claude-sonnet-4-6",
+            "provider": "anthropic",
+            "workspace_cwd": "/tmp",
+            "task_id": "123",
+        }
         with pytest.raises(RuntimeCatalogValidationError, match="Invalid template placeholders"):
             service.render_template(template, context)
 

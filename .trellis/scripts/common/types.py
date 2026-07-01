@@ -18,6 +18,7 @@ from typing import TypedDict
 # task.json shape (TypedDict — used only for read-path type hints)
 # =============================================================================
 
+
 class TaskData(TypedDict, total=False):
     """Shape of task.json on disk.
 
@@ -54,6 +55,7 @@ class TaskData(TypedDict, total=False):
 # =============================================================================
 # Loaded task object (frozen dataclass — the public API type)
 # =============================================================================
+
 
 @dataclass(frozen=True)
 class TaskInfo:
@@ -96,6 +98,7 @@ class TaskInfo:
 # =============================================================================
 # registry.json agent entry
 # =============================================================================
+
 
 class AgentRecord(TypedDict, total=False):
     """Shape of an agent entry in registry.json."""

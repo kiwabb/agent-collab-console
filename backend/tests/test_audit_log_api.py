@@ -5,7 +5,7 @@ the underlying `list_audit_logs` store extensions (categories IN, since/until,
 q LIKE, keyset cursor) on BOTH stores. Frontend (PR4) is out of scope.
 """
 
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 from datetime import datetime, timedelta
 
@@ -100,9 +100,7 @@ async def test_store_since_until_range(tmp_path):
 async def test_store_q_search_case_insensitive(tmp_path):
     store = AsyncSQLiteStore(tmp_path / "console.db")
     await store._ensure_db()
-    await store.save_audit_log(
-        _row(1, payload_json='{"cmd": "git STATUS --porcelain"}')
-    )
+    await store.save_audit_log(_row(1, payload_json='{"cmd": "git STATUS --porcelain"}'))
     await store.save_audit_log(_row(2, payload_json='{"cmd": "ls -la"}'))
 
     hit = await store.list_audit_logs(q="status")

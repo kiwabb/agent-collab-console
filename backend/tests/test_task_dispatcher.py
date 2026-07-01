@@ -1,9 +1,10 @@
 """Tests for task_dispatcher.dispatch_role."""
+
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: F401
 from uuid import uuid4
 
 import pytest
@@ -228,7 +229,7 @@ async def test_dispatch_role_retry_creates_fresh_task():
     async def fake_dispatcher(task):
         dispatcher_called.append(task)
 
-    task_id, node_id = await dispatch_role(
+    task_id, node_id = await dispatch_role(  # noqa: RUF059
         issue=issue,
         role="engineer",
         store=store,
@@ -424,7 +425,7 @@ async def test_dispatch_role_skips_handoff_message_for_idempotent_path():
     graph.nodes = [existing_node]
 
     agent = _make_agent("engineer")
-    store = _make_store(issue, graph, [agent])
+    store = _make_store(issue, graph, [agent])  # noqa: F841
 
     # Patch same_role_count: with one "engineer" node, count=1 → key="engineer#1"
     # (no match). To hit idempotent path we need count=0 → key="engineer".
@@ -497,7 +498,7 @@ async def test_dispatch_role_registers_before_launching_runner():
     task in TaskCompletionRegistry BEFORE invoking the task runner, so an
     instantly-completing runner can't signal into the void. We assert ordering by
     checking the task is already registered at the moment the runner is called."""
-    from app.application.task_dispatcher import dispatch_role
+    from app.application.task_dispatcher import dispatch_role  # noqa: I001
     from app.application.task_completion_registry import TaskCompletionRegistry
 
     TaskCompletionRegistry._instance = None
@@ -532,7 +533,7 @@ async def test_dispatch_role_registers_before_launching_runner():
 async def test_dispatch_role_does_not_register_by_default():
     """Fire-and-forget callers (no await) must NOT leave an orphan event: with
     register_completion=False (default), dispatch_role does not register."""
-    from app.application.task_dispatcher import dispatch_role
+    from app.application.task_dispatcher import dispatch_role  # noqa: I001
     from app.application.task_completion_registry import TaskCompletionRegistry
 
     TaskCompletionRegistry._instance = None
@@ -561,7 +562,7 @@ async def test_dispatch_role_instant_completion_result_survives_race():
     signals completion INSTANTLY (before register_completion would have run if it
     were post-launch) still lands its result, because dispatch_role registers
     first. The result is retrievable via wait_for_active without timeout."""
-    from app.application.task_dispatcher import dispatch_role
+    from app.application.task_dispatcher import dispatch_role  # noqa: I001
     from app.application.task_completion_registry import TaskCompletionRegistry
 
     TaskCompletionRegistry._instance = None
@@ -587,7 +588,9 @@ async def test_dispatch_role_instant_completion_result_survives_race():
             register_completion=True,
         )
         result = await reg.wait_for_active(
-            task_id, idle_timeout=0.5, hard_timeout=0.5,
+            task_id,
+            idle_timeout=0.5,
+            hard_timeout=0.5,
             activity_age=lambda _t: 999.0,
         )
         assert result == expected
@@ -601,7 +604,7 @@ async def test_concurrent_same_role_dispatch_gets_unique_node_keys():
     path) must each mint a distinct node_key. The per-issue lock serialises the
     count→add-node section; without it both would read an empty graph and collide
     on 'engineer'."""
-    from app.application.task_dispatcher import dispatch_role, _issue_dispatch_locks
+    from app.application.task_dispatcher import dispatch_role, _issue_dispatch_locks  # noqa: I001
 
     _issue_dispatch_locks.clear()
     issue = _make_issue()

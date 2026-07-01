@@ -269,44 +269,15 @@ class QAWorkflow:
         issue_id: str | None,
         task_id: str | None,
     ) -> None:
-        """Mirror each QA command execution into the unified audit_log (PR2).
+        """Mirror each QA command execution into the unified audit_log.
 
-        Best-effort + fire-and-forget. None (execution disabled / mock) records
-        nothing. stdout/stderr are already tail-trimmed by the executor; refused
-        commands record their refusal reason in `status`/`error`.
+        Thin forwarding shell over `audit.record_command_execs` — the per-result
+        shaping (status derivation, tail-trim) lives in the audit package now.
+        Kept as a static method so the call site and existing tests are stable.
         """
-        if not execution_results:
-            return
-        try:
-            from app.application.audit_logger import audit_logger
+        from app.application import audit
 
-            for r in execution_results:
-                refused = r.get("refused")
-                exit_code = r.get("exit_code")
-                status = "error" if (refused or (exit_code or 0) != 0) else "ok"
-                duration_s = r.get("duration_s")
-                duration_ms = (
-                    int(duration_s * 1000) if isinstance(duration_s, (int, float)) else None
-                )
-                audit_logger.record(
-                    "command_exec",
-                    actor="qa",
-                    issue_id=issue_id,
-                    task_id=task_id,
-                    status=status,
-                    duration_ms=duration_ms,
-                    payload={
-                        "command": r.get("command"),
-                        "exit_code": exit_code,
-                        "stdout": (r.get("stdout") or "")[-2000:],
-                        "stderr": (r.get("stderr") or "")[-2000:],
-                        "duration_s": duration_s,
-                        "refused": refused,
-                    },
-                    error=str(refused) if refused else None,
-                )
-        except Exception:  # noqa: BLE001, RUF100
-            pass
+        audit.record_command_execs(execution_results, issue_id, task_id)
 
     def _execute_verification_commands(
         self, commands: list[str], workspace_path: str

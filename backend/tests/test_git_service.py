@@ -1,7 +1,8 @@
 """Integration tests for GitService against a real local git binary."""
+
 from __future__ import annotations
 
-import asyncio
+import asyncio  # noqa: F401
 import shutil
 import subprocess
 from pathlib import Path
@@ -77,7 +78,11 @@ async def test_squash_merge_lands_on_base(repo: Path, tmp_path: Path):
     _git("-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "add file", cwd=wt)
     sha = await svc.squash_merge(repo, "feature/y", "main", "merge feature/y")
     log = subprocess.run(
-        ["git", "log", "--oneline", "main"], cwd=str(repo), capture_output=True, text=True, check=True
+        ["git", "log", "--oneline", "main"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert "merge feature/y" in log
     assert len(sha) >= 7

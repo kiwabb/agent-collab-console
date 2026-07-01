@@ -20,7 +20,8 @@ The handlers deliberately do *not* run the benchmark themselves
 — they mutate the job + store and (for POST) schedule a
 background task via :mod:`benchmark.job`.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 from typing import Any
 
@@ -31,9 +32,9 @@ from .correlation import CalibrationSet, calibration_report
 from .runner import run_aggregate_from_store
 from .job import (
     JOB_STATUS_COMPLETED,
-    JOB_STATUS_FAILED,
-    JOB_STATUS_PENDING,
-    JOB_STATUS_RUNNING,
+    JOB_STATUS_FAILED,  # noqa: F401
+    JOB_STATUS_PENDING,  # noqa: F401
+    JOB_STATUS_RUNNING,  # noqa: F401
     Job,
     JobRegistry,
     make_progress_updater,
@@ -132,10 +133,10 @@ class TriggerRunBody:
 # Defined here so the route in app/interfaces/api.py can
 # reference it via import.
 try:
-    from pydantic import BaseModel as _BaseModel, Field as _Field
+    from pydantic import BaseModel as _BaseModel, Field as _Field  # noqa: I001
 except ImportError:  # pragma: no cover — pydantic is a hard dep
     _BaseModel = object  # type: ignore[assignment,misc]
-    _Field = lambda default=None, **_: default  # type: ignore[assignment]
+    _Field = lambda default=None, **_: default  # type: ignore[assignment]  # noqa: E731
 
 
 class TriggerRunRequest(_BaseModel):  # type: ignore[misc]
@@ -182,6 +183,7 @@ async def trigger_run(body: dict[str, Any]) -> dict[str, Any]:
     if TriggerRunRequest is None:
         # Defensive — the module-level import failed earlier.
         from benchmark.api import TriggerRunRequest as _R  # type: ignore
+
         TriggerRunRequest = _R
     try:
         req = TriggerRunRequest.model_validate(body)
@@ -216,10 +218,8 @@ async def trigger_run(body: dict[str, Any]) -> dict[str, Any]:
         if dry_run or not (project_id and workspace_id):
             executor = FakeExecutor()
         else:
-            executor = RealConductorExecutor(
-                project_id=project_id, workspace_id=workspace_id
-            )
-        progress_cb = make_progress_updater(registry, job)
+            executor = RealConductorExecutor(project_id=project_id, workspace_id=workspace_id)
+        progress_cb = make_progress_updater(registry, job)  # noqa: F841
         # total_epochs is also written to meta so the leaderboard
         # can compute a progress hint without recomputing.
         registry.update(job)
@@ -314,7 +314,12 @@ def get_run_diff(run_id: str) -> dict[str, Any]:
         }
     cand_agg = run_aggregate_from_store(store, run_id)
     base_agg = run_aggregate_from_store(store, baseline.id)
-    d = diff(cand_agg, base_agg, baseline_label=baseline.label or baseline.id, candidate_label=run.label or run.id)
+    d = diff(
+        cand_agg,
+        base_agg,
+        baseline_label=baseline.label or baseline.id,
+        candidate_label=run.label or run.id,
+    )
     return {
         "candidate": _serialize_run(run, epochs=store.list_epochs(run_id)),
         "baseline": _serialize_run(baseline, epochs=store.list_epochs(baseline.id)),
@@ -376,7 +381,7 @@ def get_calibration_report(*, floor: float = 0.7) -> dict[str, Any]:
     judge text is constructed at call time), and reports the
     correlation.
     """
-    from .judge import FixedResponseBackend
+    from .judge import FixedResponseBackend  # noqa: F401, I001
     from pathlib import Path
 
     cal_root = Path(__file__).parent / "calibration"

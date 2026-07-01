@@ -1,4 +1,4 @@
-import asyncio
+import asyncio  # noqa: I001
 import json
 from datetime import datetime
 from pathlib import Path
@@ -107,9 +107,9 @@ def test_project_conductor_answer_uses_pinned_warm_and_cold_memory(tmp_path: Pat
             ProjectConductorState(
                 project_id=project.id,
                 pinned_text="Pinned: keep API contracts stable.",
-                warm_summaries_json=json.dumps([
-                    {"summary": "Recent issues failed because QA caught missing migrations."}
-                ]),
+                warm_summaries_json=json.dumps(
+                    [{"summary": "Recent issues failed because QA caught missing migrations."}]
+                ),
                 warm_tokens=10,
             )
         )
@@ -152,7 +152,9 @@ def test_project_conductor_scheduled_review_runs_pr_followup_sweep(monkeypatch, 
         await store.save_project(project)
         calls: list[dict[str, object]] = []
 
-        async def sweep_project_github_prs(project_id, *, store, event_bus, run_subprocess, auto_merge=False):
+        async def sweep_project_github_prs(
+            project_id, *, store, event_bus, run_subprocess, auto_merge=False
+        ):
             calls.append(
                 {
                     "project_id": project_id,
@@ -202,13 +204,17 @@ def test_project_conductor_scheduled_review_runs_pr_followup_sweep(monkeypatch, 
     assert hot[-1]["github_pr_followup"]["counts"] == {"merged": 1}
 
 
-def test_project_conductor_scheduled_review_reports_pr_followup_failure(monkeypatch, tmp_path: Path):
+def test_project_conductor_scheduled_review_reports_pr_followup_failure(
+    monkeypatch, tmp_path: Path
+):
     async def run():
         store = AsyncSQLiteStore(tmp_path / "scheduled-review-failure.db")
         project = _project(tmp_path)
         await store.save_project(project)
 
-        async def sweep_project_github_prs(project_id, *, store, event_bus, run_subprocess, auto_merge=False):
+        async def sweep_project_github_prs(
+            project_id, *, store, event_bus, run_subprocess, auto_merge=False
+        ):
             raise RuntimeError("gh auth expired")
 
         monkeypatch.setattr(
@@ -260,9 +266,9 @@ def test_project_conductor_api_exposes_state_and_ask(monkeypatch, tmp_path: Path
             ProjectConductorState(
                 project_id=project.id,
                 pinned_text="Pinned: preserve event stream contracts.",
-                warm_summaries_json=json.dumps([
-                    {"summary": "Recent failures came from stale conductor context."}
-                ]),
+                warm_summaries_json=json.dumps(
+                    [{"summary": "Recent failures came from stale conductor context."}]
+                ),
                 warm_tokens=8,
             )
         )
@@ -279,7 +285,9 @@ def test_project_conductor_api_exposes_state_and_ask(monkeypatch, tmp_path: Path
     assert "stale conductor context" in ask_payload["answer"]
 
 
-def test_project_conductor_start_loop_api_uses_deterministic_checkpoint_without_llm(monkeypatch, tmp_path: Path):
+def test_project_conductor_start_loop_api_uses_deterministic_checkpoint_without_llm(
+    monkeypatch, tmp_path: Path
+):
     import app.interfaces.api as api_module
     from app.interfaces.api import (
         ProjectConductorStartLoopRequest,

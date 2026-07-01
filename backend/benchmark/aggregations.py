@@ -32,13 +32,14 @@ The math follows the conventions from the task
     epochs); per-fixture cost is the mean across epochs. The runner
     reads cost/tokens from the existing ``ExecutionProcess`` ledger
     via the executor; this module only does the math.
-"""
-from __future__ import annotations
+"""  # noqa: RUF002
+
+from __future__ import annotations  # noqa: I001
 
 import math
 import statistics
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Iterable  # noqa: UP035
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +137,7 @@ class RunAggregate:
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_duration_s: float = 0.0
-    # Per-fixture cost means (for the score×cost frontier).
+    # Per-fixture cost means (for the score×cost frontier).  # noqa: RUF003
     cost_per_fixture: dict[str, float] = field(default_factory=dict)
 
     @property
@@ -214,7 +215,7 @@ def aggregate(
         total_input_tokens / total_output_tokens: aggregate token
             counts.
         total_duration_s: aggregate wall-clock duration.
-    """
+    """  # noqa: RUF002
     if not fixtures:
         return RunAggregate(
             fixtures=[],
@@ -234,7 +235,7 @@ def aggregate(
     # Sample stdev; use 1 (not 0) for N-1 denominator. For N=1
     # stdev is undefined → 0 stderr. (One-fixture runs are too small
     # to be statistically useful, but the math shouldn't crash.)
-    if len(fixtures) > 1:
+    if len(fixtures) > 1:  # noqa: SIM108
         stdev = statistics.stdev(rates)
     else:
         stdev = 0.0

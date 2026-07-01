@@ -10,7 +10,8 @@ Future scorers (PR3):
   - File-presence scorer (a stricter version of coverage for tasks
     that need a specific file to exist with specific content)
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import re
 
@@ -76,13 +77,62 @@ class ExecutionScorer:
 # out of the criterion text and the task-title text before comparison.
 _STOPWORDS: frozenset[str] = frozenset(
     {
-        "a", "an", "and", "or", "of", "to", "the", "for", "in", "on",
-        "with", "by", "is", "it", "this", "that", "as", "at", "be",
-        "from", "into", "than", "then", "so", "but", "not", "no",
-        "if", "do", "does", "did", "should", "would", "could", "can",
-        "may", "might", "must", "shall", "will", "have", "has", "had",
-        "i", "we", "you", "they", "he", "she", "them", "us", "my",
-        "your", "their", "our", "its",
+        "a",
+        "an",
+        "and",
+        "or",
+        "of",
+        "to",
+        "the",
+        "for",
+        "in",
+        "on",
+        "with",
+        "by",
+        "is",
+        "it",
+        "this",
+        "that",
+        "as",
+        "at",
+        "be",
+        "from",
+        "into",
+        "than",
+        "then",
+        "so",
+        "but",
+        "not",
+        "no",
+        "if",
+        "do",
+        "does",
+        "did",
+        "should",
+        "would",
+        "could",
+        "can",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "will",
+        "have",
+        "has",
+        "had",
+        "i",
+        "we",
+        "you",
+        "they",
+        "he",
+        "she",
+        "them",
+        "us",
+        "my",
+        "your",
+        "their",
+        "our",
+        "its",
     }
 )
 
@@ -152,7 +202,7 @@ class AcceptanceCoverageScorer:
         joined = " ".join(artifacts.completed_engineer_tasks)
         covered_flags = [_criterion_covered(c, joined) for c in golden]
         covered = sum(covered_flags)
-        uncovered = [c for c, ok in zip(golden, covered_flags) if not ok]
+        uncovered = [c for c, ok in zip(golden, covered_flags) if not ok]  # noqa: B905
         return Score(
             value=covered / len(golden),
             passed=covered == len(golden),
@@ -162,9 +212,7 @@ class AcceptanceCoverageScorer:
                 "uncovered": uncovered,
             },
             notes=(
-                None
-                if covered == len(golden)
-                else f"{covered}/{len(golden)} criteria addressed"
+                None if covered == len(golden) else f"{covered}/{len(golden)} criteria addressed"
             ),
         )
 

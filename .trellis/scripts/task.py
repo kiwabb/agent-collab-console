@@ -67,6 +67,7 @@ from common.task_context import (
 # Command: start / finish
 # =============================================================================
 
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Set active task."""
     repo_root = get_repo_root()
@@ -81,7 +82,9 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     if not full_path.is_dir():
         print(colored(f"Error: Task not found: {task_input}", Colors.RED))
-        print("Hint: Use task name (e.g., 'my-task') or full path (e.g., '.trellis/tasks/01-31-my-task')")
+        print(
+            "Hint: Use task name (e.g., 'my-task') or full path (e.g., '.trellis/tasks/01-31-my-task')"
+        )
         return 1
 
     # Convert to relative path for storage
@@ -97,16 +100,20 @@ def cmd_start(args: argparse.Namespace) -> int:
         # Hook didn't inject TRELLIS_CONTEXT_ID (common on Windows + Claude Code,
         # --continue resume path, fork distribution, hooks disabled, etc.). Skip
         # per-session pointer write; AI continues based on conversation context.
-        print(colored(
-            "ℹ Session identity not available; active-task pointer not persisted "
-            "this session (degraded mode). AI continues based on conversation context.",
-            Colors.YELLOW,
-        ))
-        print(colored(
-            "Hint: run inside an AI IDE/session that exposes session identity, "
-            "or set TRELLIS_CONTEXT_ID before running task.py start.",
-            Colors.YELLOW,
-        ))
+        print(
+            colored(
+                "ℹ Session identity not available; active-task pointer not persisted "
+                "this session (degraded mode). AI continues based on conversation context.",
+                Colors.YELLOW,
+            )
+        )
+        print(
+            colored(
+                "Hint: run inside an AI IDE/session that exposes session identity, "
+                "or set TRELLIS_CONTEXT_ID before running task.py start.",
+                Colors.YELLOW,
+            )
+        )
 
         # Still flip task.json status: planning → in_progress so downstream phases proceed.
         if task_json_path.is_file():
@@ -114,7 +121,11 @@ def cmd_start(args: argparse.Namespace) -> int:
             if data and data.get("status") == "planning":
                 data["status"] = "in_progress"
                 if write_json(task_json_path, data):
-                    print(colored("✓ Status: planning → in_progress (degraded)", Colors.GREEN))
+                    print(
+                        colored(
+                            "✓ Status: planning → in_progress (degraded)", Colors.GREEN
+                        )
+                    )
             run_task_hooks("after_start", task_json_path, repo_root)
         return 0
 
@@ -131,7 +142,12 @@ def cmd_start(args: argparse.Namespace) -> int:
                     print(colored("✓ Status: planning → in_progress", Colors.GREEN))
 
         print()
-        print(colored("The hook will now inject context from this task's jsonl files.", Colors.BLUE))
+        print(
+            colored(
+                "The hook will now inject context from this task's jsonl files.",
+                Colors.BLUE,
+            )
+        )
 
         run_task_hooks("after_start", task_json_path, repo_root)
         return 0
@@ -184,6 +200,7 @@ def cmd_current(args: argparse.Namespace) -> int:
 # Command: list
 # =============================================================================
 
+
 def cmd_list(args: argparse.Namespace) -> int:
     """List active tasks."""
     repo_root = get_repo_root()
@@ -195,7 +212,12 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     if filter_mine:
         if not developer:
-            print(colored("Error: No developer set. Run init_developer.py first", Colors.RED), file=sys.stderr)
+            print(
+                colored(
+                    "Error: No developer set. Run init_developer.py first", Colors.RED
+                ),
+                file=sys.stderr,
+            )
             return 1
         print(colored(f"My tasks (assignee: {developer}):", Colors.BLUE))
     else:
@@ -237,7 +259,9 @@ def cmd_list(args: argparse.Namespace) -> int:
         if filter_mine:
             print(f"{prefix}{dir_name}/ ({t.status}){pkg_tag}{progress}{marker}")
         else:
-            print(f"{prefix}{dir_name}/ ({t.status}){pkg_tag}{progress} [{colored(t.assignee or '-', Colors.CYAN)}]{marker}")
+            print(
+                f"{prefix}{dir_name}/ ({t.status}){pkg_tag}{progress} [{colored(t.assignee or '-', Colors.CYAN)}]{marker}"
+            )
         count += 1
 
         # Print children indented
@@ -264,6 +288,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 # =============================================================================
 # Command: list-archive
 # =============================================================================
+
 
 def cmd_list_archive(args: argparse.Namespace) -> int:
     """List archived tasks."""
@@ -298,6 +323,7 @@ def cmd_list_archive(args: argparse.Namespace) -> int:
 # =============================================================================
 # Help
 # =============================================================================
+
 
 def show_usage() -> None:
     """Show usage help."""
@@ -351,6 +377,7 @@ Examples:
 # Main Entry
 # =============================================================================
 
+
 def main() -> int:
     """CLI entry point."""
     # Deprecation guard: `init-context` was removed in v0.5.0-beta.12.
@@ -396,7 +423,9 @@ def main() -> int:
     p_create.add_argument("--assignee", "-a", help="Assignee developer")
     p_create.add_argument("--priority", "-p", default="P2", help="Priority (P0-P3)")
     p_create.add_argument("--description", "-d", help="Task description")
-    p_create.add_argument("--parent", help="Parent task directory (establishes subtask link)")
+    p_create.add_argument(
+        "--parent", help="Parent task directory (establishes subtask link)"
+    )
     p_create.add_argument("--package", help="Package name for monorepo projects")
 
     # add-context
@@ -420,8 +449,9 @@ def main() -> int:
 
     # current
     p_current = subparsers.add_parser("current", help="Show active task")
-    p_current.add_argument("--source", action="store_true",
-                           help="Show active task source")
+    p_current.add_argument(
+        "--source", action="store_true", help="Show active task source"
+    )
 
     # finish
     subparsers.add_parser("finish", help="Clear active task")
@@ -444,7 +474,9 @@ def main() -> int:
     # archive
     p_archive = subparsers.add_parser("archive", help="Archive task")
     p_archive.add_argument("name", help="Task directory or name")
-    p_archive.add_argument("--no-commit", action="store_true", help="Skip auto git commit after archive")
+    p_archive.add_argument(
+        "--no-commit", action="store_true", help="Skip auto git commit after archive"
+    )
 
     # list
     p_list = subparsers.add_parser("list", help="List tasks")
@@ -457,7 +489,9 @@ def main() -> int:
     p_addsub.add_argument("child_dir", help="Child task directory")
 
     # remove-subtask
-    p_rmsub = subparsers.add_parser("remove-subtask", help="Unlink child task from parent")
+    p_rmsub = subparsers.add_parser(
+        "remove-subtask", help="Unlink child task from parent"
+    )
     p_rmsub.add_argument("parent_dir", help="Parent task directory")
     p_rmsub.add_argument("child_dir", help="Child task directory")
 

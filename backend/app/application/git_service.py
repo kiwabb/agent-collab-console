@@ -124,36 +124,18 @@ class GitService:
         *,
         error: str | None = None,
     ) -> None:
-        """Record one git command into the unified audit_log (PR2).
+        """Record one git command into the unified audit_log.
 
-        `_run` is hot (every git op funnels through it), so the payload is kept
-        small: full argv + cwd + exit_code + duration, but stdout/stderr are
-        truncated to a short tail (the per-line output is NOT a log_events
-        concern here — git does not stream into log_events — but a calls-level
-        audit only needs a summary, not full blobs). Best-effort + fire-and-
-        forget: never blocks or raises into the git path.
+        Thin forwarding shell over `audit.record_git_command` — the payload
+        shaping (argv, tail-trim, status derivation) lives in the audit package
+        now. Kept as a static method so the hot `_run` path and existing tests
+        keep their call site.
         """
-        try:
-            from app.application.audit_logger import audit_logger
+        from app.application import audit
 
-            duration_ms = int((time.monotonic() - started) * 1000)
-            status = "error" if (error is not None or (exit_code or 0) != 0) else "ok"
-            audit_logger.record(
-                "git_command",
-                actor="git",
-                status=status,
-                duration_ms=duration_ms,
-                payload={
-                    "argv": ["git", *[str(a) for a in args]],
-                    "cwd": str(cwd) if cwd else None,
-                    "exit_code": exit_code,
-                    "stdout": (stdout or "")[-2000:],
-                    "stderr": (stderr or "")[-2000:],
-                },
-                error=error,
-            )
-        except Exception:  # noqa: BLE001, RUF100
-            pass
+        audit.record_git_command(
+            args, cwd, exit_code, stdout, stderr, started, error=error
+        )
 
     # --- Repo validation ---
 

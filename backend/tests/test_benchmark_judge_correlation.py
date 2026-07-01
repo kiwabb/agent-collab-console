@@ -11,9 +11,10 @@ Covers:
   - The shipped ``backend/benchmark/calibration/`` set loads
     cleanly via ``CalibrationSet.from_dir``.
 """
-from __future__ import annotations
 
-import math
+from __future__ import annotations  # noqa: I001
+
+import math  # noqa: F401
 from pathlib import Path
 
 import pytest
@@ -31,7 +32,7 @@ from benchmark.judge import (
     LLMJudgeScorer,
     _parse_score,
 )
-from benchmark.types import IssueArtifacts, Score
+from benchmark.types import IssueArtifacts, Score  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +162,28 @@ def test_pearson_no_correlation():
     # y is uncorrelated with x (random walk). Use enough points
     # that the sample r is small in magnitude even with noise.
     xs = list(range(20))
-    ys = [3.0, 1.0, 4.0, 2.0, 5.0, 1.5, 3.5, 2.5, 4.5, 1.0,
-          2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 1.0, 2.0]
+    ys = [
+        3.0,
+        1.0,
+        4.0,
+        2.0,
+        5.0,
+        1.5,
+        3.5,
+        2.5,
+        4.5,
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        1.5,
+        2.5,
+        3.5,
+        4.5,
+        1.0,
+        2.0,
+    ]
     r = pearson(xs, ys)
     assert abs(r) < 0.3  # not strict — random walk; just bounded
 
@@ -327,8 +348,9 @@ def test_calibration_set_from_empty_dir(tmp_path: Path):
 def test_calibration_set_shipped_items_load(tmp_path: Path):
     """The shipped 8 calibration items load cleanly and have
     judge_score=null (the judge hasn't run on them)."""
-    from benchmark.correlation import CalibrationSet
+    from benchmark.correlation import CalibrationSet  # noqa: I001
     import shutil
+
     # Copy the shipped items into a tmp dir so we can read them
     # without polluting the real source.
     shipped = Path(__file__).parent.parent / "benchmark" / "calibration"

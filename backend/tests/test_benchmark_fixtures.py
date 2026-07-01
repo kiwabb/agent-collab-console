@@ -9,7 +9,8 @@ These tests pin the contract that:
   3. The loader is stable (ids in sorted order), the whitelist filter
      works, and missing directories fail loudly.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import json
 from pathlib import Path
@@ -52,8 +53,7 @@ def test_fixture_ids_match_file_stems():
     for path in root.glob("*.json"):
         fixture = golden_loader.load_golden(path)
         assert path.stem == fixture.id, (
-            f"file {path.name!r} has id {fixture.id!r}; "
-            "the loader keys fixtures by file stem"
+            f"file {path.name!r} has id {fixture.id!r}; the loader keys fixtures by file stem"
         )
 
 
@@ -87,7 +87,7 @@ def test_minimal_valid_fixture_parses():
 
 
 def test_id_pattern_rejects_uppercase_and_spaces():
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         GoldenIssue(
             id="Has Spaces",
             title="title",
@@ -98,7 +98,7 @@ def test_id_pattern_rejects_uppercase_and_spaces():
 
 
 def test_empty_acceptance_criteria_rejected():
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         GoldenIssue(
             id="empty.criteria",
             title="title",
@@ -109,7 +109,7 @@ def test_empty_acceptance_criteria_rejected():
 
 
 def test_short_criterion_rejected():
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         GoldenIssue(
             id="short.crit",
             title="title",
@@ -121,7 +121,7 @@ def test_short_criterion_rejected():
 
 def test_pinned_command_zero_is_allowed():
     """Zero pinned commands is a degenerate fixture; schema should reject."""
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         GoldenIssue(
             id="zero.cmd",
             title="title",
@@ -147,7 +147,7 @@ def test_pinned_command_zero_is_allowed():
     ],
 )
 def test_pinned_command_rejects_dangerous_shell(bad_command: str):
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         PinnedCommand(command=bad_command)
 
 

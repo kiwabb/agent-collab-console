@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
-from app.domain.models import CodexTask, Project, ProjectConductorState
+from app.domain.models import CodexTask, Project, ProjectConductorState  # noqa: F401
 
 
 def _run(coro):
@@ -26,7 +26,9 @@ def _project(tmp_path: Path) -> Project:
     )
 
 
-def _task(issue_id: str, status: str, role: str = "engineer", task_kind: str = "initial") -> CodexTask:
+def _task(
+    issue_id: str, status: str, role: str = "engineer", task_kind: str = "initial"
+) -> CodexTask:
     return CodexTask(
         id=str(uuid4()),
         session_id="session-1",

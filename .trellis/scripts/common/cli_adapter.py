@@ -385,9 +385,7 @@ class CLIAdapter:
                 "GitHub Copilot is IDE-only; CLI agent run is not supported."
             )
         elif self.platform == "droid":
-            raise ValueError(
-                "Factory Droid CLI agent run is not yet supported."
-            )
+            raise ValueError("Factory Droid CLI agent run is not yet supported.")
         elif self.platform == "pi":
             cmd = ["pi", "-p", prompt]
 
@@ -447,13 +445,9 @@ class CLIAdapter:
                 "CodeBuddy does not support non-interactive mode (no CLI agent)"
             )
         elif self.platform == "copilot":
-            raise ValueError(
-                "GitHub Copilot is IDE-only; CLI resume is not supported."
-            )
+            raise ValueError("GitHub Copilot is IDE-only; CLI resume is not supported.")
         elif self.platform == "droid":
-            raise ValueError(
-                "Factory Droid CLI resume is not yet supported."
-            )
+            raise ValueError("Factory Droid CLI resume is not yet supported.")
         elif self.platform == "pi":
             return ["pi", "-c", session_id]
         else:
@@ -742,9 +736,7 @@ def detect_platform(project_root: Path) -> Platform:
         return "kiro"
 
     # Check for Antigravity workflow directory only when no other platform config exists
-    if (
-        project_root / ".agent" / "workflows"
-    ).is_dir() and not _has_other_platform_dir(
+    if (project_root / ".agent" / "workflows").is_dir() and not _has_other_platform_dir(
         project_root, {".agent", ".gemini"}
     ):
         return "antigravity"
@@ -752,9 +744,7 @@ def detect_platform(project_root: Path) -> Platform:
     # Check for Windsurf workflow directory only when no other platform config exists
     if (
         project_root / ".windsurf" / "workflows"
-    ).is_dir() and not _has_other_platform_dir(
-        project_root, {".windsurf"}
-    ):
+    ).is_dir() and not _has_other_platform_dir(project_root, {".windsurf"}):
         return "windsurf"
 
     # Check for .codebuddy directory (CodeBuddy-specific)
@@ -785,9 +775,7 @@ def detect_platform(project_root: Path) -> Platform:
     # can legitimately coexist with any platform as a shared consumption
     # layer for Amp/Cline/Warp/etc.
     agents_skills = project_root / ".agents" / "skills"
-    if agents_skills.is_dir() and not _has_other_platform_dir(
-        project_root, set()
-    ):
+    if agents_skills.is_dir() and not _has_other_platform_dir(project_root, set()):
         try:
             for entry in agents_skills.iterdir():
                 if entry.is_dir() and entry.name.startswith("trellis-"):

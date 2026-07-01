@@ -1,9 +1,10 @@
 """Tests for ConductorSessionRegistry — one live session per issue."""
+
 from __future__ import annotations
 
 import asyncio
 
-import pytest
+import pytest  # noqa: F401
 
 from app.application.conductor_session_registry import ConductorSessionRegistry
 

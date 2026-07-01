@@ -9,30 +9,6 @@ import threading
 import sys
 
 
-# Event types NOT mirrored into the unified audit_log `event` category, to avoid
-# a double-write storm. `conductor_turn` / `conductor_turn_delta` are already
-# captured (richer, structured) by the conductor co-located audit writer
-# (conductor_main_loop._audit_conductor_turn). The high-frequency, low-value
-# real-time-only types (`log`, `message_delta`, `heartbeat`) are deliberately
-# not persisted as audit rows — `log` lines already land in `log_events` (the
-# PRD says NOT to re-copy per-line stdout/stderr into audit_log), and
-# delta/heartbeat are pure streaming signals the PRD explicitly leaves on the
-# event channel only.
-_AUDIT_EVENT_SKIP_TYPES = frozenset(
-    {
-        "conductor_turn",
-        "conductor_turn_delta",
-        "log",
-        "message_delta",
-        "heartbeat",
-    }
-)
-# Cap how much of a generic event payload we mirror into the audit row. The
-# audit_logger truncates to 8000 chars on serialize anyway; this keeps the
-# common case small and avoids shipping big nested blobs through the queue.
-_AUDIT_EVENT_PAYLOAD_LIMIT = 4000
-
-
 class EventBus:
     def __init__(self):
         self._buffer_size = int(os.getenv("EVENT_BUS_BUFFER_SIZE", "1000"))
@@ -77,11 +53,11 @@ class EventBus:
         envelope = self._wrap_event(event)
         self.events.append(envelope)
 
-        # Mirror the generic event into the unified audit_log (PR2). This is the
+        # Mirror the generic event into the unified audit_log. This is the
         # high-frequency choke point, so it is the one that exercises the
         # bounded-queue drop policy under load. Best-effort + fire-and-forget;
         # conductor_turn/delta + per-line log/delta/heartbeat are skipped (see
-        # _AUDIT_EVENT_SKIP_TYPES) to avoid a double-write storm.
+        # audit.EVENT_SKIP_TYPES) to avoid a double-write storm.
         self._audit_event(envelope)
 
         # Broadcast envelopes to global WS subscribers.
@@ -96,48 +72,15 @@ class EventBus:
         await self._broadcast_to_ws(event, envelope)
 
     def _audit_event(self, envelope: dict[str, Any]) -> None:
-        """Record a generic EventBus event into the unified audit_log.
+        """Mirror a generic EventBus event into the unified audit_log.
 
-        Best-effort + non-blocking: any failure here is swallowed so audit
-        instrumentation can never perturb event broadcasting (the thing it
-        audits). Skips types already captured elsewhere or that are pure
-        streaming noise (see _AUDIT_EVENT_SKIP_TYPES). Only the event type plus a
-        trimmed payload is recorded — the audit_logger truncates again on
-        serialize, so this stays cheap on the hot path.
+        Thin forwarding shell over `audit.record_event` — the shaping (skip
+        list, payload trim, field extraction) lives in the audit package now.
+        Kept as a method so existing tests can call it / drive it via append().
         """
-        try:
-            event_type = str(envelope.get("type") or "unknown")
-            if event_type in _AUDIT_EVENT_SKIP_TYPES:
-                return
-            payload = envelope.get("payload")
-            payload = payload if isinstance(payload, dict) else {}
-            issue_id = payload.get("issue_id")
-            task_id = payload.get("task_id")
-            conductor_task_id = payload.get("conductor_task_id")
-            execution_process_id = payload.get("execution_process_id")
-            # Trim before enqueue: keep the type + a bounded payload preview so a
-            # large nested blob never travels through the queue in full.
-            preview = str(payload)
-            if len(preview) > _AUDIT_EVENT_PAYLOAD_LIMIT:
-                preview = preview[:_AUDIT_EVENT_PAYLOAD_LIMIT] + "…[trimmed]"
-            from app.application.audit_logger import audit_logger
+        from app.application import audit
 
-            audit_logger.record(
-                "event",
-                actor=event_type,
-                issue_id=str(issue_id) if issue_id else None,
-                task_id=str(task_id) if task_id else None,
-                conductor_task_id=str(conductor_task_id) if conductor_task_id else None,
-                execution_process_id=str(execution_process_id) if execution_process_id else None,
-                payload={
-                    "type": event_type,
-                    "event_id": envelope.get("event_id"),
-                    "ts": envelope.get("ts"),
-                    "payload_preview": preview,
-                },
-            )
-        except Exception as exc:  # noqa: BLE001, RUF100
-            print(f"[EventBus] audit mirror error: {exc}", file=sys.stderr)
+        audit.record_event(envelope)
 
     async def _broadcast_to_ws(self, event: dict[str, Any], envelope: dict[str, Any] | None = None):
         """Broadcast events to WebSocket subscribers via JSON Patch."""

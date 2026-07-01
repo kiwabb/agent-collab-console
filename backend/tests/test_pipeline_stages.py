@@ -1,6 +1,7 @@
 """Tests for GET /api/codex/issues/{id}/pipeline-stages."""
-import json
-from datetime import datetime, timedelta
+
+import json  # noqa: I001
+from datetime import datetime, timedelta  # noqa: F401
 
 import pytest
 
@@ -50,9 +51,7 @@ def _issue(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_stages_returns_four_stages_when_no_graph(
-    monkeypatch, tmp_path
-):
+async def test_pipeline_stages_returns_four_stages_when_no_graph(monkeypatch, tmp_path):
     issue = _issue(tmp_path)
     monkeypatch.setattr(api_module, "codex_store", _StoreStub(issue))
 
@@ -77,9 +76,7 @@ async def test_pipeline_stages_returns_four_stages_when_no_graph(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_stages_extracts_pm_acceptance_count(
-    monkeypatch, tmp_path
-):
+async def test_pipeline_stages_extracts_pm_acceptance_count(monkeypatch, tmp_path):
     issue = _issue(tmp_path)
     pm_dir = tmp_path / "issues" / issue.id / "pm"
     pm_dir.mkdir(parents=True)
@@ -104,13 +101,11 @@ async def test_pipeline_stages_extracts_pm_acceptance_count(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_stages_aggregates_graph_nodes_by_role(
-    monkeypatch, tmp_path
-):
+async def test_pipeline_stages_aggregates_graph_nodes_by_role(monkeypatch, tmp_path):
     issue = _issue(tmp_path)
     t0 = datetime(2026, 5, 18, 19, 30)
     t1 = datetime(2026, 5, 18, 19, 34)
-    t2 = datetime(2026, 5, 18, 19, 38)
+    t2 = datetime(2026, 5, 18, 19, 38)  # noqa: F841
 
     pm_agent = Agent(
         id="agent-pm",
@@ -275,15 +270,15 @@ class _GraphStatsStoreStub:
         return self.tasks.get(task_id)
 
     async def load_log_events(self, session_id=None, task_id=None, limit=5000):
-        return [
-            type("E", (), {"content": c})() for c in self.log_events
-        ]
+        return [type("E", (), {"content": c})() for c in self.log_events]
 
 
 @pytest.mark.asyncio
 async def test_graph_stats_aggregates_tokens(monkeypatch, tmp_path):
     issue = _issue(tmp_path)
-    pm_agent = Agent(id="agent-pm", name="PM", role_key="product_manager", system_prompt_template="")
+    pm_agent = Agent(
+        id="agent-pm", name="PM", role_key="product_manager", system_prompt_template=""
+    )
     graph = WorkflowGraph(
         id="g1",
         issue_id=issue.id,
@@ -337,9 +332,7 @@ async def test_graph_stats_aggregates_tokens(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_graph_stats_returns_empty_shell_when_no_graph(monkeypatch, tmp_path):
     issue = _issue(tmp_path)
-    monkeypatch.setattr(
-        api_module, "codex_store", _GraphStatsStoreStub(issue, graph=None)
-    )
+    monkeypatch.setattr(api_module, "codex_store", _GraphStatsStoreStub(issue, graph=None))
     result = await api_module.get_issue_graph_stats(issue.id)
     assert result["nodes"] == {}
     assert result["conductor"]["role_key"] == "conductor"
@@ -372,7 +365,7 @@ class _ZipStoreStub:
 
 @pytest.mark.asyncio
 async def test_artifacts_zip_streams_files(monkeypatch, tmp_path):
-    import zipfile
+    import zipfile  # noqa: I001
     import io
 
     issue = _issue(tmp_path)

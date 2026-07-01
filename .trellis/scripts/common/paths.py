@@ -40,6 +40,7 @@ FILE_JOURNAL_PREFIX = "journal-"
 # Repository Root
 # =============================================================================
 
+
 def get_repo_root(start_path: Path | None = None) -> Path:
     """Find the nearest directory containing .trellis/ folder.
 
@@ -65,6 +66,7 @@ def get_repo_root(start_path: Path | None = None) -> Path:
 # =============================================================================
 # Developer
 # =============================================================================
+
 
 def get_developer(repo_root: Path | None = None) -> str | None:
     """Get developer name from .developer file.
@@ -110,6 +112,7 @@ def check_developer(repo_root: Path | None = None) -> bool:
 # Tasks Directory
 # =============================================================================
 
+
 def get_tasks_dir(repo_root: Path | None = None) -> Path:
     """Get tasks directory path.
 
@@ -127,6 +130,7 @@ def get_tasks_dir(repo_root: Path | None = None) -> Path:
 # =============================================================================
 # Workspace Directory
 # =============================================================================
+
 
 def get_workspace_dir(repo_root: Path | None = None) -> Path | None:
     """Get developer workspace directory.
@@ -149,6 +153,7 @@ def get_workspace_dir(repo_root: Path | None = None) -> Path | None:
 # =============================================================================
 # Journal File
 # =============================================================================
+
 
 def get_active_journal_file(repo_root: Path | None = None) -> Path | None:
     """Get the current active journal file.
@@ -206,6 +211,7 @@ def count_lines(file_path: Path) -> int:
 # =============================================================================
 # Current Task Management
 # =============================================================================
+
 
 def normalize_task_ref(task_ref: str) -> str:
     """Normalize a task ref for stable runtime storage.
@@ -328,12 +334,15 @@ def set_current_task(
 
     from .active_task import set_active_task
 
-    return set_active_task(
-        task_path,
-        repo_root,
-        platform_input=platform_input,
-        platform=platform,
-    ) is not None
+    return (
+        set_active_task(
+            task_path,
+            repo_root,
+            platform_input=platform_input,
+            platform=platform,
+        )
+        is not None
+    )
 
 
 def clear_current_task(
@@ -377,6 +386,7 @@ def has_current_task(repo_root: Path | None = None) -> bool:
 # =============================================================================
 # Task ID Generation
 # =============================================================================
+
 
 def generate_task_date_prefix() -> str:
     """Generate task ID based on date (MM-DD format).

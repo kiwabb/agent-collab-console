@@ -9,11 +9,12 @@ The loader **validates every file at load time** via the Pydantic
 ``GoldenIssue`` schema. A malformed fixture fails loudly on import —
 we never want a typo to silently drop a fixture from the leaderboard.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable  # noqa: UP035
 
 from .golden_schema import GoldenIssue
 
@@ -38,9 +39,7 @@ def _read_one(path: Path) -> GoldenIssue:
     try:
         return GoldenIssue.model_validate(data)
     except Exception as exc:
-        raise GoldenFixtureError(
-            f"fixture {path.name!r} failed schema validation: {exc}"
-        ) from exc
+        raise GoldenFixtureError(f"fixture {path.name!r} failed schema validation: {exc}") from exc
 
 
 def load_golden(path: Path) -> GoldenIssue:

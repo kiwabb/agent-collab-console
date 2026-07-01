@@ -1,4 +1,4 @@
-import json
+import json  # noqa: I001
 from datetime import datetime
 
 import pytest
@@ -18,15 +18,21 @@ class ArtifactBackfillStoreStub:
 
     async def list_codex_tasks(self, session_id: str | None = None, issue_id: str | None = None):
         if session_id == self.issue.session_id and issue_id == self.issue.id:
-            return [{
-                "id": self.task.id,
-                "issue_id": self.task.issue_id,
-                "role": self.task.role,
-                "status": self.task.status,
-                "workspace_path": self.task.workspace_path,
-                "updated_at": self.task.updated_at.isoformat() if self.task.updated_at else None,
-                "created_at": self.task.created_at.isoformat() if self.task.created_at else None,
-            }]
+            return [
+                {
+                    "id": self.task.id,
+                    "issue_id": self.task.issue_id,
+                    "role": self.task.role,
+                    "status": self.task.status,
+                    "workspace_path": self.task.workspace_path,
+                    "updated_at": self.task.updated_at.isoformat()
+                    if self.task.updated_at
+                    else None,
+                    "created_at": self.task.created_at.isoformat()
+                    if self.task.created_at
+                    else None,
+                }
+            ]
         return []
 
     async def load_codex_task(self, task_id: str):
@@ -76,27 +82,31 @@ async def test_issue_artifacts_backfill_missing_prd_files(monkeypatch, tmp_path)
         role="product_manager",
         executor="codex",
         status="done",
-        result=json.dumps({
-            "language": "zh-CN",
-            "project_name": "Demo Workspace",
-            "issue_id": issue.id,
-            "issue_title": task_title,
-            "original_requirements": "写一个简单需求",
-            "product_goals": ["目标1"],
-            "user_stories": ["用户故事1"],
-            "requirement_analysis": "分析内容",
-            "requirement_pool": [{"priority": "P0", "title": "需求1", "description": "描述1"}],
-            "acceptance_criteria": ["验收1"],
-            "constraints": [],
-            "open_questions": [],
-            "risks": [],
-        }),
+        result=json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "Demo Workspace",
+                "issue_id": issue.id,
+                "issue_title": task_title,
+                "original_requirements": "写一个简单需求",
+                "product_goals": ["目标1"],
+                "user_stories": ["用户故事1"],
+                "requirement_analysis": "分析内容",
+                "requirement_pool": [{"priority": "P0", "title": "需求1", "description": "描述1"}],
+                "acceptance_criteria": ["验收1"],
+                "constraints": [],
+                "open_questions": [],
+                "risks": [],
+            }
+        ),
         workspace_path=str(tmp_path),
         created_at=now,
         updated_at=now,
     )
 
-    monkeypatch.setattr(api_module, "codex_store", ArtifactBackfillStoreStub(issue, task, workspace))
+    monkeypatch.setattr(
+        api_module, "codex_store", ArtifactBackfillStoreStub(issue, task, workspace)
+    )
 
     artifacts = await api_module.get_codex_issue_artifacts(issue.id)
 

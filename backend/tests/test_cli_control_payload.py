@@ -59,7 +59,7 @@ def test_codex_frame_check_keeps_real_artifacts():
     # Real role-artifact JSON has no top-level "method" — must be kept.
     assert is_codex_protocol_frame('{"status":"completed","changed_files":[]}') is False
     assert is_codex_protocol_frame('{"language":"zh-CN","product_goals":[]}') is False
-    assert is_codex_protocol_frame("当前任务已经完成：实现了 /api/codex/ping。") is False
+    assert is_codex_protocol_frame("当前任务已经完成：实现了 /api/codex/ping。") is False  # noqa: RUF001
     assert is_codex_protocol_frame("") is False
     assert is_codex_protocol_frame(None) is False
     # A non-codex JSON-RPC-ish method name without a path segment is not a codex frame.

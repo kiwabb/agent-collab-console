@@ -1,8 +1,8 @@
 """Tests for Phase 4 specialist orchestrator (P2P mesh calls)."""
 
-import pytest
+import pytest  # noqa: I001
 from datetime import datetime
-from uuid import uuid4
+from uuid import uuid4  # noqa: F401
 
 from app.application.specialist_orchestrator import (
     SpecialistOrchestrator,
@@ -25,7 +25,7 @@ class MockStore:
     async def save_codex_task(self, task: CodexTask):
         self.tasks[task.id] = task
 
-    async def list_codex_tasks(self, parent_task_id: str = None):
+    async def list_codex_tasks(self, parent_task_id: str = None):  # noqa: RUF013
         if parent_task_id is None:
             return list(self.tasks.values())
         return [t for t in self.tasks.values() if t.parent_task_id == parent_task_id]
@@ -229,9 +229,7 @@ async def test_request_specialist_mesh_depth_limit(orchestrator, store):
 
 
 @pytest.mark.asyncio
-async def test_complete_specialist_request_resumes_parent(
-    orchestrator, store, parent_task
-):
+async def test_complete_specialist_request_resumes_parent(orchestrator, store, parent_task):
     """Test that completing specialist request resumes parent task."""
     await store.save_codex_task(parent_task)
 
@@ -260,9 +258,7 @@ async def test_complete_specialist_request_resumes_parent(
 
 
 @pytest.mark.asyncio
-async def test_complete_specialist_request_injects_result(
-    orchestrator, store, parent_task
-):
+async def test_complete_specialist_request_injects_result(orchestrator, store, parent_task):
     """Test that specialist result is properly injected into parent."""
     await store.save_codex_task(parent_task)
 
@@ -288,9 +284,7 @@ async def test_complete_specialist_request_injects_result(
 
 
 @pytest.mark.asyncio
-async def test_complete_specialist_request_creates_agent_message(
-    orchestrator, store, parent_task
-):
+async def test_complete_specialist_request_creates_agent_message(orchestrator, store, parent_task):
     """Test that specialist result creates an AgentMessage in the feed."""
     await store.save_codex_task(parent_task)
 

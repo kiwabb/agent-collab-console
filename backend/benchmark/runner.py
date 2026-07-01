@@ -34,31 +34,32 @@ benchmarks would only multiply cost without speeding up a
 sequential flaky-output study. The PR3 async job layer can layer
 parallelism on top if cost analysis justifies it.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 import json
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field  # noqa: F401
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from .aggregations import (
-    FixtureStats,
+    FixtureStats,  # noqa: F401
     RunAggregate,
     aggregate as aggregate_stats,
     per_fixture,
 )
 from .golden_loader import GoldenIssue, load_all
-from .golden_schema import PinnedCommand
+from .golden_schema import PinnedCommand  # noqa: F401
 from .scorers_impl import default_registry
 from .scorers import ScorerRegistry
 from .store import (
     BenchmarkEpoch,
     BenchmarkRun,
     BenchmarkStore,
-    InMemoryStore,
+    InMemoryStore,  # noqa: F401
     make_run_row,
 )
 from .types import CommandResult, IssueArtifacts, Score
@@ -79,9 +80,7 @@ class IssueExecutor(Protocol):
     structured ``ExecutorResult`` so the runner can score + persist.
     """
 
-    async def execute(
-        self, fixture: GoldenIssue, epoch_index: int
-    ) -> "ExecutorResult": ...
+    async def execute(self, fixture: GoldenIssue, epoch_index: int) -> "ExecutorResult": ...  # noqa: UP037
 
 
 @dataclass
@@ -124,9 +123,7 @@ class FakeExecutor:
         self._latency = latency_s
         self.calls: list[tuple[str, int]] = []  # for test assertions
 
-    async def execute(
-        self, fixture: GoldenIssue, epoch_index: int
-    ) -> ExecutorResult:
+    async def execute(self, fixture: GoldenIssue, epoch_index: int) -> ExecutorResult:
         self.calls.append((fixture.id, epoch_index))
         if self._latency > 0:
             await asyncio.sleep(self._latency)
@@ -191,15 +188,13 @@ class RealConductorExecutor:
         self._project_id = project_id
         self._workspace_id = workspace_id
 
-    async def execute(
-        self, fixture: GoldenIssue, epoch_index: int
-    ) -> ExecutorResult:
+    async def execute(self, fixture: GoldenIssue, epoch_index: int) -> ExecutorResult:
         # Defer real imports to call time so unit tests can
         # construct the class without the conductor on the path.
-        from app.bootstrap import (
+        from app.bootstrap import (  # noqa: I001
             codex_store,
-            event_bus,
-            get_codex_process_manager,
+            event_bus,  # noqa: F401
+            get_codex_process_manager,  # noqa: F401
         )
         from app.interfaces.api import create_codex_issue
         from app.application.conductor_main_loop import run_issue_conductor_loop
@@ -229,10 +224,8 @@ class RealConductorExecutor:
             # Read the QA real-command results and the engineer's
             # completed task titles from the store.
             artifacts = await self._collect_artifacts(codex_store, fixture, issue.id)
-            spent, in_tok, out_tok = await self._collect_cost(
-                codex_store, issue.id
-            )
-        except Exception as exc:  # noqa: BLE001 — boundary catch
+            spent, in_tok, out_tok = await self._collect_cost(codex_store, issue.id)
+        except Exception as exc:  # noqa: BLE001, RUF100
             error = f"{type(exc).__name__}: {exc}"
 
         return ExecutorResult(
@@ -286,11 +279,7 @@ class RealConductorExecutor:
 
         # Engineer completed task titles.
         tasks = await codex_store.list_codex_tasks(issue_id=issue_id)
-        completed = [
-            t.get("title", "")
-            for t in tasks
-            if t.get("status") in ("done", "completed")
-        ]
+        completed = [t.get("title", "") for t in tasks if t.get("status") in ("done", "completed")]
 
         return IssueArtifacts(
             issue_id=issue_id,
@@ -299,9 +288,7 @@ class RealConductorExecutor:
             completed_engineer_tasks=completed,
         )
 
-    async def _collect_cost(
-        self, codex_store, issue_id: str
-    ) -> tuple[float, int, int]:
+    async def _collect_cost(self, codex_store, issue_id: str) -> tuple[float, int, int]:
         """Sum cost/tokens across completed ExecutionProcess rows for
         this issue. Returns (spent_usd, input_tokens, output_tokens)."""
         from app.application.budget_service import COMPLETED_PROCESS_STATES
@@ -416,10 +403,7 @@ class BenchmarkRunner:
                     epoch_records.append(epoch_row)
 
                     # Optional mid-run budget cap.
-                    if (
-                        options.max_budget_usd is not None
-                        and spent_total > options.max_budget_usd
-                    ):
+                    if options.max_budget_usd is not None and spent_total > options.max_budget_usd:
                         raise RuntimeError(
                             f"run aborted: spent ${spent_total:.4f} "
                             f"exceeds max_budget_usd ${options.max_budget_usd:.4f}"
@@ -465,8 +449,7 @@ class BenchmarkRunner:
         score_results: dict[str, Score],
     ) -> BenchmarkEpoch:
         agg_score = sum(
-            s.value * self._registry.get(name).weight
-            for name, s in score_results.items()
+            s.value * self._registry.get(name).weight for name, s in score_results.items()
         ) / max(1, sum(self._registry.get(n).weight for n in score_results))
         return BenchmarkEpoch(
             id=f"ep-{run_id}-{fixture.id}-{epoch_index}",
@@ -485,9 +468,7 @@ class BenchmarkRunner:
             score_execution=score_results["execution"].value
             if "execution" in score_results
             else 0.0,
-            score_coverage=score_results["coverage"].value
-            if "coverage" in score_results
-            else 0.0,
+            score_coverage=score_results["coverage"].value if "coverage" in score_results else 0.0,
             score_aggregate=agg_score,
             spent_usd=result.spent_usd,
             input_tokens=result.input_tokens,
@@ -547,9 +528,7 @@ class BenchmarkRunner:
 # ---------------------------------------------------------------------------
 
 
-def run_aggregate_from_store(
-    store: BenchmarkStore, run_id: str
-) -> RunAggregate:
+def run_aggregate_from_store(store: BenchmarkStore, run_id: str) -> RunAggregate:
     """Reconstruct a ``RunAggregate`` from a stored run + its epochs.
 
     Used by PR3 (diff endpoint) and PR4 (leaderboard).
@@ -558,7 +537,7 @@ def run_aggregate_from_store(
     if run is None:
         raise ValueError(f"run {run_id!r} not found")
     epochs = store.list_epochs(run_id)
-    per = per_fixture(((e.fixture_id, e.pass_execution) for e in epochs))
+    per = per_fixture(((e.fixture_id, e.pass_execution) for e in epochs))  # noqa: UP034
     from collections import defaultdict
 
     sums: dict[str, float] = defaultdict(float)

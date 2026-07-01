@@ -1,5 +1,6 @@
 """FastAPI tests for the Codex echo endpoint."""
 
+
 def test_codex_echo_normal_message(client):
     resp = client.get("/api/codex/echo?msg=hello")
     assert resp.status_code == 200

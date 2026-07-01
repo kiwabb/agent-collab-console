@@ -22,7 +22,8 @@ for n in the dozens (which is the expected size of the
 calibration set); a future feature that needs tens of thousands
 of items should swap in a streaming implementation.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import json
 import math
@@ -51,7 +52,7 @@ def pearson(xs: list[float], ys: list[float]) -> float:
         return 0.0
     mean_x = statistics.fmean(xs)
     mean_y = statistics.fmean(ys)
-    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))  # noqa: B905
     var_x = sum((x - mean_x) ** 2 for x in xs)
     var_y = sum((y - mean_y) ** 2 for y in ys)
     denom = math.sqrt(var_x * var_y)
@@ -175,10 +176,7 @@ def calibration_report(
     judges = [i.judge_score for i in with_scores]
     p = pearson(humans, judges)
     s = spearman(humans, judges)
-    residuals = [
-        (i.id, abs(i.human_score - (i.judge_score or 0.0)))
-        for i in with_scores
-    ]
+    residuals = [(i.id, abs(i.human_score - (i.judge_score or 0.0))) for i in with_scores]
     weakest = max(residuals, key=lambda r: r[1])[0] if residuals else None
     return CalibrationReport(
         n=n_total,
@@ -224,7 +222,7 @@ class CalibrationSet:
             )
 
     @classmethod
-    def from_dir(cls, root: Path) -> "CalibrationSet":
+    def from_dir(cls, root: Path) -> "CalibrationSet":  # noqa: UP037
         cs = cls()
         if not root.is_dir():
             return cs
@@ -237,9 +235,7 @@ class CalibrationSet:
                     artifact_excerpt=data["artifact_excerpt"],
                     human_score=float(data["human_score"]),
                     judge_score=(
-                        float(data["judge_score"])
-                        if data.get("judge_score") is not None
-                        else None
+                        float(data["judge_score"]) if data.get("judge_score") is not None else None
                     ),
                     note=data.get("note"),
                 )

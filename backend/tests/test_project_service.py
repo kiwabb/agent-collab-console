@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import shutil
 import subprocess
@@ -32,7 +32,9 @@ def svc(store: AsyncSQLiteStore) -> ProjectService:
 def _make_git_repo(path: Path) -> Path:
     path.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("hello")
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)

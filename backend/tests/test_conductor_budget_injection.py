@@ -5,6 +5,7 @@ remaining to the orchestrating brain, without changing decision behaviour.
 This test drives run_issue_conductor_loop with a stub LLM that captures the
 messages it receives and asserts the COST / BUDGET block is present.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -64,8 +65,13 @@ def _ep(status: str, cost: float | None):
 
     now = datetime.now()
     return ExecutionProcess(
-        id=str(uuid4()), task_id="task-1", session_id="sess-001",
-        status=status, total_cost_usd=cost, created_at=now, updated_at=now,
+        id=str(uuid4()),
+        task_id="task-1",
+        session_id="sess-001",
+        status=status,
+        total_cost_usd=cost,
+        created_at=now,
+        updated_at=now,
     )
 
 
@@ -90,12 +96,14 @@ async def test_loop_injects_budget_summary_into_llm_request():
         captured["messages"] = messages
         return {
             "stop_reason": "tool_use",
-            "content": [{
-                "type": "tool_use",
-                "id": "toolu_final",
-                "name": "finalize_task",
-                "input": {"status": "done", "answer": "done"},
-            }],
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "done"},
+                }
+            ],
         }
 
     async def finalize_tool(inp):
@@ -109,13 +117,17 @@ async def test_loop_injects_budget_summary_into_llm_request():
     mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm), \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm),
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=MagicMock(),
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
 
         result = await run_issue_conductor_loop(
@@ -131,9 +143,9 @@ async def test_loop_injects_budget_summary_into_llm_request():
     assert messages, "stub LLM never received messages"
     system_text = str(messages[0]["content"])
     assert "COST / BUDGET" in system_text
-    assert "$2.0000" in system_text   # accrued spend (only completed runs)
+    assert "$2.0000" in system_text  # accrued spend (only completed runs)
     assert "$10.0000" in system_text  # resolved budget
-    assert "$8.0000" in system_text   # remaining
+    assert "$8.0000" in system_text  # remaining
 
 
 @pytest.mark.asyncio
@@ -157,10 +169,14 @@ async def test_loop_budget_injection_failure_is_non_fatal():
         captured["messages"] = messages
         return {
             "stop_reason": "tool_use",
-            "content": [{
-                "type": "tool_use", "id": "toolu_final",
-                "name": "finalize_task", "input": {"status": "done", "answer": "ok"},
-            }],
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "ok"},
+                }
+            ],
         }
 
     async def finalize_tool(inp):
@@ -174,13 +190,17 @@ async def test_loop_budget_injection_failure_is_non_fatal():
     mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm), \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
-
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm),
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=MagicMock(),
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=MagicMock())
 
         result = await run_issue_conductor_loop(

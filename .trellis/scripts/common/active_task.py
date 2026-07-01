@@ -175,7 +175,9 @@ def _lookup_string(data: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def _detect_platform(platform_input: dict[str, Any] | None, platform: str | None) -> str:
+def _detect_platform(
+    platform_input: dict[str, Any] | None, platform: str | None
+) -> str:
     if platform:
         return _sanitize_key(platform) or "session"
     if platform_input:
@@ -299,7 +301,9 @@ def _pending_ticket_matches_args(ticket: dict[str, Any], repo_root: Path) -> boo
         if command_name != "start":
             return True
         task_ref = args[1] if len(args) > 1 else None
-        if _task_refs_match(_string_value(subcommand.get("task_ref")), task_ref, repo_root):
+        if _task_refs_match(
+            _string_value(subcommand.get("task_ref")), task_ref, repo_root
+        ):
             return True
 
     return False
@@ -400,11 +404,15 @@ def resolve_context_key(
 
         conversation_id = _lookup_string(data, _CONVERSATION_KEYS)
         if conversation_id:
-            return _context_key(platform_name or "session", "conversation", conversation_id)
+            return _context_key(
+                platform_name or "session", "conversation", conversation_id
+            )
 
         transcript_path = _lookup_string(data, _TRANSCRIPT_KEYS)
         if transcript_path:
-            return _context_key(platform_name or "session", "transcript", transcript_path)
+            return _context_key(
+                platform_name or "session", "transcript", transcript_path
+            )
 
     env_context_key = _lookup_env_context_key(platform_name)
     if env_context_key:
@@ -520,7 +528,12 @@ def _resolve_single_session_fallback(repo_root: Path) -> ActiveTask | None:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _context_metadata(
@@ -607,7 +620,9 @@ def clear_task_from_sessions(task_path: str, repo_root: Path) -> int:
         current = _string_value(context.get("current_task"))
         if not current:
             continue
-        current_ref = _canonical_task_ref(current, repo_root) or normalize_task_ref(current)
+        current_ref = _canonical_task_ref(current, repo_root) or normalize_task_ref(
+            current
+        )
         if current_ref != target:
             continue
         if session_path.is_file() and _remove_file(session_path):

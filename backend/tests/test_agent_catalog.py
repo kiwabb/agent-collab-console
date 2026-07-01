@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path  # noqa: I001
 
 from app.application.agent_catalog.catalog import AgentCatalog
 from app.application.agent_catalog.generic_specialist_workflow import GenericSpecialistWorkflow
@@ -6,7 +6,7 @@ from app.application.role_workflow_service import RoleWorkflowService
 from app.application.subagent_result_builder import build_subagent_result
 from app.application.agent_seed import seed_builtin_agents
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
-from app.domain.models import Agent, CodexTask
+from app.domain.models import Agent, CodexTask  # noqa: F401
 
 
 def test_catalog_loads_predefined_specialists():
@@ -32,7 +32,10 @@ def test_catalog_registers_custom_agent():
 
     assert custom.role_key == "custom:diagram_drawer"
     assert custom.agent_tier == "custom"
-    assert catalog.resolve_agent("custom:diagram_drawer").prompt_template == "Draw architecture diagrams"
+    assert (
+        catalog.resolve_agent("custom:diagram_drawer").prompt_template
+        == "Draw architecture diagrams"
+    )
 
 
 def test_seed_builtin_agents_adds_specialists_with_tier(tmp_path: Path):
@@ -45,6 +48,7 @@ def test_seed_builtin_agents_adds_specialists_with_tier(tmp_path: Path):
         return created, agents
 
     import asyncio
+
     created, agents = asyncio.run(run())
     by_role = {agent.role_key: agent for agent in agents}
 
@@ -72,12 +76,18 @@ def test_generic_specialist_workflow_persists_json_artifact(tmp_path: Path):
 
     doc = workflow.persist_result(task)
 
-    expected = tmp_path / "issues" / "issue-1" / "specialists" / "security_reviewer" / "task-sec.json"
+    expected = (
+        tmp_path / "issues" / "issue-1" / "specialists" / "security_reviewer" / "task-sec.json"
+    )
     assert expected.exists()
     assert doc.role_key == "security_reviewer"
     assert doc.artifact["summary"] == "Looks safe"
     assert doc.written_files == [
-        {"name": "specialists/security_reviewer/task-sec.json", "path": str(expected), "kind": "specialist"}
+        {
+            "name": "specialists/security_reviewer/task-sec.json",
+            "path": str(expected),
+            "kind": "specialist",
+        }
     ]
     assert "Specialist security_reviewer report generated" in task.result
 
@@ -100,10 +110,13 @@ def test_role_workflow_service_routes_specialist_result(tmp_path: Path):
         return task, doc
 
     import asyncio
+
     task, doc = asyncio.run(run())
 
     assert doc.role_key == "security_reviewer"
-    assert (tmp_path / "issues" / "issue-1" / "specialists" / "security_reviewer" / "task-role-sec.json").exists()
+    assert (
+        tmp_path / "issues" / "issue-1" / "specialists" / "security_reviewer" / "task-role-sec.json"
+    ).exists()
     assert task.result.startswith("Specialist security_reviewer report generated")
 
 
@@ -123,7 +136,14 @@ def test_generic_specialist_workflow_persists_custom_agent_artifact(tmp_path: Pa
 
     doc = workflow.persist_result(task)
 
-    expected = tmp_path / "issues" / "issue-1" / "specialists" / "custom:diagram_drawer" / "task-custom.json"
+    expected = (
+        tmp_path
+        / "issues"
+        / "issue-1"
+        / "specialists"
+        / "custom:diagram_drawer"
+        / "task-custom.json"
+    )
     assert expected.exists()
     assert doc.role_key == "custom:diagram_drawer"
     assert doc.artifact["diagram"] == "A -> B"
@@ -161,7 +181,12 @@ def test_subagent_result_builder_preserves_specialist_artifact(tmp_path: Path):
 
     assert result.artifact_json["artifact"]["summary"] == "Specialist says ok"
     assert result.artifact_paths == [
-        str(tmp_path / "issues" / "issue-1" / "specialists" / "security_reviewer" / "task-sec-envelope.json")
+        str(
+            tmp_path
+            / "issues"
+            / "issue-1"
+            / "specialists"
+            / "security_reviewer"
+            / "task-sec-envelope.json"
+        )
     ]
-
-

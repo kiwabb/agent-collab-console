@@ -1,7 +1,8 @@
 """Tests for /api/codex/tasks/{id}/refine endpoint (P3) — generic across 4 roles."""
-import json
+
+import json  # noqa: I001
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path  # noqa: F401
 
 import pytest
 from fastapi.testclient import TestClient
@@ -92,12 +93,27 @@ class RefineStoreStub:
 def _write_pm_artifact(tmp_path, issue_id):
     docs = IssueArtifactDocuments()
     p = docs.pm_prd_json_path(str(tmp_path), issue_id)
-    p.write_text(json.dumps({
-        "language": "zh-CN", "project_name": "p", "issue_id": issue_id, "issue_title": "t",
-        "original_requirements": "...", "product_goals": ["goal A"], "user_stories": [],
-        "requirement_analysis": "x", "requirement_pool": [], "acceptance_criteria": [],
-        "constraints": [], "open_questions": [], "risks": [],
-    }, ensure_ascii=False), encoding="utf-8")
+    p.write_text(
+        json.dumps(
+            {
+                "language": "zh-CN",
+                "project_name": "p",
+                "issue_id": issue_id,
+                "issue_title": "t",
+                "original_requirements": "...",
+                "product_goals": ["goal A"],
+                "user_stories": [],
+                "requirement_analysis": "x",
+                "requirement_pool": [],
+                "acceptance_criteria": [],
+                "constraints": [],
+                "open_questions": [],
+                "risks": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _write_architect_artifact(tmp_path, issue_id):
@@ -135,13 +151,24 @@ def _install_runner_stub(monkeypatch, store):
     captured = {}
 
     class _RunnerStub:
-        async def start_task_run(self, task, *, kind="initial", triggering_message_id=None,
-                                  prompt_override=None, resume_session_id=None, resume_message_id=None, **_):
-            captured.update({
-                "kind": kind,
-                "triggering_message_id": triggering_message_id,
-                "prompt_override": prompt_override,
-            })
+        async def start_task_run(
+            self,
+            task,
+            *,
+            kind="initial",
+            triggering_message_id=None,
+            prompt_override=None,
+            resume_session_id=None,
+            resume_message_id=None,
+            **_,
+        ):
+            captured.update(
+                {
+                    "kind": kind,
+                    "triggering_message_id": triggering_message_id,
+                    "prompt_override": prompt_override,
+                }
+            )
             ep = ExecutionProcess(
                 id="ep-refine-1",
                 task_id=task.id,
@@ -225,7 +252,9 @@ async def test_build_prompt_text_refine_includes_existing_pm_artifact(tmp_path):
 
     _write_pm_artifact(tmp_path, "issue-1")
     runner = CodexTaskRunner.__new__(CodexTaskRunner)
-    runner._role_workflow_service = type("S", (), {"is_managed_role": staticmethod(lambda r: True)})()
+    runner._role_workflow_service = type(
+        "S", (), {"is_managed_role": staticmethod(lambda r: True)}
+    )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
     runner.codex_store = None
 
@@ -249,14 +278,20 @@ async def test_build_prompt_text_refine_includes_existing_architect_artifact(tmp
 
     _write_architect_artifact(tmp_path, "issue-1")
     runner = CodexTaskRunner.__new__(CodexTaskRunner)
-    runner._role_workflow_service = type("S", (), {"is_managed_role": staticmethod(lambda r: True)})()
+    runner._role_workflow_service = type(
+        "S", (), {"is_managed_role": staticmethod(lambda r: True)}
+    )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
     runner.codex_store = None
 
     task = _make_task(role="architect", tmp_path=tmp_path)
     out = await runner._build_prompt_text(
-        task, prompt_text="加模块 B", prompt_override="加模块 B",
-        resume_session_id="cli-1", resume_message_id=None, kind="refine",
+        task,
+        prompt_text="加模块 B",
+        prompt_override="加模块 B",
+        resume_session_id="cli-1",
+        resume_message_id=None,
+        kind="refine",
     )
     assert "existing-A" in out
     assert "加模块 B" in out
@@ -268,14 +303,20 @@ async def test_build_prompt_text_refine_includes_existing_engineer_artifact(tmp_
 
     _write_engineer_artifact(tmp_path, "issue-1", task_id="task-1")
     runner = CodexTaskRunner.__new__(CodexTaskRunner)
-    runner._role_workflow_service = type("S", (), {"is_managed_role": staticmethod(lambda r: True)})()
+    runner._role_workflow_service = type(
+        "S", (), {"is_managed_role": staticmethod(lambda r: True)}
+    )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
     runner.codex_store = None
 
     task = _make_task(role="engineer", tmp_path=tmp_path)
     out = await runner._build_prompt_text(
-        task, prompt_text="加测试 X", prompt_override="加测试 X",
-        resume_session_id="cli-1", resume_message_id=None, kind="refine",
+        task,
+        prompt_text="加测试 X",
+        prompt_override="加测试 X",
+        resume_session_id="cli-1",
+        resume_message_id=None,
+        kind="refine",
     )
     assert "Done X" in out  # markdown content embedded
     assert "加测试 X" in out
@@ -287,14 +328,20 @@ async def test_build_prompt_text_refine_includes_existing_qa_artifact(tmp_path):
 
     _write_qa_artifact(tmp_path, "issue-1")
     runner = CodexTaskRunner.__new__(CodexTaskRunner)
-    runner._role_workflow_service = type("S", (), {"is_managed_role": staticmethod(lambda r: True)})()
+    runner._role_workflow_service = type(
+        "S", (), {"is_managed_role": staticmethod(lambda r: True)}
+    )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
     runner.codex_store = None
 
     task = _make_task(role="qa", tmp_path=tmp_path)
     out = await runner._build_prompt_text(
-        task, prompt_text="改成 failed", prompt_override="改成 failed",
-        resume_session_id="cli-1", resume_message_id=None, kind="refine",
+        task,
+        prompt_text="改成 failed",
+        prompt_override="改成 failed",
+        resume_session_id="cli-1",
+        resume_message_id=None,
+        kind="refine",
     )
     assert "passed" in out  # existing status
     assert "改成 failed" in out
@@ -307,13 +354,19 @@ async def test_build_prompt_text_refine_raises_when_no_artifact(tmp_path):
     from app.application.codex_task_runner import CodexTaskRunner
 
     runner = CodexTaskRunner.__new__(CodexTaskRunner)
-    runner._role_workflow_service = type("S", (), {"is_managed_role": staticmethod(lambda r: True)})()
+    runner._role_workflow_service = type(
+        "S", (), {"is_managed_role": staticmethod(lambda r: True)}
+    )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
     runner.codex_store = None
 
     task = _make_task(role="product_manager", tmp_path=tmp_path)
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         await runner._build_prompt_text(
-            task, prompt_text="x", prompt_override="x",
-            resume_session_id=None, resume_message_id=None, kind="refine",
+            task,
+            prompt_text="x",
+            prompt_override="x",
+            resume_session_id=None,
+            resume_message_id=None,
+            kind="refine",
         )

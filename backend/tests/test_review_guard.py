@@ -7,6 +7,7 @@ Covers the three guard states plus key boundaries:
   4. path normalization (./a/b.py == a/b.py).
   5. expected_files empty -> soft layer skipped, hard layer still applies.
 """
+
 import json
 import subprocess
 from pathlib import Path
@@ -15,7 +16,7 @@ import pytest
 
 from app.application.issue_artifact_documents import IssueArtifactDocuments
 from app.application.review_guard import (
-    GuardResult,
+    GuardResult,  # noqa: F401
     compute_review_guard,
     render_guard_context,
 )
@@ -53,7 +54,7 @@ def _write_engineer_report(
     docs = IssueArtifactDocuments()
     path = docs.engineer_implementation_md_path(str(repo), ISSUE_ID, task_id="eng-1")
     lines = [
-        f"# Implementation Report: demo",
+        f"# Implementation Report: demo",  # noqa: F541
         "",
         f"- Status: {status}",
         "",
@@ -159,14 +160,17 @@ def test_plan_drift_soft_signal(tmp_path):
     _init_repo(repo)
     _make_real_change(repo, "app/actual.py")
     _write_engineer_report(repo, status="completed", changed_files=["app/actual.py"])
-    _write_plan(repo, [
-        {
-            "title": "t1",
-            "description": "d",
-            "priority": "P1",
-            "expected_files": ["app/expected.py"],
-        }
-    ])
+    _write_plan(
+        repo,
+        [
+            {
+                "title": "t1",
+                "description": "d",
+                "priority": "P1",
+                "expected_files": ["app/expected.py"],
+            }
+        ],
+    )
 
     guard = compute_review_guard(str(repo), ISSUE_ID)
     assert guard.verdict == "plan_drift"
@@ -187,14 +191,17 @@ def test_path_normalization_dot_slash(tmp_path):
     _init_repo(repo)
     _make_real_change(repo, "a/b.py")
     _write_engineer_report(repo, status="completed", changed_files=["./a/b.py"])
-    _write_plan(repo, [
-        {
-            "title": "t1",
-            "description": "d",
-            "priority": "P1",
-            "expected_files": ["./a/b.py"],
-        }
-    ])
+    _write_plan(
+        repo,
+        [
+            {
+                "title": "t1",
+                "description": "d",
+                "priority": "P1",
+                "expected_files": ["./a/b.py"],
+            }
+        ],
+    )
 
     guard = compute_review_guard(str(repo), ISSUE_ID)
     # expected matches actual after normalization -> no drift.
@@ -209,9 +216,7 @@ def test_empty_expected_files_skips_soft_layer(tmp_path):
     _init_repo(repo)
     _make_real_change(repo, "app/x.py")
     _write_engineer_report(repo, status="completed", changed_files=["app/x.py"])
-    _write_plan(repo, [
-        {"title": "t1", "description": "d", "priority": "P1", "expected_files": []}
-    ])
+    _write_plan(repo, [{"title": "t1", "description": "d", "priority": "P1", "expected_files": []}])
 
     guard = compute_review_guard(str(repo), ISSUE_ID)
     # Real change exists + no expected prediction -> ok (no drift judged).
@@ -224,9 +229,9 @@ def test_empty_expected_files_skips_soft_layer(tmp_path):
     repo2.mkdir()
     _init_repo(repo2)
     _write_engineer_report(repo2, status="completed", changed_files=["app/y.py"])
-    _write_plan(repo2, [
-        {"title": "t1", "description": "d", "priority": "P1", "expected_files": []}
-    ])
+    _write_plan(
+        repo2, [{"title": "t1", "description": "d", "priority": "P1", "expected_files": []}]
+    )
     guard2 = compute_review_guard(str(repo2), ISSUE_ID)
     assert guard2.verdict == "hard_mismatch"
 

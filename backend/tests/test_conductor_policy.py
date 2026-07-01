@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001, RUF100
 
 from datetime import datetime
 from types import SimpleNamespace
@@ -9,7 +9,6 @@ from app.application.conductor_policy import (
     decide_conductor_policy,
 )
 from app.domain.models import CodexIssue, ConductorTask, ConductorTurn
-
 
 
 def test_trivial_single_file_prefers_single_engineer():
@@ -93,8 +92,6 @@ def test_prompt_allows_batch_when_user_explicitly_requests_parallel_independent_
     assert "Batch allowed: yes" in prompt
     assert "explicit_parallel" in prompt
     assert "independent_slices" in prompt
-
-
 
 
 def _issue() -> CodexIssue:

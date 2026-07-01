@@ -1,5 +1,6 @@
 """Tests for TaskCompletionRegistry."""
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 import pytest
@@ -29,7 +30,7 @@ async def test_register_and_signal():
         await asyncio.sleep(0.01)
         reg.signal(task_id, expected)
 
-    asyncio.create_task(_signal_after())
+    asyncio.create_task(_signal_after())  # noqa: RUF006
     result = await reg.wait_for(task_id, timeout=2.0)
     assert result == expected
 
@@ -59,7 +60,7 @@ async def test_is_registered():
         await asyncio.sleep(0.01)
         reg.signal(task_id, {"done": True})
 
-    asyncio.create_task(_signal())
+    asyncio.create_task(_signal())  # noqa: RUF006
     await reg.wait_for(task_id, timeout=2.0)
     # After wait_for, the event is popped
     assert not reg.is_registered(task_id)
@@ -88,7 +89,7 @@ async def test_wait_for_active_extends_while_progressing():
         await asyncio.sleep(0.25)  # > idle_timeout, but task is "active"
         reg.signal(task_id, expected)
 
-    asyncio.create_task(_signal_after())
+    asyncio.create_task(_signal_after())  # noqa: RUF006
     # idle_timeout tiny, but activity_age always reports "just active" (0.0),
     # so it must NOT time out before the signal arrives.
     result = await reg.wait_for_active(
@@ -189,9 +190,7 @@ async def test_wait_for_active_drains_pending_when_never_registered():
     expected = {"status": "done"}
     reg.signal(task_id, expected)
 
-    result = await reg.wait_for_active(
-        task_id, idle_timeout=1.0, hard_timeout=1.0
-    )
+    result = await reg.wait_for_active(task_id, idle_timeout=1.0, hard_timeout=1.0)
     assert result == expected
 
 
@@ -205,7 +204,7 @@ async def test_register_is_idempotent_and_preserves_set_event():
 
     reg.register(task_id)
     reg.signal(task_id, expected)  # event now set, result stored
-    reg.register(task_id)          # second register must NOT reset it
+    reg.register(task_id)  # second register must NOT reset it
 
     result = await reg.wait_for(task_id, timeout=0.5)
     assert result == expected

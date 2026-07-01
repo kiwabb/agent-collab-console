@@ -9,12 +9,13 @@ mirror are exercised without needing a live LLM endpoint.
 Disk-touching tests are tagged `@pytest.mark.slow` per the PRD, so the
 default `pytest -v` run stays fast.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import shutil
 import subprocess
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator  # noqa: UP035
 
 import pytest
 
@@ -22,13 +23,13 @@ from app.adapters.async_sqlite_store import AsyncSQLiteStore
 from app.application.prototype_service import (
     PrototypeError,
     PrototypeService,
-    StreamEvent,
-    _stream_html,
+    StreamEvent,  # noqa: F401
+    _stream_html,  # noqa: F401
     build_html_system_prompt,
     build_iteration_system_prompt,
     strip_markdown_fence,
 )
-from app.application.runtime_catalog_service import RuntimeCatalogService
+from app.application.runtime_catalog_service import RuntimeCatalogService  # noqa: F401
 from app.domain.models import Project, RuntimeExecutorConfig
 
 
@@ -58,6 +59,7 @@ def fake_catalog_service():
     class _Fake:
         async def load_catalog(self):
             from app.domain.models import RuntimeCatalog
+
             return RuntimeCatalog(
                 executors=[
                     RuntimeExecutorConfig(
@@ -84,7 +86,9 @@ def _make_git_repo(path: Path) -> Path:
         pytest.skip("git binary not available")
     path.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("hello")
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)
@@ -96,6 +100,7 @@ def _make_git_repo(path: Path) -> Path:
 async def project(store: AsyncSQLiteStore, tmp_path: Path) -> Project:
     repo = _make_git_repo(tmp_path / "demo")
     from datetime import datetime
+
     p = Project(
         id="proj-1",
         name="demo",
@@ -114,9 +119,10 @@ async def project(store: AsyncSQLiteStore, tmp_path: Path) -> Project:
 
 
 def test_strip_markdown_fence_handles_known_shapes():
-    assert strip_markdown_fence(
-        "```html\n<!DOCTYPE html>\n<html></html>\n```"
-    ) == "<!DOCTYPE html>\n<html></html>"
+    assert (
+        strip_markdown_fence("```html\n<!DOCTYPE html>\n<html></html>\n```")
+        == "<!DOCTYPE html>\n<html></html>"
+    )
     assert strip_markdown_fence("```HTML\n<body></body>\n```") == "<body></body>"
     # Already-clean HTML stays untouched.
     raw = "<!DOCTYPE html>\n<html></html>"
@@ -184,9 +190,7 @@ async def test_list_and_delete_round_trip(svc: PrototypeService, project: Projec
 # ---------------------------------------------------------------------------
 
 
-async def _fake_stream_html_chunks(
-    prompt: str, ctx
-) -> AsyncIterator[str]:  # noqa: ARG001
+async def _fake_stream_html_chunks(prompt: str, ctx) -> AsyncIterator[str]:  # noqa: ARG001, RUF100
     # Mirror what a real LLM would do: start with <!DOCTYPE html>, end with
     # </html>. We DO include a stray markdown fence to exercise strip_markdown_fence.
     yield "```html\n"
@@ -197,10 +201,7 @@ async def _fake_stream_html_chunks(
 
 
 async def _collect(svc: PrototypeService, prototype_id: str, instruction: str | None):
-    return [
-        ev
-        async for ev in svc.stream_events(prototype_id, instruction)
-    ]
+    return [ev async for ev in svc.stream_events(prototype_id, instruction)]
 
 
 @pytest.mark.asyncio
@@ -256,7 +257,7 @@ async def test_iterate_with_instruction_produces_v2(
     proto = await svc.create(project.id, "Pricing", "v1 brief")
     await _collect(svc, proto.id, None)  # → v1
 
-    async def fake_iter(prompt, ctx):  # noqa: ARG001
+    async def fake_iter(prompt, ctx):  # noqa: ARG001, RUF100
         # Iteration should be a refinement of the prior HTML; pretend the
         # model kept the structure and added a footer.
         yield "<!DOCTYPE html>\n<html><body>"
@@ -301,7 +302,7 @@ async def test_iterate_without_prior_version_yields_error(
 async def test_empty_llm_response_yields_error_and_no_db_write(
     svc: PrototypeService, project: Project, monkeypatch
 ):
-    async def empty_stream(prompt, ctx):  # noqa: ARG001
+    async def empty_stream(prompt, ctx):  # noqa: ARG001, RUF100
         if False:
             yield ""  # pragma: no cover - keep this a generator
 
@@ -318,10 +319,8 @@ async def test_empty_llm_response_yields_error_and_no_db_write(
 
 
 @pytest.mark.asyncio
-async def test_stream_aborts_on_runtime_error(
-    svc: PrototypeService, project: Project, monkeypatch
-):
-    async def boom(prompt, ctx):  # noqa: ARG001
+async def test_stream_aborts_on_runtime_error(svc: PrototypeService, project: Project, monkeypatch):
+    async def boom(prompt, ctx):  # noqa: ARG001, RUF100
         raise RuntimeError("upstream 502")
         yield ""  # pragma: no cover - keeps it a generator
 
@@ -343,10 +342,7 @@ async def test_stream_aborts_on_runtime_error(
 
 
 async def _collect_batch(svc: PrototypeService, project_id: str):
-    return [
-        ev
-        async for ev in svc.regenerate_all_stream(project_id)
-    ]
+    return [ev async for ev in svc.regenerate_all_stream(project_id)]
 
 
 @pytest.mark.asyncio
@@ -412,7 +408,7 @@ async def test_regenerate_all_skips_failure_and_continues_with_remaining(
     # First call: boom. Subsequent calls: the regular happy-path fake.
     call_count = {"n": 0}
 
-    async def conditional_stream(prompt, ctx):  # noqa: ARG001
+    async def conditional_stream(prompt, ctx):  # noqa: ARG001, RUF100
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise RuntimeError("upstream 502")
@@ -471,6 +467,7 @@ async def test_regenerate_all_with_no_prototypes_emits_zero_summary(
 @pytest.mark.asyncio
 async def test_regenerate_all_raises_for_unknown_project(svc: PrototypeService):
     from app.application.prototype_service import PrototypeError
+
     with pytest.raises(PrototypeError, match="project not found"):
         async for _ in svc.regenerate_all_stream("no-such-project"):
             pass

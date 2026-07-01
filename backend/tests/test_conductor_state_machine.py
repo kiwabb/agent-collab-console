@@ -61,7 +61,11 @@ async def test_transition_records_state_log_and_updates_estimates(tmp_path):
     estimate = await estimator.estimate("awaiting_llm")
     await store.close()
 
-    assert [entry.to_phase for entry in entries] == ["awaiting_llm", "streaming_llm", "dispatching_subagent"]
+    assert [entry.to_phase for entry in entries] == [
+        "awaiting_llm",
+        "streaming_llm",
+        "dispatching_subagent",
+    ]
     assert entries[0].duration_ms is None
     assert entries[1].duration_ms is not None and entries[1].duration_ms >= 1
     assert all(entry.is_legal for entry in entries)
@@ -222,8 +226,7 @@ async def test_recovery_marks_expired_running_conductor_stalled(tmp_path):
     assert "old-process" in (loaded.result_json or "")
     assert entries[-1].to_phase == "stalled"
     assert any(
-        call.args[0].get("type") == "conductor_status"
-        and call.args[0].get("phase") == "stalled"
+        call.args[0].get("type") == "conductor_status" and call.args[0].get("phase") == "stalled"
         for call in event_bus.append.call_args_list
     )
 
@@ -284,7 +287,9 @@ async def test_startup_recovery_marks_dead_foreign_owner_stalled(tmp_path, monke
         updated_at=fresh_seen,
     )
     await store.save_conductor_task(task)
-    monkeypatch.setattr(conductor_recovery.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(
+        conductor_recovery.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError())
+    )
 
     recovered = await conductor_recovery.recover_orphaned_conductors(
         store,

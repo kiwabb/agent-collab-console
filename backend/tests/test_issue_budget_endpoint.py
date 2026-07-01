@@ -7,7 +7,8 @@ Covers the three branches called out in the task ADR:
 
 Also pins the field shape so the frontend type contract is stable.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 from datetime import datetime
 from uuid import uuid4
@@ -104,8 +105,11 @@ def test_budget_status_dict_has_stable_shape():
     from app.application.budget_service import IssueBudgetStatus
 
     status = IssueBudgetStatus(
-        issue_id="i", spent_usd=1.0, budget_usd=2.0,
-        budget_source="issue", soft_warn_ratio=0.8,
+        issue_id="i",
+        spent_usd=1.0,
+        budget_usd=2.0,
+        budget_source="issue",
+        soft_warn_ratio=0.8,
     )
     payload = status.to_dict()
     assert set(payload.keys()) == EXPECTED_FIELDS
@@ -123,8 +127,11 @@ def test_budget_status_dict_no_ceiling_uses_null_not_zero():
     from app.application.budget_service import IssueBudgetStatus
 
     status = IssueBudgetStatus(
-        issue_id="i", spent_usd=3.0, budget_usd=0.0,
-        budget_source="default", soft_warn_ratio=0.8,
+        issue_id="i",
+        spent_usd=3.0,
+        budget_usd=0.0,
+        budget_source="default",
+        soft_warn_ratio=0.8,
     )
     payload = status.to_dict()
     assert payload["has_ceiling"] is False
@@ -143,8 +150,12 @@ def test_budget_status_dict_no_ceiling_uses_null_not_zero():
 async def test_endpoint_ceiling_issue_returns_aggregated_spend(monkeypatch):
     issue = _make_issue(budget_usd=10.0)
     task = CodexTask(
-        id="t-1", session_id=issue.session_id, project_id=issue.project_id,
-        issue_id=issue.id, title="impl", prompt="do it",
+        id="t-1",
+        session_id=issue.session_id,
+        project_id=issue.project_id,
+        issue_id=issue.id,
+        title="impl",
+        prompt="do it",
     )
     procs = [
         _proc("t-1", "Completed", 1.50),
@@ -154,7 +165,8 @@ async def test_endpoint_ceiling_issue_returns_aggregated_spend(monkeypatch):
         _proc("t-1", "Running", 99.0),
     ]
     monkeypatch.setattr(
-        api_module, "codex_store",
+        api_module,
+        "codex_store",
         _BudgetStoreStub(issue, tasks=[task], processes=procs),
     )
 
@@ -208,12 +220,17 @@ async def test_endpoint_unlimited_issue_still_reports_spend(monkeypatch):
     """An issue with no ceiling can still show accrued cost; over_budget is false."""
     issue = _make_issue(budget_usd=0.0)
     task = CodexTask(
-        id="t-unlim", session_id=issue.session_id, project_id=issue.project_id,
-        issue_id=issue.id, title="impl", prompt="do it",
+        id="t-unlim",
+        session_id=issue.session_id,
+        project_id=issue.project_id,
+        issue_id=issue.id,
+        title="impl",
+        prompt="do it",
     )
     procs = [_proc("t-unlim", "Completed", 7.5)]
     monkeypatch.setattr(
-        api_module, "codex_store",
+        api_module,
+        "codex_store",
         _BudgetStoreStub(issue, tasks=[task], processes=procs),
     )
 
@@ -234,6 +251,7 @@ async def test_endpoint_unlimited_issue_still_reports_spend(monkeypatch):
 async def test_endpoint_404_when_issue_missing(monkeypatch):
     monkeypatch.setattr(api_module, "codex_store", _BudgetStoreStub(issue=None))
     from fastapi import HTTPException
+
     with pytest.raises(HTTPException) as exc:
         await api_module.get_issue_budget("ghost-id")
     assert exc.value.status_code == 404
@@ -249,6 +267,7 @@ async def test_endpoint_404_when_issue_missing(monkeypatch):
 async def test_endpoint_503_when_store_unavailable(monkeypatch):
     monkeypatch.setattr(api_module, "codex_store", None)
     from fastapi import HTTPException
+
     with pytest.raises(HTTPException) as exc:
         await api_module.get_issue_budget("any")
     assert exc.value.status_code == 503
@@ -264,12 +283,17 @@ async def test_endpoint_soft_warn_flips_at_threshold(monkeypatch):
     """At 80% spent the soft_warn flag should be True; over_budget still False."""
     issue = _make_issue(budget_usd=10.0)
     task = CodexTask(
-        id="t-warn", session_id=issue.session_id, project_id=issue.project_id,
-        issue_id=issue.id, title="impl", prompt="do it",
+        id="t-warn",
+        session_id=issue.session_id,
+        project_id=issue.project_id,
+        issue_id=issue.id,
+        title="impl",
+        prompt="do it",
     )
     procs = [_proc("t-warn", "Completed", 8.5)]
     monkeypatch.setattr(
-        api_module, "codex_store",
+        api_module,
+        "codex_store",
         _BudgetStoreStub(issue, tasks=[task], processes=procs),
     )
     result = await api_module.get_issue_budget(issue.id)
@@ -282,12 +306,17 @@ async def test_endpoint_over_budget_flips_at_ceiling(monkeypatch):
     """At 100% spent the over_budget flag should be True; soft_warn also True."""
     issue = _make_issue(budget_usd=4.0)
     task = CodexTask(
-        id="t-over", session_id=issue.session_id, project_id=issue.project_id,
-        issue_id=issue.id, title="impl", prompt="do it",
+        id="t-over",
+        session_id=issue.session_id,
+        project_id=issue.project_id,
+        issue_id=issue.id,
+        title="impl",
+        prompt="do it",
     )
     procs = [_proc("t-over", "Completed", 4.0)]
     monkeypatch.setattr(
-        api_module, "codex_store",
+        api_module,
+        "codex_store",
         _BudgetStoreStub(issue, tasks=[task], processes=procs),
     )
     result = await api_module.get_issue_budget(issue.id)

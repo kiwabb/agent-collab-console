@@ -4,6 +4,7 @@ These tests share the session-scoped TestClient from conftest.py. The
 `reset_sqlite_store` autouse fixture wipes user-created rows between tests,
 but built-in agents are re-seeded by the FastAPI lifespan handler.
 """
+
 import pytest
 
 from app.application.agent_seed import seed_builtin_agents
@@ -12,6 +13,7 @@ from app.application.agent_seed import seed_builtin_agents
 def _run_async(coro):
     """Run an async coroutine in a one-shot loop (Py3.14-safe — no get_event_loop)."""
     import asyncio
+
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(coro)
@@ -24,6 +26,7 @@ def reseed_builtins():
     """Reset wipes the agents table along with everything else, so reseed
     before each test (lifespan only runs once for the session-scoped client)."""
     import app.bootstrap as bootstrap_module
+
     if bootstrap_module.async_store is not None:
         _run_async(seed_builtin_agents(bootstrap_module.async_store))
     yield
@@ -44,6 +47,7 @@ def test_seed_creates_managed_and_specialist_builtin_agents(client):
 def test_seed_is_idempotent(client):
     """Running seed twice should not create duplicates."""
     import app.bootstrap as bootstrap_module
+
     _run_async(seed_builtin_agents(bootstrap_module.async_store))
     _run_async(seed_builtin_agents(bootstrap_module.async_store))
     resp = client.get("/api/agents")

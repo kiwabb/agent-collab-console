@@ -1,8 +1,9 @@
 # Set CODEX_LAUNCH_ENABLED=false BEFORE any app imports
 # This must be at the very top, before any other imports
-import os
+import os  # noqa: I001, RUF100
 import shutil
 import tempfile
+
 os.environ["CODEX_LAUNCH_ENABLED"] = "false"
 
 # Use an isolated test SQLite database so tests never touch the real console.db
@@ -21,16 +22,16 @@ _test_workspace_root = os.path.join(tempfile.gettempdir(), "agent-collab-console
 os.environ["CODEX_WORKSPACE_ROOT"] = _test_workspace_root
 shutil.rmtree(_test_workspace_root, ignore_errors=True)
 
-import pytest
-import pytest_asyncio
-from fastapi.testclient import TestClient
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402, F401
 
 
 @pytest.fixture(scope="session", autouse=True)
 def clean_test_db_file():
     """Remove the test SQLite file after the test session completes."""
     yield
-    try:
+    try:  # noqa: SIM105
         os.remove(_test_db_path)
     except OSError:
         pass
@@ -41,11 +42,11 @@ def clean_test_workspace_root():
     """Remove temporary task workspaces after the test session completes."""
     yield
     shutil.rmtree(_test_workspace_root, ignore_errors=True)
-    try:
+    try:  # noqa: SIM105
         os.remove(_test_db_path + "-wal")
     except OSError:
         pass
-    try:
+    try:  # noqa: SIM105
         os.remove(_test_db_path + "-shm")
     except OSError:
         pass
@@ -61,8 +62,9 @@ def client():
     reset_process_manager autouse fixture rather than by entering/exiting the
     lifespan context on each test, which would hang on WebSocket/SSE drain.
     """
-    from app.main import app
-    from fastapi.testclient import TestClient
+    from app.main import app  # noqa: I001
+    from fastapi.testclient import TestClient  # noqa: F811
+
     yield TestClient(app)
 
 
@@ -74,6 +76,7 @@ def force_codex_available(monkeypatch):
     the real 'codex' binary to be installed to run.
     """
     import app.bootstrap as bootstrap_module
+
     monkeypatch.setattr(bootstrap_module, "check_codex_available", lambda: True)
 
 
@@ -84,7 +87,7 @@ def reset_sqlite_store():
     This is extremely robust, completely avoiding any lock issues and FTS5 shadow table corruption.
     """
     yield
-    import app.bootstrap as bootstrap_module
+    import app.bootstrap as bootstrap_module  # noqa: I001
     import asyncio
     import os
     import time
@@ -147,6 +150,7 @@ async def reset_process_manager():
     """
     yield
     import app.bootstrap as bootstrap_module
+
     try:
         mgr = bootstrap_module.codex_process_manager
         if mgr is not None:

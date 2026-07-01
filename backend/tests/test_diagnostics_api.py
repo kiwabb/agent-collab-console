@@ -233,7 +233,7 @@ def test_diagnostics_degrades_when_github_pr_followup_is_running(client, monkeyp
 
 
 def test_diagnostics_degrades_when_project_review_scheduler_is_running(client, monkeypatch):
-    from app.application.github_pr_followup import reset_github_pr_followup_status
+    from app.application.github_pr_followup import reset_github_pr_followup_status  # noqa: I001
     from app.application import project_review_scheduler
 
     reset_github_pr_followup_status()
@@ -268,7 +268,7 @@ def test_diagnostics_degrades_when_project_review_scheduler_is_running(client, m
 
 
 def test_diagnostics_degrades_when_project_review_scheduler_is_stale(client, monkeypatch):
-    from app.application.github_pr_followup import reset_github_pr_followup_status
+    from app.application.github_pr_followup import reset_github_pr_followup_status  # noqa: I001
     from app.application import project_review_scheduler
 
     reset_github_pr_followup_status()
@@ -302,7 +302,7 @@ def test_diagnostics_degrades_when_project_review_scheduler_is_stale(client, mon
 
 
 def test_diagnostics_does_not_degrade_recent_project_review_scheduler(client, monkeypatch):
-    from app.application.github_pr_followup import reset_github_pr_followup_status
+    from app.application.github_pr_followup import reset_github_pr_followup_status  # noqa: I001
     from app.application import project_review_scheduler
 
     reset_github_pr_followup_status()
@@ -327,14 +327,13 @@ def test_diagnostics_does_not_degrade_recent_project_review_scheduler(client, mo
     assert resp.status_code == 200
     body = resp.json()
     assert not any(
-        check["name"] == "project_review_scheduler"
-        and check["status"] == "degraded"
+        check["name"] == "project_review_scheduler" and check["status"] == "degraded"
         for check in body["checks"]
     )
 
 
 def test_diagnostics_does_not_degrade_never_completed_project_review_scheduler(client, monkeypatch):
-    from app.application.github_pr_followup import reset_github_pr_followup_status
+    from app.application.github_pr_followup import reset_github_pr_followup_status  # noqa: I001
     from app.application import project_review_scheduler
 
     reset_github_pr_followup_status()
@@ -359,14 +358,15 @@ def test_diagnostics_does_not_degrade_never_completed_project_review_scheduler(c
     assert resp.status_code == 200
     body = resp.json()
     assert not any(
-        check["name"] == "project_review_scheduler"
-        and check["status"] == "degraded"
+        check["name"] == "project_review_scheduler" and check["status"] == "degraded"
         for check in body["checks"]
     )
 
 
-def test_diagnostics_degrades_when_self_improvement_proposal_scheduler_is_running(client, monkeypatch):
-    from app.application.github_pr_followup import reset_github_pr_followup_status
+def test_diagnostics_degrades_when_self_improvement_proposal_scheduler_is_running(
+    client, monkeypatch
+):
+    from app.application.github_pr_followup import reset_github_pr_followup_status  # noqa: I001
     from app.application.project_review_scheduler import reset_project_review_scheduler_status
     from app.application import self_improvement_proposal_scheduler
 
@@ -402,8 +402,10 @@ def test_diagnostics_degrades_when_self_improvement_proposal_scheduler_is_runnin
     )
 
 
-def test_diagnostics_degrades_when_self_improvement_proposal_scheduler_is_stale(client, monkeypatch):
-    from app.application.github_pr_followup import reset_github_pr_followup_status
+def test_diagnostics_degrades_when_self_improvement_proposal_scheduler_is_stale(
+    client, monkeypatch
+):
+    from app.application.github_pr_followup import reset_github_pr_followup_status  # noqa: I001
     from app.application.project_review_scheduler import reset_project_review_scheduler_status
     from app.application import self_improvement_proposal_scheduler
 
@@ -438,8 +440,10 @@ def test_diagnostics_degrades_when_self_improvement_proposal_scheduler_is_stale(
     )
 
 
-def test_diagnostics_does_not_degrade_never_completed_self_improvement_proposal_scheduler(client, monkeypatch):
-    from app.application.github_pr_followup import reset_github_pr_followup_status
+def test_diagnostics_does_not_degrade_never_completed_self_improvement_proposal_scheduler(
+    client, monkeypatch
+):
+    from app.application.github_pr_followup import reset_github_pr_followup_status  # noqa: I001
     from app.application.project_review_scheduler import reset_project_review_scheduler_status
     from app.application import self_improvement_proposal_scheduler
 
@@ -466,8 +470,7 @@ def test_diagnostics_does_not_degrade_never_completed_self_improvement_proposal_
     assert resp.status_code == 200
     body = resp.json()
     assert not any(
-        check["name"] == "self_improvement_proposal_scheduler"
-        and check["status"] == "degraded"
+        check["name"] == "self_improvement_proposal_scheduler" and check["status"] == "degraded"
         for check in body["checks"]
     )
 

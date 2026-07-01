@@ -1,4 +1,5 @@
 """OpenAI-protocol adapter + Conductor LLM context resolution."""
+
 from __future__ import annotations
 
 import json
@@ -17,28 +18,52 @@ from app.domain.models import (
 
 
 def test_tools_anthropic_to_openai_shape():
-    tools = [{"name": "dispatch_subagent", "description": "d", "input_schema": {"type": "object", "properties": {"role": {"type": "string"}}}}]
-    out = _anthropic_tools_to_openai(tools)
-    assert out == [{
-        "type": "function",
-        "function": {
+    tools = [
+        {
             "name": "dispatch_subagent",
             "description": "d",
-            "parameters": {"type": "object", "properties": {"role": {"type": "string"}}},
-        },
-    }]
+            "input_schema": {"type": "object", "properties": {"role": {"type": "string"}}},
+        }
+    ]
+    out = _anthropic_tools_to_openai(tools)
+    assert out == [
+        {
+            "type": "function",
+            "function": {
+                "name": "dispatch_subagent",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {"role": {"type": "string"}}},
+            },
+        }
+    ]
 
 
 def test_messages_anthropic_to_openai_handles_tool_use_and_tool_result():
     messages = [
         {"role": "user", "content": "do the thing"},
-        {"role": "assistant", "content": [
-            {"type": "text", "text": "I'll dispatch engineer"},
-            {"type": "tool_use", "id": "call_1", "name": "dispatch_subagent", "input": {"role": "engineer"}},
-        ]},
-        {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "call_1", "content": "{\"status\": \"done\"}", "is_error": False},
-        ]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "I'll dispatch engineer"},
+                {
+                    "type": "tool_use",
+                    "id": "call_1",
+                    "name": "dispatch_subagent",
+                    "input": {"role": "engineer"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_1",
+                    "content": '{"status": "done"}',
+                    "is_error": False,
+                },
+            ],
+        },
     ]
     out = _anthropic_messages_to_openai(messages)
     assert out[0] == {"role": "user", "content": "do the thing"}
@@ -49,7 +74,7 @@ def test_messages_anthropic_to_openai_handles_tool_use_and_tool_result():
     assert out[1]["tool_calls"][0]["function"]["name"] == "dispatch_subagent"
     assert json.loads(out[1]["tool_calls"][0]["function"]["arguments"]) == {"role": "engineer"}
     # tool_result -> role "tool"
-    assert out[2] == {"role": "tool", "tool_call_id": "call_1", "content": "{\"status\": \"done\"}"}
+    assert out[2] == {"role": "tool", "tool_call_id": "call_1", "content": '{"status": "done"}'}
 
 
 def test_openai_choice_back_to_anthropic():
@@ -57,23 +82,41 @@ def test_openai_choice_back_to_anthropic():
         "role": "assistant",
         "content": "going to engineer",
         "tool_calls": [
-            {"id": "call_9", "type": "function", "function": {"name": "dispatch_subagent", "arguments": "{\"role\": \"engineer\"}"}},
+            {
+                "id": "call_9",
+                "type": "function",
+                "function": {"name": "dispatch_subagent", "arguments": '{"role": "engineer"}'},
+            },
         ],
     }
-    out = _openai_choice_to_anthropic(message, "tool_calls", {"prompt_tokens": 10, "completion_tokens": 5})
+    out = _openai_choice_to_anthropic(
+        message, "tool_calls", {"prompt_tokens": 10, "completion_tokens": 5}
+    )
     assert out["stop_reason"] == "tool_use"
     assert out["content"][0] == {"type": "text", "text": "going to engineer"}
-    assert out["content"][1] == {"type": "tool_use", "id": "call_9", "name": "dispatch_subagent", "input": {"role": "engineer"}}
+    assert out["content"][1] == {
+        "type": "tool_use",
+        "id": "call_9",
+        "name": "dispatch_subagent",
+        "input": {"role": "engineer"},
+    }
     assert out["usage"] == {"input_tokens": 10, "output_tokens": 5}
 
 
 def _catalog(protocol: str) -> RuntimeCatalog:
     return RuntimeCatalog(
-        executors=[RuntimeExecutorConfig(
-            id="oai", label="OpenAI compat", enabled=True, executor_type="codex",
-            api_endpoint="https://api.example.com", api_key="sk-test",
-            default_model="gpt-x", protocol=protocol,
-        )],
+        executors=[
+            RuntimeExecutorConfig(
+                id="oai",
+                label="OpenAI compat",
+                enabled=True,
+                executor_type="codex",
+                api_endpoint="https://api.example.com",
+                api_key="sk-test",
+                default_model="gpt-x",
+                protocol=protocol,
+            )
+        ],
         conductor_llm=ConductorLLMConfig(executor_id="oai", model="gpt-x"),
     )
 

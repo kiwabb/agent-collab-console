@@ -23,15 +23,16 @@ Two implementations:
     sync interface is fine; the conductor's async store is
     unaffected.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import json
 import sqlite3
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field  # noqa: F401
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Protocol, runtime_checkable
+from typing import Iterable, Protocol, runtime_checkable  # noqa: F401, UP035
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +211,7 @@ class InMemoryStore:
                 )
             # Set the new baseline row's flag.
             new = self._runs[run_id]
-            self._runs[run_id] = BenchmarkRun(
-                **{**asdict(new), "is_baseline": True}
-            )
+            self._runs[run_id] = BenchmarkRun(**{**asdict(new), "is_baseline": True})
             self._baseline_id = run_id
 
     def add_epoch(self, epoch: BenchmarkEpoch) -> None:
@@ -353,12 +352,12 @@ class SqliteStore:
         self._conn.commit()
 
     def close(self) -> None:
-        try:
+        try:  # noqa: SIM105
             self._conn.close()
         except Exception:
             pass
 
-    def __enter__(self) -> "SqliteStore":
+    def __enter__(self) -> "SqliteStore":  # noqa: UP037
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -446,21 +445,15 @@ class SqliteStore:
                 raise ValueError(f"run {run.id!r} does not exist")
 
     def get_run(self, run_id: str) -> BenchmarkRun | None:
-        row = self._conn.execute(
-            "SELECT * FROM benchmark_run WHERE id = ?", (run_id,)
-        ).fetchone()
+        row = self._conn.execute("SELECT * FROM benchmark_run WHERE id = ?", (run_id,)).fetchone()
         return _row_to_run(row) if row else None
 
     def list_runs(self) -> list[BenchmarkRun]:
-        rows = self._conn.execute(
-            "SELECT * FROM benchmark_run ORDER BY created_at DESC"
-        ).fetchall()
+        rows = self._conn.execute("SELECT * FROM benchmark_run ORDER BY created_at DESC").fetchall()
         return [_row_to_run(r) for r in rows]
 
     def get_baseline(self) -> BenchmarkRun | None:
-        row = self._conn.execute(
-            "SELECT * FROM benchmark_run WHERE is_baseline = 1"
-        ).fetchone()
+        row = self._conn.execute("SELECT * FROM benchmark_run WHERE is_baseline = 1").fetchone()
         return _row_to_run(row) if row else None
 
     def set_baseline(self, run_id: str) -> None:

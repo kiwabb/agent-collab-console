@@ -1,4 +1,4 @@
-import json
+import json  # noqa: I001
 import subprocess
 from datetime import datetime
 
@@ -26,7 +26,9 @@ class StoreStub:
     async def save_execution_process(self, process: ExecutionProcess):
         self.processes[process.id] = process
 
-    async def update_execution_process_status(self, process_id: str, status: str, exit_code=None, completed_at=None):
+    async def update_execution_process_status(
+        self, process_id: str, status: str, exit_code=None, completed_at=None
+    ):
         process = self.processes[process_id]
         process.status = status
         process.exit_code = exit_code
@@ -183,7 +185,9 @@ class RuntimeStoreStub:
     async def save_codex_workspace(self, workspace: CodexSession):
         self.workspace = workspace.model_copy(deep=True)
 
-    async def update_execution_process_status(self, process_id: str, status: str, exit_code=None, completed_at=None):
+    async def update_execution_process_status(
+        self, process_id: str, status: str, exit_code=None, completed_at=None
+    ):
         return None
 
     async def save_codex_task_message(self, message):
@@ -394,16 +398,36 @@ async def test_persist_reader_metadata_does_not_overwrite_terminal_failure_reaso
 
 @pytest.mark.asyncio
 async def test_finalize_task_on_reader_exit_salvages_idle_engineer_with_changed_files(tmp_path):
-    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True, text=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
     app_dir = tmp_path / "backend" / "app"
     app_dir.mkdir(parents=True)
     target = app_dir / "sample.py"
     target.write_text("print('before')\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "commit", "-m", "baseline"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     target.write_text("print('after')\n", encoding="utf-8")
 
     now = datetime.now()
@@ -468,7 +492,7 @@ async def test_finalize_task_on_reader_exit_salvages_idle_engineer_with_changed_
 
 # ── Per-task session identity (shared-session poisoning fix) ──────────────────
 
-from app.application.process_runtime_common import is_workspace_console_task
+from app.application.process_runtime_common import is_workspace_console_task  # noqa: E402
 
 
 def test_is_workspace_console_task_discriminator():
@@ -476,8 +500,12 @@ def test_is_workspace_console_task_discriminator():
 
     def mk(**kw):
         base = dict(
-            id="t", session_id="ws", title="x", prompt="x",
-            created_at=now, updated_at=now,
+            id="t",
+            session_id="ws",
+            title="x",
+            prompt="x",
+            created_at=now,
+            updated_at=now,
         )
         base.update(kw)
         return CodexTask(**base)
@@ -497,19 +525,38 @@ def test_is_workspace_console_task_discriminator():
 async def test_persist_reader_metadata_role_task_does_not_touch_workspace_pointer():
     now = datetime.now()
     task = CodexTask(
-        id="role-task", session_id="ws-role", issue_id="issue-role",
-        title="Engineer", prompt="impl", role="engineer", executor="claude",
-        status="running", workspace_path="/tmp/ws", created_at=now, updated_at=now,
+        id="role-task",
+        session_id="ws-role",
+        issue_id="issue-role",
+        title="Engineer",
+        prompt="impl",
+        role="engineer",
+        executor="claude",
+        status="running",
+        workspace_path="/tmp/ws",
+        created_at=now,
+        updated_at=now,
     )
     workspace = CodexSession(
-        id="ws-role", title="WS", cwd="/tmp/ws",
-        claude_thread_id="stale-shared-session", created_at=now, last_active_at=now,
+        id="ws-role",
+        title="WS",
+        cwd="/tmp/ws",
+        claude_thread_id="stale-shared-session",
+        created_at=now,
+        last_active_at=now,
     )
     store = StoreStub(task, workspace)
-    runtime = RuntimeUnderTest(codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None)
+    runtime = RuntimeUnderTest(
+        codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None
+    )
     entry = AsyncProcessEntry(
-        proc=None, output_task=None, alive=False, session_id=task.session_id,
-        executor="claude", cwd="/tmp/ws", resume_session_id="role-own-session",
+        proc=None,
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        executor="claude",
+        cwd="/tmp/ws",
+        resume_session_id="role-own-session",
         result_text="real result",
     )
     entry.produced_real_turn = True
@@ -525,18 +572,35 @@ async def test_persist_reader_metadata_role_task_does_not_touch_workspace_pointe
 async def test_persist_reader_metadata_console_task_updates_workspace_pointer():
     now = datetime.now()
     task = CodexTask(  # console task: no issue_id, normal kind, no parent
-        id="console-task", session_id="ws-con", title="chat", prompt="hi",
-        executor="claude", status="running", created_at=now, updated_at=now,
+        id="console-task",
+        session_id="ws-con",
+        title="chat",
+        prompt="hi",
+        executor="claude",
+        status="running",
+        created_at=now,
+        updated_at=now,
     )
     workspace = CodexSession(
-        id="ws-con", title="WS", cwd="/tmp/ws",
-        claude_thread_id="old", created_at=now, last_active_at=now,
+        id="ws-con",
+        title="WS",
+        cwd="/tmp/ws",
+        claude_thread_id="old",
+        created_at=now,
+        last_active_at=now,
     )
     store = StoreStub(task, workspace)
-    runtime = RuntimeUnderTest(codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None)
+    runtime = RuntimeUnderTest(
+        codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None
+    )
     entry = AsyncProcessEntry(
-        proc=None, output_task=None, alive=False, session_id=task.session_id,
-        executor="claude", cwd="/tmp/ws", resume_session_id="console-session",
+        proc=None,
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        executor="claude",
+        cwd="/tmp/ws",
+        resume_session_id="console-session",
         result_text="hello back",
     )
     entry.produced_real_turn = True
@@ -550,17 +614,33 @@ async def test_persist_reader_metadata_console_task_updates_workspace_pointer():
 async def test_persist_reader_metadata_drops_resume_id_when_no_real_turn():
     now = datetime.now()
     task = CodexTask(
-        id="empty-role-task", session_id="ws-empty", issue_id="issue-empty",
-        title="Engineer", prompt="impl", role="engineer", executor="claude",
-        status="failed", resume_session_id="previous-id",
-        workspace_path="/tmp/ws", created_at=now, updated_at=now,
+        id="empty-role-task",
+        session_id="ws-empty",
+        issue_id="issue-empty",
+        title="Engineer",
+        prompt="impl",
+        role="engineer",
+        executor="claude",
+        status="failed",
+        resume_session_id="previous-id",
+        workspace_path="/tmp/ws",
+        created_at=now,
+        updated_at=now,
     )
-    workspace = CodexSession(id="ws-empty", title="WS", cwd="/tmp/ws", created_at=now, last_active_at=now)
+    workspace = CodexSession(
+        id="ws-empty", title="WS", cwd="/tmp/ws", created_at=now, last_active_at=now
+    )
     store = StoreStub(task, workspace)
-    runtime = RuntimeUnderTest(codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None)
+    runtime = RuntimeUnderTest(
+        codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None
+    )
     entry = AsyncProcessEntry(
-        proc=None, output_task=None, alive=False, session_id=task.session_id,
-        executor="claude", cwd="/tmp/ws",
+        proc=None,
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        executor="claude",
+        cwd="/tmp/ws",
         resume_session_id="dead-control-only-session",  # captured but no real turn
     )
     # produced_real_turn stays False (control-only run)

@@ -43,7 +43,7 @@ def test_minimax_failure_missing_open_quote_on_key():
         '{"priority":"P0","title":"Executor"},'
         '{priority":"P0","title":"Provider"},'
         '{priority":"P1","title":"Config"}'
-        ']}'
+        "]}"
     )
     result = tolerant_json_loads(s)
     pool = result["requirement_pool"]
@@ -59,7 +59,7 @@ def test_minimax_failure_missing_open_brace_in_array():
         '{"requirement_pool":['
         '{"priority":"P0","title":"first","description":"...支持codex和claude"},'
         '"priority":"P0","title":"Runtime Catalog"'
-        ']}'
+        "]}"
     )
     result = tolerant_json_loads(s)
     pool = result["requirement_pool"]

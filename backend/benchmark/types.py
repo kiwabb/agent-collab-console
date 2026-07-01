@@ -11,7 +11,8 @@ fields, no Pydantic. Pydantic is reserved for the *external* boundary
 boundary uses dataclasses for speed and because we control all the
 producers.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 from dataclasses import dataclass, field
 from typing import Any

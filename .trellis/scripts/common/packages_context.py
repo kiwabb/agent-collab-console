@@ -13,7 +13,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import _is_true_config_value, get_default_package, get_packages, get_spec_scope
+from .config import (
+    _is_true_config_value,
+    get_default_package,
+    get_packages,
+    get_spec_scope,
+)
 from .paths import (
     DIR_SPEC,
     DIR_WORKFLOW,
@@ -27,6 +32,7 @@ from .tasks import load_task
 # Internal Helpers
 # =============================================================================
 
+
 def _scan_spec_layers(spec_dir: Path, package: str | None = None) -> list[str]:
     """Scan spec directory for available layers (subdirectories).
 
@@ -36,9 +42,7 @@ def _scan_spec_layers(spec_dir: Path, package: str | None = None) -> list[str]:
     target = spec_dir / package if package else spec_dir
     if not target.is_dir():
         return []
-    return sorted(
-        d.name for d in target.iterdir() if d.is_dir() and d.name != "guides"
-    )
+    return sorted(d.name for d in target.iterdir() if d.is_dir() and d.name != "guides")
 
 
 def _get_active_task_package(repo_root: Path) -> str | None:
@@ -88,6 +92,7 @@ def _resolve_scope_set(
 # Public Functions
 # =============================================================================
 
+
 def get_packages_info(repo_root: Path) -> list[dict]:
     """Get structured package info for monorepo projects.
 
@@ -104,20 +109,30 @@ def get_packages_info(repo_root: Path) -> list[dict]:
     result = []
 
     for pkg_name, pkg_config in packages.items():
-        pkg_path = pkg_config.get("path", pkg_name) if isinstance(pkg_config, dict) else str(pkg_config)
-        pkg_type = pkg_config.get("type", "local") if isinstance(pkg_config, dict) else "local"
-        pkg_git = pkg_config.get("git", False) if isinstance(pkg_config, dict) else False
+        pkg_path = (
+            pkg_config.get("path", pkg_name)
+            if isinstance(pkg_config, dict)
+            else str(pkg_config)
+        )
+        pkg_type = (
+            pkg_config.get("type", "local") if isinstance(pkg_config, dict) else "local"
+        )
+        pkg_git = (
+            pkg_config.get("git", False) if isinstance(pkg_config, dict) else False
+        )
         layers = _scan_spec_layers(spec_dir, pkg_name)
 
-        result.append({
-            "name": pkg_name,
-            "path": pkg_path,
-            "type": pkg_type,
-            "default": pkg_name == default_pkg,
-            "specLayers": layers,
-            "isSubmodule": pkg_type == "submodule",
-            "isGitRepo": _is_true_config_value(pkg_git),
-        })
+        result.append(
+            {
+                "name": pkg_name,
+                "path": pkg_path,
+                "type": pkg_type,
+                "default": pkg_name == default_pkg,
+                "specLayers": layers,
+                "isSubmodule": pkg_type == "submodule",
+                "isGitRepo": _is_true_config_value(pkg_git),
+            }
+        )
 
     return result
 

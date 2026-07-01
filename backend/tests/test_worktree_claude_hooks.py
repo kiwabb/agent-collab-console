@@ -1,10 +1,11 @@
 """Tests for worktree_claude_hooks: injection and the limit_read hook script."""
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import json
 import subprocess
 import sys
-import textwrap
+import textwrap  # noqa: F401
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from app.application.worktree_claude_hooks import inject_worktree_claude_hooks
 # ---------------------------------------------------------------------------
 # inject_worktree_claude_hooks
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_inject_creates_settings_and_hook(tmp_path):
@@ -38,9 +40,9 @@ async def test_inject_settings_content(tmp_path):
 
     read_hook = next(h for h in hooks if h.get("matcher") == "Read")
     cmd_hooks = read_hook["hooks"]
-    assert any(
-        "limit_read.py" in h.get("command", "") for h in cmd_hooks
-    ), "settings must reference limit_read.py"
+    assert any("limit_read.py" in h.get("command", "") for h in cmd_hooks), (
+        "settings must reference limit_read.py"
+    )
 
 
 @pytest.mark.asyncio
@@ -50,11 +52,36 @@ async def test_inject_idempotent(tmp_path):
     assert (tmp_path / ".claude" / "settings.json").exists()
 
 
+@pytest.mark.asyncio
+async def test_inject_excludes_managed_hooks_from_git_status(tmp_path):
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    await inject_worktree_claude_hooks(tmp_path)
+
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert not any(path.startswith(".claude/") for path in untracked)
+    assert ".claude/" in (tmp_path / ".git" / "info" / "exclude").read_text()
+
+
 # ---------------------------------------------------------------------------
 # limit_read.py hook behaviour — run via subprocess so we test the real script
 # ---------------------------------------------------------------------------
 
-def _invoke_hook(hook_path: Path, tool_name: str, file_path: str, offset=None) -> subprocess.CompletedProcess:
+
+def _invoke_hook(
+    hook_path: Path, tool_name: str, file_path: str, offset=None
+) -> subprocess.CompletedProcess:
     tool_input: dict = {"file_path": file_path}
     if offset is not None:
         tool_input["offset"] = offset
@@ -70,7 +97,11 @@ def _invoke_hook(hook_path: Path, tool_name: str, file_path: str, offset=None) -
 def hook_dir(tmp_path):
     """Return a tmp dir with the hook injected."""
     import asyncio
-    asyncio.get_event_loop().run_until_complete(inject_worktree_claude_hooks(tmp_path))
+
+    # asyncio.run creates and owns its own loop — robust regardless of whether a
+    # prior async test left the thread's loop closed (Python 3.14 removed the
+    # implicit get_event_loop() fallback).
+    asyncio.run(inject_worktree_claude_hooks(tmp_path))
     return tmp_path
 
 
@@ -131,6 +162,7 @@ def test_hook_blocks_201_line_file(hook_path, tmp_path):
 # Timeout ladder invariant: idle > stall + 120
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_inject_merges_with_existing_settings(tmp_path):
     existing = {"hooks": {"SessionStart": [{"type": "command", "command": "echo hi"}]}}
@@ -158,11 +190,12 @@ async def test_inject_does_not_duplicate_hook(tmp_path):
 
     data = json.loads((tmp_path / ".claude" / "settings.json").read_text())
     read_entries = [
-        e for e in data["hooks"]["PreToolUse"]
-        if isinstance(e, dict) and e.get("matcher") == "Read"
+        e for e in data["hooks"]["PreToolUse"] if isinstance(e, dict) and e.get("matcher") == "Read"
     ]
     limit_read_hooks = [
-        h for e in read_entries for h in e.get("hooks", [])
+        h
+        for e in read_entries
+        for h in e.get("hooks", [])
         if "limit_read.py" in h.get("command", "")
     ]
     assert len(limit_read_hooks) == 1, (
@@ -171,11 +204,18 @@ async def test_inject_does_not_duplicate_hook(tmp_path):
 
 
 def test_timeout_invariant_passes_with_new_defaults():
-    from app.application.timeouts import check_invariants, DEFAULT_SUBAGENT_IDLE_S, DEFAULT_STALL_THRESHOLD_S
+    from app.application.timeouts import (  # noqa: I001
+        check_invariants,
+        DEFAULT_SUBAGENT_IDLE_S,
+        DEFAULT_STALL_THRESHOLD_S,
+    )  # noqa: I001, RUF100
+
     assert DEFAULT_SUBAGENT_IDLE_S > DEFAULT_STALL_THRESHOLD_S + 120, (
         f"DEFAULT_SUBAGENT_IDLE_S ({DEFAULT_SUBAGENT_IDLE_S}) must be > "
         f"DEFAULT_STALL_THRESHOLD_S+120 ({DEFAULT_STALL_THRESHOLD_S + 120})"
     )
     violations = check_invariants()
     stall_violations = [v for v in violations if "STALL_THRESHOLD" in v]
-    assert not stall_violations, f"Unexpected stall-related invariant violations: {stall_violations}"
+    assert not stall_violations, (
+        f"Unexpected stall-related invariant violations: {stall_violations}"
+    )

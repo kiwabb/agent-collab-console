@@ -1,8 +1,9 @@
 """Tests for the team_notes_service (block parsing + soft-delete state)."""
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import tempfile
-from datetime import datetime
+from datetime import datetime  # noqa: F401
 from pathlib import Path
 
 import pytest
@@ -78,11 +79,9 @@ async def test_soft_delete_and_restore(store, project_repo):
     blocks_after = await svc.list_blocks(store, "proj-1", str(project_repo))
     assert {b.block_id for b in blocks_after} == {"issue:def-456"}
 
-    with_deleted = await svc.list_blocks(
-        store, "proj-1", str(project_repo), include_deleted=True
-    )
+    with_deleted = await svc.list_blocks(store, "proj-1", str(project_repo), include_deleted=True)
     assert len(with_deleted) == 2
-    deleted = [b for b in with_deleted if b.block_id == "issue:abc-123"][0]
+    deleted = [b for b in with_deleted if b.block_id == "issue:abc-123"][0]  # noqa: RUF015
     assert deleted.deleted_at is not None
 
     await svc.restore(store, "proj-1", "issue:abc-123")

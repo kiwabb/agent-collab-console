@@ -78,7 +78,10 @@ def test_non_memory_apply_plan_returns_pr_task_candidate_not_direct_patch():
     assert plan["risk"] == "medium"
     assert plan["next_action"] == "open_reviewed_pr"
     assert plan["candidate_changes"][0]["kind"] == "open_pr_task"
-    assert plan["candidate_changes"][0]["title"] == "Apply self-improvement proposal: Capture retry contract"
+    assert (
+        plan["candidate_changes"][0]["title"]
+        == "Apply self-improvement proposal: Capture retry contract"
+    )
     assert "Document the retry boundary" in plan["candidate_changes"][0]["body"]
     assert not any(change.get("kind") == "patch_file" for change in plan["candidate_changes"])
 
@@ -103,8 +106,7 @@ def test_benchmark_eval_apply_plan_returns_pr_task_candidate_not_direct_patch():
 
 def test_hash_apply_candidate_content_uses_sha256_hex():
     assert hash_apply_candidate_content("hello\n") == (
-        "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286"
-        "a2e846f6be03"
+        "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
     )
 
 
@@ -144,7 +146,9 @@ def test_apply_project_memory_proposal_is_idempotent_when_marker_exists(tmp_path
 
     assert result.already_present is True
     assert result.bytes_written == 0
-    assert memory_path.read_text(encoding="utf-8").count("self-improvement-proposal:proposal-1") == 1
+    assert (
+        memory_path.read_text(encoding="utf-8").count("self-improvement-proposal:proposal-1") == 1
+    )
 
 
 def test_apply_project_memory_proposal_rejects_hash_mismatch_without_writing(tmp_path):
@@ -262,6 +266,8 @@ def test_rollback_project_memory_proposal_requires_existing_repo_path(tmp_path):
     proposal = _proposal(status="applied")
 
     with pytest.raises(SelfImprovementApplyError) as exc:
-        rollback_project_memory_proposal(project_repo_path=str(tmp_path / "missing"), proposal=proposal)
+        rollback_project_memory_proposal(
+            project_repo_path=str(tmp_path / "missing"), proposal=proposal
+        )
 
     assert exc.value.code == "repo_unavailable"

@@ -30,6 +30,7 @@ from .paths import (
 # Developer Initialization
 # =============================================================================
 
+
 def init_developer(name: str, repo_root: Path | None = None) -> bool:
     """Initialize developer.
 
@@ -59,8 +60,7 @@ def init_developer(name: str, repo_root: Path | None = None) -> bool:
     initialized_at = datetime.now().isoformat()
     try:
         dev_file.write_text(
-            f"name={name}\ninitialized_at={initialized_at}\n",
-            encoding="utf-8"
+            f"name={name}\ninitialized_at={initialized_at}\n", encoding="utf-8"
         )
     except (OSError, IOError) as e:
         print(f"Error: Failed to create .developer file: {e}", file=sys.stderr)
@@ -159,7 +159,10 @@ def ensure_developer(repo_root: Path | None = None) -> None:
 
     if not check_developer(repo_root):
         print("Error: Developer not initialized.", file=sys.stderr)
-        print(f"Run: python3 ./{DIR_WORKFLOW}/scripts/init_developer.py <your-name>", file=sys.stderr)
+        print(
+            f"Run: python3 ./{DIR_WORKFLOW}/scripts/init_developer.py <your-name>",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 

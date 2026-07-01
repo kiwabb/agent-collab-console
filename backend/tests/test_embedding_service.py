@@ -1,7 +1,8 @@
 """Tests for embedding_service — focus on the disabled path + cache."""
+
 from __future__ import annotations
 
-import asyncio
+import asyncio  # noqa: F401
 
 import pytest
 
@@ -25,17 +26,13 @@ def test_disabled_when_model_missing():
 
 def test_enabled_when_all_present(monkeypatch):
     monkeypatch.delenv("EMBEDDING_DISABLED", raising=False)
-    svc = EmbeddingService(
-        EmbeddingConfig(endpoint="http://x", api_key="k", model="m")
-    )
+    svc = EmbeddingService(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
     assert svc.enabled
 
 
 def test_env_flag_force_disables(monkeypatch):
     monkeypatch.setenv("EMBEDDING_DISABLED", "1")
-    svc = EmbeddingService(
-        EmbeddingConfig(endpoint="http://x", api_key="k", model="m")
-    )
+    svc = EmbeddingService(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
     assert not svc.enabled
 
 
@@ -48,9 +45,7 @@ async def test_embed_one_returns_none_when_disabled():
 
 @pytest.mark.asyncio
 async def test_embed_one_returns_none_for_empty_text():
-    svc = EmbeddingService(
-        EmbeddingConfig(endpoint="http://x", api_key="k", model="m")
-    )
+    svc = EmbeddingService(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
 
     async def fake_call(texts):
         return [[1.0, 0.0]]
@@ -62,9 +57,7 @@ async def test_embed_one_returns_none_for_empty_text():
 
 @pytest.mark.asyncio
 async def test_embed_one_uses_cache(monkeypatch):
-    svc = EmbeddingService(
-        EmbeddingConfig(endpoint="http://x", api_key="k", model="m")
-    )
+    svc = EmbeddingService(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
     calls = {"n": 0}
 
     async def fake_call(texts):
@@ -80,9 +73,7 @@ async def test_embed_one_uses_cache(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_embed_one_swallows_provider_errors():
-    svc = EmbeddingService(
-        EmbeddingConfig(endpoint="http://x", api_key="k", model="m")
-    )
+    svc = EmbeddingService(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
 
     async def boom(texts):
         raise RuntimeError("provider exploded")
@@ -94,7 +85,9 @@ async def test_embed_one_swallows_provider_errors():
 def test_model_label_format():
     svc = EmbeddingService(
         EmbeddingConfig(
-            endpoint="http://x", api_key="k", model="text-embedding-3-small",
+            endpoint="http://x",
+            api_key="k",
+            model="text-embedding-3-small",
             provider_type="openai",
         )
     )

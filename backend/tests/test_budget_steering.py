@@ -5,9 +5,10 @@ and sorted cheap→expensive, the COST / BUDGET block escalates tone at the
 soft-warn threshold and over budget, and a structured steering event is produced
 for observability (only when it matters).
 """
+
 from __future__ import annotations
 
-import pytest
+import pytest  # noqa: F401
 
 from app.application.budget_service import (
     IssueBudgetStatus,
@@ -35,38 +36,54 @@ def _catalog() -> RuntimeCatalog:
                         label="Anthropic",
                         models=[
                             RuntimeModelConfig(
-                                id="opus", label="Opus",
-                                input_usd_per_m=15.0, output_usd_per_m=75.0,
+                                id="opus",
+                                label="Opus",
+                                input_usd_per_m=15.0,
+                                output_usd_per_m=75.0,
                             ),
                             RuntimeModelConfig(
-                                id="haiku", label="Haiku",
-                                input_usd_per_m=0.80, output_usd_per_m=4.0,
+                                id="haiku",
+                                label="Haiku",
+                                input_usd_per_m=0.80,
+                                output_usd_per_m=4.0,
                             ),
                             RuntimeModelConfig(
-                                id="sonnet", label="Sonnet",
-                                input_usd_per_m=3.0, output_usd_per_m=15.0,
+                                id="sonnet",
+                                label="Sonnet",
+                                input_usd_per_m=3.0,
+                                output_usd_per_m=15.0,
                             ),
                             # Disabled model must be excluded.
                             RuntimeModelConfig(
-                                id="legacy", label="Legacy", enabled=False,
-                                input_usd_per_m=0.1, output_usd_per_m=0.1,
+                                id="legacy",
+                                label="Legacy",
+                                enabled=False,
+                                input_usd_per_m=0.1,
+                                output_usd_per_m=0.1,
                             ),
                         ],
                     ),
                     # Unpriced model: falls back to env, sorts last.
                     RuntimeProviderConfig(
-                        id="custom", label="Custom",
+                        id="custom",
+                        label="Custom",
                         models=[RuntimeModelConfig(id="mystery", label="Mystery")],
                     ),
                 ],
             ),
             # Disabled executor: all its models excluded.
             RuntimeExecutorConfig(
-                id="codex", label="Codex", enabled=False, executor_type="codex",
-                providers=[RuntimeProviderConfig(
-                    id="openai", label="OpenAI",
-                    models=[RuntimeModelConfig(id="x", label="X", output_usd_per_m=0.01)],
-                )],
+                id="codex",
+                label="Codex",
+                enabled=False,
+                executor_type="codex",
+                providers=[
+                    RuntimeProviderConfig(
+                        id="openai",
+                        label="OpenAI",
+                        models=[RuntimeModelConfig(id="x", label="X", output_usd_per_m=0.01)],
+                    )
+                ],
             ),
         ]
     )
@@ -83,6 +100,7 @@ def _status(spent: float, budget: float, *, warn_ratio: float = 0.8) -> IssueBud
 
 
 # --- Candidate model collection / ordering ---------------------------------
+
 
 def test_candidates_sorted_cheapest_first_disabled_excluded():
     cands = collect_candidate_model_prices(_catalog())
@@ -103,7 +121,7 @@ def test_candidate_prices_injected_and_sorted_in_block():
     text = render_budget_summary(_status(1.0, 10.0), cands)
     assert "Candidate models" in text
     # The unit prices appear in the injected text.
-    assert "$0.8000" in text   # haiku input
+    assert "$0.8000" in text  # haiku input
     assert "$75.0000" in text  # opus output
     # Cheapest model line comes before the most expensive in the rendered block.
     assert text.index("haiku") < text.index("opus")
@@ -113,6 +131,7 @@ def test_candidate_prices_injected_and_sorted_in_block():
 
 
 # --- Soft-warn / wind-down tone --------------------------------------------
+
 
 def test_healthy_budget_allows_expensive_models():
     text = render_budget_summary(_status(1.0, 10.0), [])
@@ -144,6 +163,7 @@ def test_unlimited_budget_has_no_warning():
 
 
 # --- Steering event --------------------------------------------------------
+
 
 def test_steering_event_none_when_healthy():
     assert budget_steering_event(_status(1.0, 10.0)) is None

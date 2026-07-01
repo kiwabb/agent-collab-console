@@ -5,6 +5,7 @@ LLM that captures messages and an event bus that captures emitted events, then
 asserts the COST / BUDGET block carries sorted candidate prices and that a
 budget_warning / budget_exceeded event fires (or does not) per spend level.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -35,16 +36,25 @@ def _catalog() -> RuntimeCatalog:
     return RuntimeCatalog(
         executors=[
             RuntimeExecutorConfig(
-                id="claude", label="Claude",
-                providers=[RuntimeProviderConfig(
-                    id="anthropic", label="Anthropic",
-                    models=[
-                        RuntimeModelConfig(id="opus", label="Opus",
-                                           input_usd_per_m=15.0, output_usd_per_m=75.0),
-                        RuntimeModelConfig(id="haiku", label="Haiku",
-                                           input_usd_per_m=0.80, output_usd_per_m=4.0),
-                    ],
-                )],
+                id="claude",
+                label="Claude",
+                providers=[
+                    RuntimeProviderConfig(
+                        id="anthropic",
+                        label="Anthropic",
+                        models=[
+                            RuntimeModelConfig(
+                                id="opus", label="Opus", input_usd_per_m=15.0, output_usd_per_m=75.0
+                            ),
+                            RuntimeModelConfig(
+                                id="haiku",
+                                label="Haiku",
+                                input_usd_per_m=0.80,
+                                output_usd_per_m=4.0,
+                            ),
+                        ],
+                    )
+                ],
             )
         ]
     )
@@ -52,25 +62,43 @@ def _catalog() -> RuntimeCatalog:
 
 def _make_issue(budget_usd):
     return CodexIssue(
-        id=str(uuid4()), session_id="sess-001", project_id="proj-001",
-        title="Add feature", description="desc", status="open",
-        budget_usd=budget_usd, created_at=datetime.now(), updated_at=datetime.now(),
+        id=str(uuid4()),
+        session_id="sess-001",
+        project_id="proj-001",
+        title="Add feature",
+        description="desc",
+        status="open",
+        budget_usd=budget_usd,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
     )
 
 
 def _make_graph(issue_id):
     return WorkflowGraph(
-        id=str(uuid4()), issue_id=issue_id, dag_json="{}", status="running",
-        created_at=datetime.now(), updated_at=datetime.now(), nodes=[], edges=[],
+        id=str(uuid4()),
+        issue_id=issue_id,
+        dag_json="{}",
+        status="running",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        nodes=[],
+        edges=[],
     )
 
 
 def _ep(status, cost):
     from app.domain.models import ExecutionProcess
+
     now = datetime.now()
     return ExecutionProcess(
-        id=str(uuid4()), task_id="task-1", session_id="sess-001",
-        status=status, total_cost_usd=cost, created_at=now, updated_at=now,
+        id=str(uuid4()),
+        task_id="task-1",
+        session_id="sess-001",
+        status=status,
+        total_cost_usd=cost,
+        created_at=now,
+        updated_at=now,
     )
 
 
@@ -103,9 +131,14 @@ async def _run(issue, store, bus):
         captured["messages"] = messages
         return {
             "stop_reason": "tool_use",
-            "content": [{"type": "tool_use", "id": "toolu_final",
-                         "name": "finalize_task",
-                         "input": {"status": "done", "answer": "done"}}],
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "done"},
+                }
+            ],
         }
 
     async def finalize_tool(inp):
@@ -119,16 +152,24 @@ async def _run(issue, store, bus):
     mock_conductor.get_or_create_state = AsyncMock(return_value=None)
     mock_conductor.append_hot_event = AsyncMock()
 
-    with patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry), \
-         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs, \
-         patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm), \
-         patch("app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=MagicMock()), \
-         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor), \
-         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock):
+    with (
+        patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
+        patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
+        patch("app.application.conductor_main_loop.call_conductor_llm", side_effect=stub_llm),
+        patch(
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=MagicMock(),
+        ),
+        patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
+        patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
+    ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=_catalog())
         result = await run_issue_conductor_loop(
-            issue=issue, project_id="proj-001", store=store,
-            event_bus=bus, task_dispatcher_fn=None,
+            issue=issue,
+            project_id="proj-001",
+            store=store,
+            event_bus=bus,
+            task_dispatcher_fn=None,
         )
     return result, captured.get("messages")
 

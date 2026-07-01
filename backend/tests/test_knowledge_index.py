@@ -1,4 +1,5 @@
 """Tests for FTS5-backed knowledge index + RRF hybrid search."""
+
 from __future__ import annotations
 
 import tempfile
@@ -76,7 +77,7 @@ async def test_search_snippet_escapes_indexed_html_but_keeps_mark_tags(store, tm
     issue = _make_issue(id="xss-issue", title="Security", description="-")
     await store.save_codex_issue(issue)
     p = tmp_path / "xss.md"
-    p.write_text('<img src=x onerror=alert(1)> vulnerable-token', encoding="utf-8")
+    p.write_text("<img src=x onerror=alert(1)> vulnerable-token", encoding="utf-8")
     await kidx.index_artifact(
         store,
         {
@@ -194,7 +195,7 @@ def test_pack_unpack_vector_roundtrip():
     blob = kidx.pack_vector(v)
     out = kidx.unpack_vector(blob)
     assert len(out) == len(v)
-    for a, b in zip(v, out):
+    for a, b in zip(v, out):  # noqa: B905
         assert abs(a - b) < 1e-5
 
 

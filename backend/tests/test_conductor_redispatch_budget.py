@@ -13,9 +13,10 @@ These tests lock that boundary deterministically:
 
 Pure tests (no real git / subprocess); the dispatcher is a sentinel.
 """
-from __future__ import annotations
 
-from datetime import datetime
+from __future__ import annotations  # noqa: I001
+
+from datetime import datetime  # noqa: F401
 from uuid import uuid4
 
 import pytest
@@ -50,6 +51,7 @@ def _reset_singletons():
 def _sentinel_dispatch_role(monkeypatch, message: str) -> None:
     """Make dispatch_role raise a sentinel so a pass-through dispatch fails fast
     right after the budget gate (no real git / runner work)."""
+
     async def _boom(*args, **kwargs):
         raise _SentinelDispatched(message)
 

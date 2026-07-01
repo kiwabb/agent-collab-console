@@ -20,7 +20,8 @@ main-pollution-guard chain has never been exercised end-to-end against real git
 Marked ``slow`` (real git subprocesses + real sqlite). Runs under ``--runslow``
 or when targeted explicitly (``pytest tests/test_swarm_integration.py``).
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import shutil
 import subprocess
@@ -34,7 +35,7 @@ import pytest
 
 import app.application.conductor_tools as ct
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
-from app.application import task_dispatcher, timeouts
+from app.application import task_dispatcher, timeouts  # noqa: F401
 from app.application.git_service import GitService
 from app.application.role_concurrency import RoleConcurrencyLimiter
 from app.application.task_completion_registry import TaskCompletionRegistry
@@ -166,10 +167,19 @@ def _patch_subagent_execution(monkeypatch, *, write_plan):
     counter = {"n": 0}
     paths: dict[str, str | None] = {}
 
-    async def fake_dispatch_role(*, issue, role, prompt_override, store,
-                                 task_dispatcher_fn, event_bus, prev_node_key,
-                                 agent_worktree_path=None, batch_key=None,
-                                 register_completion=False):
+    async def fake_dispatch_role(
+        *,
+        issue,
+        role,
+        prompt_override,
+        store,
+        task_dispatcher_fn,
+        event_bus,
+        prev_node_key,
+        agent_worktree_path=None,
+        batch_key=None,
+        register_completion=False,
+    ):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"
         paths[task_id] = agent_worktree_path
@@ -222,14 +232,19 @@ async def test_dispatch_batch_real_fanout_merges_and_keeps_main_clean(
 
         def _do(p: Path):
             (p / name).write_text(f"content of {name}\n")
+
         return _do
 
     _patch_subagent_execution(monkeypatch, write_plan=write_plan)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer", "prompt": "write a.txt"},
-        {"role": "qa", "prompt": "write b.txt"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer", "prompt": "write a.txt"},
+                {"role": "qa", "prompt": "write b.txt"},
+            ]
+        }
+    )
 
     assert out["status"] == "batch_complete"
     assert out["succeeded_count"] == 2
@@ -253,8 +268,7 @@ async def test_dispatch_batch_real_fanout_merges_and_keeps_main_clean(
 
     # Both agent worktrees cleaned up after a successful merge (no leak).
     leaked = [
-        p for p in await manager.git.list_worktree_paths(str(repo))
-        if "swarm-" in Path(p).name
+        p for p in await manager.git.list_worktree_paths(str(repo)) if "swarm-" in Path(p).name
     ]
     assert leaked == [], f"agent worktrees leaked: {leaked}"
 
@@ -292,15 +306,20 @@ async def test_dispatch_batch_three_same_role_engineers_merge_modules(
 
         def _do(p: Path):
             (p / name).write_text(content)
+
         return _do
 
     _patch_subagent_execution(monkeypatch, write_plan=write_plan)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer", "prompt": "create module_a.py with add"},
-        {"role": "engineer", "prompt": "create module_b.py with mul"},
-        {"role": "engineer", "prompt": "create module_c.py with sub"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer", "prompt": "create module_a.py with add"},
+                {"role": "engineer", "prompt": "create module_b.py with mul"},
+                {"role": "engineer", "prompt": "create module_c.py with sub"},
+            ]
+        }
+    )
 
     assert out["status"] == "batch_complete"
     assert out["succeeded_count"] == 3
@@ -330,9 +349,7 @@ async def test_dispatch_batch_three_same_role_engineers_merge_modules(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_batch_real_conflict_surfaces_structured(
-    monkeypatch, store, manager, repo
-):
+async def test_dispatch_batch_real_conflict_surfaces_structured(monkeypatch, store, manager, repo):
     """Two agents edit the SAME file with conflicting content via REAL git. The
     merge-back stops at the first conflict; asserts:
       - exactly one agent merged cleanly (not rolled back),
@@ -349,14 +366,19 @@ async def test_dispatch_batch_real_conflict_surfaces_structured(
 
         def _do(p: Path):
             (p / "shared.txt").write_text(f"from {tag}\n")
+
         return _do
 
     _patch_subagent_execution(monkeypatch, write_plan=write_plan)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer", "prompt": "edit shared.txt"},
-        {"role": "qa", "prompt": "edit shared.txt"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer", "prompt": "edit shared.txt"},
+                {"role": "qa", "prompt": "edit shared.txt"},
+            ]
+        }
+    )
 
     assert out["merge_status"] == "conflict"
     # First agent merged cleanly; second conflicts (stop-on-first-conflict).
@@ -392,9 +414,7 @@ async def test_dispatch_batch_real_conflict_surfaces_structured(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_batch_noop_agent_is_clean_not_conflict(
-    monkeypatch, store, manager, repo
-):
+async def test_dispatch_batch_noop_agent_is_clean_not_conflict(monkeypatch, store, manager, repo):
     """Regression: an agent that produces NO files (pure-analysis role / chose not
     to edit anything) must NOT be reported as a conflict. Its branch has nothing
     ahead of the issue branch, so the squash-merge would fail at the empty commit
@@ -407,17 +427,23 @@ async def test_dispatch_batch_noop_agent_is_clean_not_conflict(
     def write_plan(wt: str):
         # First agent writes a real file; second agent writes nothing (no-op).
         if wt.endswith("engineer"):
+
             def _do(p: Path):
                 (p / "a.txt").write_text("content of a.txt\n")
+
             return _do
         return None  # no-op agent: no files produced
 
     _patch_subagent_execution(monkeypatch, write_plan=write_plan)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer", "prompt": "write a.txt"},
-        {"role": "qa", "prompt": "analyze only, write nothing"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer", "prompt": "write a.txt"},
+                {"role": "qa", "prompt": "analyze only, write nothing"},
+            ]
+        }
+    )
 
     assert out["status"] == "batch_complete"
     assert out["succeeded_count"] == 2
@@ -433,8 +459,7 @@ async def test_dispatch_batch_noop_agent_is_clean_not_conflict(
 
     # No swarm worktrees leaked (neither the merged nor the no-op agent).
     leaked = [
-        p for p in await manager.git.list_worktree_paths(str(repo))
-        if "swarm-" in Path(p).name
+        p for p in await manager.git.list_worktree_paths(str(repo)) if "swarm-" in Path(p).name
     ]
     assert leaked == [], f"agent worktrees leaked: {leaked}"
 
@@ -449,9 +474,7 @@ async def test_dispatch_batch_noop_agent_is_clean_not_conflict(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_batch_flushes_upstream_so_agents_see_it(
-    monkeypatch, store, manager, repo
-):
+async def test_dispatch_batch_flushes_upstream_so_agents_see_it(monkeypatch, store, manager, repo):
     """An uncommitted upstream artifact in the shared issue worktree must be
     flushed onto the issue branch BEFORE per-agent worktrees fork, so each agent
     forks a tree that includes it (PR1 finding). Driven through the real
@@ -471,14 +494,19 @@ async def test_dispatch_batch_flushes_upstream_so_agents_see_it(
             seen_upstream[wt] = prd.exists() and prd.read_text() == "upstream PM output\n"
             # Also do real work so the merge is non-trivial.
             (p / f"{Path(wt).name}.txt").write_text("agent work\n")
+
         return _do
 
     _patch_subagent_execution(monkeypatch, write_plan=write_plan)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer"},
-        {"role": "qa"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer"},
+                {"role": "qa"},
+            ]
+        }
+    )
 
     assert out["succeeded_count"] == 2
     # Every agent forked a worktree that already contained the flushed upstream
@@ -551,16 +579,26 @@ async def test_dispatch_batch_tight_budget_downscales_concurrency(
     monkeypatch.setattr(ctmod, "_emit", capture_emit)
 
     import asyncio as _asyncio
+
     live = {"now": 0, "max": 0}
 
     # Wrap wait so we can measure real peak concurrency through the semaphore.
     counter = {"n": 0}
     paths: dict[str, str | None] = {}
 
-    async def fake_dispatch_role(*, issue, role, prompt_override, store,
-                                 task_dispatcher_fn, event_bus, prev_node_key,
-                                 agent_worktree_path=None, batch_key=None,
-                                 register_completion=False):
+    async def fake_dispatch_role(
+        *,
+        issue,
+        role,
+        prompt_override,
+        store,
+        task_dispatcher_fn,
+        event_bus,
+        prev_node_key,
+        agent_worktree_path=None,
+        batch_key=None,
+        register_completion=False,
+    ):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"
         paths[task_id] = agent_worktree_path
@@ -580,9 +618,7 @@ async def test_dispatch_batch_tight_budget_downscales_concurrency(
 
     monkeypatch.setattr(TaskCompletionRegistry, "wait_for_active", fake_wait)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer"} for _ in range(4)
-    ]})
+    out = await reg.tools["dispatch_batch"]({"agents": [{"role": "engineer"} for _ in range(4)]})
 
     assert out["succeeded_count"] == 4
     started = next(e for e in events if e.get("status") == "batch_started")
@@ -604,6 +640,7 @@ async def test_dispatch_batch_unlimited_budget_keeps_full_concurrency(
 
     events: list[dict] = []
     import app.application.conductor_tools as ctmod
+
     orig_emit = ctmod._emit
 
     async def capture_emit(bus, etype, payload):
@@ -616,15 +653,20 @@ async def test_dispatch_batch_unlimited_budget_keeps_full_concurrency(
     def write_plan(wt: str):
         def _do(p: Path):
             (p / f"{Path(wt).name}.txt").write_text("x\n")
+
         return _do
 
     _patch_subagent_execution(monkeypatch, write_plan=write_plan)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer"},
-        {"role": "qa"},
-        {"role": "architect"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer"},
+                {"role": "qa"},
+                {"role": "architect"},
+            ]
+        }
+    )
 
     assert out["succeeded_count"] == 3
     started = next(e for e in events if e.get("status") == "batch_started")
@@ -638,9 +680,7 @@ async def test_dispatch_batch_unlimited_budget_keeps_full_concurrency(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_batch_over_budget_is_soft_not_killed(
-    monkeypatch, store, manager, repo
-):
+async def test_dispatch_batch_over_budget_is_soft_not_killed(monkeypatch, store, manager, repo):
     """Over-budget must NOT abort/raise in dispatch_batch: it squeezes concurrency
     to 1 (soft) but still runs the agents and merges their work. (Soft-semantics
     contract from the budget spec.)"""
@@ -653,6 +693,7 @@ async def test_dispatch_batch_over_budget_is_soft_not_killed(
 
     events: list[dict] = []
     import app.application.conductor_tools as ctmod
+
     orig_emit = ctmod._emit
 
     async def capture_emit(bus, etype, payload):
@@ -665,14 +706,19 @@ async def test_dispatch_batch_over_budget_is_soft_not_killed(
     def write_plan(wt: str):
         def _do(p: Path):
             (p / f"{Path(wt).name}.txt").write_text("x\n")
+
         return _do
 
     _patch_subagent_execution(monkeypatch, write_plan=write_plan)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer"},
-        {"role": "qa"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer"},
+                {"role": "qa"},
+            ]
+        }
+    )
 
     # NOT hard-killed: the batch ran to completion and merged.
     assert out["status"] == "batch_complete"
@@ -689,9 +735,7 @@ async def test_dispatch_batch_over_budget_is_soft_not_killed(
 
 
 @pytest.mark.asyncio
-async def test_cleanup_issue_swarm_worktrees_removes_residue_main_clean(
-    store, manager, repo
-):
+async def test_cleanup_issue_swarm_worktrees_removes_residue_main_clean(store, manager, repo):
     """Conductor terminal-state sweep: residual per-agent swarm worktrees +
     `swarm/*` branch refs (left when a batch is kept for reconcile / a loop ends
     mid-flight) are removed by ``cleanup_issue_swarm_worktrees``. Asserts:
@@ -767,7 +811,9 @@ async def test_cleanup_issue_swarm_worktrees_seal_path_main_clean(
     # The seal resolves the worktree manager from the bootstrap singleton.
     monkeypatch.setattr(bootstrap, "worktree_manager", manager)
 
-    with patch("app.application.conductor_main_loop.record_issue_self_improvement", new_callable=AsyncMock):
+    with patch(
+        "app.application.conductor_main_loop.record_issue_self_improvement", new_callable=AsyncMock
+    ):
         await cml._seal_graph_and_issue_status(
             store=store, issue=issue, event_bus=None, result_status="done"
         )

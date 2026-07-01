@@ -1,4 +1,5 @@
 """FastAPI integration tests for the project + worktree flow."""
+
 from __future__ import annotations
 
 import shutil
@@ -16,11 +17,15 @@ pytestmark = [
 def _make_git_repo(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"], cwd=path, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("hello")
     (path / ".gitignore").write_text(".claude\n")
-    subprocess.run(["git", "add", "README.md", ".gitignore"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", "README.md", ".gitignore"], cwd=path, check=True, capture_output=True
+    )
     subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)
     return path
 
@@ -118,16 +123,18 @@ def test_merge_issue_squash_lands_on_base(client, tmp_path):
     assert body["base_branch"] == "main"
     # The squash commit is on main now.
     log = subprocess.run(
-        ["git", "log", "--oneline", "main"], cwd=project["repo_path"], capture_output=True, text=True, check=True
+        ["git", "log", "--oneline", "main"],
+        cwd=project["repo_path"],
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert "Squash merge issue" in log
 
 
 def test_delete_project_refuses_without_force_when_session_attached(client, tmp_path):
     project = _create_project(client, tmp_path, name="protected")
-    client.post(
-        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
-    )
+    client.post("/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]})
     resp = client.delete(f"/api/projects/{project['id']}")
     assert resp.status_code == 409
 
@@ -138,9 +145,7 @@ def test_delete_project_force_cascades_sessions(client, tmp_path):
         "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     # Spawn an issue so a real worktree dir exists.
-    issue = client.post(
-        "/api/codex/issues", json={"session_id": ws["id"], "title": "I"}
-    ).json()
+    issue = client.post("/api/codex/issues", json={"session_id": ws["id"], "title": "I"}).json()
     worktree_parent = Path(issue["git_worktree_path"]).parent
     assert worktree_parent.exists()
     resp = client.delete(f"/api/projects/{project['id']}?force=true")
@@ -157,12 +162,16 @@ def test_issue_creation_with_base_branch_override_forks_from_feature(client, tmp
     project = _create_project(client, tmp_path, name="basefork")
     # Create a feature branch on the repo so we can fork from it.
     repo = Path(project["repo_path"])
-    subprocess.run(["git", "checkout", "-b", "feature/seed"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "checkout", "-b", "feature/seed"], cwd=repo, check=True, capture_output=True
+    )
     (repo / "feat.txt").write_text("seed")
     subprocess.run(["git", "add", "feat.txt"], cwd=repo, check=True, capture_output=True)
     subprocess.run(
         ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "seed"],
-        cwd=repo, check=True, capture_output=True,
+        cwd=repo,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(["git", "checkout", "main"], cwd=repo, check=True, capture_output=True)
 
@@ -202,7 +211,9 @@ def test_project_stats_counts_workspaces_and_issue_buckets(client, tmp_path):
     subprocess.run(["git", "add", "x.txt"], cwd=worktree, check=True, capture_output=True)
     subprocess.run(
         ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "x"],
-        cwd=worktree, check=True, capture_output=True,
+        cwd=worktree,
+        check=True,
+        capture_output=True,
     )
     client.post(f"/api/codex/issues/{merged_issue['id']}/merge", json={"message": None})
     client.post(f"/api/codex/issues/{abandoned_issue['id']}/abandon")
@@ -237,7 +248,9 @@ def test_merge_refuses_when_base_diverged(client, tmp_path):
     subprocess.run(["git", "add", "main-progress.txt"], cwd=repo, check=True, capture_output=True)
     subprocess.run(
         ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "main progress"],
-        cwd=repo, check=True, capture_output=True,
+        cwd=repo,
+        check=True,
+        capture_output=True,
     )
     # And add a real commit on the worktree side so the squash has something to land.
     wt = Path(issue["git_worktree_path"])
@@ -245,13 +258,18 @@ def test_merge_refuses_when_base_diverged(client, tmp_path):
     subprocess.run(["git", "add", "feat.txt"], cwd=wt, check=True, capture_output=True)
     subprocess.run(
         ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "feat"],
-        cwd=wt, check=True, capture_output=True,
+        cwd=wt,
+        check=True,
+        capture_output=True,
     )
 
     # Default merge is refused with 409.
     refused = client.post(f"/api/codex/issues/{issue['id']}/merge", json={"message": None})
     assert refused.status_code == 409
-    assert "diverged" in refused.json()["detail"].lower() or "ahead" in refused.json()["detail"].lower()
+    assert (
+        "diverged" in refused.json()["detail"].lower()
+        or "ahead" in refused.json()["detail"].lower()
+    )
 
     # Override gets through.
     allowed = client.post(
@@ -266,9 +284,7 @@ def test_merge_auto_commits_dirty_worktree(client, tmp_path):
     ws = client.post(
         "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
-    issue = client.post(
-        "/api/codex/issues", json={"session_id": ws["id"], "title": "dirty"}
-    ).json()
+    issue = client.post("/api/codex/issues", json={"session_id": ws["id"], "title": "dirty"}).json()
     # Drop an uncommitted file in the worktree.
     (Path(issue["git_worktree_path"]) / "tmp.txt").write_text("staging")
     resp = client.post(f"/api/codex/issues/{issue['id']}/merge", json={"message": None})
@@ -307,16 +323,16 @@ def test_abandon_refuses_when_already_merged(client, tmp_path):
     ws = client.post(
         "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
-    issue = client.post(
-        "/api/codex/issues", json={"session_id": ws["id"], "title": "block"}
-    ).json()
+    issue = client.post("/api/codex/issues", json={"session_id": ws["id"], "title": "block"}).json()
     # Materialise a real change so the squash merge has something to commit.
     worktree = Path(issue["git_worktree_path"])
     (worktree / "x.txt").write_text("hi")
     subprocess.run(["git", "add", "x.txt"], cwd=worktree, check=True, capture_output=True)
     subprocess.run(
         ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "x"],
-        cwd=worktree, check=True, capture_output=True,
+        cwd=worktree,
+        check=True,
+        capture_output=True,
     )
     client.post(f"/api/codex/issues/{issue['id']}/merge", json={"message": None})
     resp = client.post(f"/api/codex/issues/{issue['id']}/abandon")
@@ -336,9 +352,13 @@ def test_repair_resets_issue_state_when_branch_was_deleted_externally(client, tm
     repo = Path(project["repo_path"])
     subprocess.run(
         ["git", "worktree", "remove", "--force", issue["git_worktree_path"]],
-        cwd=repo, check=True, capture_output=True,
+        cwd=repo,
+        check=True,
+        capture_output=True,
     )
-    subprocess.run(["git", "branch", "-D", issue["git_branch"]], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "branch", "-D", issue["git_branch"]], cwd=repo, check=True, capture_output=True
+    )
     resp = client.post(f"/api/projects/{project['id']}/repair")
     assert resp.status_code == 200, resp.text
     assert resp.json()["issues_reset"] == 1
@@ -352,9 +372,7 @@ def test_repair_removes_orphan_worktree_dirs(client, tmp_path):
         "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     # Create one live issue (=> one legit worktree).
-    live = client.post(
-        "/api/codex/issues", json={"session_id": ws["id"], "title": "live"}
-    ).json()
+    live = client.post("/api/codex/issues", json={"session_id": ws["id"], "title": "live"}).json()
     worktree_parent = Path(live["git_worktree_path"]).parent
     # Drop a stray issue-* dir simulating a crashed delete.
     orphan = worktree_parent / "issue-ghost1234"
@@ -375,9 +393,7 @@ def test_repair_resets_issue_state_when_worktree_dir_is_missing(client, tmp_path
     ws = client.post(
         "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
-    issue = client.post(
-        "/api/codex/issues", json={"session_id": ws["id"], "title": "ghost"}
-    ).json()
+    issue = client.post("/api/codex/issues", json={"session_id": ws["id"], "title": "ghost"}).json()
     # Simulate disk drift: nuke the worktree directory behind git's back.
     shutil.rmtree(issue["git_worktree_path"])
     resp = client.post(f"/api/projects/{project['id']}/repair")
@@ -403,9 +419,7 @@ def test_audit_log_supports_since_filter(client, tmp_path):
     cutoff = earlier[0]["created_at"]
     # Trigger one more event AFTER the cutoff.
     client.post(f"/api/codex/issues/{issue_a['id']}/abandon")
-    filtered = client.get(
-        f"/api/projects/{project['id']}/audit?since={cutoff}"
-    ).json()
+    filtered = client.get(f"/api/projects/{project['id']}/audit?since={cutoff}").json()
     events = {row["event"] for row in filtered}
     assert "abandoned" in events
     # The earlier creation entry shouldn't be returned again — strictly newer.
@@ -418,21 +432,19 @@ def test_audit_log_records_merge_and_abandon(client, tmp_path):
         "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
     ).json()
     # Merge one issue
-    merged = client.post(
-        "/api/codex/issues", json={"session_id": ws["id"], "title": "m"}
-    ).json()
+    merged = client.post("/api/codex/issues", json={"session_id": ws["id"], "title": "m"}).json()
     wt = Path(merged["git_worktree_path"])
     (wt / "f.txt").write_text("x")
     subprocess.run(["git", "add", "f.txt"], cwd=wt, check=True, capture_output=True)
     subprocess.run(
         ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "x"],
-        cwd=wt, check=True, capture_output=True,
+        cwd=wt,
+        check=True,
+        capture_output=True,
     )
     client.post(f"/api/codex/issues/{merged['id']}/merge", json={"message": None})
     # Abandon another
-    abandoned = client.post(
-        "/api/codex/issues", json={"session_id": ws["id"], "title": "a"}
-    ).json()
+    abandoned = client.post("/api/codex/issues", json={"session_id": ws["id"], "title": "a"}).json()
     client.post(f"/api/codex/issues/{abandoned['id']}/abandon")
 
     audit = client.get(f"/api/projects/{project['id']}/audit").json()
@@ -469,7 +481,9 @@ def test_full_create_to_merge_round_trip(client, tmp_path):
     subprocess.run(["git", "add", "feature.txt"], cwd=worktree, check=True, capture_output=True)
     subprocess.run(
         ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "feat: x"],
-        cwd=worktree, check=True, capture_output=True,
+        cwd=worktree,
+        check=True,
+        capture_output=True,
     )
 
     # 5. Diffstat surfaces the change
@@ -477,9 +491,7 @@ def test_full_create_to_merge_round_trip(client, tmp_path):
     assert diff["stat"] == {"files": 1, "insertions": 1, "deletions": 0}
 
     # 6. Squash merge
-    merge = client.post(
-        f"/api/codex/issues/{issue['id']}/merge", json={"message": "ship it"}
-    )
+    merge = client.post(f"/api/codex/issues/{issue['id']}/merge", json={"message": "ship it"})
     assert merge.status_code == 200, merge.text
     sha = merge.json()["sha"]
 
@@ -599,7 +611,9 @@ def test_issue_reset_recreates_existing_issue_branch(client, tmp_path):
     original_branch = issue["git_branch"]
     original_worktree = Path(issue["git_worktree_path"])
     (original_worktree / "generated.txt").write_text("old run\n")
-    subprocess.run(["git", "add", "generated.txt"], cwd=original_worktree, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", "generated.txt"], cwd=original_worktree, check=True, capture_output=True
+    )
     subprocess.run(
         ["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", "old run"],
         cwd=original_worktree,
@@ -652,10 +666,14 @@ def _make_cloned_project(client, tmp_path: Path, name: str):
     """
     seed = _make_git_repo(tmp_path / f"{name}-seed")
     origin = tmp_path / f"{name}-origin.git"
-    subprocess.run(["git", "clone", "--bare", str(seed), str(origin)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", "--bare", str(seed), str(origin)], check=True, capture_output=True
+    )
     work = tmp_path / name
     subprocess.run(["git", "clone", str(origin), str(work)], check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@e"], cwd=work, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"], cwd=work, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=work, check=True, capture_output=True)
     resp = client.post(
         "/api/projects",
@@ -668,7 +686,9 @@ def _make_cloned_project(client, tmp_path: Path, name: str):
 def _push_upstream_commit(origin: Path, tmp_path: Path, name: str):
     pusher = tmp_path / f"{name}-pusher"
     subprocess.run(["git", "clone", str(origin), str(pusher)], check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@e"], cwd=pusher, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"], cwd=pusher, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=pusher, check=True, capture_output=True)
     (pusher / "upstream.txt").write_text("new upstream work\n")
     subprocess.run(["git", "add", "upstream.txt"], cwd=pusher, check=True, capture_output=True)

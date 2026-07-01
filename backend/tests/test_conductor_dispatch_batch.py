@@ -8,6 +8,7 @@ runs. We verify:
   - partial join: one agent failing/timing out does not abort the batch,
   - the extracted single-dispatch helper still drives dispatch_subagent (regression).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -145,9 +146,19 @@ def _patch_dispatch(monkeypatch, *, run, register_only=True):
     paths: dict[str, str | None] = {}
     batch_keys: dict[str, str | None] = {}
 
-    async def fake_dispatch_role(*, issue, role, prompt_override, store, task_dispatcher_fn,
-                                 event_bus, prev_node_key, agent_worktree_path=None,
-                                 batch_key=None, register_completion=False):
+    async def fake_dispatch_role(
+        *,
+        issue,
+        role,
+        prompt_override,
+        store,
+        task_dispatcher_fn,
+        event_bus,
+        prev_node_key,
+        agent_worktree_path=None,
+        batch_key=None,
+        register_completion=False,
+    ):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"
         paths[task_id] = agent_worktree_path
@@ -178,11 +189,15 @@ async def test_dispatch_batch_fans_out_with_isolated_worktrees(monkeypatch):
 
     _patch_dispatch(monkeypatch, run=run)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer", "prompt": "a"},
-        {"role": "engineer", "prompt": "b"},
-        {"role": "qa", "prompt": "c"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer", "prompt": "a"},
+                {"role": "engineer", "prompt": "b"},
+                {"role": "qa", "prompt": "c"},
+            ]
+        }
+    )
 
     assert out["status"] == "batch_complete"
     assert out["agent_count"] == 3
@@ -218,11 +233,15 @@ async def test_dispatch_batch_tags_all_nodes_with_one_batch_key(monkeypatch):
 
     _paths, batch_keys = _patch_dispatch(monkeypatch, run=run)
 
-    await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer"},
-        {"role": "engineer"},
-        {"role": "qa"},
-    ]})
+    await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer"},
+                {"role": "engineer"},
+                {"role": "qa"},
+            ]
+        }
+    )
 
     keys = [batch_keys[f"task-{i}"] for i in (1, 2, 3)]
     assert all(k is not None for k in keys), keys
@@ -254,7 +273,7 @@ async def test_dispatch_batch_respects_concurrency_cap(monkeypatch):
     reg = _build(store, wm)
 
     live = {"now": 0, "max": 0}
-    gate = asyncio.Event()
+    gate = asyncio.Event()  # noqa: F841
 
     async def run(task_id, wt):
         live["now"] += 1
@@ -267,9 +286,7 @@ async def test_dispatch_batch_respects_concurrency_cap(monkeypatch):
 
     _patch_dispatch(monkeypatch, run=run)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer"} for _ in range(5)
-    ]})
+    out = await reg.tools["dispatch_batch"]({"agents": [{"role": "engineer"} for _ in range(5)]})
 
     assert out["succeeded_count"] == 5
     assert live["max"] <= 2, f"peak concurrency {live['max']} exceeded cap 2"
@@ -288,11 +305,15 @@ async def test_dispatch_batch_partial_join_on_failure(monkeypatch):
 
     _patch_dispatch(monkeypatch, run=run)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer"},
-        {"role": "qa"},
-        {"role": "architect"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer"},
+                {"role": "qa"},
+                {"role": "architect"},
+            ]
+        }
+    )
 
     # Whole batch does not raise; failures are isolated as result items.
     assert out["status"] == "batch_complete"
@@ -330,11 +351,15 @@ async def test_dispatch_batch_does_not_merge_partial_agent(monkeypatch):
 
     _patch_dispatch(monkeypatch, run=run)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer"},
-        {"role": "engineer"},
-        {"role": "architect"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer"},
+                {"role": "engineer"},
+                {"role": "architect"},
+            ]
+        }
+    )
 
     assert out["succeeded_count"] == 2
     assert out["failed_count"] == 1
@@ -366,10 +391,14 @@ async def test_dispatch_batch_merge_conflict_surfaces_structured(monkeypatch):
 
     _patch_dispatch(monkeypatch, run=run)
 
-    out = await reg.tools["dispatch_batch"]({"agents": [
-        {"role": "engineer"},
-        {"role": "qa"},
-    ]})
+    out = await reg.tools["dispatch_batch"](
+        {
+            "agents": [
+                {"role": "engineer"},
+                {"role": "qa"},
+            ]
+        }
+    )
 
     assert out["merge_status"] == "conflict"
     assert len(out["conflicts"]) == 1

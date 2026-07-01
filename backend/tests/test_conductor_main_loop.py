@@ -85,6 +85,7 @@ async def test_heartbeat_pulse_survives_transient_failures_and_alerts():
 @pytest.mark.asyncio
 async def test_heartbeat_pulse_propagates_cancellation():
     """Cancellation must tear the pulse down cleanly (not be swallowed)."""
+
     async def heartbeat():
         return None
 
@@ -194,7 +195,9 @@ async def test_conductor_loop_records_turn_timeline():
         llm=fake_llm,
         tools={"finalize_task": finalize_task},
         tool_definitions=[{"name": "finalize_task"}],
-        turn_recorder=lambda **turn: recorded.append((turn["kind"], turn["turn_index"], turn["sub_index"])),
+        turn_recorder=lambda **turn: recorded.append(
+            (turn["kind"], turn["turn_index"], turn["sub_index"])
+        ),
     )
 
     assert recorded == [
@@ -269,7 +272,8 @@ async def test_conductor_loop_injects_user_interjection_before_next_llm_call():
             }
         assert any(
             entry.get("role") == "user"
-            and entry.get("content") == "[USER INTERJECTION] skip architect, go straight to engineer"
+            and entry.get("content")
+            == "[USER INTERJECTION] skip architect, go straight to engineer"
             for entry in messages
         )
         return {
@@ -320,9 +324,24 @@ async def test_conductor_loop_runs_multiple_tool_uses_in_one_turn_concurrently()
             return {
                 "stop_reason": "tool_use",
                 "content": [
-                    {"type": "tool_use", "id": "t1", "name": "dispatch_subagent", "input": {"role": "reviewer_a"}},
-                    {"type": "tool_use", "id": "t2", "name": "dispatch_subagent", "input": {"role": "reviewer_b"}},
-                    {"type": "tool_use", "id": "t3", "name": "dispatch_subagent", "input": {"role": "reviewer_c"}},
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "dispatch_subagent",
+                        "input": {"role": "reviewer_a"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "t2",
+                        "name": "dispatch_subagent",
+                        "input": {"role": "reviewer_b"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "t3",
+                        "name": "dispatch_subagent",
+                        "input": {"role": "reviewer_c"},
+                    },
                 ],
             }
         # tool_results must come back aligned with the original tool_use ids/order.
@@ -347,12 +366,18 @@ async def test_conductor_loop_runs_multiple_tool_uses_in_one_turn_concurrently()
 async def test_conductor_loop_seals_max_wall_when_wall_clock_exceeded():
     """The whole-loop wall-clock ceiling stops a loop that never finalizes, even
     if it is still under max_turns."""
+
     async def fake_llm(messages, tools):
         # Always asks for more work; would loop until max_turns without the ceiling.
         return {
             "stop_reason": "tool_use",
             "content": [
-                {"type": "tool_use", "id": "tx", "name": "dispatch_subagent", "input": {"role": "engineer"}}
+                {
+                    "type": "tool_use",
+                    "id": "tx",
+                    "name": "dispatch_subagent",
+                    "input": {"role": "engineer"},
+                }
             ],
         }
 
@@ -376,11 +401,17 @@ async def test_conductor_loop_seals_max_wall_when_wall_clock_exceeded():
 @pytest.mark.asyncio
 async def test_conductor_loop_wall_clock_disabled_when_zero():
     """max_wall_s=0 disables the ceiling; the loop runs to its natural finalize."""
+
     async def fake_llm(messages, tools):
         return {
             "stop_reason": "tool_use",
             "content": [
-                {"type": "tool_use", "id": "f", "name": "finalize_task", "input": {"status": "done", "answer": "ok"}}
+                {
+                    "type": "tool_use",
+                    "id": "f",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "ok"},
+                }
             ],
         }
 

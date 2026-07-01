@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Trace Log · 执行调用链</title>
+<style>
+  /* ── Design system: project theme (agent-collab-console globals.css) ───── */
+  :root {
+    --bg:            #0b0b0c;  /* near-black app background */
+    --surface:       #0f1115;  /* panel walls (sidebar, right detail) */
+    --card:          #161a21;  /* cards / rows / popovers */
+    --card-hover:    #181e29;  /* row hover */
+    --muted:         #1b2230;  /* inputs, kbd chips */
+    --border:        #2e3647;  /* border-muted */
+    --border-soft:   #232a38;  /* border-subtle */
+
+    --fg:            #f4f4f5;  /* primary text */
+    --fg-dim:        #b0bac8;  /* text-secondary */
+    --fg-muted:      #7f8a99;  /* text-muted */
+    --fg-faint:      #596579;  /* text-faint */
+
+    /* Orange brand — primary CTA, brand mark, running / active states */
+    --brand:         #e69552;
+    --brand-strong:  #f0a567;
+    --brand-muted:   rgba(230,149,82,0.16);
+    --brand-ring:    rgba(230,149,82,0.22);
+
+    --data:          #60a5fa;  /* blue (status-info) — models / ids */
+    --data-deep:     #3b82f6;
+    --run:           #e69552;  /* orange — running (status-running) */
+    --run-dim:       #f0a567;
+    --done:          #4ade80;  /* green — ok / completed (status-done) */
+    --warn:          #eab308;  /* yellow — awaiting / cost (status-awaiting) */
+    --error:         #f87171;  /* red — failures */
+    --error-deep:    #ef4444;
+    --thinking:      #c084fc;  /* purple — tool/agent action lane (status-tool) */
+
+    /* role accents */
+    --role-pm:       #f472b6;
+    --role-arch:     #60a5fa;
+    --role-eng:      #4ade80;
+    --role-qa:       #eab308;
+    --role-spec:     #c084fc;
+    --role-cond:     #7f8a99;
+
+    --radius:        10px;
+    --radius-sm:     7px;
+    --z-base: 0; --z-sticky: 20; --z-panel: 30; --z-overlay: 50;
+
+    --mono: "Fira Code", ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: "Fira Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  ::selection { background: rgba(230,149,82,0.30); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3d4961; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  button { font-family: inherit; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--data); outline-offset: 2px; border-radius: 4px; }
+
+  /* ── App shell ────────────────────────────────────────────────────────── */
+  .app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+
+  /* Header */
+  header.topbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 20px; height: 56px; flex: none;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    z-index: var(--z-sticky);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .brand .logo {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--brand), var(--brand-strong));
+    box-shadow: 0 0 14px rgba(230,149,82,0.35);
+  }
+  .brand .logo svg { width: 18px; height: 18px; color: #fff; }
+  .brand h1 { font-size: 15px; margin: 0; letter-spacing: .2px; }
+  .brand .sub { font-size: 11px; color: var(--fg-muted); font-weight: 400; }
+
+  .trace-pick {
+    margin-left: 8px; display: flex; align-items: center; gap: 8px;
+    background: var(--card); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: var(--radius-sm); font-size: 12.5px;
+    color: var(--fg-dim); transition: background .18s, border-color .18s;
+  }
+  .trace-pick:hover { background: var(--card-hover); border-color: #3d4961; }
+  .trace-pick .tid { color: var(--data); font-family: var(--mono); }
+  .trace-pick svg { width: 14px; height: 14px; color: var(--fg-faint); }
+
+  .topbar .spacer { flex: 1; }
+  .live-dot {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--run); font-weight: 500;
+  }
+  .live-dot i {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--run);
+    box-shadow: 0 0 8px var(--run);
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{ opacity:1; transform:scale(1);} 50%{ opacity:.4; transform:scale(.8);} }
+
+  /* Summary metrics strip */
+  .metrics {
+    display: flex; gap: 0; flex: none;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 0 8px;
+  }
+  .metric {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 11px 18px; min-width: 96px;
+    border-right: 1px solid var(--border-soft);
+  }
+  .metric .label {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .6px;
+    color: var(--fg-faint); font-weight: 600;
+  }
+  .metric .val { font-family: var(--mono); font-size: 17px; font-weight: 600; }
+  .metric .val small { font-size: 11px; color: var(--fg-muted); font-weight: 400; }
+  .metric.cost .val { color: var(--warn); }
+  .metric.ok .val { color: var(--done); }
+  .metric.err .val { color: var(--error); }
+  .metric .roles { display: flex; gap: 4px; margin-top: 3px; }
+  .metric .roles span {
+    width: 16px; height: 16px; border-radius: 4px; font-size: 9px;
+    display: grid; place-items: center; font-weight: 700; color: var(--bg);
+  }
+
+  /* ── Body split ───────────────────────────────────────────────────────── */
+  .body { display: flex; flex: 1; min-height: 0; }
+
+  /* Left: tree column */
+  .tree-col {
+    width: 46%; min-width: 380px; max-width: 640px;
+    display: flex; flex-direction: column;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .toolbar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 14px; flex: none;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .search {
+    display: flex; align-items: center; gap: 8px; flex: 1; min-width: 160px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 7px 10px;
+  }
+  .search svg { width: 15px; height: 15px; color: var(--fg-faint); flex: none; }
+  .search input {
+    background: none; border: none; color: var(--fg); flex: 1;
+    font-size: 13px; font-family: var(--mono); outline: none;
+  }
+  .search input::placeholder { color: var(--fg-faint); }
+
+  .filter-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 11px; border-radius: 999px; font-size: 12px; font-weight: 500;
+    background: var(--card); color: var(--fg-muted);
+    border: 1px solid var(--border); transition: all .16s ease;
+    min-height: 30px;
+  }
+  .chip:hover { background: var(--card-hover); color: var(--fg-dim); }
+  .chip[aria-pressed="true"] { background: var(--brand-muted); color: var(--brand); border-color: var(--brand-ring); }
+  .chip i { width: 7px; height: 7px; border-radius: 50%; }
+
+  .tree-scroll { overflow-y: auto; flex: 1; padding: 6px 0 40px; }
+
+  /* Role group */
+  .role-group { margin: 4px 0; }
+  .role-head {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 14px; width: 100%; text-align: left;
+    background: none; border: none; color: var(--fg);
+    border-left: 3px solid transparent;
+    transition: background .15s;
+  }
+  .role-head:hover { background: var(--card); }
+  .role-head .twist { transition: transform .2s ease; color: var(--fg-faint); display: inline-flex; }
+  .role-head[aria-expanded="false"] .twist { transform: rotate(-90deg); }
+  .role-badge {
+    width: 24px; height: 24px; border-radius: 6px; flex: none;
+    display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--bg);
+  }
+  .role-head .name { font-weight: 600; font-size: 13.5px; }
+  .role-head .count {
+    margin-left: auto; font-family: var(--mono); font-size: 11px;
+    color: var(--fg-muted); background: var(--muted);
+    padding: 2px 8px; border-radius: 999px;
+  }
+  .role-head .rdur { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
+
+  /* Spans (the chain) */
+  .spans { padding: 2px 0 6px; }
+  .span-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center; gap: 10px;
+    padding: 7px 14px 7px 0; width: 100%;
+    background: none; border: none; color: var(--fg-dim); text-align: left;
+    position: relative; transition: background .14s;
+  }
+  .span-row:hover { background: var(--card); }
+  .span-row.sel { background: var(--brand-muted); }
+  .span-row.sel::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--brand);
+  }
+
+  /* indent + connector rails */
+  .rail { display: flex; align-self: stretch; flex: none; }
+  .rail .lvl { width: 22px; position: relative; }
+  .rail .lvl::before {
+    content: ""; position: absolute; left: 11px; top: 0; bottom: 0;
+    width: 1px; background: var(--border);
+  }
+  .rail .lvl.last-tee::before { bottom: 50%; }
+  .rail .lvl.tee::after, .rail .lvl.last-tee::after {
+    content: ""; position: absolute; left: 11px; top: 50%; width: 11px; height: 1px;
+    background: var(--border);
+  }
+  .rail .lvl.blank::before { display: none; }
+
+  .span-icon {
+    width: 22px; height: 22px; border-radius: 6px; flex: none;
+    display: grid; place-items: center;
+    background: var(--muted); border: 1px solid var(--border);
+  }
+  .span-icon svg { width: 13px; height: 13px; }
+  .span-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .span-title {
+    font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: var(--fg);
+  }
+  .span-title .tool { font-family: var(--mono); color: var(--data); font-weight: 500; }
+  .span-sub {
+    font-size: 11px; color: var(--fg-faint); font-family: var(--mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .span-meta { display: flex; align-items: center; gap: 8px; flex: none; }
+  .span-dur {
+    font-family: var(--mono); font-size: 11px; color: var(--fg-muted);
+    min-width: 52px; text-align: right;
+  }
+  .stat-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .stat-ok { background: var(--done); box-shadow: 0 0 6px rgba(74,222,128,.5); }
+  .stat-err { background: var(--error); box-shadow: 0 0 6px rgba(248,113,113,.5); }
+  .stat-run { background: var(--run); box-shadow: 0 0 6px rgba(230,149,82,.6); animation: pulse 1.4s infinite; }
+
+  /* kind tag colors on the icon */
+  .k-dispatch { color: var(--data); }
+  .k-cli      { color: var(--thinking); }
+  .k-step     { color: var(--fg-dim); }
+  .k-finalize { color: var(--run); }
+  .k-turn     { color: var(--role-cond); }
+  .k-think    { color: var(--thinking); }
+  .icn-read   { color: var(--data); }
+  .icn-write  { color: var(--warn); }
+  .icn-bash   { color: var(--run); }
+  .icn-search { color: var(--thinking); }
+
+  /* ── Right: detail panel ─────────────────────────────────────────────── */
+  .detail {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    background: var(--bg);
+  }
+  .detail-head {
+    padding: 16px 22px; flex: none; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .detail-kind {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .7px;
+    padding: 4px 10px; border-radius: 999px;
+    background: var(--muted); color: var(--data);
+    border: 1px solid var(--border);
+  }
+  .detail-kind svg { width: 13px; height: 13px; }
+  .audit-link {
+    float: right; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 500; text-decoration: none;
+    color: var(--fg-muted); background: var(--card);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 5px 10px; transition: background .16s, border-color .16s, color .16s;
+  }
+  .audit-link:hover { background: var(--card-hover); border-color: var(--brand-ring); color: var(--brand-strong); }
+  .audit-link svg { width: 13px; height: 13px; }
+  .detail-title {
+    font-size: 19px; font-weight: 600; margin: 11px 0 4px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .detail-title .tool { font-family: var(--mono); }
+  .badge {
+    font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 6px;
+    font-family: var(--mono); display: inline-flex; align-items: center; gap: 5px;
+  }
+  .badge.ok  { background: rgba(74,222,128,.16); color: var(--done); }
+  .badge.err { background: rgba(248,113,113,.16); color: var(--error); }
+  .badge.run { background: var(--brand-muted); color: var(--brand-strong); }
+
+  /* attribute grid */
+  .attrs {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 1px; background: var(--border-soft);
+    border: 1px solid var(--border-soft); border-radius: var(--radius);
+    overflow: hidden; margin-top: 14px;
+  }
+  .attr { background: var(--surface); padding: 10px 13px; }
+  .attr .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--fg-faint); font-weight: 600; }
+  .attr .v { font-family: var(--mono); font-size: 13px; margin-top: 3px; color: var(--fg); word-break: break-all; }
+  .attr .v.blue { color: var(--data); }
+  .attr .v.amber { color: var(--warn); }
+  .attr .v.green { color: var(--done); }
+
+  .detail-body { overflow-y: auto; flex: 1; padding: 18px 22px 60px; }
+  .io-block { margin-bottom: 18px; }
+  .io-head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    font-size: 12px; font-weight: 600; color: var(--fg-muted);
+    text-transform: uppercase; letter-spacing: .6px;
+  }
+  .io-head svg { width: 14px; height: 14px; }
+  .io-head .copy {
+    margin-left: auto; font-size: 11px; color: var(--fg-faint);
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 9px; display: inline-flex; align-items: center; gap: 5px;
+    text-transform: none; letter-spacing: 0; font-weight: 500;
+  }
+  .io-head .copy:hover { background: var(--card-hover); color: var(--fg-dim); }
+  .io-head .copy svg { width: 12px; height: 12px; }
+  pre.code {
+    margin: 0; background: #0a0c10; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 16px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.65;
+    color: var(--fg-dim); overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  pre.code .str { color: #86efac; }
+  pre.code .key { color: var(--data); }
+  pre.code .num { color: var(--warn); }
+  pre.code .cmt { color: var(--fg-faint); }
+  pre.code.err { border-color: rgba(248,113,113,.4); }
+  pre.code.err .str { color: #fca5a5; }
+
+  .empty {
+    height: 100%; display: grid; place-items: center; text-align: center;
+    color: var(--fg-faint); padding: 40px;
+  }
+  .empty svg { width: 46px; height: 46px; margin-bottom: 14px; opacity: .4; }
+  .empty p { margin: 4px 0; }
+  .empty .hint { font-size: 12px; }
+
+  @media (max-width: 880px) {
+    .tree-col { width: 100%; max-width: none; }
+    .detail { position: absolute; inset: 0; z-index: var(--z-panel); }
+    .metric:nth-child(n+5) { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Top bar ──────────────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 3-3 3 3 5-5"/></svg>
+      </span>
+      <div>
+        <h1>Agent Trace Log</h1>
+        <div class="sub">执行调用链 · 端到端可追溯</div>
+      </div>
+    </div>
+
+    <button class="trace-pick" type="button">
+      <span>Issue #142</span>
+      <span class="tid">trace-issue-142</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+
+    <div class="spacer"></div>
+    <span class="live-dot"><i></i> Live · engineer 运行中</span>
+  </header>
+
+  <!-- ── Summary metrics ──────────────────────────────────────────────── -->
+  <div class="metrics" role="group" aria-label="Trace 汇总">
+    <div class="metric"><span class="label">Spans</span><span class="val">47</span></div>
+    <div class="metric"><span class="label">耗时</span><span class="val">13<small>m</small> 32<small>s</small></span></div>
+    <div class="metric"><span class="label">Tokens</span><span class="val">251<small>K</small></span></div>
+    <div class="metric cost"><span class="label">成本</span><span class="val">$1.83</span></div>
+    <div class="metric ok"><span class="label">状态</span><span class="val">运行中</span></div>
+    <div class="metric err"><span class="label">错误</span><span class="val">1</span></div>
+    <div class="metric">
+      <span class="label">角色</span>
+      <div class="roles" title="product_manager · architect · engineer · qa">
+        <span style="background:var(--role-pm)">P</span>
+        <span style="background:var(--role-arch)">A</span>
+        <span style="background:var(--role-eng)">E</span>
+        <span style="background:var(--role-qa)">Q</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Body ─────────────────────────────────────────────────────────── -->
+  <div class="body">
+
+    <!-- Left: trace tree -->
+    <div class="tree-col">
+      <div class="toolbar">
+        <label class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input type="text" placeholder="搜索 span / 工具 / 文件 / 命令…" aria-label="搜索调用链" />
+        </label>
+        <div class="filter-chips" role="group" aria-label="按类型过滤">
+          <button class="chip" aria-pressed="true"><i style="background:var(--data)"></i>dispatch</button>
+          <button class="chip" aria-pressed="true"><i style="background:var(--thinking)"></i>cli_spawn</button>
+          <button class="chip" aria-pressed="true"><i style="background:var(--fg-dim)"></i>step</button>
+          <button class="chip" aria-pressed="false"><i style="background:var(--error)"></i>仅错误</button>
+        </div>
+      </div>
+
+      <div class="tree-scroll" id="tree"><!-- JS renders --></div>
+    </div>
+
+    <!-- Right: detail -->
+    <div class="detail" id="detail"><!-- JS renders --></div>
+  </div>
+</div>
+
+<script>
+/* ── Mock trace tree matching the API contract (SpanNode) ──────────────── */
+const ICONS = {
+  turn:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  dispatch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>',
+  cli:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg>',
+  read:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+  write:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  bash:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>',
+  search:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
+  think:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 4 17.5a2.5 2.5 0 0 1-1.1-4.6A2.5 2.5 0 0 1 4 8.5a2.5 2.5 0 0 1 3-3A2.5 2.5 0 0 1 9.5 2Z"/></svg>',
+  finalize: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+};
+const TOOLICON = { Read:'read', Write:'write', Edit:'write', Bash:'bash', WebSearch:'search', WebFetch:'search', Grep:'read', Glob:'read' };
+const TOOLCLASS = { Read:'icn-read', Grep:'icn-read', Glob:'icn-read', Write:'icn-write', Edit:'icn-write', Bash:'icn-bash', WebSearch:'icn-search', WebFetch:'icn-search' };
+
+const ROLES = {
+  product_manager: { label:'产品经理', short:'P', color:'var(--role-pm)' },
+  architect:       { label:'架构师',   short:'A', color:'var(--role-arch)' },
+  engineer:        { label:'工程师',   short:'E', color:'var(--role-eng)' },
+  qa:              { label:'质检',     short:'Q', color:'var(--role-qa)' },
+  conductor:       { label:'Conductor',short:'C', color:'var(--role-cond)' },
+};
+
+const TRACE = {
+  trace_id: "trace-issue-142", issue_id: "issue-142", title: "给日志系统设计 trace",
+  groups: [
+    { role:"architect", spans:[
+      { span_id:"sp-a1", kind:"dispatch", role:"architect", title:"dispatch → architect", sub:"设计 trace 数据模型", model:null, status:"ok", dur:412000, depth:0,
+        input:{ role:"architect", prompt:"基于现有 audit_log + log_events 设计端到端 trace 模型（trace_id/span_id/parent）" },
+        output:"产出 ADR：复用 correlation_id 作 trace_id，execution_process_id 作执行边界，read-time join log_events。" },
+      { span_id:"sp-a2", kind:"cli_spawn", role:"architect", title:"调用 claude", sub:"claude-opus-4-8 · sess-7f3a91", model:"claude-opus-4-8", session:"sess-7f3a91c2", status:"ok", dur:408000, depth:1, tin:42000, tout:9800, cost:0.61,
+        input:{ argv:["claude","-p","--output-format=stream-json","--model","claude-opus-4-8"], cwd:"/repo/.worktrees/issue-142", resume_session_id:null },
+        output:"会话建立，6 步工具调用，最终产出 ADR 文档。" },
+      { span_id:"sp-a3", kind:"step", role:"architect", tool:"Read", title:"Read audit_logger.py", sub:"backend/app/application/audit_logger.py", status:"ok", dur:240, depth:2,
+        input:{ file_path:"backend/app/application/audit_logger.py" }, output:"319 行，统一写入口 record()，9 类 category。" },
+      { span_id:"sp-a4", kind:"step", role:"architect", tool:"Grep", title:"Grep correlation_id", sub:"grep -rn 'correlation_id' app/", status:"ok", dur:180, depth:2,
+        input:{ pattern:"correlation_id", path:"app/" }, output:"仅定义，零写入 — 死字段确认。" },
+      { span_id:"sp-a5", kind:"step", role:"architect", tool:"Write", title:"Write adr-trace-model.md", sub:".trellis/tasks/.../adr.md", status:"ok", dur:95, depth:2,
+        input:{ file_path:".trellis/.../adr-trace-model.md", bytes:4210 }, output:"ADR 写入成功。" },
+      { span_id:"sp-a6", kind:"finalize", role:"architect", title:"结果返回", sub:"finalize · ok", status:"ok", dur:60, depth:1,
+        input:{}, output:"architect 完成：trace 模型 ADR 已交付，建议下一步 engineer 实现透传。" },
+    ]},
+    { role:"engineer", spans:[
+      { span_id:"sp-e1", kind:"dispatch", role:"engineer", title:"dispatch → engineer", sub:"实现 trace_id 透传到 runtime", status:"run", dur:null, depth:0,
+        input:{ role:"engineer", prompt:"在 conductor 生成 trace_id，透传到 claude_process_runtime 的 _append_log" },
+        output:null },
+      { span_id:"sp-e2", kind:"cli_spawn", role:"engineer", title:"调用 claude", sub:"claude-opus-4-8 · sess-b2d4e8", model:"claude-opus-4-8", session:"sess-b2d4e810", status:"run", dur:null, depth:1, tin:88000, tout:14200, cost:0.94,
+        input:{ argv:["claude","-p","--output-format=stream-json","--model","claude-opus-4-8"], cwd:"/repo/.worktrees/issue-142", resume_session_id:null },
+        output:null },
+      { span_id:"sp-e3", kind:"step", role:"engineer", tool:"Read", title:"Read claude_process_runtime.py", sub:"backend/app/application/claude_process_runtime.py", status:"ok", dur:310, depth:2,
+        input:{ file_path:"backend/app/application/claude_process_runtime.py" }, output:"373 行，stream-json reader loop 在 process_runtime_common.py。" },
+      { span_id:"sp-e4", kind:"step", role:"engineer", tool:"Edit", title:"Edit process_runtime_common.py", sub:"+ trace_id 透传到 _append_log", status:"ok", dur:140, depth:2,
+        input:{ file_path:"...process_runtime_common.py", change:"_append_log(... , trace_id=ctx.trace_id)" }, output:"3 处调用点已加 trace_id 参数。" },
+      { span_id:"sp-e5", kind:"step", role:"engineer", tool:"Bash", title:"pytest test_audit_logger", sub:"timeout 120 python3 -m pytest tests/test_audit_logger.py", status:"err", dur:8400, depth:2,
+        input:{ command:"timeout 120 python3 -m pytest tests/test_audit_logger.py -q" },
+        output:"FAILED tests/test_audit_logger.py::test_correlation_propagation\nAssertionError: expected trace_id 'trace-issue-142', got None\n  log_events row missing trace_id — _append_log signature not threaded through queue_log_event()" },
+      { span_id:"sp-e6", kind:"step", role:"engineer", tool:"WebSearch", title:"WebSearch sqlite alter add column", sub:"sqlite add column with backfill default", status:"ok", dur:1200, depth:2,
+        input:{ query:"sqlite ALTER TABLE add column backfill existing rows" }, output:"确认 ADD COLUMN 不锁表，默认 NULL，回填走单独 UPDATE。" },
+    ]},
+  ],
+};
+
+/* ── Render tree ───────────────────────────────────────────────────────── */
+function railHTML(depth, isLast) {
+  if (depth === 0) return '';
+  let r = '<span class="rail">';
+  for (let i = 0; i < depth - 1; i++) r += '<span class="lvl"></span>';
+  r += `<span class="lvl ${isLast ? 'last-tee' : 'tee'}"></span>`;
+  r += '</span>';
+  return r;
+}
+function statDot(s){ return s==='err'?'<span class="stat-dot stat-err"></span>':s==='run'?'<span class="stat-dot stat-run"></span>':'<span class="stat-dot stat-ok"></span>'; }
+function fmtDur(ms){ if(ms==null) return '···'; if(ms<1000) return ms+'ms'; if(ms<60000) return (ms/1000).toFixed(1)+'s'; const m=Math.floor(ms/60000); return m+'m'+Math.round((ms%60000)/1000)+'s'; }
+
+function spanIconKind(sp){
+  if(sp.kind==='step') return TOOLICON[sp.tool] || 'bash';
+  if(sp.kind==='cli_spawn') return 'cli';
+  if(sp.kind==='finalize') return 'finalize';
+  if(sp.kind==='turn') return 'turn';
+  return 'dispatch';
+}
+function spanIconClass(sp){
+  if(sp.kind==='step') return TOOLCLASS[sp.tool] || 'icn-bash';
+  return 'k-'+(sp.kind==='cli_spawn'?'cli':sp.kind);
+}
+
+let SELECTED = null;
+const flat = [];
+TRACE.groups.forEach(g => g.spans.forEach(s => flat.push(s)));
+
+function renderTree(){
+  const root = document.getElementById('tree');
+  root.innerHTML = '';
+  TRACE.groups.forEach((g, gi) => {
+    const r = ROLES[g.role];
+    const group = document.createElement('div'); group.className = 'role-group';
+    const totalDur = g.spans.reduce((a,s)=>a+(s.dur||0),0);
+
+    const head = document.createElement('button');
+    head.className = 'role-head'; head.setAttribute('aria-expanded','true');
+    head.style.borderLeftColor = r.color;
+    head.innerHTML = `
+      <span class="twist"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></span>
+      <span class="role-badge" style="background:${r.color}">${r.short}</span>
+      <span class="name">${r.label}</span>
+      <span class="rdur">${fmtDur(totalDur)}</span>
+      <span class="count">${g.spans.length} spans</span>`;
+    group.appendChild(head);
+
+    const wrap = document.createElement('div'); wrap.className = 'spans';
+    g.spans.forEach((sp, i) => {
+      const isLast = (sp.depth>0) && (i===g.spans.length-1 || g.spans[i+1].depth < sp.depth);
+      const row = document.createElement('button');
+      row.className = 'span-row'; row.dataset.id = sp.span_id;
+      row.innerHTML = `
+        ${railHTML(sp.depth, isLast)}
+        <span class="span-icon ${spanIconClass(sp)}">${ICONS[spanIconKind(sp)]}</span>
+        <span class="span-main">
+          <span class="span-title">${sp.tool?`<span class="tool">${sp.tool}</span> `:''}${sp.title.replace(sp.tool||' ','')}</span>
+          <span class="span-sub">${sp.sub||''}</span>
+        </span>
+        <span class="span-meta"><span class="span-dur">${fmtDur(sp.dur)}</span>${statDot(sp.status)}</span>`;
+      row.addEventListener('click', () => selectSpan(sp.span_id));
+      wrap.appendChild(row);
+    });
+    group.appendChild(wrap);
+
+    head.addEventListener('click', () => {
+      const open = head.getAttribute('aria-expanded') === 'true';
+      head.setAttribute('aria-expanded', String(!open));
+      wrap.style.display = open ? 'none' : 'block';
+    });
+    root.appendChild(group);
+  });
+}
+
+/* ── Syntax-ish JSON highlight ─────────────────────────────────────────── */
+function hl(obj){
+  let s = JSON.stringify(obj, null, 2);
+  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  s = s.replace(/"([^"]+)":/g, '<span class="key">"$1"</span>:');
+  s = s.replace(/: "([^"]*)"/g, ': <span class="str">"$1"</span>');
+  s = s.replace(/: (\d+\.?\d*)/g, ': <span class="num">$1</span>');
+  s = s.replace(/: (null|true|false)/g, ': <span class="num">$1</span>');
+  return s;
+}
+
+function selectSpan(id){
+  SELECTED = id;
+  document.querySelectorAll('.span-row').forEach(r => r.classList.toggle('sel', r.dataset.id===id));
+  const sp = flat.find(s => s.span_id===id);
+  const d = document.getElementById('detail');
+  const r = ROLES[sp.role] || ROLES.conductor;
+  const kindLabel = {dispatch:'发起请求',cli_spawn:'调用 CLI',step:'处理步骤',finalize:'结果返回',turn:'Conductor 轮次'}[sp.kind]||sp.kind;
+  const badge = sp.status==='err'?'<span class="badge err">● failed</span>':sp.status==='run'?'<span class="badge run">● running</span>':'<span class="badge ok">● ok</span>';
+
+  let attrs = `
+    <div class="attr"><div class="k">角色</div><div class="v" style="color:${r.color}">${r.label}</div></div>
+    <div class="attr"><div class="k">span_id</div><div class="v blue">${sp.span_id}</div></div>
+    <div class="attr"><div class="k">耗时</div><div class="v">${fmtDur(sp.dur)}</div></div>`;
+  if(sp.model)   attrs += `<div class="attr"><div class="k">模型</div><div class="v blue">${sp.model}</div></div>`;
+  if(sp.session) attrs += `<div class="attr"><div class="k">会话 ID</div><div class="v blue">${sp.session}</div></div>`;
+  if(sp.tin!=null)  attrs += `<div class="attr"><div class="k">Tokens</div><div class="v">↓${(sp.tin/1000).toFixed(1)}K ↑${(sp.tout/1000).toFixed(1)}K</div></div>`;
+  if(sp.cost!=null) attrs += `<div class="attr"><div class="k">成本</div><div class="v amber">$${sp.cost.toFixed(2)}</div></div>`;
+
+  const outErr = sp.status==='err';
+  d.innerHTML = `
+    <div class="detail-head">
+      <span class="detail-kind">${ICONS[spanIconKind(sp)]} ${kindLabel}</span><a class="audit-link" href="audit-log-list.html?issue=${encodeURIComponent((TRACE.issue_id||'').replace(/^issue-/,''))}&corr=${encodeURIComponent(TRACE.trace_id)}&row=${encodeURIComponent(sp.span_id)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg> 在审计日志中查看</a>
+      <div class="detail-title">${sp.tool?`<span class="tool" style="color:var(--data)">${sp.tool}</span>`:''}<span>${sp.title.replace(sp.tool||' ','')}</span>${badge}</div>
+      <div class="attrs">${attrs}</div>
+    </div>
+    <div class="detail-body">
+      <div class="io-block">
+        <div class="io-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+          输入 · INPUT
+          <button class="copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button>
+        </div>
+        <pre class="code">${hl(sp.input||{})}</pre>
+      </div>
+      <div class="io-block">
+        <div class="io-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+          输出 · OUTPUT ${outErr?'<span style="color:var(--error)">(以 claude 报告为准)</span>':''}
+          <button class="copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button>
+        </div>
+        ${sp.output==null
+          ? '<pre class="code"><span class="cmt">// 运行中，尚无输出…</span></pre>'
+          : `<pre class="code ${outErr?'err':''}">${(sp.output+'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</pre>`}
+      </div>
+    </div>`;
+}
+
+function renderEmpty(){
+  document.getElementById('detail').innerHTML = `
+    <div class="empty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      <p>选择左侧任一调用查看详情</p>
+      <p class="hint">发起请求 → 调用 claude（模型/会话）→ 处理步骤 → 结果返回</p>
+    </div>`;
+}
+
+renderTree();
+renderEmpty();
+
+/* ── Deep-link: ?span= selects + scrolls to a span (from audit log row click) ── */
+(function deepLink(){
+  const params = new URLSearchParams(window.location.search);
+  const wanted = params.get('span');
+  const target = (wanted && flat.find(s => s.span_id === wanted)) ? wanted : 'sp-e5';
+  selectSpan(target);
+  if (wanted && target === wanted) {
+    const row = document.querySelector(`.span-row[data-id="${CSS.escape(wanted)}"]`);
+    if (row) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+})();
+
+document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
+  c.setAttribute('aria-pressed', c.getAttribute('aria-pressed')==='true'?'false':'true');
+}));
+</script>
+</body>
+</html>

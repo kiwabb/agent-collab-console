@@ -31,7 +31,8 @@ Design choices:
   - ``source_issue_id`` is optional attribution when a golden task is
     derived from a real archived issue. The runner does not use it.
 """
-from __future__ import annotations
+
+from __future__ import annotations  # noqa: I001
 
 import re
 from typing import Literal
@@ -71,9 +72,7 @@ class PinnedCommand(BaseModel):
             re.IGNORECASE,
         )
         if forbidden.search(v):
-            raise ValueError(
-                f"pinned_qa_commands entry contains a forbidden shell pattern: {v!r}"
-            )
+            raise ValueError(f"pinned_qa_commands entry contains a forbidden shell pattern: {v!r}")
         return v
 
 
@@ -132,9 +131,7 @@ class GoldenIssue(BaseModel):
     def _criteria_non_trivial(cls, v: list[str]) -> list[str]:
         for i, c in enumerate(v):
             if len(c.strip()) < 5:
-                raise ValueError(
-                    f"acceptance_criteria[{i}] is too short (min 5 chars): {c!r}"
-                )
+                raise ValueError(f"acceptance_criteria[{i}] is too short (min 5 chars): {c!r}")
         return v
 
     @field_validator("tags")
