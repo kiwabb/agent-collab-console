@@ -340,6 +340,92 @@ return {
 }
 ```
 
+### Scenario: Runtime Catalog Test Timeout Contract
+
+#### 1. Scope / Trigger
+
+- Trigger: changing `POST /api/runtime-catalog/test`, executor test
+  requests, runtime catalog timeout fields, or OpenAI/Anthropic provider
+  probe behavior.
+- Runtime test is a real provider call from the backend. It must reflect the
+  configured runtime tolerance while still capping request duration for UI
+  responsiveness.
+
+#### 2. Signatures
+
+- API: `POST /api/runtime-catalog/test`
+- Request model: `TestExecutorRequest(executor_id, provider_id?, model_id?, api_endpoint?, api_key?)`
+- Timeout source: `RuntimeCatalog.conductor_llm.timeout_s`
+- Timeout helper: `_runtime_test_timeout_s(catalog: RuntimeCatalog) -> float`
+- OpenAI probe URL: `llm_api_url(endpoint, "/v1/chat/completions")`
+- Anthropic probe URL: `llm_api_url(endpoint, "/v1/messages")`
+
+#### 3. Contracts
+
+- Effective executor/provider/model resolution follows the saved runtime
+  catalog, with request overrides for endpoint/key/model when supplied.
+- OpenAI protocol probes send `{"model": model_id, "max_tokens": 1,
+  "messages": [{"role": "user", "content": "ping"}]}` to
+  `/v1/chat/completions`.
+- Anthropic protocol probes send the same logical ping body to `/v1/messages`
+  with `x-api-key` and `anthropic-version`.
+- Timeout must derive from `catalog.conductor_llm.timeout_s` and clamp to the
+  inclusive range `10.0..120.0`.
+- Missing or falsey timeout defaults to `10.0`.
+- Timeout error text must report the effective timeout value, for example
+  `Request timed out after 120s`.
+- Runtime test responses must never expose raw API keys or bearer tokens.
+
+#### 4. Validation & Error Matrix
+
+- Unknown executor id -> HTTP `404`.
+- Unknown provider id for that executor -> HTTP `400`.
+- No resolved model -> HTTP `400`.
+- Provider model id not present in provider model list -> HTTP `400`.
+- Missing resolved endpoint or key -> HTTP `400`.
+- Provider returns HTTP error -> `{"success": false, "error": "HTTP <status>: <sanitized prefix>"}`.
+- Provider request times out -> `{"success": false, "error": "Request timed out after <effective>s"}`.
+- Successful provider HTTP `200` -> `{"success": true, "latency_ms": <float>}`.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a catalog with `conductor_llm.timeout_s=120` lets a slow
+  OpenAI-compatible local proxy finish instead of failing at a hard-coded 10s.
+- Base: omitted conductor timeout uses 10s and keeps quick UI feedback.
+- Base: a request supplies `api_endpoint`/`api_key` overrides to test an
+  unsaved form draft without persisting the key.
+- Bad: hard-coding `httpx.AsyncClient(timeout=10)` in the endpoint.
+- Bad: returning raw provider response headers or auth data in the failure
+  payload.
+
+#### 6. Tests Required
+
+- API contract test: OpenAI protocol uses `/v1/chat/completions`, bearer auth,
+  the selected model, and the clamped catalog timeout.
+- API contract test: saved API keys are preserved/masked when the UI omits
+  `api_key`, so test requests can still use the stored key.
+- API contract test: timeout errors include the effective timeout rather than a
+  stale hard-coded value.
+- API contract test: provider/executor/model validation returns the expected
+  HTTP status without making an outbound request.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+async with httpx.AsyncClient(timeout=10) as client:
+    response = await client.post(...)
+```
+
+Correct:
+
+```python
+timeout_s = _runtime_test_timeout_s(catalog)
+async with httpx.AsyncClient(timeout=timeout_s) as client:
+    response = await client.post(...)
+```
+
 ### Scenario: Safe Knowledge Search Snippets
 
 #### 1. Scope / Trigger

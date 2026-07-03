@@ -2632,6 +2632,7 @@ async def get_execution_process_logs(process_id: str):
 # --- Runtime Catalog APIs ---
 
 from app.application.runtime_catalog_service import RuntimeCatalogService, RuntimeCatalogValidationError
+from app.application.llm_runner import llm_api_url
 from app.domain.models import RuntimeCatalog
 
 
@@ -2644,6 +2645,30 @@ class RuntimeCatalogRequest(BaseModel):
     catalog: RuntimeCatalog
 
 
+def _runtime_catalog_response(catalog: RuntimeCatalog) -> dict:
+    payload = catalog.model_dump()
+    for executor, executor_payload in zip(catalog.executors, payload.get("executors", [])):
+        executor_payload.pop("api_key", None)
+        executor_payload["api_key_configured"] = bool(executor.api_key)
+    return payload
+
+
+def _preserve_omitted_runtime_api_keys(
+    incoming: RuntimeCatalog, existing: RuntimeCatalog
+) -> RuntimeCatalog:
+    existing_by_id = {executor.id: executor for executor in existing.executors}
+    for executor in incoming.executors:
+        previous = existing_by_id.get(executor.id)
+        if previous is not None and executor.api_key is None and previous.api_key:
+            executor.api_key = previous.api_key
+    return incoming
+
+
+def _runtime_test_timeout_s(catalog: RuntimeCatalog) -> float:
+    timeout_s = catalog.conductor_llm.timeout_s or 10.0
+    return max(10.0, min(float(timeout_s), 120.0))
+
+
 @router.get("/runtime-catalog")
 async def get_runtime_catalog():
     """Get the global runtime catalog."""
@@ -2651,7 +2676,7 @@ async def get_runtime_catalog():
         raise HTTPException(status_code=503, detail="SQLite store not available")
     service = _get_runtime_catalog_service()
     catalog = await service.load_catalog()
-    return catalog
+    return _runtime_catalog_response(catalog)
 
 
 @router.put("/runtime-catalog")
@@ -2664,8 +2689,11 @@ async def update_runtime_catalog(request: RuntimeCatalogRequest):
         raise HTTPException(status_code=503, detail="SQLite store not available")
     service = _get_runtime_catalog_service()
     try:
-        catalog = await service.save_catalog(request.catalog)
-        return catalog
+        existing = await service.load_catalog()
+        catalog = await service.save_catalog(
+            _preserve_omitted_runtime_api_keys(request.catalog, existing)
+        )
+        return _runtime_catalog_response(catalog)
     except RuntimeCatalogValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -2742,23 +2770,40 @@ async def test_runtime_executor(request: TestExecutorRequest):
     if not endpoint or not api_key:
         raise HTTPException(status_code=400, detail="api_endpoint and api_key are required")
 
+    protocol = (executor.protocol or "anthropic").lower()
+
     # Build the request
     start = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"{endpoint.rstrip('/')}/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": model_id,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "ping"}],
-                },
-            )
+        timeout_s = _runtime_test_timeout_s(catalog)
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            if protocol == "openai":
+                response = await client.post(
+                    llm_api_url(endpoint, "/v1/chat/completions"),
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": model_id,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "ping"}],
+                    },
+                )
+            else:
+                response = await client.post(
+                    llm_api_url(endpoint, "/v1/messages"),
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": model_id,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "ping"}],
+                    },
+                )
         latency_ms = (time.monotonic() - start) * 1000
 
         if response.status_code == 200:
@@ -2766,7 +2811,7 @@ async def test_runtime_executor(request: TestExecutorRequest):
         else:
             return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
     except httpx.TimeoutException:
-        return {"success": False, "error": "Request timed out after 10s"}
+        return {"success": False, "error": f"Request timed out after {timeout_s:g}s"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

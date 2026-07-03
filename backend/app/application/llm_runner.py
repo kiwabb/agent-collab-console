@@ -181,7 +181,7 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                 )
                 return None
 
-            url = f"{executor.api_endpoint.rstrip('/')}/v1/messages"
+            url = llm_api_url(executor.api_endpoint, "/v1/messages")
             # Assistant-prefill (see stream_llm for the rationale). The
             # leading "{" is NOT in the model's response, so we prepend it
             # before returning so json.loads sees a complete object.
@@ -284,6 +284,21 @@ class StreamingPlanContext:
     timeout_s: float
 
 
+def llm_api_url(endpoint: str, api_path: str) -> str:
+    """Join an LLM endpoint with an API path without duplicating `/v1`.
+
+    The UI and provider docs commonly describe OpenAI-compatible base URLs as
+    `.../v1`, while this backend historically stored provider roots and appended
+    `/v1/...` itself. Accept both shapes so runtime catalog tests and conductor
+    calls behave like users expect.
+    """
+    base = endpoint.rstrip("/")
+    path = api_path if api_path.startswith("/") else f"/{api_path}"
+    if base.endswith("/v1") and path.startswith("/v1/"):
+        return f"{base}{path[3:]}"
+    return f"{base}{path}"
+
+
 def resolve_streaming_context(catalog) -> StreamingPlanContext | None:
     """Mirror of the picks build_llm_runner makes, but exposed so the SSE
     endpoint can announce which model is about to be called before the first
@@ -321,7 +336,7 @@ async def stream_llm(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[st
     close. Raises on transport-level errors (the caller catches and emits a
     fallback event).
     """
-    url = f"{ctx.endpoint}/v1/messages"
+    url = llm_api_url(ctx.endpoint, "/v1/messages")
     # Assistant-prefill trick: by ending the messages array with an empty-ish
     # assistant turn that starts with "{", we force the model to continue
     # generating from inside an open JSON object — no preamble, no markdown
@@ -384,7 +399,7 @@ async def call_llm_with_tools(
     ctx: StreamingPlanContext,
 ) -> dict[str, Any]:
     """Call an Anthropic-compatible messages endpoint with tool definitions."""
-    url = f"{ctx.endpoint}/v1/messages"
+    url = llm_api_url(ctx.endpoint, "/v1/messages")
     payload: dict[str, Any] = {
         "model": ctx.model,
         "max_tokens": ctx.max_tokens,
@@ -425,7 +440,7 @@ async def call_llm_with_tools_streaming(
     Emits batched `text` and `tool_input_json` deltas through `on_delta`, while
     returning a complete assistant message payload at the end.
     """
-    url = f"{ctx.endpoint}/v1/messages"
+    url = llm_api_url(ctx.endpoint, "/v1/messages")
     payload: dict[str, Any] = {
         "model": ctx.model,
         "max_tokens": ctx.max_tokens,
@@ -718,7 +733,7 @@ async def call_openai_with_tools(
     ctx: StreamingPlanContext,
 ) -> dict[str, Any]:
     """Call an OpenAI-compatible /v1/chat/completions endpoint; return Anthropic shape."""
-    url = f"{ctx.endpoint}/v1/chat/completions"
+    url = llm_api_url(ctx.endpoint, "/v1/chat/completions")
     payload: dict[str, Any] = {
         "model": ctx.model,
         "max_tokens": ctx.max_tokens,
@@ -762,7 +777,7 @@ async def call_openai_with_tools_streaming(
     Anthropic streamer: text -> kind "text" at block 0; tool-call arguments ->
     kind "tool_input_json" at block (openai_index + 1).
     """
-    url = f"{ctx.endpoint}/v1/chat/completions"
+    url = llm_api_url(ctx.endpoint, "/v1/chat/completions")
     payload: dict[str, Any] = {
         "model": ctx.model,
         "max_tokens": ctx.max_tokens,

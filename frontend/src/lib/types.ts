@@ -463,13 +463,24 @@ export interface RuntimeExecutorConfig {
   executor_type: "claude" | "codex";
   api_endpoint?: string | null;
   api_key?: string | null;
+  api_key_configured?: boolean;
   default_model?: string | null;
+  protocol?: "anthropic" | "openai";
   providers: RuntimeProviderConfig[];
   default_provider_id: string | null;
 }
 
 export interface RuntimeCatalog {
   executors: RuntimeExecutorConfig[];
+  conductor_llm?: ConductorLLMConfig;
+}
+
+export interface ConductorLLMConfig {
+  executor_id?: string | null;
+  model?: string | null;
+  max_tokens?: number;
+  timeout_s?: number;
+  output_language?: string;
 }
 
 export interface RuntimeCatalogRequest {
@@ -485,6 +496,8 @@ export interface TestExecutorResponse {
   success: boolean;
   latency_ms?: number;
   error?: string;
+  mode?: string;
+  detail?: string;
 }
 
 export interface IssueTemplate {
