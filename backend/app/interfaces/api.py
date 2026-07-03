@@ -4,7 +4,7 @@ from pathlib import Path
 import logging
 import shutil
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 import json
 
@@ -19,6 +19,13 @@ from app.application.product_manager_service import ProductManagerArtifactError,
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.process_runtime_common import is_agent_message_item_type
 from app.application.project_service import ProjectError
+from app.application.resume_service import (
+    MAX_PDF_IMPORT_BYTES,
+    ResumeDependencyError,
+    ResumeProjectPathError,
+    ResumeValidationError,
+    resume_service,
+)
 from app.application.worktree_manager import WorktreeError
 from app.application.git_service import GitError
 from app.interfaces.execution_process_views import build_execution_process_view
@@ -640,10 +647,52 @@ class UpdateProjectRequest(BaseModel):
     setup_script: str | None = None
 
 
+class ResumeResponse(BaseModel):
+    project_id: str
+    markdown: str
+    exists: bool
+    relative_path: str
+    updated_at: str | None = None
+    size_bytes: int
+
+
+class UpdateResumeRequest(BaseModel):
+    markdown: str
+
+
+class ResumeImportResponse(BaseModel):
+    project_id: str
+    markdown: str
+    source_filename: str
+    page_count: int
+    extracted_pages: int
+    size_bytes: int
+    warnings: list[str]
+
+
 def _require_project_service():
     if project_service is None:
         raise HTTPException(status_code=503, detail="Project service unavailable (no async store)")
     return project_service
+
+
+async def _get_project_or_404(project_id: str) -> Project:
+    svc = _require_project_service()
+    try:
+        return await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _resume_response(project_id: str, document) -> ResumeResponse:
+    return ResumeResponse(
+        project_id=project_id,
+        markdown=document.markdown,
+        exists=document.exists,
+        relative_path=document.relative_path,
+        updated_at=document.updated_at,
+        size_bytes=document.size_bytes,
+    )
 
 
 @router.get("/projects")
@@ -688,6 +737,58 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
         )
     except ProjectError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/projects/{project_id}/resume", response_model=ResumeResponse)
+async def get_project_resume(project_id: str):
+    project = await _get_project_or_404(project_id)
+    try:
+        return _resume_response(project.id, resume_service.read(project.repo_path))
+    except ResumeProjectPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ResumeValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/projects/{project_id}/resume", response_model=ResumeResponse)
+async def update_project_resume(project_id: str, request: UpdateResumeRequest):
+    project = await _get_project_or_404(project_id)
+    try:
+        return _resume_response(project.id, resume_service.write(project.repo_path, request.markdown))
+    except ResumeProjectPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ResumeValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/resume/import-pdf", response_model=ResumeImportResponse)
+async def import_project_resume_pdf(
+    project_id: str,
+    file: UploadFile = File(...),
+):
+    project = await _get_project_or_404(project_id)
+    data = await file.read(MAX_PDF_IMPORT_BYTES + 1)
+    try:
+        draft = resume_service.extract_pdf_text(
+            filename=file.filename,
+            content_type=file.content_type,
+            data=data,
+        )
+    except ResumeDependencyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ResumeValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
+    return ResumeImportResponse(
+        project_id=project.id,
+        markdown=draft.markdown,
+        source_filename=draft.source_filename,
+        page_count=draft.page_count,
+        extracted_pages=draft.extracted_pages,
+        size_bytes=draft.size_bytes,
+        warnings=draft.warnings,
+    )
 
 
 @router.delete("/projects/{project_id}")

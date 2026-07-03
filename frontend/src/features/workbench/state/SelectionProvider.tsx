@@ -49,15 +49,9 @@ function writeLocal(key: string, value: string | null) {
 }
 
 export function SelectionProvider({ children, initial }: ProviderProps) {
-  const [projectId, setProjectIdState] = useState<string | null>(
-    initial?.projectId ?? readLocal(PROJECT_KEY)
-  );
-  const [workspaceId, setWorkspaceIdState] = useState<string | null>(
-    initial?.workspaceId ?? readLocal(WORKSPACE_KEY)
-  );
-  const [issueId, setIssueIdState] = useState<string | null>(
-    initial?.issueId ?? readLocal(ISSUE_KEY)
-  );
+  const [projectId, setProjectIdState] = useState<string | null>(initial?.projectId ?? null);
+  const [workspaceId, setWorkspaceIdState] = useState<string | null>(initial?.workspaceId ?? null);
+  const [issueId, setIssueIdState] = useState<string | null>(initial?.issueId ?? null);
   const [tab, setTabState] = useState<IssueTab>(initial?.tab ?? "dag");
 
   const setProjectId = useCallback((id: string | null) => {
@@ -76,14 +70,26 @@ export function SelectionProvider({ children, initial }: ProviderProps) {
 
   useEffect(() => {
     if (initial?.projectId !== undefined) setProjectIdState(initial.projectId ?? null);
+    else setProjectIdState(readLocal(PROJECT_KEY));
     if (initial?.workspaceId !== undefined) setWorkspaceIdState(initial.workspaceId ?? null);
+    else setWorkspaceIdState(readLocal(WORKSPACE_KEY));
     if (initial?.issueId !== undefined) setIssueIdState(initial.issueId ?? null);
+    else setIssueIdState(readLocal(ISSUE_KEY));
     if (initial?.tab) setTabState(initial.tab);
   }, [initial?.projectId, initial?.workspaceId, initial?.issueId, initial?.tab]);
 
   const value = useMemo<SelectionContextValue>(
-    () => ({ projectId, workspaceId, issueId, tab, setProjectId, setWorkspaceId, setIssueId, setTab }),
-    [projectId, workspaceId, issueId, tab, setProjectId, setWorkspaceId, setIssueId, setTab]
+    () => ({
+      projectId,
+      workspaceId,
+      issueId,
+      tab,
+      setProjectId,
+      setWorkspaceId,
+      setIssueId,
+      setTab,
+    }),
+    [projectId, workspaceId, issueId, tab, setProjectId, setWorkspaceId, setIssueId, setTab],
   );
 
   return <SelectionContext.Provider value={value}>{children}</SelectionContext.Provider>;

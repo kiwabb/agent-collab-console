@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Folder, HelpCircle, Search } from "lucide-react";
+import { ChevronDown, Folder, HelpCircle, Menu, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/features/workbench/components/CommandPalette";
 import { AccountPopover } from "@/features/workbench/components/AccountPopover";
@@ -27,6 +27,7 @@ export interface BreadcrumbItem {
 
 interface Props {
   breadcrumbs?: BreadcrumbItem[];
+  onMenuClick?: () => void;
   right?: React.ReactNode;
   /** Top-level workspace name shown right after the C logo. Falls back to the repo name. */
   workspaceLabel?: string;
@@ -41,7 +42,7 @@ interface Props {
  * - Slash-separated breadcrumb (muted segments, last segment bold)
  * - Right-aligned search input with ⌘K hint chip + user avatar
  */
-export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
+export function AppHeader({ breadcrumbs = [], onMenuClick, right, workspaceLabel }: Props) {
   const { t } = useI18n();
   const rootLabel = workspaceLabel ?? "codex";
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -60,7 +61,7 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
 
   return (
     <>
-      <header className="h-14 shrink-0 border-b border-border-subtle/80 bg-surface/85 backdrop-blur-md flex items-center gap-3.5 px-4 relative z-10">
+      <header className="relative z-10 flex h-14 shrink-0 items-center gap-2.5 border-b border-border-subtle/80 bg-surface/85 px-3 backdrop-blur-md sm:gap-3.5 sm:px-4">
         <Link
           href="/"
           aria-label={t("ui.home")}
@@ -74,9 +75,24 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
         >
           C
         </Link>
-        <nav aria-label={t("ui.breadcrumb")} className="flex items-center min-w-0 text-[13px] gap-2">
+        {onMenuClick && (
+          <button
+            type="button"
+            onClick={onMenuClick}
+            aria-label={t("ui.openNavigation")}
+            className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-input/80 text-text-muted transition-colors hover:bg-surface-hover hover:text-foreground lg:hidden"
+          >
+            <Menu size={18} aria-hidden />
+          </button>
+        )}
+        <nav
+          aria-label={t("ui.breadcrumb")}
+          className="flex min-w-0 flex-1 items-center gap-2 text-[13px]"
+        >
           <Link href="/" className="shrink-0">
-            <span className="text-text-muted hover:text-foreground transition-colors">{rootLabel}</span>
+            <span className="text-text-muted hover:text-foreground transition-colors">
+              {rootLabel}
+            </span>
           </Link>
           <HeaderProjectSwitcher />
           {breadcrumbs.map((b, i) => {
@@ -86,10 +102,17 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
                 <span className="text-text-muted/50 select-none">/</span>
                 {b.href && !isLast ? (
                   <Link href={b.href}>
-                    <span className="truncate text-text-muted hover:text-foreground transition-colors">{b.label}</span>
+                    <span className="truncate text-text-muted hover:text-foreground transition-colors">
+                      {b.label}
+                    </span>
                   </Link>
                 ) : (
-                  <span className={cn("truncate", isLast ? "text-foreground font-semibold" : "text-text-muted")}>
+                  <span
+                    className={cn(
+                      "truncate",
+                      isLast ? "text-foreground font-semibold" : "text-text-muted",
+                    )}
+                  >
                     {b.label}
                   </span>
                 )}
@@ -97,7 +120,7 @@ export function AppHeader({ breadcrumbs = [], right, workspaceLabel }: Props) {
             );
           })}
         </nav>
-        <div className="ml-auto flex items-center gap-2.5">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2.5">
           {right}
           <SearchInput onOpen={() => setPaletteOpen(true)} t={t} />
           <HelpButton />
@@ -194,15 +217,12 @@ function SearchInput({ onOpen, t }: { onOpen: () => void; t: (key: string) => st
       type="button"
       onClick={onOpen}
       className={cn(
-        "relative w-[360px] max-w-[42vw] h-[34px] pl-8 pr-12 rounded-[10px] text-[12.5px] text-left outline-none",
+        "relative hidden h-[34px] w-[360px] max-w-[42vw] rounded-[10px] pl-8 pr-12 text-left text-[12.5px] outline-none sm:block",
         "bg-surface-input/90 border border-border-muted shadow-sm",
         "text-text-muted hover:border-border-strong hover:text-foreground transition-colors",
       )}
     >
-      <Search
-        size={13}
-        className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted"
-      />
+      <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
       {t("header.jumpToPlaceholder")}
       <span className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 text-[10px] text-text-muted font-mono pointer-events-none">
         <kbd className="px-1 py-0.5 rounded bg-surface-raised border border-border-subtle">

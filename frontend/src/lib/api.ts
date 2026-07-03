@@ -35,6 +35,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
 const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE ?? "ws://localhost:8000";
 
 export { API_BASE, WS_BASE };
+export { getProjectResume, importProjectResumePdf, saveProjectResume } from "./api/resume";
+export type { ProjectResume, ProjectResumeImport } from "./api/resume";
 
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {

@@ -19,6 +19,7 @@ import {
   Sparkles,
   Activity,
   ScrollText,
+  FileText,
 } from "lucide-react";
 import { getCodexIssues, getWorkspaces, listProjects } from "@/lib/api";
 import type { CodexIssue, Project, Workspace } from "@/lib/types";
@@ -288,6 +289,12 @@ export function AppSidebar() {
           label={t("sidebar.knowledge")}
           active={pathname.startsWith("/knowledge")}
           onClick={() => router.push("/knowledge")}
+        />
+        <NavRow
+          icon={<FileText size={13} />}
+          label={t("sidebar.resume")}
+          active={pathname.startsWith("/resume")}
+          onClick={() => router.push("/resume")}
         />
         <NavRow
           icon={<Users size={13} />}

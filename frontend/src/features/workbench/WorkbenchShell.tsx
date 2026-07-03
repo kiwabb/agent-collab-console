@@ -1,12 +1,14 @@
 "use client";
 
-
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { AppSidebar } from "@/features/workbench/components/AppSidebar";
 import { AppHeader, type BreadcrumbItem } from "@/features/workbench/components/AppHeader";
 import { AppStatusBar } from "@/features/workbench/components/AppStatusBar";
 import { SelectionProvider } from "@/features/workbench/state/SelectionProvider";
 import { ExecutionProcessesProvider } from "@/providers/ExecutionProcessesProvider";
 import { useBrowserNotifications } from "@/hooks/useBrowserNotifications";
+import { useI18n } from "@/providers/I18nProvider";
 
 interface Props {
   children: React.ReactNode;
@@ -16,14 +18,19 @@ interface Props {
   issueId?: string | null;
 }
 
-export function WorkbenchShell({ children, breadcrumbs, headerRight, workspaceId, issueId }: Props) {
+export function WorkbenchShell({
+  children,
+  breadcrumbs,
+  headerRight,
+  workspaceId,
+  issueId,
+}: Props) {
   return (
-    <SelectionProvider initial={{ workspaceId: workspaceId ?? undefined, issueId: issueId ?? undefined }}>
+    <SelectionProvider
+      initial={{ workspaceId: workspaceId ?? undefined, issueId: issueId ?? undefined }}
+    >
       <ExecutionProcessesProvider workspaceId={workspaceId ?? null}>
-        <WorkbenchInner
-          breadcrumbs={breadcrumbs}
-          headerRight={headerRight}
-        >
+        <WorkbenchInner breadcrumbs={breadcrumbs} headerRight={headerRight}>
           {children}
         </WorkbenchInner>
       </ExecutionProcessesProvider>
@@ -40,12 +47,20 @@ function WorkbenchInner({
   breadcrumbs?: BreadcrumbItem[];
   headerRight?: React.ReactNode;
 }) {
+  const pathname = usePathname();
+  const { t } = useI18n();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   // D3: tab-title + favicon + Notification API for cross-session events.
   // Mounted once at the shell so every route benefits.
   useBrowserNotifications();
 
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [pathname]);
+
   return (
-    <div className="relative isolate h-screen overflow-hidden bg-background text-foreground">
+    <div className="relative isolate h-dvh overflow-hidden bg-background text-foreground">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 opacity-60"
@@ -55,10 +70,29 @@ function WorkbenchInner({
         }}
       />
       <div className="relative z-10 flex h-full flex-col">
-        <AppHeader breadcrumbs={breadcrumbs} right={headerRight} />
-        <div className="flex flex-1 min-h-0 gap-3 px-3 pb-3">
-          <AppSidebar />
-          <main className="enterprise-panel flex-1 min-h-0 overflow-hidden rounded-[30px]">
+        <AppHeader
+          breadcrumbs={breadcrumbs}
+          onMenuClick={() => setSidebarOpen(true)}
+          right={headerRight}
+        />
+        {sidebarOpen && (
+          <div className="fixed inset-0 z-40 lg:hidden">
+            <button
+              type="button"
+              aria-label={t("ui.closeNavigation")}
+              className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
+              onClick={() => setSidebarOpen(false)}
+            />
+            <div className="absolute inset-y-2 left-2 w-72 max-w-[calc(100vw-1rem)]">
+              <AppSidebar />
+            </div>
+          </div>
+        )}
+        <div className="flex min-h-0 flex-1 gap-0 px-2 pb-2 sm:px-3 sm:pb-3 lg:gap-3">
+          <div className="hidden h-full shrink-0 lg:block">
+            <AppSidebar />
+          </div>
+          <main className="enterprise-panel min-w-0 flex-1 overflow-hidden rounded-[22px] lg:rounded-[30px]">
             <div className="h-full overflow-auto">{children}</div>
           </main>
         </div>
