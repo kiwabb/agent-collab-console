@@ -1,0 +1,13 @@
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify data survives backend/frontend/store/event boundaries."}
+{"file":".trellis/spec/vibe-kanban/backend/index.md","reason":"Check backend orchestration, API, and timeout conventions."}
+{"file":".trellis/spec/vibe-kanban/backend/database-guidelines.md","reason":"Check store parity and persistence round-trip requirements."}
+{"file":".trellis/spec/ccgui/frontend/index.md","reason":"Check frontend API typing, UI strings, and i18n parity."}
+{"file":".trellis/spec/ccgui/frontend/hook-guidelines.md","reason":"Check live event refresh and websocket hook safety."}
+{"file":".trellis/spec/ccgui/frontend/type-safety.md","reason":"Verify narrow API compatibility exports and typed event payloads."}
+{"file":".trellis/spec/ccgui/frontend/state-management.md","reason":"Verify optional provider usage, task-id polling fallback, terminal de-duplication, and timeout feedback."}
+{"file":".trellis/spec/vibe-kanban/backend/quality-guidelines.md","reason":"Verify backend script-task endpoint, task fields, store round-trip, event ownership, and fallback contracts."}
+{"file":"frontend/src/features/projects/scriptTaskStatus.ts","reason":"Verify terminal status classification remains pure and covered by frontend tests."}
+{"file":"backend/tests/test_operations_engineer_script_task.py","reason":"Focused backend regression tests for script-task endpoint, operations workflow context/fallback, and store round-trip."}
+{"file":"frontend/tests/projectsScriptTaskStatus.test.ts","reason":"Focused frontend pure-helper regression tests for operations script task terminal status classification."}
+{"file":"frontend/tests/projectRunControls.test.ts","reason":"Contains i18n and source-wiring assertions for project run and operations engineer startup-script controls."}
+{"file":"frontend/tests/apiCompatibilityExports.test.ts","reason":"Focused frontend regression test for monolithic api compatibility exports that previously caused runtime is-not-a-function errors."}

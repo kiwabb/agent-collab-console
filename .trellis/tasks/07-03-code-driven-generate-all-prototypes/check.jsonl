@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend quality and storage/API conventions"}
+{"file": ".trellis/spec/ccgui/frontend/index.md", "reason": "Frontend quality, i18n, typing conventions"}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-layer verification guidance"}
+{"file": ".trellis/tasks/07-03-code-driven-generate-all-prototypes/research/axhub-make-code-prototype-design.md", "reason": "Reference assumptions to verify against implementation"}
+{"file": ".trellis/tasks/07-03-code-driven-generate-all-prototypes/info.md", "reason": "Detailed design and acceptance evidence for verifying implementation against the planned code-driven generation flow"}

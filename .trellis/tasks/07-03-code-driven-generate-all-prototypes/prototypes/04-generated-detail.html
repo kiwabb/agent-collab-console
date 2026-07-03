@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generated Prototype Detail</title>
+  <style>
+    :root {
+      --background:#0b0b0c; --foreground:#f4f4f5; --surface:#0f1115; --raised:#161a21; --input:#1b2230; --hover:#181e29;
+      --brand:#e69552; --brand-strong:#f0a567; --brand-muted:rgba(230,149,82,.16);
+      --text-secondary:#b0bac8; --text-muted:#7f8a99; --text-faint:#596579;
+      --border:#232a38; --border-muted:#2e3647; --done:#4ade80; --info:#60a5fa; --failed:#ef4444;
+      color-scheme: dark;
+    }
+    *{box-sizing:border-box} body{margin:0;background:var(--background);color:var(--foreground);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;letter-spacing:0} h1,h2,h3,p{margin:0} svg{display:block}
+    button{height:28px;border-radius:8px;border:1px solid transparent;background:var(--input);color:var(--foreground);padding:0 10px;font:600 13px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;display:inline-flex;align-items:center;gap:6px}.btn-primary{background:var(--brand);border-color:var(--brand);color:#120904}.btn-secondary{background:var(--input)}.btn-outline{background:transparent;border-color:var(--border);color:var(--text-secondary)}.btn-warn{border-color:rgba(230,149,82,.28);background:var(--brand-muted);color:var(--brand-strong)}
+    .project-shell{min-height:100vh}.project-top{position:relative;overflow:hidden;border-bottom:1px solid var(--border)}.project-top:before{content:"";position:absolute;inset:0;opacity:.35;background:radial-gradient(900px 300px at 12% -10%,rgba(230,149,82,.30),transparent 60%),radial-gradient(700px 240px at 90% -10%,rgba(96,165,250,.18),transparent 60%)}.project-inner{position:relative;max-width:1280px;margin:0 auto;padding:28px 32px 16px}.project-row{display:flex;align-items:center;gap:12px;min-width:0}.project-row>div:last-child{min-width:0}.project-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:12px;background:linear-gradient(135deg,var(--brand),var(--brand-strong));color:#120904}.project-row h1{font-size:24px;line-height:1.2;font-weight:750}.repo{margin-top:4px;color:var(--text-muted);font:12px/1.4 "SF Mono","SFMono-Regular",ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}.project-tab{display:inline-flex;align-items:center;gap:8px;min-height:34px;padding:0 14px;border:1px solid var(--border);border-radius:999px;background:rgba(22,26,33,.70);color:var(--text-muted);font-size:14px;font-weight:650}.project-tab.active{border-color:rgba(230,149,82,.55);background:var(--brand-muted);color:var(--foreground)}
+    .content{max-width:1280px;margin:0 auto;padding:24px 32px 36px}.prototype-page{display:flex;flex-direction:column;gap:16px}.page-header{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px}.page-title h2{font-size:24px;line-height:1.2;font-weight:760}.page-title p{margin-top:5px;color:var(--text-muted);font-size:14px}.actions{display:flex;gap:8px;flex-wrap:wrap}.workspace{display:grid;grid-template-columns:280px minmax(0,1fr);gap:16px;min-height:640px}.workspace>*{min-width:0}.panel{border:1px solid var(--border);border-radius:12px;background:rgba(22,26,33,.60)}.sidebar{display:flex;flex-direction:column;gap:10px;padding:12px}.sidebar-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.sidebar-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted)}
+    .proto-list{display:flex;flex-direction:column;gap:4px;overflow:auto}.proto{width:100%;min-height:54px;border:1px solid transparent;border-radius:8px;background:var(--surface);padding:8px 10px;text-align:left;color:var(--text-muted)}.proto.active{border-color:var(--brand);background:var(--brand-muted);color:var(--foreground)}.proto-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit;font-size:14px;font-weight:700}.proto-sub{margin-top:3px;color:var(--text-muted);font:11px/1.35 "SF Mono","SFMono-Regular",ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.badges{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;height:20px;border-radius:999px;border:1px solid var(--border);background:var(--input);color:var(--text-secondary);padding:0 7px;font-size:11px;font-weight:650}.badge.code{border-color:rgba(96,165,250,.22);background:rgba(96,165,250,.08);color:#93c5fd}.badge.changed{border-color:rgba(230,149,82,.28);background:var(--brand-muted);color:var(--brand-strong)}
+    .canvas{display:flex;min-height:0;flex-direction:column;padding:12px}.canvas-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}.canvas-head h3{font-size:20px;line-height:1.2;font-weight:700}.canvas-meta{margin-top:3px;color:var(--text-muted);font-size:12px}.canvas-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.tabs{display:inline-flex;width:max-content;height:32px;align-items:center;border-radius:8px;background:var(--input);padding:3px;color:var(--text-muted);gap:3px}.tab{height:26px;min-width:72px;border-radius:6px;display:grid;place-items:center;font-size:14px;font-weight:600}.tab.active{background:var(--background);border:1px solid var(--border-muted);color:var(--foreground)}
+    .preview{margin-top:10px;min-height:420px;flex:1;border:1px solid var(--border);border-radius:12px;background:var(--raised);overflow:hidden}.iframe{height:100%;min-height:420px;background:var(--surface);padding:22px}.mock-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--border);padding-bottom:14px}.mock-head h4{font-size:22px;margin:0}.mock-head p{margin-top:6px;color:var(--text-muted);font-size:13px;overflow-wrap:anywhere}.mock-grid{display:grid;grid-template-columns:280px minmax(0,1fr);gap:12px;margin-top:16px}.mock-panel{border:1px solid var(--border);border-radius:10px;background:var(--raised);padding:12px}.mock-row{height:32px;margin-top:8px;border-radius:8px;background:var(--input)}.mock-row.short{width:68%}
+    .source-strip{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;margin-top:10px;border:1px solid var(--border);border-radius:8px;background:rgba(27,34,48,.35);padding:8px 10px}.source-strip>*{min-width:0}.source-strip .badge{justify-self:start;width:max-content}.source-strip span{color:var(--text-faint);font-size:11px;text-transform:uppercase;letter-spacing:.07em;font-weight:800}.source-strip b{display:block;margin-top:3px;color:var(--text-secondary);font:11px/1.4 "SF Mono","SFMono-Regular",ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.source-detail{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}.source-cell{border:1px solid var(--border);border-radius:8px;background:rgba(15,17,21,.72);padding:8px}.source-cell span{color:var(--text-faint);font-size:10px;text-transform:uppercase;letter-spacing:.07em;font-weight:800}.source-cell b{display:block;margin-top:4px;color:var(--text-secondary);font:11px/1.4 "SF Mono","SFMono-Regular",ui-monospace,monospace;overflow-wrap:anywhere}
+    .prompt{display:flex;flex-direction:column;gap:8px;margin-top:10px;border:1px solid var(--border);border-radius:12px;background:var(--raised);padding:12px}.textarea{min-height:64px;border:1px solid rgba(127,138,153,.70);border-radius:8px;background:rgba(27,34,48,.30);color:var(--text-muted);padding:9px 10px;font-size:14px}.prompt-row{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--text-muted);font-size:12px}.versions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.version{height:26px;border:1px solid var(--border);border-radius:999px;background:var(--raised);color:var(--text-muted);padding:0 10px;display:inline-flex;align-items:center;font-size:12px;font-weight:650}.version.active{border-color:rgba(230,149,82,.45);background:var(--brand-muted);color:var(--brand-strong)}
+    @media(max-width:900px){.content,.project-inner{padding-left:16px;padding-right:16px}.workspace,.mock-grid,.source-detail{grid-template-columns:1fr}.page-header{flex-direction:column}.source-strip{grid-template-columns:1fr}.source-strip b{white-space:normal;overflow-wrap:anywhere}.canvas-head,.mock-head,.prompt-row{align-items:flex-start;flex-direction:column}.canvas-actions{justify-content:flex-start}.mock-head button{width:max-content}.iframe{padding:18px}.mock-head h4{font-size:20px}}
+  </style>
+</head>
+<body>
+  <div class="project-shell">
+    <header class="project-top">
+      <div class="project-inner">
+        <div class="project-row"><div class="project-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 7h6l2 2h8v9a2 2 0 0 1-2 2H4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></div><div><h1>agent-collab-console</h1><div class="repo">/Users/zhoujiaangyao/.../agent-collab-console</div></div></div>
+        <nav class="project-tabs"><span class="project-tab">Workspaces</span><span class="project-tab">Conductor</span><span class="project-tab active">Prototypes</span></nav>
+      </div>
+    </header>
+    <main class="content">
+      <section class="prototype-page">
+        <header class="page-header">
+          <div class="page-title"><h2>原型设计</h2><p>创建、生成和迭代项目级 HTML 原型。</p><div class="repo">/Users/zhoujiaangyao/.../agent-collab-console</div></div>
+          <div class="actions"><button class="btn-primary">从代码生成</button><button class="btn-secondary">重新生成全部</button></div>
+        </header>
+        <section class="workspace">
+          <aside class="panel sidebar">
+            <div class="sidebar-head"><span class="sidebar-label">Prototypes</span><button class="btn-secondary">新建</button></div>
+            <div class="proto-list">
+              <div class="proto active"><div class="proto-title">Project Prototypes</div><div class="proto-sub">/projects/:id/prototypes</div><div class="badges"><span class="badge code">Code</span><span class="badge changed">Changed</span><span class="badge">v4</span></div></div>
+              <div class="proto"><div class="proto-title">Issue Detail</div><div class="proto-sub">/issues/:id</div><div class="badges"><span class="badge code">Code</span><span class="badge">v2</span></div></div>
+              <div class="proto"><div class="proto-title">SaaS Pricing Draft</div><div class="proto-sub">manual brief</div><div class="badges"><span class="badge">Manual</span><span class="badge">v1</span></div></div>
+            </div>
+          </aside>
+          <section class="panel canvas">
+            <div class="canvas-head">
+              <div><h3>Project Prototypes</h3><div class="canvas-meta">版本: v4 · code-backed · /projects/:id/prototypes</div></div>
+              <div class="canvas-actions"><button class="btn-warn">源码已变化</button><button class="btn-outline">删除</button></div>
+            </div>
+            <div class="tabs" role="tablist"><span class="tab active">预览</span><span class="tab">代码</span></div>
+            <div class="preview">
+              <div class="iframe">
+                <div class="mock-head"><div><h4>原型设计</h4><p>项目级 HTML 原型工作台，包含左侧原型列表、右侧沙箱预览、版本切换和代码生成入口。</p></div><button class="btn-primary">从代码生成</button></div>
+                <div class="mock-grid"><div class="mock-panel"><b>Prototypes</b><div class="mock-row"></div><div class="mock-row"></div><div class="mock-row short"></div></div><div class="mock-panel"><b>PrototypeCanvas</b><div class="mock-row"></div><div class="mock-row"></div><div class="mock-row short"></div></div></div>
+              </div>
+            </div>
+            <div class="source-strip"><div><span>Source</span><b>frontend/src/app/projects/[id]/prototypes/page.tsx · features/prototype/ProjectPrototypesPage.tsx · features/prototype/PrototypeCanvas.tsx</b></div><span class="badge changed">hash drift</span></div>
+            <div class="source-detail"><div class="source-cell"><span>Route</span><b>/projects/:id/prototypes</b></div><div class="source-cell"><span>Hash</span><b>4fc9a21b -> ac08e12f</b></div><div class="source-cell"><span>Sandbox</span><b>iframe allow-scripts</b></div></div>
+            <footer class="prompt"><div class="textarea">根据最新源码重新生成，保留现有页面结构和真实组件密度...</div><div class="prompt-row"><span>代码原型会生成新版本，不覆盖手动 brief。</span><button class="btn-primary">重新生成</button></div></footer>
+            <nav class="versions" aria-label="Versions"><span class="version">v1</span><span class="version">v2</span><span class="version">v3</span><span class="version active">v4</span></nav>
+          </section>
+        </section>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{"file":".trellis/spec/guides/index.md","reason":"Shared thinking guide index for cross-layer/code-reuse triggers."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Feature spans API, store, runtime events, frontend API/types, and UI refresh."}
+{"file":".trellis/spec/vibe-kanban/backend/index.md","reason":"Backend package conventions for FastAPI, store, orchestration, and timeout handling."}
+{"file":".trellis/spec/vibe-kanban/backend/database-guidelines.md","reason":"Store fields must round-trip across async and sync SQLite implementations."}
+{"file":".trellis/spec/ccgui/frontend/index.md","reason":"Frontend package conventions including i18n parity and typed API models."}
+{"file":".trellis/spec/ccgui/frontend/hook-guidelines.md","reason":"Event subscription and websocket lifecycle changes affect frontend live refresh."}
+{"file":".trellis/spec/ccgui/frontend/type-safety.md","reason":"API split compatibility exports and typed event contracts are part of this task."}
+{"file":".trellis/spec/ccgui/frontend/state-management.md","reason":"Projects page task loading, optional provider access, polling fallback, and toast de-duplication are part of this task."}
+{"file":".trellis/spec/vibe-kanban/backend/quality-guidelines.md","reason":"Backend Operations Engineer startup-script task contract was added for this cross-layer feature."}
+{"file":"frontend/src/features/projects/scriptTaskStatus.ts","reason":"Pure status derivation helper for Operations Engineer task loading/toast behavior."}

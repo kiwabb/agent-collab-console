@@ -1264,3 +1264,39 @@ Implemented a review-only self-improvement proposal ledger: durable proposal sto
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: Resume maintenance PDF import
+
+**Date**: 2026-07-04
+**Task**: Resume maintenance PDF import
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Implemented project resume markdown storage and PDF import, fixed runtime catalog executor testing for OpenAI/v1 timeout behavior, and archived E2E evidence.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d238d1e6` | (see git log) |
+| `7ed7574f` | (see git log) |
+| `e41b2381` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

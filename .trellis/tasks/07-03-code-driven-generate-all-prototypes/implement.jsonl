@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/vibe-kanban/backend/index.md", "reason": "Backend service/API/store guidance for code-driven prototype generation"}
+{"file": ".trellis/spec/ccgui/frontend/index.md", "reason": "Frontend prototype page/API/i18n guidance"}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-layer and reuse thinking guides"}
+{"file": ".trellis/tasks/07-03-code-driven-generate-all-prototypes/research/axhub-make-code-prototype-design.md", "reason": "Axhub Make reference mapping for this feature"}
+{"file": ".trellis/tasks/07-03-code-driven-generate-all-prototypes/info.md", "reason": "Detailed design, route inventory, UI prototype coverage, backend/frontend flow, edge cases, and rollout plan"}
