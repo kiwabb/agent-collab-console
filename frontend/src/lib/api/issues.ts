@@ -4,33 +4,35 @@ import { API_BASE, dedupedFetch, handleResponse } from "./fetch";
 import type {
   Artifact,
   CodexIssue,
+  CodexTask,
   CreateIssueRequest,
   IssueDiffResult,
   MergeIssueResult,
   UpdateIssuePhaseRequest,
 } from "../types";
+import { autoStartIssueGraph } from "./conductors";
 
 export async function mergeCodexIssue(
   issueId: string,
   message: string | null = null,
   allowDivergedBase = false,
-): Promise<import("../types").MergeIssueResult> {
+): Promise<MergeIssueResult> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}/merge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, allow_diverged_base: allowDivergedBase }),
   });
-  return handleResponse<import("../types").MergeIssueResult>(response);
+  return handleResponse<MergeIssueResult>(response);
 }
 export async function getCodexIssueDiff(
   issueId: string,
   statOnly = false,
-): Promise<import("../types").IssueDiffResult> {
+): Promise<IssueDiffResult> {
   const url = statOnly
     ? `${API_BASE}/codex/issues/${issueId}/diff?stat_only=true`
     : `${API_BASE}/codex/issues/${issueId}/diff`;
   const response = await fetch(url);
-  return handleResponse<import("../types").IssueDiffResult>(response);
+  return handleResponse<IssueDiffResult>(response);
 }
 /** B1: inject a mid-run hint into the issue's worktree. The next dispatched
  *  agent picks it up via `_steer.md` and treats it as authoritative. */
@@ -273,6 +275,54 @@ export async function updateCodexIssuePhase(
     body: JSON.stringify(body),
   });
   return handleResponse<CodexIssue>(response);
+}
+
+export interface TransitionIssueToArchitectureResult {
+  issue: CodexIssue;
+  task: CodexTask | null;
+}
+
+export interface TransitionIssueToDevelopmentResult {
+  issue: CodexIssue;
+  tasks: CodexTask[];
+}
+
+export interface TransitionIssueToTestingResult {
+  issue: CodexIssue;
+  task: CodexTask | null;
+}
+
+async function transitionIssueViaGraph(issueId: string, phase: string): Promise<CodexIssue> {
+  const issue = await updateCodexIssuePhase(issueId, phase);
+  await autoStartIssueGraph(issueId);
+  return issue;
+}
+
+export async function transitionIssueToArchitecture(
+  issueId: string,
+): Promise<TransitionIssueToArchitectureResult> {
+  return {
+    issue: await transitionIssueViaGraph(issueId, "architecture"),
+    task: null,
+  };
+}
+
+export async function transitionIssueToDevelopment(
+  issueId: string,
+): Promise<TransitionIssueToDevelopmentResult> {
+  return {
+    issue: await transitionIssueViaGraph(issueId, "development"),
+    tasks: [],
+  };
+}
+
+export async function transitionIssueToTesting(
+  issueId: string,
+): Promise<TransitionIssueToTestingResult> {
+  return {
+    issue: await transitionIssueViaGraph(issueId, "testing"),
+    task: null,
+  };
 }
 export async function deleteCodexIssue(issueId: string): Promise<unknown> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}`, {

@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
-import { abandonCodexIssue, getCodexIssueDiff, mergeCodexIssue } from "@/lib/api";
+import { abandonCodexIssue, getCodexIssueDiff, mergeCodexIssue } from "@/lib/api/issues";
 import type { CodexIssue, DiffStat, GitMergeStatus, IssueDiffResult } from "@/lib/types";
 import { DiffPanel } from "./DiffPanel";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";

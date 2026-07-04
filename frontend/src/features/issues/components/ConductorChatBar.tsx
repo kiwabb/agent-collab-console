@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Send } from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import { appendConductorMessage } from "@/lib/api";
+import { appendConductorMessage } from "@/lib/api/conductors";
 
 interface Props {
   projectId: string | null;

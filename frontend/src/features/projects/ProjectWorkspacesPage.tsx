@@ -20,21 +20,23 @@ import {
   X,
 } from "lucide-react";
 
+import { getCodexIssues } from "@/lib/api/issues";
 import {
   createWorkspace,
   deleteWorkspace,
-  getCodexIssues,
+  getWorkspaces,
+  updateWorkspace,
+} from "@/lib/api/workspaces";
+import {
   getProject,
   getProjectRemoteStatus,
   getProjectRunLogs,
   getProjectRunStatus,
-  getWorkspaces,
   isProjectRunStartError,
   pullProject,
   startProjectRun,
   stopProjectRun,
-  updateWorkspace,
-} from "@/lib/api";
+} from "@/lib/api/projects";
 import type {
   CodexIssue,
   Project,

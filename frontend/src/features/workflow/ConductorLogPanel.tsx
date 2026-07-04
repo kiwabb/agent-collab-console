@@ -28,7 +28,7 @@ import {
   type ConductorStateLogEntry,
   type ConductorStatePayload,
   type ConductorTurn,
-} from "@/lib/api";
+} from "@/lib/api/conductors";
 import { cn } from "@/lib/utils";
 import type { HistoryEntry } from "@/features/agents/dock/agentBus";
 import { PERSONAS } from "@/features/agents/dock/personas";
@@ -36,6 +36,7 @@ import type { BusConductorStateViolationEvent, BusConductorStatusEvent, BusCondu
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
+import type { TranslationKey } from "@/lib/i18n";
 
 interface Props {
   issueId: string;
@@ -437,7 +438,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
   const conductorDetail = conductorPhase === "awaiting_subagent" && conductorState?.detail
     ? `${conductorState.detail} (${phaseElapsedSeconds}s)`
     : (conductorState?.detail ?? null);
-  const translatedStatus = t(`conductor.status.${conductorStatus}` as any) ?? conductorStatus;
+  const translatedStatus = t(`conductor.status.${conductorStatus}` as TranslationKey) ?? conductorStatus;
   const isPaused = conductorStatus === "paused";
   const hasActiveLoop = Boolean(conductorState?.conductor_task_id) && !["done", "completed", "failed", "max_turns"].includes(conductorStatus);
   const statusCls = STATUS_STYLES[conductorStatus] ?? "bg-surface-raised text-text-secondary border-border-subtle";

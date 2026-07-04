@@ -11,17 +11,19 @@ import {
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import {
-  getCodexCostStats,
-  getIssueOrchestrationPolicy,
   getIssueActivity,
   getIssuePipelineStages,
   type ActivityEvent,
-  type CodexCostStats,
   type IssueChecklist,
   type PipelineStagesResponse,
   type PipelineStage,
-} from "@/lib/api";
-import type { CodexIssue, CodexTask, IssueOrchestrationPolicy } from "@/lib/types";
+} from "@/lib/api/issues";
+import {
+  getCodexCostStats,
+  getIssueOrchestrationPolicy,
+  type CodexCostStats,
+} from "@/lib/api/stats";
+import type { CodexIssue, CodexTask, IssueBudgetStatus, IssueOrchestrationPolicy } from "@/lib/types";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 import { SimilarIssuesCard } from "./SimilarIssuesCard";
@@ -360,7 +362,7 @@ function TelemetryCard({
   cost: CodexCostStats | null;
   pipeline: PipelineStagesResponse | null;
   taskCount: number;
-  budget: import("@/lib/types").IssueBudgetStatus | null;
+  budget: IssueBudgetStatus | null;
   budgetLoading: boolean;
   t: TFn;
 }) {

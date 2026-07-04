@@ -5,14 +5,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Search, RefreshCw, FileText, Hash } from "lucide-react";
 import {
   getEmbeddingStatus,
-  listProjects,
   searchKnowledge,
   triggerKnowledgeReindex,
   type EmbeddingStatus,
   type KnowledgeSearchResponse,
   type KnowledgeSearchMode,
   type KnowledgeSearchScope,
-} from "@/lib/api";
+} from "@/lib/api/knowledge";
+import { listProjects } from "@/lib/api/projects";
 import type { Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { TeamNotesEditor } from "./TeamNotesEditor";

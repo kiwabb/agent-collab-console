@@ -265,15 +265,15 @@ async def _enqueue_engineer_rework(
     )
     setattr(engineer, "updated_at", datetime.now())  # noqa: B010
     await store.save_codex_task(engineer)
+    from app.application.task_status_events import build_task_status_event
+
     await _append_event(
         event_bus,
-        {
-            "type": "task_status",
-            "task_id": getattr(engineer, "id", task_id),
-            "issue_id": getattr(engineer, "issue_id", issue.id),
-            "session_id": getattr(engineer, "session_id", issue.session_id),
-            "status": "pending",
-        },
+        build_task_status_event(
+            engineer,
+            "pending",
+            review_comment=getattr(engineer, "review_comment", None),
+        ),
     )
     return True
 

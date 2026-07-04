@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, type PanInfo } from "framer-motion";
 import { cn } from "@/lib/utils";
+
+type MotionDragEvent = MouseEvent | TouchEvent | PointerEvent;
 
 interface ExpandableTaskCardProps {
   children: ReactNode;
@@ -68,12 +70,12 @@ export function SwipeToDelete({
 }: SwipeToDeleteProps) {
   const [offset, setOffset] = useState(0);
 
-  const handleDrag = (_: any, info: any) => {
+  const handleDrag = (_: MotionDragEvent, info: PanInfo) => {
     if (!enabled) return;
     setOffset(info.offset.x);
   };
 
-  const handleDragEnd = (_: any, info: any) => {
+  const handleDragEnd = (_: MotionDragEvent, info: PanInfo) => {
     if (!enabled) return;
     if (info.offset.x < -100) {
       onDelete();

@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.application.task_statuses import is_task_success_status
+
 
 @dataclass(frozen=True)
 class OrchestrationPolicy:
@@ -300,7 +302,7 @@ def _done_finalize_count(recent_turns: list[object]) -> int:
         if getattr(turn, "kind", "") != "finalize":
             continue
         payload = _turn_payload(turn)
-        if str(payload.get("status") or "").lower() == "done":
+        if is_task_success_status(payload.get("status")):
             count += 1
     return count
 

@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { useExecutionProcesses } from "@/hooks/useExecutionProcesses";
 import {
   ExecutionProcessesContext,
   type ExecutionProcessesContextValue,
 } from "@/contexts/ExecutionProcessesContext";
+import { emitDataEvent } from "@/lib/dataEvents";
 import type { ExecutionProcess } from "@/lib/types";
 
 interface ExecutionProcessesProviderProps {
@@ -40,6 +41,12 @@ export function ExecutionProcessesProvider({ workspaceId, children }: ExecutionP
       }),
     [visible],
   );
+
+  useEffect(() => {
+    if (lastEvent?.type === "project_updated" || lastEvent?.type === "project_script_updated") {
+      emitDataEvent("projects:changed");
+    }
+  }, [lastEvent]);
 
   const value = useMemo((): ExecutionProcessesContextValue => ({
     executionProcessesAll: executionProcesses,

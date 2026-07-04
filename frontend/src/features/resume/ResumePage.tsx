@@ -7,7 +7,7 @@ import {
   saveProjectResume,
   type ProjectResume,
   type ProjectResumeImport,
-} from "@/lib/api";
+} from "@/lib/api/resume";
 import { useI18n } from "@/providers/I18nProvider";
 import { useSelection } from "@/features/workbench/state/SelectionProvider";
 import { PageFrame } from "@/features/workbench/components/PageFrame";

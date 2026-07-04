@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useMemo, useEffect } from "react";
+import { useRef, useState, useMemo, useEffect, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Artifact } from "@/lib/types";
 import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, Copy, Check, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, WrapText, Search, Hash, GitCompare, X } from "lucide-react";
@@ -251,6 +251,17 @@ interface VirtualizedArtifactListProps {
   maxHeight?: string;
 }
 
+interface ArtifactSection {
+  id: string;
+  label: string;
+  icon?: ReactNode;
+  items: Artifact[];
+}
+
+type FlatArtifactItem =
+  | { type: "header"; data: ArtifactSection; index: number }
+  | { type: "item"; data: Artifact; index: number };
+
 export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100%" }: VirtualizedArtifactListProps) {
   const { t } = useI18n();
   const parentRef = useRef<HTMLDivElement>(null);
@@ -269,7 +280,7 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
     (a) => !["product", "architecture", "development", "testing", "plan", "execution_result"].includes(a.kind)
   ), [artifacts]);
 
-  const allSections = useMemo(() => [
+  const allSections = useMemo<ArtifactSection[]>(() => [
     { id: "product", label: t("artifacts.product"), icon: <FileJson size={12} className="text-warning" />, items: productArtifacts },
     { id: "architecture", label: t("artifacts.architecture"), icon: <FileText size={12} className="text-brand" />, items: architectureArtifacts },
     { id: "development", label: t("artifacts.development"), icon: <ListTodo size={12} className="text-success" />, items: developmentArtifacts },
@@ -280,7 +291,7 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
   ].filter(section => section.items.length > 0), [t, productArtifacts, architectureArtifacts, developmentArtifacts, testingArtifacts, planArtifacts, execArtifacts, otherArtifacts]);
 
   const flatItems = useMemo(() => {
-    const items: Array<{ type: "header" | "item"; data: any; index: number }> = [];
+    const items: FlatArtifactItem[] = [];
     allSections.forEach((section, sectionIdx) => {
       items.push({ type: "header", data: section, index: items.length });
       section.items.forEach((artifact) => {
@@ -295,7 +306,11 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) => flatItems[index].type === "header" ? 40 : expandedId === flatItems[index].data.id ? 300 : 60,
+    estimateSize: (index) => {
+      const item = flatItems[index];
+      if (!item) return 60;
+      return item.type === "header" ? 40 : expandedId === item.data.id ? 300 : 60;
+    },
     overscan: 5,
   });
 
@@ -373,6 +388,7 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
         >
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const item = flatItems[virtualRow.index];
+            if (!item) return null;
 
             if (item.type === "header") {
               const section = item.data;

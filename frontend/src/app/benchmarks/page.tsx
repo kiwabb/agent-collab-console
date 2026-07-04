@@ -18,9 +18,10 @@ import {
   getCalibrationReport,
   listBenchmarkRuns,
   setBaselineRun,
-} from "@/lib/api";
+} from "@/lib/api/benchmarks";
 import type {
   BenchmarkDiff,
+  BenchmarkJobStatus,
   BenchmarkRun,
   CalibrationReport,
 } from "@/lib/types";
@@ -84,7 +85,7 @@ export default function BenchmarksRoutePage() {
   );
 
   const handleStarted = useCallback(
-    (res: { job_id: string; status: import("@/lib/types").BenchmarkJobStatus; status_url: string }) => {
+    (res: { job_id: string; status: BenchmarkJobStatus; status_url: string }) => {
       setActiveJobId(res.job_id);
     },
     [],

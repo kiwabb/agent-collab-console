@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { getCodexIssues } from "@/lib/api";
+import { getCodexIssues } from "@/lib/api/issues";
 import type { CodexIssue } from "@/lib/types";
 
 /**

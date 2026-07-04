@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Bot, Network, RefreshCcw, ShieldCheck, Sparkles } from "lucide-react";
-import { listAgents } from "@/lib/api";
+import { listAgents } from "@/lib/api/agents";
 import type { Agent } from "@/lib/types";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ const MANAGED_ROLE_KEYS = [
   "engineer",
   "engineer_frontend",
   "engineer_backend",
+  "operations_engineer",
   "qa",
 ] as const;
 const SPECIALIST_ROLE_KEYS = [

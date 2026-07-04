@@ -345,3 +345,67 @@ def test_regenerate_all_stream_with_no_prototypes_emits_zero_summary(
     assert [e["event"] for e in events] == ["batch_meta", "all_done"]
     assert events[0]["data"] == {"count": 0}
     assert events[-1]["data"] == {"ok": [], "failed": []}
+
+
+# ---------------------------------------------------------------------------
+# Code-driven endpoints
+# ---------------------------------------------------------------------------
+
+
+def _write_page_for_api(project_id: str, rel: str, body: str) -> None:
+    import app.bootstrap as bootstrap_module
+    import sqlite3
+
+    store = bootstrap_module.async_store
+    assert store is not None
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute("SELECT repo_path FROM projects WHERE id = ?", (project_id,)).fetchone()
+    assert row is not None
+    path = Path(row[0]) / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+def test_code_candidates_endpoint_returns_preview(client, seeded_project):
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "frontend/src/app/projects/[id]/prototypes/page.tsx",
+        "export default function ProjectPrototypesPage() { return <main /> }",
+    )
+    resp = client.get(f"/api/projects/{pid}/prototypes/code-candidates")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["count"] == 1
+    candidate = body["candidates"][0]
+    assert candidate["route"] == "/projects/:id/prototypes"
+    assert candidate["action"] == "create"
+
+
+def test_generate_from_code_stream_creates_then_skips(client, seeded_project, monkeypatch):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/page.tsx",
+        "export default function HomePage() { return <main>Home</main> }",
+    )
+
+    with client.stream("GET", f"/api/projects/{pid}/prototypes/generate-from-code/stream") as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    assert events[0]["event"] == "scan_meta"
+    assert events[-1]["event"] == "all_done"
+    assert events[-1]["data"]["created"] == 1
+    assert len([e for e in events if e["event"] == "prototype_done"]) == 1
+
+    with client.stream("GET", f"/api/projects/{pid}/prototypes/generate-from-code/stream") as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    second = _consume_sse_response(text)
+    assert [e["event"] for e in second] == ["scan_meta", "candidate_start", "candidate_skip", "all_done"]
+    assert second[-1]["data"]["skipped"] == 1
+
+
+def test_generate_from_code_stream_returns_404_for_unknown_project(client):
+    resp = client.get("/api/projects/no-such-project/prototypes/generate-from-code/stream")
+    assert resp.status_code == 404

@@ -5,7 +5,7 @@ import type { CreateSkillRequest, Skill, SkillImportResult, UpdateSkillRequest }
 
 export async function listSkills(
   opts: { search?: string; category?: string } = {},
-): Promise<import("../types").Skill[]> {
+): Promise<Skill[]> {
   const params = new URLSearchParams();
   if (opts.search) params.set("search", opts.search);
   if (opts.category) params.set("category", opts.category);
@@ -38,8 +38,8 @@ export async function deleteSkillCategory(name: string, force = false): Promise<
   }
 }
 export async function createSkill(
-  body: import("../types").CreateSkillRequest,
-): Promise<import("../types").Skill> {
+  body: CreateSkillRequest,
+): Promise<Skill> {
   const response = await fetch(`${API_BASE}/skills`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -49,8 +49,8 @@ export async function createSkill(
 }
 export async function updateSkill(
   skillId: string,
-  body: import("../types").UpdateSkillRequest,
-): Promise<import("../types").Skill> {
+  body: UpdateSkillRequest,
+): Promise<Skill> {
   const response = await fetch(`${API_BASE}/skills/${encodeURIComponent(skillId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -66,13 +66,13 @@ export async function deleteSkill(skillId: string): Promise<{ deleted: string }>
 }
 export async function importSkillsMarkdown(
   files: File[],
-): Promise<import("../types").SkillImportResult> {
+): Promise<SkillImportResult> {
   const fd = new FormData();
   files.forEach((f) => fd.append("files", f));
   const response = await fetch(`${API_BASE}/skills/import/md`, { method: "POST", body: fd });
   return handleResponse(response);
 }
-export async function importSkillsExcel(file: File): Promise<import("../types").SkillImportResult> {
+export async function importSkillsExcel(file: File): Promise<SkillImportResult> {
   const fd = new FormData();
   fd.append("file", file);
   const response = await fetch(`${API_BASE}/skills/import/excel`, { method: "POST", body: fd });

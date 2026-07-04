@@ -7,6 +7,10 @@ export interface Prototype {
   title: string;
   framework: string;
   current_version: number;
+  source_kind: "manual" | "code";
+  source_ref: string | null;
+  source_hash: string | null;
+  source_meta_json: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -25,4 +29,29 @@ export interface PrototypeVersion {
 export interface PrototypeDetail {
   prototype: Prototype;
   versions: PrototypeVersion[];
+}
+
+export type PrototypeCodeCandidateAction = "create" | "regenerate" | "skip" | "unsupported";
+
+export interface PrototypeCodeCandidate {
+  id: string;
+  title: string;
+  route: string;
+  kind: "page" | "route" | "feature";
+  framework_hint: string;
+  source_paths: string[];
+  primary_source_path: string;
+  source_hash: string;
+  source_excerpt: string;
+  signals: string[];
+  action: PrototypeCodeCandidateAction;
+  prototype_id: string | null;
+  unsupported_reason: string | null;
+}
+
+export interface PrototypeCodeCandidatesResponse {
+  project_id: string;
+  count: number;
+  counts: Record<PrototypeCodeCandidateAction, number>;
+  candidates: PrototypeCodeCandidate[];
 }

@@ -239,6 +239,17 @@ async def test_aggregate_issue_spend_sums_only_completed_runs(tmp_path):
                 updated_at=now,
             )
         )
+        await store.save_execution_process(
+            ExecutionProcess(
+                id="ep-cancelled-1",
+                task_id=task.id,
+                session_id=issue.session_id,
+                status="Cancelled",
+                total_cost_usd=0.50,
+                created_at=now,
+                updated_at=now,
+            )
+        )
         # Running run: NOT counted (cost not yet final).
         await store.save_execution_process(
             ExecutionProcess(
@@ -265,7 +276,7 @@ async def test_aggregate_issue_spend_sums_only_completed_runs(tmp_path):
         )
 
         spend = await aggregate_issue_spend_usd(store, issue.id)
-        assert spend == pytest.approx(2.0)
+        assert spend == pytest.approx(2.5)
     finally:
         await store.close()
 
@@ -302,6 +313,48 @@ async def test_compute_budget_status_explicit_override(tmp_path):
         assert status.budget_usd == 4.0
         assert status.has_ceiling
         assert status.remaining_usd == 4.0
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_compute_budget_status_reserves_running_process_estimate(tmp_path, monkeypatch):
+    from app.adapters.async_sqlite_store import AsyncSQLiteStore
+    from app.application.budget_service import compute_issue_budget_status
+
+    monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.75")
+    store = AsyncSQLiteStore(str(tmp_path / "reserved.db"))
+    try:
+        issue = _make_issue(budget_usd=2.0)
+        await store.save_codex_issue(issue)
+        task = CodexTask(
+            id="task-running",
+            session_id=issue.session_id,
+            project_id=issue.project_id,
+            issue_id=issue.id,
+            title="impl",
+            prompt="do it",
+        )
+        await store.save_codex_task(task)
+        now = datetime.now()
+        await store.save_execution_process(
+            ExecutionProcess(
+                id="ep-running",
+                task_id=task.id,
+                session_id=issue.session_id,
+                status="Running",
+                total_cost_usd=99.0,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        status = await compute_issue_budget_status(store, issue)
+
+        assert status.spent_usd == 0.0
+        assert status.reserved_usd == pytest.approx(0.75)
+        assert status.effective_spend_usd == pytest.approx(0.75)
+        assert status.remaining_usd == pytest.approx(1.25)
     finally:
         await store.close()
 

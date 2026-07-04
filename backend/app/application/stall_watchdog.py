@@ -5,8 +5,8 @@ from __future__ import annotations
 How it works:
 - `task_activity.touch(task_id)` is called from the runtime on every LLM
   stream event; the watchdog reads that timestamp.
-- Every WATCHDOG_INTERVAL_S seconds the watchdog scans all in-flight tasks
-  (status in {running, responding}). If a task has been silent for more
+- Every WATCHDOG_INTERVAL_S seconds the watchdog scans all active tasks
+  (`task_statuses.is_task_active_status`). If a task has been silent for more
   than STALL_THRESHOLD_S, the watchdog:
     1. terminate_task(task_id)   → kills the hung HTTP/process call;
                                     runtime marks task.status = "failed".
@@ -24,10 +24,13 @@ Environment knobs (all optional):
 """
 import asyncio  # noqa: E402
 import logging  # noqa: E402
-import os  # noqa: E402
 from datetime import datetime  # noqa: E402
 
 from app.application import task_activity, timeouts  # noqa: E402
+from app.application.task_statuses import (  # noqa: E402
+    is_task_active_status,
+    is_task_failure_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +39,6 @@ NUDGE_PROMPT = (
     "然后**直接给出最终结果**（按照原本的产物 schema），不要再做更多调研——你已经收集到的信息足够了。"  # noqa: RUF001
     "如果某些细节不确定，按合理默认值填，并在 risks 字段简短说明。"  # noqa: RUF001
 )
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return default
-
 
 async def _emit_stall_event(event_type: str, **fields) -> None:
     """GAP I: structured stall lifecycle events on the global bus so stalls are
@@ -79,8 +72,8 @@ async def _scan_once(store, process_manager, run_task_with_user_content) -> None
         task_id = _field(task, "id")
         if not task_id:
             continue
-        status = (_field(task, "status") or "").lower()
-        if status not in {"running", "responding"}:
+        status = _field(task, "status")
+        if not is_task_active_status(status):
             # Not in flight — clean trackers so a future re-run starts fresh.
             task_activity.clear(task_id)
             continue
@@ -189,7 +182,10 @@ async def _recover_nudge_result(store, process_manager, task_id: str) -> bool:
         return False
     try:
         task = await store.load_codex_task(task_id)
-        if task is None or task.status not in {"failed", "responding", "running"}:
+        status = getattr(task, "status", None)
+        if task is None or (
+            not is_task_active_status(status) and not is_task_failure_status(status)
+        ):
             return False
         # Promote so refresh_task_result extracts + persists from the nudge EP.
         task.status = "done"
@@ -210,7 +206,7 @@ async def _recover_nudge_result(store, process_manager, task_id: str) -> bool:
 
 async def run(store, get_process_manager, run_task_with_user_content) -> None:
     """Long-running watchdog loop. Cancel via task.cancel() on shutdown."""
-    if not _env_bool("CODEX_STALL_WATCHDOG", True):
+    if not timeouts.stall_watchdog_enabled():
         logger.info("stall watchdog disabled via CODEX_STALL_WATCHDOG=false")
         return
     interval = timeouts.stall_interval_s()

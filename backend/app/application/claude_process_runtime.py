@@ -6,6 +6,7 @@ import os
 import subprocess
 from datetime import datetime
 
+from app.application import timeouts
 from app.application.process_runtime_common import (
     AsyncProcessEntry,
     BaseProcessRuntime,
@@ -33,9 +34,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             help_orchestrator=help_orchestrator,
             refresh_task_result=refresh_task_result,
         )
-        self._claude_cmd = os.getenv(
-            "CLAUDE_CMD", "claude -p --output-format=stream-json --verbose"
-        ).split()
+        self._claude_cmd = timeouts.claude_cmd().split()
 
     def check_availability(self) -> bool:
         try:
@@ -224,6 +223,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             stderr=asyncio.subprocess.PIPE,
             cwd=effective_cwd,
             env=env,
+            start_new_session=True,
             # Raise the StreamReader line limit (default 64KB) so a single large
             # stream-json line (a big tool result / long assistant turn) doesn't
             # raise LimitOverrunError and break the reader loop.

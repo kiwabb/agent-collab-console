@@ -1,15 +1,28 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 
+type WorkbenchTransitionFlag =
+  | 'isTransitioningToArchitecture'
+  | 'isTransitioningToDevelopment'
+  | 'isTransitioningToTesting';
+type WorkbenchStoreShape = WorkbenchState & WorkbenchActions;
+type WorkbenchSetter = (updater: (state: WorkbenchStoreShape) => void) => void;
+
 // Conductor-driven restart: the old "transition to architecture/development/testing"
 // buttons map onto a single action — kick the Conductor loop on the issue.
 // Conductor decides which agent to dispatch next; the phase label on the issue
 // updates as nodes complete.
-async function startGraphForIssue(get: any, set: any, flagKey: string, issueId: string, newPhase: string) {
-  set((state: any) => { state[flagKey] = true; });
+async function startGraphForIssue(
+  get: () => WorkbenchStoreShape,
+  set: WorkbenchSetter,
+  flagKey: WorkbenchTransitionFlag,
+  issueId: string,
+  newPhase: string,
+) {
+  set((state) => { state[flagKey] = true; });
   try {
     await autoStartIssueGraph(issueId);
-    const issue = get().issues.find((i: any) => i.id === issueId);
+    const issue = get().issues.find((i) => i.id === issueId);
     if (issue && get().updateIssue) {
       get().updateIssue(issueId, { ...issue, current_phase: newPhase });
     }
@@ -17,10 +30,10 @@ async function startGraphForIssue(get: any, set: any, flagKey: string, issueId: 
       await get().loadIssueArtifacts(issueId);
     }
   } catch (err) {
-    set((state: any) => { state.error = err instanceof Error ? err.message : 'Conductor start failed'; });
+    set((state) => { state.error = err instanceof Error ? err.message : 'Conductor start failed'; });
     throw err;
   } finally {
-    set((state: any) => { state[flagKey] = false; });
+    set((state) => { state[flagKey] = false; });
   }
 }
 import type {
@@ -39,21 +52,13 @@ import type {
   SendMessageResult,
 } from '@/lib/types';
 import type { BusEvent } from '@/contexts/ExecutionProcessesContext';
-import {
-  listProjects,
-  getProject,
-  getWorkspaces,
-  getCodexIssues,
-  getCodexTasks,
-  getTaskHelpRequests,
-  getCodexIssueArtifacts,
-  getPendingApprovals,
-  getRuntimeCatalog,
-  autoStartIssueGraph,
-  refineCodexTask,
-  chatCodexTask,
-  sendCodexTask,
-} from '@/lib/api';
+import { autoStartIssueGraph } from '@/lib/api/conductors';
+import { getCodexIssues, getCodexIssueArtifacts } from '@/lib/api/issues';
+import { getPendingApprovals } from '@/lib/api/approvals';
+import { listProjects, getProject } from '@/lib/api/projects';
+import { getRuntimeCatalog } from '@/lib/api/runtime';
+import { chatCodexTask, getCodexTasks, getTaskHelpRequests, refineCodexTask, sendCodexTask } from '@/lib/api/tasks';
+import { getWorkspaces } from '@/lib/api/workspaces';
 
 type NavigationState = 'home' | 'workspace' | 'issue';
 

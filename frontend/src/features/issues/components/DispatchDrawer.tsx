@@ -7,12 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import {
-  chatCodexTask,
-  refineCodexTask,
-  rerunCodexTask,
-  terminateCodexTask,
-} from "@/lib/api";
+import { chatCodexTask, refineCodexTask, rerunCodexTask, terminateCodexTask } from "@/lib/api/tasks";
 import { formatTok, formatCost, formatDuration } from "@/lib/format";
 import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
 import { SubAgentResultCard } from "./SubAgentResultCard";

@@ -1,6 +1,11 @@
 import { normalizeLogs } from "./codexLogNormalizer";
 import type { CodexTaskMessage, ExecutionProcess, NormalizedEntry } from "./types";
 
+type ProcessConversationFields = ExecutionProcess & {
+  messages?: Record<string, CodexTaskMessage>;
+  logs?: unknown[];
+};
+
 export function sortMessages<T extends { created_at?: string | null; role?: string }>(messages: T[]): T[] {
   return [...messages].sort((a, b) => {
     const aTime = a?.created_at ? new Date(a.created_at).getTime() : 0;
@@ -35,7 +40,7 @@ export function mergeTaskConversationMessages(messageGroups: CodexTaskMessage[][
 }
 
 export function mergeTaskConversationLogs(logGroups: unknown[][]): unknown[] {
-  return sortLogs(mergeById(logGroups.flat() as unknown as { id?: string; created_at?: string | null }[]));
+  return sortLogs(mergeById(logGroups.flat() as { id?: string; created_at?: string | null }[]));
 }
 
 export function buildConversationMessages(messages: CodexTaskMessage[], logs: unknown[]): CodexTaskMessage[] {
@@ -72,9 +77,9 @@ export function buildTaskConversationDetail(
   executionProcesses: ExecutionProcess[]
 ): { logs: unknown[]; messages: CodexTaskMessage[] } {
   const processMessages = (executionProcesses || []).flatMap((process) =>
-    Object.values((process as unknown as Record<string, unknown>).messages || {}),
+    Object.values((process as ProcessConversationFields).messages || {}),
   );
-  const processLogs = (executionProcesses || []).flatMap((process) => (process as unknown as Record<string, unknown>).logs || []);
+  const processLogs = (executionProcesses || []).flatMap((process) => (process as ProcessConversationFields).logs || []);
   const logs = mergeTaskConversationLogs([processLogs]);
   return {
     logs,

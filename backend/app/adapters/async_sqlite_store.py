@@ -7,7 +7,7 @@ from uuid import uuid4
 import aiosqlite
 
 from app.adapters.audit_log_query import build_audit_log_query as _build_audit_log_query
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, Project, Skill, SelfImprovementProposal
+from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, Project, Prototype, PrototypeVersion, Skill, SelfImprovementProposal
 
 
 class AsyncSQLiteStore:
@@ -431,11 +431,62 @@ class AsyncSQLiteStore:
                 default_branch TEXT NOT NULL DEFAULT 'main',
                 origin_url TEXT,
                 setup_script TEXT,
+                run_command TEXT,
                 created_at TEXT,
                 updated_at TEXT
             )
         """)
+        for stmt in ("ALTER TABLE projects ADD COLUMN run_command TEXT",):
+            try:
+                await conn.execute(stmt)
+            except aiosqlite.OperationalError:
+                pass
         await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_repo_path ON projects(repo_path)")
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS prototypes (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                framework TEXT NOT NULL DEFAULT 'html',
+                current_version INTEGER NOT NULL DEFAULT 0,
+                source_kind TEXT NOT NULL DEFAULT 'manual',
+                source_ref TEXT,
+                source_hash TEXT,
+                source_meta_json TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS prototype_versions (
+                id TEXT PRIMARY KEY,
+                prototype_id TEXT NOT NULL,
+                version_no INTEGER NOT NULL,
+                instruction TEXT NOT NULL,
+                html TEXT NOT NULL,
+                disk_path TEXT,
+                created_at TEXT,
+                UNIQUE(prototype_id, version_no),
+                FOREIGN KEY (prototype_id) REFERENCES prototypes(id) ON DELETE CASCADE
+            )
+        """)
+        for stmt in (
+            "ALTER TABLE prototypes ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'manual'",
+            "ALTER TABLE prototypes ADD COLUMN source_ref TEXT",
+            "ALTER TABLE prototypes ADD COLUMN source_hash TEXT",
+            "ALTER TABLE prototypes ADD COLUMN source_meta_json TEXT",
+        ):
+            try:
+                await conn.execute(stmt)
+            except aiosqlite.OperationalError:
+                pass
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_prototypes_project_id ON prototypes(project_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_prototypes_project_source ON prototypes(project_id, source_kind, source_ref)"
+        )
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_version (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -501,6 +552,12 @@ class AsyncSQLiteStore:
             await conn.execute(
                 "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
                 (2,),
+            )
+            current_version = 2
+        if current_version < 3:
+            await conn.execute(
+                "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+                (3,),
             )
         # Create runtime_catalog_settings table if not exists
         await conn.execute("""
@@ -1372,7 +1429,7 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
         select_sql = (
-            "SELECT id, session_id, project_id, issue_id, phase, title, prompt, role, executor, status, result, result_json, "
+            "SELECT id, session_id, project_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, result_json, "
             "parent_task_id, task_kind, blocked_by_help_id, workspace_path, "
             "git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, "
             "resume_session_id, resume_message_id, last_execution_process_id, "
@@ -1399,7 +1456,7 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
-            "INSERT OR REPLACE INTO projects (id, name, repo_path, default_branch, origin_url, setup_script, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO projects (id, name, repo_path, default_branch, origin_url, setup_script, run_command, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 project.id,
                 project.name,
@@ -1407,6 +1464,7 @@ class AsyncSQLiteStore:
                 project.default_branch,
                 project.origin_url,
                 project.setup_script,
+                project.run_command,
                 self._format_datetime(project.created_at),
                 self._format_datetime(project.updated_at),
             ),
@@ -1428,6 +1486,7 @@ class AsyncSQLiteStore:
             default_branch=row["default_branch"] or "main",
             origin_url=row["origin_url"],
             setup_script=row["setup_script"],
+            run_command=row["run_command"],
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1447,6 +1506,7 @@ class AsyncSQLiteStore:
             default_branch=row["default_branch"] or "main",
             origin_url=row["origin_url"],
             setup_script=row["setup_script"],
+            run_command=row["run_command"],
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1465,6 +1525,7 @@ class AsyncSQLiteStore:
                 default_branch=r["default_branch"] or "main",
                 origin_url=r["origin_url"],
                 setup_script=r["setup_script"],
+                run_command=r["run_command"],
                 created_at=self._parse_datetime(r["created_at"]),
                 updated_at=self._parse_datetime(r["updated_at"]),
             )
@@ -1476,6 +1537,231 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         await conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         await conn.commit()
+
+    # --- Prototype CRUD ---
+
+    def _prototype_from_row(self, row: aiosqlite.Row) -> Prototype:
+        return Prototype(
+            id=row["id"],
+            project_id=row["project_id"],
+            title=row["title"],
+            framework=row["framework"] or "html",
+            current_version=int(row["current_version"] or 0),
+            source_kind=row["source_kind"] or "manual",
+            source_ref=row["source_ref"],
+            source_hash=row["source_hash"],
+            source_meta_json=row["source_meta_json"],
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    def _prototype_version_from_row(self, row: aiosqlite.Row) -> PrototypeVersion:
+        return PrototypeVersion(
+            id=row["id"],
+            prototype_id=row["prototype_id"],
+            version_no=int(row["version_no"]),
+            instruction=row["instruction"],
+            html=row["html"],
+            disk_path=row["disk_path"],
+            created_at=self._parse_datetime(row["created_at"]),
+        )
+
+    async def save_prototype(self, prototype: Prototype) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """
+            INSERT OR REPLACE INTO prototypes
+            (id, project_id, title, framework, current_version, source_kind,
+             source_ref, source_hash, source_meta_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                prototype.id,
+                prototype.project_id,
+                prototype.title,
+                prototype.framework,
+                prototype.current_version,
+                prototype.source_kind or "manual",
+                prototype.source_ref,
+                prototype.source_hash,
+                prototype.source_meta_json,
+                self._format_datetime(prototype.created_at),
+                self._format_datetime(prototype.updated_at),
+            ),
+        )
+        await conn.commit()
+
+    async def load_prototype(self, prototype_id: str) -> Prototype | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """
+            SELECT id, project_id, title, framework, current_version, source_kind,
+                   source_ref, source_hash, source_meta_json, created_at, updated_at
+            FROM prototypes
+            WHERE id = ?
+            """,
+            (prototype_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return self._prototype_from_row(row) if row else None
+
+    async def load_prototype_by_source(
+        self, project_id: str, source_ref: str
+    ) -> Prototype | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """
+            SELECT id, project_id, title, framework, current_version, source_kind,
+                   source_ref, source_hash, source_meta_json, created_at, updated_at
+            FROM prototypes
+            WHERE project_id = ? AND source_kind = 'code' AND source_ref = ?
+            """,
+            (project_id, source_ref),
+        ) as cur:
+            row = await cur.fetchone()
+        return self._prototype_from_row(row) if row else None
+
+    async def list_prototypes(self, project_id: str) -> list[Prototype]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """
+            SELECT id, project_id, title, framework, current_version, source_kind,
+                   source_ref, source_hash, source_meta_json, created_at, updated_at
+            FROM prototypes
+            WHERE project_id = ?
+            ORDER BY updated_at DESC, created_at DESC, title ASC
+            """,
+            (project_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [self._prototype_from_row(row) for row in rows]
+
+    async def list_code_prototypes(self, project_id: str) -> list[Prototype]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """
+            SELECT id, project_id, title, framework, current_version, source_kind,
+                   source_ref, source_hash, source_meta_json, created_at, updated_at
+            FROM prototypes
+            WHERE project_id = ? AND source_kind = 'code'
+            ORDER BY updated_at DESC, created_at DESC, title ASC
+            """,
+            (project_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [self._prototype_from_row(row) for row in rows]
+
+    async def update_prototype_source_metadata(
+        self,
+        prototype_id: str,
+        source_hash: str,
+        source_meta_json: str | None,
+    ) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """
+            UPDATE prototypes
+            SET source_hash = ?, source_meta_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                source_hash,
+                source_meta_json,
+                self._format_datetime(datetime.now()),
+                prototype_id,
+            ),
+        )
+        await conn.commit()
+
+    async def delete_prototype(self, prototype_id: str) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute("DELETE FROM prototype_versions WHERE prototype_id = ?", (prototype_id,))
+        await conn.execute("DELETE FROM prototypes WHERE id = ?", (prototype_id,))
+        await conn.commit()
+
+    async def save_prototype_version(self, version: PrototypeVersion) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """
+            INSERT INTO prototype_versions
+            (id, prototype_id, version_no, instruction, html, disk_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(prototype_id, version_no) DO UPDATE SET
+                id = excluded.id,
+                instruction = excluded.instruction,
+                html = excluded.html,
+                disk_path = excluded.disk_path,
+                created_at = excluded.created_at
+            """,
+            (
+                version.id,
+                version.prototype_id,
+                version.version_no,
+                version.instruction,
+                version.html,
+                version.disk_path,
+                self._format_datetime(version.created_at),
+            ),
+        )
+        if version.version_no > 0:
+            await conn.execute(
+                """
+                UPDATE prototypes
+                SET current_version = MAX(current_version, ?), updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    version.version_no,
+                    self._format_datetime(version.created_at or datetime.now()),
+                    version.prototype_id,
+                ),
+            )
+        await conn.commit()
+
+    async def load_prototype_version(
+        self, prototype_id: str, version_no: int
+    ) -> PrototypeVersion | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """
+            SELECT id, prototype_id, version_no, instruction, html, disk_path, created_at
+            FROM prototype_versions
+            WHERE prototype_id = ? AND version_no = ?
+            """,
+            (prototype_id, version_no),
+        ) as cur:
+            row = await cur.fetchone()
+        return self._prototype_version_from_row(row) if row else None
+
+    async def list_prototype_versions(self, prototype_id: str) -> list[PrototypeVersion]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """
+            SELECT id, prototype_id, version_no, instruction, html, disk_path, created_at
+            FROM prototype_versions
+            WHERE prototype_id = ?
+            ORDER BY version_no ASC
+            """,
+            (prototype_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [self._prototype_version_from_row(row) for row in rows]
 
     async def append_project_audit(
         self,

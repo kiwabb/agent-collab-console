@@ -214,3 +214,18 @@ def test_repeated_low_signal_finalize_skips_llm():
 
     assert decision.action == "skip_llm"
     assert decision.reason_code == "recent_safe_finalize"
+
+
+def test_repeated_success_alias_finalize_skips_llm():
+    decision = decide_conductor_policy(
+        _issue(),
+        _task(),
+        recent_turns=[
+            _turn("finalize", '{"status":"completed","answer":"already complete"}', index=0),
+            _turn("finalize", '{"status":"success","answer":"already complete"}', index=1),
+        ],
+        graph=None,
+    )
+
+    assert decision.action == "skip_llm"
+    assert decision.reason_code == "recent_safe_finalize"

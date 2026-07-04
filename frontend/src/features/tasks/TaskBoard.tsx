@@ -37,7 +37,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { getRuntimeCatalog } from "@/lib/api";
+import { getRuntimeCatalog } from "@/lib/api/runtime";
 import { useToast } from "@/components/ui/toast";
 
 function formatRelativeTime(dateStr: string | null): string {

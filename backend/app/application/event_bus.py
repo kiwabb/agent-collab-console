@@ -4,14 +4,16 @@ from collections import deque  # noqa: I001, RUF100
 from datetime import datetime
 from typing import Any
 import asyncio
-import os
 import threading
 import sys
+
+from app.application import timeouts
+from app.application.task_statuses import is_task_terminal_status
 
 
 class EventBus:
     def __init__(self):
-        self._buffer_size = int(os.getenv("EVENT_BUS_BUFFER_SIZE", "1000"))
+        self._buffer_size = timeouts.event_bus_buffer_size()
         self.events: deque[dict[str, Any]] = deque(maxlen=max(1, self._buffer_size))
         self.subscribers: list[asyncio.Queue] = []
         self._loop = None
@@ -110,24 +112,15 @@ class EventBus:
                         status,
                         result,
                         execution_process_id=execution_process_id,
+                        fallback_event=event,
                     )
-                    if execution_process_id and str(status or "").lower() in {
-                        "done",
-                        "completed",
-                        "failed",
-                        "killed",
-                    }:
+                    if execution_process_id and is_task_terminal_status(status):
                         await message_stream_manager.publish_finished(execution_process_id)
                         await raw_log_stream_manager.publish_finished(execution_process_id)
 
                 # Workflow DAG: notify scheduler on terminal task statuses so
                 # the graph can advance / open a replan.
-                if task_id and str(status or "").lower() in {
-                    "done",
-                    "failed",
-                    "completed",
-                    "killed",
-                }:
+                if task_id and is_task_terminal_status(status):
                     try:
                         await self._notify_workflow_scheduler(task_id)
                     except Exception as exc:  # noqa: BLE001, RUF100

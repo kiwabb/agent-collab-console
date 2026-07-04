@@ -44,6 +44,12 @@ from app.application.project_conductor import ProjectConductor
 from app.application.project_memory_service import record_project_memory
 from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.application.self_improvement_service import record_issue_self_improvement
+from app.application.task_statuses import (
+    TASK_FAILURE_STATUSES,
+    TASK_SUCCESS_STATUSES,
+    is_task_failure_status,
+    normalize_task_status,
+)
 from app.domain.models import ConductorStateLog, ConductorTask, ConductorTurn
 
 
@@ -118,6 +124,7 @@ def build_issue_conductor_prompt(
     budget_context: str,
     language_directive: str,
     conductor_policy_hint: str = "",
+    recovery_context: str = "",
 ) -> str:
     """Build the issue-level Conductor operating prompt.
 
@@ -138,7 +145,7 @@ def build_issue_conductor_prompt(
 ## Issue
 Title: {issue.title}
 Description: {issue.description or "(no description provided)"}
-{project_context}{budget_context}{orchestration_policy}{conductor_policy_hint}
+{project_context}{budget_context}{recovery_context}{orchestration_policy}{conductor_policy_hint}
 
 ## Your Job
 Complete the issue by choosing the smallest reliable multi-agent workflow. You own
@@ -210,6 +217,28 @@ class ConductorLoopResult:
     messages: list[dict[str, Any]]
     tool_events: list[dict[str, Any]] = field(default_factory=list)
     turn_count: int = 0
+
+
+_CONDUCTOR_SUCCESS_STATUSES = TASK_SUCCESS_STATUSES
+_CONDUCTOR_FAILURE_STATUSES = TASK_FAILURE_STATUSES | {
+    "blocked",
+    "needs_user",
+    "max_wall",
+    "max_turns",
+}
+
+
+def _normalize_conductor_status(status: str | None) -> str:
+    normalized = normalize_task_status(status)
+    if normalized in _CONDUCTOR_SUCCESS_STATUSES:
+        return "done"
+    if normalized in _CONDUCTOR_FAILURE_STATUSES:
+        return normalized
+    return "failed"
+
+
+def _is_conductor_success_status(status: str | None) -> bool:
+    return _normalize_conductor_status(status) == "done"
 
 
 async def _run_heartbeat_pulse(
@@ -358,16 +387,32 @@ async def run_conductor_loop(
 
         tool_uses = [block for block in content if block.get("type") == "tool_use"]
         if not tool_uses:
+            if turn_index < max_turns - 1:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Protocol error: you responded without a tool call. "
+                            "You MUST call finalize_task to finish, or use another available tool "
+                            "if the task is not ready to finish."
+                        ),
+                    }
+                )
+                continue
+            protocol_text = (
+                final_text
+                or "Conductor stopped because the model did not call finalize_task."
+            )
             await _record_turn(
                 turn_recorder,
                 turn_index=turn_index,
                 sub_index=0,
                 kind="finalize",
-                payload={"status": "done", "answer": final_text},
+                payload={"status": "protocol_error", "answer": protocol_text},
             )
             return ConductorLoopResult(
-                status="done",
-                final_text=final_text,
+                status="protocol_error",
+                final_text=protocol_text,
                 messages=messages,
                 tool_events=tool_events,
                 turn_count=turn_index + 1,
@@ -393,11 +438,64 @@ async def run_conductor_loop(
                     else {},
                 },
             )
-        events = await _execute_tool_uses(tool_uses, tools)
+        finalize_mixed_with_work = len(tool_uses) > 1 and any(
+            str(tool_use.get("name") or "") == "finalize_task" for tool_use in tool_uses
+        )
+        clarification_mixed_with_work = len(tool_uses) > 1 and any(
+            str(tool_use.get("name") or "") == "request_user_clarification"
+            for tool_use in tool_uses
+        )
+        if clarification_mixed_with_work:
+            events = [
+                _tool_protocol_error(
+                    tool_use,
+                    (
+                        "request_user_clarification cannot be used in the same turn as other "
+                        "tools; ask the user first, then wait for their answer before dispatching"
+                    ),
+                )
+                for tool_use in tool_uses
+            ]
+        elif finalize_mixed_with_work:
+            events = [None for _ in tool_uses]
+            executable_uses: list[dict[str, Any]] = []
+            executable_indices: list[int] = []
+            for idx, tool_use in enumerate(tool_uses):
+                if str(tool_use.get("name") or "") == "finalize_task":
+                    events[idx] = _tool_protocol_error(
+                        tool_use,
+                        (
+                            "finalize_task cannot be used in the same turn as other tools; "
+                            "consume the other tool results first, then finalize in a later turn"
+                        ),
+                    )
+                else:
+                    executable_indices.append(idx)
+                    executable_uses.append(tool_use)
+            executable_events = await _execute_tool_uses(executable_uses, tools)
+            for idx, event in zip(executable_indices, executable_events):  # noqa: B905
+                events[idx] = event
+            events = [event for event in events if event is not None]
+        else:
+            events = await _execute_tool_uses(tool_uses, tools)
 
         result_blocks: list[dict[str, Any]] = []
         for sub_index, event in enumerate(events, start=1):
             tool_events.append(event)
+            if event["name"] == "finalize_task" and finalize_mixed_with_work:
+                event = {
+                    **event,
+                    "result": {
+                        **(event["result"] if isinstance(event["result"], dict) else {}),
+                        "status": "protocol_error",
+                        "error": (
+                            "finalize_task cannot be used in the same turn as other tools; "
+                            "consume the other tool results first, then finalize in a later turn"
+                        ),
+                    },
+                    "is_error": True,
+                }
+                tool_events[-1] = event
             result_blocks.append(
                 {
                     "type": "tool_result",
@@ -418,9 +516,27 @@ async def run_conductor_loop(
                     "is_error": event["is_error"],
                 },
             )
+            if event["name"] == "request_user_clarification" and not event["is_error"]:
+                result = event["result"] if isinstance(event["result"], dict) else {}
+                question = str(result.get("question") or result.get("answer") or final_text)
+                final_answer = question or "Waiting for user clarification."
+                await _record_turn(
+                    turn_recorder,
+                    turn_index=turn_index,
+                    sub_index=sub_index,
+                    kind="finalize",
+                    payload={"status": "needs_user", "answer": final_answer},
+                )
+                return ConductorLoopResult(
+                    status="needs_user",
+                    final_text=final_answer,
+                    messages=messages,
+                    tool_events=tool_events,
+                    turn_count=turn_index + 1,
+                )
             if event["name"] == "finalize_task" and not event["is_error"]:
                 result = event["result"] if isinstance(event["result"], dict) else {}
-                final_status = str(result.get("status") or "done")
+                final_status = _normalize_conductor_status(str(result.get("status") or "done"))
                 final_answer = str(result.get("answer") or result.get("summary") or final_text)
                 await _record_turn(
                     turn_recorder,
@@ -468,6 +584,17 @@ async def _execute_tool_uses(
     if len(tool_uses) == 1:
         return [await _execute_tool_use(tool_uses[0], tools)]
     return list(await asyncio.gather(*(_execute_tool_use(tu, tools) for tu in tool_uses)))
+
+
+def _tool_protocol_error(tool_use: dict[str, Any], error: str) -> dict[str, Any]:
+    tool_input = tool_use.get("input") if isinstance(tool_use.get("input"), dict) else {}
+    return {
+        "id": str(tool_use.get("id") or ""),
+        "name": str(tool_use.get("name") or ""),
+        "input": tool_input,
+        "result": {"status": "protocol_error", "error": error},
+        "is_error": True,
+    }
 
 
 async def _execute_tool_use(
@@ -586,6 +713,7 @@ async def run_issue_conductor_loop(
     store,
     event_bus=None,
     task_dispatcher_fn=None,
+    recovery_context: str = "",
 ) -> ConductorLoopResult:
     """Entry point for Conductor-driven issue orchestration."""
     logger = logging.getLogger(__name__)
@@ -915,6 +1043,7 @@ async def run_issue_conductor_loop(
             budget_context=budget_context,
             language_directive=language_directive,
             conductor_policy_hint=render_conductor_policy_hint(policy_decision),
+            recovery_context=recovery_context,
         )
 
         async def llm(messages, tools, on_token_delta=None):
@@ -926,7 +1055,13 @@ async def run_issue_conductor_loop(
                             "type": "tool_use",
                             "id": "toolu_policy_skip",
                             "name": "finalize_task",
-                            "input": {"status": "done", "answer": policy_decision.reason},
+                            "input": {
+                                "status": "blocked",
+                                "answer": (
+                                    "Conductor policy skipped the LLM turn; "
+                                    f"manual review is required before completion. {policy_decision.reason}"
+                                ),
+                            },
                         }
                     ],
                 }
@@ -939,8 +1074,8 @@ async def run_issue_conductor_loop(
                             "id": "toolu_fallback",
                             "name": "finalize_task",
                             "input": {
-                                "status": "done",
-                                "answer": "LLM not configured; conductor loop skipped.",
+                                "status": "blocked",
+                                "answer": "LLM not configured; conductor loop cannot complete the issue.",
                             },
                         }
                     ],
@@ -1025,9 +1160,9 @@ async def run_issue_conductor_loop(
             result_status=result.status,
         )
 
-        # max_wall (whole-loop ceiling hit) is a non-success terminal, same as
-        # failed: the issue did not complete, so the phase must reflect that.
-        is_failed_terminal = result.status in {"failed", "max_wall"}
+        # Only explicit success statuses seal as done. Blocked/cancelled/error,
+        # protocol failures, and loop ceilings must not masquerade as completed.
+        is_failed_terminal = not _is_conductor_success_status(result.status)
         await transition_conductor_phase(
             store=store,
             event_bus=event_bus,
@@ -1084,7 +1219,7 @@ async def recover_background_conductor_failure(
     if issue is None or not hasattr(store, "load_latest_conductor_task_for_issue"):
         return
     conductor_task = await store.load_latest_conductor_task_for_issue(issue_id)
-    if conductor_task is None or conductor_task.status == "failed":
+    if conductor_task is None or is_task_failure_status(conductor_task.status):
         return
     await _record_failure(
         store=store,
@@ -1171,23 +1306,39 @@ async def _record_failure(
 
 
 async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status: str) -> None:
-    graph_status = "done" if result_status in {"done", "success", "completed"} else "failed"
+    graph_status = "done" if _is_conductor_success_status(result_status) else "failed"
+    graph = None
     try:
         graph = await store.load_workflow_graph_for_issue(issue.id)
-        if graph is not None:
+    except Exception as exc:  # noqa: BLE001, RUF100
+        logging.getLogger(__name__).warning("workflow graph load failed during terminal seal: %s", exc)
+
+    if graph is not None:
+        try:
             if graph.status != graph_status:
                 graph.status = graph_status
                 graph.updated_at = datetime.now()
                 await store.save_workflow_graph(graph)
-            if graph_status == "done":
+        except Exception as exc:  # noqa: BLE001, RUF100
+            logging.getLogger(__name__).warning("workflow graph status seal failed: %s", exc)
+        if graph_status == "done":
+            try:
                 await record_project_memory(graph.id, store)
-                try:
-                    await record_issue_self_improvement(issue, store)
-                except Exception as exc:  # noqa: BLE001, RUF100
-                    logging.getLogger(__name__).warning(
-                        "self_improvement extraction failed: %s", exc
-                    )
-        if issue.status not in {"awaiting_approval", "awaiting_review", "awaiting_merge"}:
+            except Exception as exc:  # noqa: BLE001, RUF100
+                logging.getLogger(__name__).warning(
+                    "project memory record failed after successful seal: %s", exc
+                )
+            try:
+                await record_issue_self_improvement(issue, store)
+            except Exception as exc:  # noqa: BLE001, RUF100
+                logging.getLogger(__name__).warning("self_improvement extraction failed: %s", exc)
+
+    try:
+        preserve_awaiting_status = (
+            graph_status == "done"
+            and issue.status in {"awaiting_approval", "awaiting_review", "awaiting_merge"}
+        )
+        if not preserve_awaiting_status:
             issue.status = "completed" if graph_status == "done" else "failed"
             issue.updated_at = datetime.now()
             await store.save_codex_issue(issue)
@@ -1201,7 +1352,7 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
                 },
             )
     except Exception as exc:  # noqa: BLE001, RUF100
-        logging.getLogger(__name__).warning("graph status seal / project memory failed: %s", exc)
+        logging.getLogger(__name__).warning("issue terminal status seal failed: %s", exc)
 
     # Terminal-state swarm worktree cleanup (best-effort). Conductor finalizes
     # issues without the API merge/delete path, so residual per-agent swarm

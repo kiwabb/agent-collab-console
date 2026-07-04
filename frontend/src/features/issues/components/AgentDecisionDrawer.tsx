@@ -9,7 +9,7 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
-import { getCodexTask } from "@/lib/api";
+import { getCodexTask } from "@/lib/api/tasks";
 import type { CodexTask } from "@/lib/types";
 import { cn } from "@/lib/utils";
 

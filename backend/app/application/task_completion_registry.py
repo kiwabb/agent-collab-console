@@ -28,6 +28,7 @@ class TaskCompletionRegistry:
             obj = super().__new__(cls)
             obj._events: dict[str, asyncio.Event] = {}
             obj._results: dict[str, Any] = {}
+            obj._aliases: dict[str, str] = {}
             # task_id -> (result, monotonic_ts) for signal-before-register.
             obj._pending: dict[str, tuple[Any, float]] = {}
             cls._instance = obj
@@ -52,7 +53,19 @@ class TaskCompletionRegistry:
             ev.set()
 
     def is_registered(self, task_id: str) -> bool:
-        return task_id in self._events
+        return task_id in self._events or self._aliases.get(task_id) in self._events
+
+    def transfer(self, from_task_id: str, to_task_id: str) -> bool:
+        """Route future completion signals for ``to_task_id`` to ``from_task_id``.
+
+        Auto-retry creates a fresh task while the Conductor is already awaiting
+        the original task id. This alias preserves the original waiter while
+        allowing the retry's terminal event to unblock it.
+        """
+        if from_task_id not in self._events:
+            return False
+        self._aliases[to_task_id] = from_task_id
+        return True
 
     def _prune_pending(self) -> None:
         """Evict stale/excess buffered results so truly-never-registered tasks
@@ -70,7 +83,8 @@ class TaskCompletionRegistry:
                 self._pending.pop(tid, None)
 
     def signal(self, task_id: str, result: Any) -> None:
-        ev = self._events.get(task_id)
+        target_task_id = self._aliases.get(task_id, task_id)
+        ev = self._events.get(target_task_id)
         if ev is None:
             # Signal-before-register: the task runner finished (e.g. instant
             # executor_failed_to_start fail-fast) before the dispatcher called
@@ -78,10 +92,10 @@ class TaskCompletionRegistry:
             # pick it up instead of dropping it and stalling the dispatch until
             # hard_timeout. Bounded + TTL-pruned so a task that is NEVER
             # registered can't orphan the buffer forever.
-            self._pending[task_id] = (result, time.monotonic())
+            self._pending[target_task_id] = (result, time.monotonic())
             self._prune_pending()
             return
-        self._results[task_id] = result
+        self._results[target_task_id] = result
         ev.set()
 
     async def wait_for(self, task_id: str, timeout: float = 600.0) -> Any:
@@ -98,6 +112,9 @@ class TaskCompletionRegistry:
             raise TimeoutError(f"Task {task_id} did not complete within {timeout}s") from exc
         finally:
             self._events.pop(task_id, None)
+            self._aliases = {
+                alias: target for alias, target in self._aliases.items() if target != task_id
+            }
         return self._results.pop(task_id, None)
 
     async def wait_for_active(
@@ -142,10 +159,20 @@ class TaskCompletionRegistry:
                         )
                     if activity_age is not None:
                         age = activity_age(task_id)
+                        alias_ages = [
+                            activity_age(alias)
+                            for alias, target in self._aliases.items()
+                            if target == task_id
+                        ]
+                        known_ages = [value for value in [age, *alias_ages] if value is not None]
+                        age = min(known_ages) if known_ages else None
                         if age is not None and age >= idle_timeout:
                             raise TimeoutError(  # noqa: B904
                                 f"Task {task_id} idle for {age:.0f}s (limit {idle_timeout:.0f}s)"
                             )
         finally:
             self._events.pop(task_id, None)
+            self._aliases = {
+                alias: target for alias, target in self._aliases.items() if target != task_id
+            }
         return self._results.pop(task_id, None)

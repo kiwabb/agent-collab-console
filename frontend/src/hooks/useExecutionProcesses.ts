@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { applyExecutionProcessPatch } from "@/lib/applyExecutionProcessPatch";
-import { getExecutionProcesses, getGlobalEventsStreamUrl, getWorkspaceStreamUrl } from "@/lib/api";
+import { getGlobalEventsStreamUrl } from "@/lib/api/health";
+import { getExecutionProcesses } from "@/lib/api/tasks";
+import { getWorkspaceStreamUrl } from "@/lib/api/workspaces";
 import type { ExecutionProcessesState, ExecutionProcess, LogEvent } from "@/lib/types";
 import type { BusEvent } from "@/contexts/ExecutionProcessesContext";
 import { useWorkbenchStore } from "@/store/workbenchStore";

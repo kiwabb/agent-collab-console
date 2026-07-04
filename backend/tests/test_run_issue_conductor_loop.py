@@ -654,6 +654,7 @@ async def test_loop_safe_skip_avoids_conductor_llm_call():
             task_dispatcher_fn=None,
         )
 
-    assert result.status == "done"
-    assert result.final_text == policy.reason
+    assert result.status == "blocked"
+    assert "manual review is required" in result.final_text
+    assert policy.reason in result.final_text
     assert mock_llm.await_count == 0

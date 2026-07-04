@@ -2,16 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  getCodexCostStats,
-  getCodexTasks,
   getIssueGraphStats,
   getIssuePipelineStages,
-  type CodexCostStats,
   type GraphNodeStat,
   type GraphStatsResponse,
   type PipelineStagesResponse,
   type PipelineStage,
-} from "@/lib/api";
+} from "@/lib/api/issues";
+import { getCodexTasks } from "@/lib/api/tasks";
+import { getCodexCostStats, type CodexCostStats } from "@/lib/api/stats";
 import {
   BarChart3,
   LayoutGrid,

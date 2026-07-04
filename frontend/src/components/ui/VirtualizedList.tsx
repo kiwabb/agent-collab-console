@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { CodexTask } from "@/lib/types";
+import type { CodexTask, ExecutionProcess } from "@/lib/types";
 import type { Phase } from "@/features/issues/phaseUtils";
 import { Activity, Clock, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -12,7 +12,7 @@ import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 interface TaskListProps {
   tasks: CodexTask[];
   allTasks: CodexTask[];
-  executionProcesses: any[];
+  executionProcesses: ExecutionProcess[];
   onSelectTask: (id: string) => void;
   phase: Phase;
 }
@@ -62,6 +62,7 @@ export function VirtualizedTaskList({
       >
         {items.map((virtualRow) => {
           const task = tasks[virtualRow.index];
+          if (!task) return null;
           const process = pickLatestExecutionProcessForTask(executionProcesses, task.id);
           const rawStatus = task.status || process?.status || "pending";
           const status = rawStatus.toLowerCase();

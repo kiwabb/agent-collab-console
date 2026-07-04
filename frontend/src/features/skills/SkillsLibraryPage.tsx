@@ -28,7 +28,7 @@ import {
   listSkills,
   translateSkillContent,
   updateSkill,
-} from "@/lib/api";
+} from "@/lib/api/skills";
 import type { CreateSkillRequest, Skill, SkillImportResult } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

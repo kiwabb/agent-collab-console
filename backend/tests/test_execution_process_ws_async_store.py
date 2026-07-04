@@ -3,7 +3,10 @@ from datetime import datetime  # noqa: I001
 import pytest
 
 from app.domain.models import CodexTask, ExecutionProcess, LogEvent
-from app.interfaces.codex_ws import ExecutionProcessWorkspaceStreamManager
+from app.interfaces.codex_ws import (
+    ExecutionProcessWorkspaceStreamManager,
+    _send_workspace_initial_snapshot,
+)
 import app.interfaces.codex_ws as codex_ws_module
 
 
@@ -111,6 +114,75 @@ async def test_update_task_status_supports_async_store(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_task_status_preserves_fallback_event_when_task_missing(monkeypatch):
+    class StoreWithoutTask(AsyncStoreStub):
+        async def load_codex_task(self, task_id: str):
+            return None
+
+    store = StoreWithoutTask()
+    manager = ExecutionProcessWorkspaceStreamManager()
+    fallback = {
+        "type": "task_status",
+        "task_id": "task-missing",
+        "project_id": "project-1",
+        "issue_id": None,
+        "workspace_id": "workspace-1",
+        "session_id": "workspace-1",
+        "role": "operations_engineer",
+        "task_kind": "project_script_suggestion",
+        "status": "running",
+        "result": None,
+        "review_comment": None,
+        "execution_process_id": "process-1",
+    }
+
+    monkeypatch.setattr(codex_ws_module, "codex_store", store)
+
+    await manager.update_task_status(
+        "workspace-1",
+        "task-missing",
+        "running",
+        execution_process_id="process-1",
+        fallback_event=fallback,
+    )
+
+    pending_events = manager._pending_events["workspace-1"]
+    assert pending_events[-1] == fallback
+
+
+@pytest.mark.asyncio
+async def test_update_task_status_uses_fallback_event_when_task_load_raises(monkeypatch):
+    class StoreWithBrokenTaskLoad(AsyncStoreStub):
+        async def load_codex_task(self, task_id: str):
+            raise RuntimeError("temporary task store outage")
+
+    store = StoreWithBrokenTaskLoad()
+    manager = ExecutionProcessWorkspaceStreamManager()
+    fallback = {
+        "type": "task_status",
+        "task_id": "task-1",
+        "workspace_id": "workspace-1",
+        "session_id": "workspace-1",
+        "status": "failed",
+        "result": "failed while store was flaky",
+        "execution_process_id": "process-1",
+    }
+
+    monkeypatch.setattr(codex_ws_module, "codex_store", store)
+
+    await manager.update_task_status(
+        "workspace-1",
+        "task-1",
+        "failed",
+        result="failed while store was flaky",
+        execution_process_id="process-1",
+        fallback_event=fallback,
+    )
+
+    assert manager._pending_events["workspace-1"][-1] == fallback
+
+
+@pytest.mark.asyncio
 async def test_get_state_supports_async_runtime_rows(monkeypatch):
     store = AsyncStoreStub()
     manager = ExecutionProcessWorkspaceStreamManager()
@@ -124,3 +196,64 @@ async def test_get_state_supports_async_runtime_rows(monkeypatch):
     assert process_payload["task_id"] == store.task.id
     assert process_payload["title"] == store.task.title
     assert process_payload["logs"][0]["id"] == "log-1"
+
+
+@pytest.mark.asyncio
+async def test_initial_snapshot_flushes_pending_events():
+    class FakeWebSocket:
+        def __init__(self):
+            self.frames = []
+
+        async def send_json(self, frame):
+            self.frames.append(frame)
+
+    websocket = FakeWebSocket()
+
+    ok = await _send_workspace_initial_snapshot(
+        websocket,
+        {"execution_processes": {}},
+        [{"type": "task_status", "task_id": "task-1", "status": "done"}],
+    )
+
+    assert ok is True
+    assert websocket.frames[0]["Events"] == [
+        {"type": "task_status", "task_id": "task-1", "status": "done"}
+    ]
+    assert websocket.frames[1] == {"Ready": True}
+
+
+def test_restore_pending_events_puts_unsent_events_back_first():
+    manager = ExecutionProcessWorkspaceStreamManager()
+    manager.buffer_pending("workspace-1", {"type": "task_status", "task_id": "later"})
+
+    manager.restore_pending_events(
+        "workspace-1",
+        [{"type": "task_status", "task_id": "unsent"}],
+    )
+
+    assert manager.consume_pending_events("workspace-1") == [
+        {"type": "task_status", "task_id": "unsent"},
+        {"type": "task_status", "task_id": "later"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_subscribed_workspace_receives_events_without_pending_patch():
+    class FakeWebSocket:
+        async def send_json(self, frame):
+            return None
+
+    manager = ExecutionProcessWorkspaceStreamManager()
+    sub = codex_ws_module.WsSubscriber(FakeWebSocket(), maxsize=10)
+    manager.subscribe("workspace-1", sub)
+
+    await manager.publish_event(
+        "workspace-1",
+        {"type": "task_status", "task_id": "task-1", "status": "done"},
+    )
+
+    assert manager._pending_events.get("workspace-1") is None
+    frame = sub.queue.get_nowait()
+    assert frame == {
+        "Events": [{"type": "task_status", "task_id": "task-1", "status": "done"}]
+    }

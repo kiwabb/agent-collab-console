@@ -1,4 +1,4 @@
-import type { CodexIssue, ExecutionProcess, WorkflowGraph } from "@/lib/types";
+import type { CodexIssue, CodexTask, ExecutionProcess, WorkflowGraph } from "@/lib/types";
 
 type CreateCodexIssueFn = (
   workspaceId: string,
@@ -11,7 +11,7 @@ type CreateCodexIssueFn = (
 ) => Promise<CodexIssue>;
 type AutoStartIssueGraphFn = (issueId: string) => Promise<WorkflowGraph>;
 type RunCodexTaskFn = (taskId: string, overrides?: { executor?: string; provider?: string | null; model?: string | null }) => Promise<ExecutionProcess>;
-type UpdateTaskFn = (taskId: string, executor?: string, provider?: string | null, model?: string | null) => Promise<import("@/lib/types").CodexTask>;
+type UpdateTaskFn = (taskId: string, executor?: string, provider?: string | null, model?: string | null) => Promise<CodexTask>;
 
 export async function createIssueAndInitialTask({
   workspaceId,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { listProjects } from "@/lib/api";
+import { listProjects } from "@/lib/api/projects";
 import type { Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 

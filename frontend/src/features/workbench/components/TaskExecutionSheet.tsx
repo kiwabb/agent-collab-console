@@ -1,6 +1,6 @@
 "use client";
 
-import type { ExecutionProcess, CodexTaskMessage, LogEvent } from "@/lib/types";
+import type { Artifact, CodexTask, CodexTaskMessage, ExecutionProcess, HelpRequest, LogEvent } from "@/lib/types";
 import { AgentCoordinationPanel } from "@/features/agents/AgentCoordinationPanel";
 import { RunDetail } from "@/features/runs/RunDetail";
 import { RunRecoveryPanel } from "@/features/runs/components/RunRecoveryPanel";
@@ -9,8 +9,17 @@ import { useI18n } from "@/providers/I18nProvider";
 import { useToast } from "@/components/ui/toast";
 import { Terminal } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { updateCodexTask, runCodexTask, deleteCodexTask, terminateCodexTask, rerunCodexTask } from "@/lib/api";
+import {
+  deleteCodexTask,
+  reviewCodexTask,
+  rerunCodexTask,
+  runCodexTask,
+  submitCodexTask,
+  terminateCodexTask,
+  updateCodexTask,
+} from "@/lib/api/tasks";
 import { useWorkbenchStore, selectCurrentTask, selectCurrentIssue, selectSelectedProcess } from "@/store/workbenchStore";
+import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { useMemo } from "react";
 import {
   deriveRunRecoveryActions,
@@ -43,23 +52,23 @@ export function TaskExecutionSheet() {
   const isTransitioningToDevelopment = useWorkbenchStore((s) => s.isTransitioningToDevelopment);
   const isTransitioningToTesting = useWorkbenchStore((s) => s.isTransitioningToTesting);
 
-  const { executionProcessesAll } = require("@/contexts/ExecutionProcessesContext").useExecutionProcessesContext();
+  const { executionProcessesAll } = useExecutionProcessesContext();
 
   // Get executor label from catalog
   const executorLabel = useMemo(() => {
     if (!runtimeCatalog || !currentTask?.executor) return currentTask?.executor ?? "";
-    const executor = runtimeCatalog.executors.find((e: any) => e.id === currentTask.executor);
+    const executor = runtimeCatalog.executors.find((e) => e.id === currentTask.executor);
     return executor?.label ?? currentTask.executor;
   }, [runtimeCatalog, currentTask?.executor]);
 
   // Derived state
   const currentIssueTasks = useMemo(() =>
-    currentIssue ? tasks.filter((t: any) => t.issue_id === currentIssue.id) : [],
+    currentIssue ? tasks.filter((t: CodexTask) => t.issue_id === currentIssue.id) : [],
     [currentIssue, tasks]
   );
 
   const hasActiveIssueTask = useMemo(() =>
-    currentIssueTasks.some((task: any) => {
+    currentIssueTasks.some((task: CodexTask) => {
       const activeStatuses = ["running", "responding"];
       return activeStatuses.includes(task.status?.toLowerCase());
     }),
@@ -67,22 +76,22 @@ export function TaskExecutionSheet() {
   );
 
   const isPmTaskDone = useMemo(() =>
-    currentIssueTasks.find((t: any) => t.role === "product_manager")?.status === "done",
+    currentIssueTasks.find((t: CodexTask) => t.role === "product_manager")?.status === "done",
     [currentIssueTasks]
   );
 
   const hasArchitectureArtifacts = useMemo(() =>
-    artifacts.some((a: any) => a.name === "architect/system_design.json" || a.name === "architect/implementation_plan.json"),
+    artifacts.some((a: Artifact) => a.name === "architect/system_design.json" || a.name === "architect/implementation_plan.json"),
     [artifacts]
   );
 
   const allEngineerTasksDone = useMemo(() => {
-    const engineerTasks = currentIssueTasks.filter((t: any) => t.role === "engineer");
-    return engineerTasks.length > 0 && engineerTasks.every((t: any) => t.status === "done");
+    const engineerTasks = currentIssueTasks.filter((t: CodexTask) => t.role === "engineer");
+    return engineerTasks.length > 0 && engineerTasks.every((t: CodexTask) => t.status === "done");
   }, [currentIssueTasks]);
 
   const qaReportStatus = useMemo(() => {
-    const qaPlan = artifacts.find((a: any) => a.name === "qa/qa_plan.json");
+    const qaPlan = artifacts.find((a: Artifact) => a.name === "qa/qa_plan.json");
     if (!qaPlan || typeof qaPlan.content !== "string") return null;
     try {
       const parsed = JSON.parse(qaPlan.content);
@@ -170,7 +179,6 @@ export function TaskExecutionSheet() {
         return;
       }
       if (id === "submit_review") {
-        const { submitCodexTask } = await import("@/lib/api");
         const updated = await submitCodexTask(currentTask.id);
         useWorkbenchStore.getState().updateTask(updated.id, updated);
         addToast({ type: "success", title: t("taskExecution.toast.submittedReview") });
@@ -269,7 +277,6 @@ export function TaskExecutionSheet() {
                 isLoadingLogs={isLoadingLogs && displayedProcessLogs.length === 0}
                 isLoadingMessages={isLoadingMessages && displayedProcessMessages.length === 0}
                 onSubmitForReview={async () => {
-                  const { submitCodexTask } = await import("@/lib/api");
                   try {
                     const updated = await submitCodexTask(currentTaskId);
                     useWorkbenchStore.getState().updateTask(updated.id, updated);
@@ -282,7 +289,6 @@ export function TaskExecutionSheet() {
                   }
                 }}
                 onReview={async (decision, comment) => {
-                  const { reviewCodexTask } = await import("@/lib/api");
                   try {
                     const updated = await reviewCodexTask(currentTaskId, decision, comment);
                     useWorkbenchStore.getState().updateTask(updated.id, updated);
@@ -403,9 +409,9 @@ export function TaskExecutionSheet() {
 
             <TabsContent value="coordination" className="h-full m-0 flex flex-col">
               <AgentCoordinationPanel
-                tasks={tasks.filter((t: any) => t.id === currentTaskId)}
-                helpRequests={helpRequests.filter((h: any) => h.parent_task_id === currentTaskId)}
-                executionProcesses={Object.values(executionProcessesAll).filter((p: any) => p.task_id === currentTaskId) as ExecutionProcess[]}
+                tasks={tasks.filter((t: CodexTask) => t.id === currentTaskId)}
+                helpRequests={helpRequests.filter((h: HelpRequest) => h.parent_task_id === currentTaskId)}
+                executionProcesses={Object.values(executionProcessesAll).filter((p: ExecutionProcess) => p.task_id === currentTaskId)}
                 onSelectTask={(id) => setCurrentTaskId(id)}
                 onSelectProcess={setSelectedProcessId}
               />

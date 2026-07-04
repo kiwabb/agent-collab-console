@@ -52,7 +52,7 @@ def test_seed_is_idempotent(client):
     _run_async(seed_builtin_agents(bootstrap_module.async_store))
     resp = client.get("/api/agents")
     builtins = [a for a in resp.json() if a["is_builtin"]]
-    assert len(builtins) == 16
+    assert len(builtins) == 17
 
 
 def test_builtin_pm_and_architect_trigger_replan_on_done(client):

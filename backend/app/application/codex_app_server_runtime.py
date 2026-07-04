@@ -17,6 +17,7 @@ from app.application.process_runtime_common import (
     is_agent_message_item_type,
     is_workspace_console_task,
 )
+from app.application.task_statuses import is_task_failure_status, is_task_terminal_status
 
 
 logger = logging.getLogger(__name__)
@@ -56,11 +57,11 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         self._pending_approvals: dict[str, dict] = {}
 
     def _build_app_server_cmd(self) -> list[str]:
-        cmd = shlex.split(os.getenv("CODEX_APP_SERVER_CMD", "codex app-server"))
+        cmd = shlex.split(timeouts.codex_app_server_cmd())
         if self._command_sets_model(cmd):
             return cmd
 
-        model = os.getenv("CODEX_APP_SERVER_MODEL", "gpt-5.4-mini").strip()
+        model = timeouts.codex_app_server_model()
         if model:
             cmd.extend(["-c", f"model={model}"])
 
@@ -210,8 +211,16 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 return "timeout"
             if entry.had_error:
                 return "timeout" if getattr(entry, "_timeout_reason", None) else "failed"
+            if not evt.is_set():
+                await self._abort_for_timeout(task_id, entry, reason="idle_timeout")
+                return "timeout"
             return "done"
 
+        if task_id:
+            entry.turn_watchdog_task = asyncio.create_task(
+                self._fire_and_forget_turn_watchdog(task_id, entry),
+                name=f"codex-turn-watchdog-{task_id}",
+            )
         return "responding"
 
     async def _wait_with_idle_watchdog(self, evt: asyncio.Event, entry: AsyncProcessEntry) -> None:
@@ -229,8 +238,41 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                         idle_for,
                         CODEX_IDLE_TIMEOUT_S,
                     )
-                    return  # caller will see evt not set + had_error set
+                    return
             # else: loop and re-check both signals
+
+    async def _fire_and_forget_turn_watchdog(self, task_id: str, entry: AsyncProcessEntry) -> None:
+        start = time.monotonic()
+        while entry.alive:
+            try:
+                await asyncio.sleep(15)
+                task = await self.codex_store.load_codex_task(task_id)
+                if task is not None and is_task_terminal_status(task.status):
+                    return
+                elapsed = time.monotonic() - start
+                if elapsed >= CODEX_TURN_TIMEOUT_S:
+                    logger.warning(
+                        "codex fire-and-forget turn exceeded total budget %ss for task=%s",
+                        CODEX_TURN_TIMEOUT_S,
+                        task_id,
+                    )
+                    await self._abort_for_timeout(task_id, entry, reason="turn_timeout")
+                    return
+                idle_for = time.monotonic() - (entry.last_event_at or time.monotonic())
+                if idle_for >= CODEX_IDLE_TIMEOUT_S:
+                    logger.warning(
+                        "codex fire-and-forget turn idle %.0fs (threshold %ss) for task=%s",
+                        idle_for,
+                        CODEX_IDLE_TIMEOUT_S,
+                        task_id,
+                    )
+                    await self._abort_for_timeout(task_id, entry, reason="idle_timeout")
+                    return
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001, RUF100
+                logger.debug("codex fire-and-forget watchdog failed task=%s: %s", task_id, exc)
+                return
 
     async def _abort_for_timeout(
         self, task_id: str | None, entry: AsyncProcessEntry, *, reason: str
@@ -476,13 +518,13 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             stderr=asyncio.subprocess.PIPE,
             cwd=effective_cwd,
             env=env,
+            start_new_session=True,
             # Raise the StreamReader line limit (default 64KB) so a single large
             # JSON-RPC frame doesn't raise LimitOverrunError and break the peer
             # reader loop.
             limit=4 * 1024 * 1024,
         )
 
-        use_auto_approve = os.getenv("CODEX_AUTO_APPROVE", "1") == "1"
         client = AppServerClient(
             codex_store=self.codex_store,
             log_store=self.log_store,
@@ -490,7 +532,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             notification_callback=self._make_app_server_notification_callback(
                 workspace_id, task_id
             ),
-            auto_approve=use_auto_approve,
+            auto_approve=timeouts.codex_auto_approve(),
         )
 
         async def on_approval_required(item_id: str, request):
@@ -681,7 +723,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 entry = self._processes.get(task_id or workspace_id)
                 if entry:
                     status = params.get("status") or params.get("turn", {}).get("status")
-                    if str(status).lower() == "failed":
+                    if is_task_failure_status(status):
                         error_payload = (
                             params.get("error") or params.get("turn", {}).get("error") or {}
                         )

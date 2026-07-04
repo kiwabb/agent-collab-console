@@ -24,6 +24,10 @@ import type {
   TestExecutorResponse,
   Project,
   GitBranch,
+  ProjectScriptSuggestionRequest,
+  ProjectScriptSuggestionResponse,
+  ProjectScriptTaskRequest,
+  ProjectScriptTaskResponse,
   Agent,
   CreateAgentRequest,
   UpdateAgentRequest,
@@ -32,11 +36,55 @@ import type {
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
-const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE ?? "ws://localhost:8000";
+const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE ?? "ws://localhost:9000";
 
 export { API_BASE, WS_BASE };
+// Compatibility exports for modules that were split out of this monolithic
+// client. Runtime feature code should import the split "@/lib/api/<domain>"
+// modules directly; keep this list narrow for legacy/test compatibility and
+// to avoid duplicate/ambiguous exports with the local monolithic definitions.
+export {
+  deleteTeamNotesBlock,
+  getEmbeddingStatus,
+  getSimilarIssues,
+  getTeamNotes,
+  pinTeamNotesBlock,
+  restoreTeamNotesBlock,
+  searchKnowledge,
+  triggerKnowledgeReindex,
+} from "./api/knowledge";
+export type {
+  EmbeddingStatus,
+  KnowledgeArtifactHit,
+  KnowledgeIssueHit,
+  KnowledgeSearchMode,
+  KnowledgeSearchResponse,
+  KnowledgeSearchScope,
+  SimilarIssue,
+  TeamNoteBlock,
+  TeamNotesResponse,
+} from "./api/knowledge";
 export { getProjectResume, importProjectResumePdf, saveProjectResume } from "./api/resume";
 export type { ProjectResume, ProjectResumeImport } from "./api/resume";
+export { getCodexCostStats, getIssueBudget, getIssueOrchestrationPolicy } from "./api/stats";
+export type { CodexCostStats } from "./api/stats";
+export {
+  appendConductorMessage,
+  getAgentMesh,
+  getSubAgentResults,
+} from "./api/conductors";
+export type { AgentMessage, SubAgentResultPayload } from "./api/conductors";
+export {
+  createPrototype,
+  deletePrototype,
+  getGenerateFromCodeStreamUrl,
+  getPrototype,
+  getPrototypeStreamUrl,
+  getPrototypeVersion,
+  getRegenerateAllStreamUrl,
+  listPrototypeCodeCandidates,
+  listPrototypes,
+} from "./api/prototypes";
 
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -119,7 +167,9 @@ export async function getProject(projectId: string): Promise<Project> {
   return handleResponse<Project>(response);
 }
 
-export async function createProject(body: import("./types").CreateProjectRequest): Promise<Project> {
+export async function createProject(
+  body: import("./types").CreateProjectRequest,
+): Promise<Project> {
   const response = await fetch(`${API_BASE}/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -138,6 +188,30 @@ export async function updateProject(
     body: JSON.stringify(updates),
   });
   return handleResponse<Project>(response);
+}
+
+export async function suggestProjectScript(
+  projectId: string,
+  body: ProjectScriptSuggestionRequest,
+): Promise<ProjectScriptSuggestionResponse> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/script-suggestion`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<ProjectScriptSuggestionResponse>(response);
+}
+
+export async function startProjectScriptTask(
+  projectId: string,
+  body: ProjectScriptTaskRequest,
+): Promise<ProjectScriptTaskResponse> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/script-task`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<ProjectScriptTaskResponse>(response);
 }
 
 export async function deleteProject(projectId: string, force = false): Promise<unknown> {
@@ -159,7 +233,9 @@ export async function getProjectBranches(projectId: string): Promise<GitBranch[]
   return handleResponse<GitBranch[]>(response);
 }
 
-export async function repairProject(projectId: string): Promise<{ pruned: boolean; issues_reset: number }> {
+export async function repairProject(
+  projectId: string,
+): Promise<{ pruned: boolean; issues_reset: number }> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/repair`, { method: "POST" });
   return handleResponse(response);
 }
@@ -280,7 +356,7 @@ export async function createCodexTask(
   issueId: string | null = null,
   phase = "requirements",
   provider: string | null = null,
-  model: string | null = null
+  model: string | null = null,
 ): Promise<CodexTask> {
   const body: CreateTaskRequest = {
     session_id: sessionId,
@@ -344,7 +420,10 @@ export async function getCodexIssueArtifacts(issueId: string): Promise<Artifact[
   return response.json();
 }
 
-export async function updateCodexIssuePhase(issueId: string, currentPhase: string): Promise<CodexIssue> {
+export async function updateCodexIssuePhase(
+  issueId: string,
+  currentPhase: string,
+): Promise<CodexIssue> {
   const body: UpdateIssuePhaseRequest = { current_phase: currentPhase };
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}/phase`, {
     method: "POST",
@@ -367,7 +446,7 @@ export async function deleteCodexIssue(issueId: string): Promise<unknown> {
 
 export async function updateCodexIssue(
   issueId: string,
-  updates: { title?: string; description?: string }
+  updates: { title?: string; description?: string },
 ): Promise<CodexIssue> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}`, {
     method: "PATCH",
@@ -377,7 +456,10 @@ export async function updateCodexIssue(
   return handleResponse<CodexIssue>(response);
 }
 
-export async function getCodexTasks(sessionId: string | null = null, issueId: string | null = null): Promise<CodexTask[]> {
+export async function getCodexTasks(
+  sessionId: string | null = null,
+  issueId: string | null = null,
+): Promise<CodexTask[]> {
   const params = new URLSearchParams();
   if (sessionId) params.set("session_id", sessionId);
   if (issueId) params.set("issue_id", issueId);
@@ -398,7 +480,7 @@ export async function getCodexTask(taskId: string): Promise<CodexTask> {
 
 export async function runCodexTask(
   taskId: string,
-  overrides?: { executor?: "codex" | "claude"; provider?: string | null; model?: string | null }
+  overrides?: { executor?: "codex" | "claude"; provider?: string | null; model?: string | null },
 ): Promise<ExecutionProcess> {
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/run`, {
     method: "POST",
@@ -413,7 +495,7 @@ export async function requestCodexTaskHelp(
   targetExecutor: string,
   title = "",
   prompt = "",
-  contextSummary = ""
+  contextSummary = "",
 ): Promise<unknown> {
   const body: RequestHelpRequest = {
     target_executor: targetExecutor,
@@ -470,7 +552,10 @@ export async function getTaskHelpRequests(taskId: string): Promise<HelpRequest[]
   return response.json();
 }
 
-export async function sendCodexTaskMessage(taskId: string, content: string): Promise<SendMessageResult> {
+export async function sendCodexTaskMessage(
+  taskId: string,
+  content: string,
+): Promise<SendMessageResult> {
   const body: SendMessageRequest = { content };
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/messages`, {
     method: "POST",
@@ -517,7 +602,10 @@ export async function rerunCodexTask(
   taskId: string,
   overrides?: { executor?: string | null; provider?: string | null; model?: string | null },
 ): Promise<SendMessageResult> {
-  const hasOverrides = !!(overrides && (overrides.executor || overrides.provider || overrides.model));
+  const hasOverrides = !!(
+    overrides &&
+    (overrides.executor || overrides.provider || overrides.model)
+  );
   const init: RequestInit = { method: "POST" };
   if (hasOverrides) {
     init.headers = { "Content-Type": "application/json" };
@@ -529,7 +617,10 @@ export async function rerunCodexTask(
   return handleResponse<SendMessageResult>(response);
 }
 
-export async function updateCodexTaskExecutor(taskId: string, executor: "codex" | "claude"): Promise<CodexTask> {
+export async function updateCodexTaskExecutor(
+  taskId: string,
+  executor: "codex" | "claude",
+): Promise<CodexTask> {
   const body: UpdateCodexTaskRequest = { executor };
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}`, {
     method: "PATCH",
@@ -543,7 +634,7 @@ export async function updateCodexTask(
   taskId: string,
   executor?: "codex" | "claude",
   provider?: string | null,
-  model?: string | null
+  model?: string | null,
 ): Promise<CodexTask> {
   const body: UpdateCodexTaskRequest = {};
   if (executor !== undefined) body.executor = executor;
@@ -579,7 +670,9 @@ export async function updateRuntimeCatalog(catalog: RuntimeCatalog): Promise<Run
   return handleResponse<RuntimeCatalog>(response);
 }
 
-export async function validateRuntimeCatalog(catalog: RuntimeCatalog): Promise<ValidateRuntimeCatalogResponse> {
+export async function validateRuntimeCatalog(
+  catalog: RuntimeCatalog,
+): Promise<ValidateRuntimeCatalogResponse> {
   const body: RuntimeCatalogRequest = { catalog };
   const response = await fetch(`${API_BASE}/runtime-catalog/validate`, {
     method: "POST",
@@ -597,7 +690,9 @@ export interface TestExecutorRequest {
   api_key?: string | null;
 }
 
-export async function testRuntimeExecutor(request: TestExecutorRequest): Promise<TestExecutorResponse> {
+export async function testRuntimeExecutor(
+  request: TestExecutorRequest,
+): Promise<TestExecutorResponse> {
   const response = await fetch(`${API_BASE}/runtime-catalog/test`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -613,7 +708,11 @@ export async function submitCodexTask(taskId: string): Promise<CodexTask> {
   return handleResponse<CodexTask>(response);
 }
 
-export async function reviewCodexTask(taskId: string, decision: "approve" | "reject", comment: string | null): Promise<CodexTask> {
+export async function reviewCodexTask(
+  taskId: string,
+  decision: "approve" | "reject",
+  comment: string | null,
+): Promise<CodexTask> {
   const body = { decision, comment };
   const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/review`, {
     method: "POST",
@@ -641,7 +740,9 @@ export async function getExecutionProcesses(
   if (sessionId) params.set("session_id", sessionId);
   if (taskId) params.set("task_id", taskId);
   const query = params.toString();
-  const url = query ? `${API_BASE}/codex/execution-processes?${query}` : `${API_BASE}/codex/execution-processes`;
+  const url = query
+    ? `${API_BASE}/codex/execution-processes?${query}`
+    : `${API_BASE}/codex/execution-processes`;
   const response = await fetch(url);
   if (!response.ok) {
     console.error(`getExecutionProcesses failed: HTTP ${response.status}`);
@@ -677,7 +778,11 @@ export async function getExecutionProcessLogs(processId: string): Promise<LogEve
   }
 }
 
-export async function resolveApproval(itemId: string, decision: string, feedback: string | null = null): Promise<unknown> {
+export async function resolveApproval(
+  itemId: string,
+  decision: string,
+  feedback: string | null = null,
+): Promise<unknown> {
   const body: ResolveApprovalRequest = { item_id: itemId, decision, feedback };
   const response = await fetch(`${API_BASE}/codex/approvals/resolve`, {
     method: "POST",
@@ -696,11 +801,16 @@ export async function getPendingApprovals(): Promise<PendingApprovalsResponse> {
   return response.json();
 }
 
-export async function exportCodexIssues(sessionId: string | null = null, format: "csv" | "json" = "json"): Promise<string> {
+export async function exportCodexIssues(
+  sessionId: string | null = null,
+  format: "csv" | "json" = "json",
+): Promise<string> {
   const params = new URLSearchParams();
   if (sessionId) params.set("session_id", sessionId);
   const query = params.toString();
-  const url = query ? `${API_BASE}/codex/issues/export?${query}` : `${API_BASE}/codex/issues/export`;
+  const url = query
+    ? `${API_BASE}/codex/issues/export?${query}`
+    : `${API_BASE}/codex/issues/export`;
   const response = await fetch(`${url}&format=${format}`);
   if (!response.ok) {
     throw new Error(`Export failed: HTTP ${response.status}`);
@@ -712,7 +822,11 @@ export async function exportCodexIssues(sessionId: string | null = null, format:
   return JSON.stringify(data, null, 2);
 }
 
-export async function exportCodexTasks(sessionId: string | null = null, issueId: string | null = null, format: "csv" | "json" = "json"): Promise<string> {
+export async function exportCodexTasks(
+  sessionId: string | null = null,
+  issueId: string | null = null,
+  format: "csv" | "json" = "json",
+): Promise<string> {
   const params = new URLSearchParams();
   if (sessionId) params.set("session_id", sessionId);
   if (issueId) params.set("issue_id", issueId);
@@ -729,25 +843,39 @@ export async function exportCodexTasks(sessionId: string | null = null, issueId:
   return JSON.stringify(data, null, 2);
 }
 
-export async function importCodexIssues(sessionId: string, data: string, format: "csv" | "json"): Promise<CodexIssue[]> {
+export async function importCodexIssues(
+  sessionId: string,
+  data: string,
+  format: "csv" | "json",
+): Promise<CodexIssue[]> {
   const formData = new FormData();
   formData.append("data", data);
   formData.append("format", format);
-  const response = await fetch(`${API_BASE}/codex/issues/import?session_id=${encodeURIComponent(sessionId)}`, {
-    method: "POST",
-    body: formData,
-  });
+  const response = await fetch(
+    `${API_BASE}/codex/issues/import?session_id=${encodeURIComponent(sessionId)}`,
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
   return handleResponse<CodexIssue[]>(response);
 }
 
-export async function importCodexTasks(sessionId: string, data: string, format: "csv" | "json"): Promise<CodexTask[]> {
+export async function importCodexTasks(
+  sessionId: string,
+  data: string,
+  format: "csv" | "json",
+): Promise<CodexTask[]> {
   const formData = new FormData();
   formData.append("data", data);
   formData.append("format", format);
-  const response = await fetch(`${API_BASE}/codex/tasks/import?session_id=${encodeURIComponent(sessionId)}`, {
-    method: "POST",
-    body: formData,
-  });
+  const response = await fetch(
+    `${API_BASE}/codex/tasks/import?session_id=${encodeURIComponent(sessionId)}`,
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
   return handleResponse<CodexTask[]>(response);
 }
 
@@ -763,7 +891,10 @@ export function downloadFile(content: string, filename: string, mimeType: string
   URL.revokeObjectURL(url);
 }
 
-export async function bulkUpdateIssues(issueIds: string[], updates: { current_phase?: string; status?: string }): Promise<CodexIssue[]> {
+export async function bulkUpdateIssues(
+  issueIds: string[],
+  updates: { current_phase?: string; status?: string },
+): Promise<CodexIssue[]> {
   const response = await fetch(`${API_BASE}/codex/issues/bulk-update`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -783,7 +914,9 @@ export async function bulkDeleteIssues(issueIds: string[]): Promise<void> {
 
 // --- Agents (PR1: Workflow DAG) ---
 
-export async function listAgents(opts: { workspaceId?: string; roleKey?: string } = {}): Promise<Agent[]> {
+export async function listAgents(
+  opts: { workspaceId?: string; roleKey?: string } = {},
+): Promise<Agent[]> {
   const params = new URLSearchParams();
   if (opts.workspaceId) params.set("workspace_id", opts.workspaceId);
   if (opts.roleKey) params.set("role_key", opts.roleKey);
@@ -835,7 +968,11 @@ export async function getIssueGraph(issueId: string): Promise<WorkflowGraph | nu
   return handleResponse<WorkflowGraph>(response);
 }
 
-export async function saveIssueGraph(issueId: string, dag: ProposedDAG, createdBy = "user"): Promise<WorkflowGraph> {
+export async function saveIssueGraph(
+  issueId: string,
+  dag: ProposedDAG,
+  createdBy = "user",
+): Promise<WorkflowGraph> {
   const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -845,8 +982,14 @@ export async function saveIssueGraph(issueId: string, dag: ProposedDAG, createdB
 }
 
 export async function startIssueGraph(issueId: string): Promise<WorkflowGraph> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/start`, { method: "POST" });
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/start`, {
+    method: "POST",
+  });
   return handleResponse<WorkflowGraph>(response);
+}
+
+export async function autoStartIssueGraph(issueId: string): Promise<WorkflowGraph> {
+  return startIssueGraph(issueId);
 }
 
 export interface ReplanPending {
@@ -873,7 +1016,7 @@ export async function listReplanPending(issueId: string): Promise<ReplanPending[
 export async function confirmReplan(issueId: string, replanId: string): Promise<WorkflowGraph> {
   const response = await fetch(
     `${API_BASE}/codex/issues/${issueId}/graph/replan/${replanId}/confirm`,
-    { method: "POST" }
+    { method: "POST" },
   );
   return handleResponse<WorkflowGraph>(response);
 }
@@ -881,7 +1024,7 @@ export async function confirmReplan(issueId: string, replanId: string): Promise<
 export async function rejectReplan(issueId: string, replanId: string): Promise<WorkflowGraph> {
   const response = await fetch(
     `${API_BASE}/codex/issues/${issueId}/graph/replan/${replanId}/reject`,
-    { method: "POST" }
+    { method: "POST" },
   );
   return handleResponse<WorkflowGraph>(response);
 }
@@ -889,6 +1032,13 @@ export async function rejectReplan(issueId: string, replanId: string): Promise<W
 // WebSocket URL builders
 export function getWorkspaceStreamUrl(workspaceId: string): string {
   return `${WS_BASE}/api/workspaces/${workspaceId}/execution_processes/ws`;
+}
+
+export function getGlobalEventsStreamUrl(lastEventId?: string | null): string {
+  const sp = new URLSearchParams();
+  if (lastEventId) sp.set("last_event_id", lastEventId);
+  const suffix = sp.size > 0 ? `?${sp.toString()}` : "";
+  return `${WS_BASE}/api/ws/events${suffix}`;
 }
 
 export function getProcessLogsUrl(processId: string): string {

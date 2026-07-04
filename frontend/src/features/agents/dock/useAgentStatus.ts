@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { getCodexTasks, getExecutionProcesses, getIssueGraph } from "@/lib/api";
+import { getIssueGraph } from "@/lib/api/conductors";
+import { getCodexTasks, getExecutionProcesses } from "@/lib/api/tasks";
 import type { CodexTask, ExecutionProcess, WorkflowGraph } from "@/lib/types";
 import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
 import { agentBus, type HistoryEntry } from "./agentBus";

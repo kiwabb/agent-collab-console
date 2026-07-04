@@ -28,7 +28,4 @@ def get_conductor_recovery_interval_s() -> int:
 
 
 def conductor_recovery_enabled() -> bool:
-    raw = (os.getenv("CONDUCTOR_RECOVERY_ENABLED") or "").strip().lower()
-    if raw in {"0", "false", "no", "off"}:  # noqa: SIM103
-        return False
-    return True
+    return timeouts.conductor_recovery_enabled()

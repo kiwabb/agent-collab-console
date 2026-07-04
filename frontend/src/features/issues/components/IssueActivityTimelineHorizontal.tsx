@@ -8,7 +8,7 @@ import {
   getIssuePipelineStages,
   type ActivityEvent,
   type PipelineStagesResponse,
-} from "@/lib/api";
+} from "@/lib/api/issues";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getProcessMessagesUrl } from "@/lib/api";
+import { getProcessMessagesUrl } from "@/lib/api/tasks";
 import type { CodexTaskMessage } from "@/lib/types";
 
 function sortMessages<T extends { created_at?: string | null }>(messages: T[]): T[] {

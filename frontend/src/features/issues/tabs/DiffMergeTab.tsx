@@ -9,13 +9,11 @@ import {
   finalizeAbandonedCodexIssue,
   getCodexIssueDiff,
   getCodexIssues,
-  getCodexTasks,
   mergeCodexIssue,
   refreshGithubPR,
   restoreCodexIssue,
-  reviewCodexTask,
-  submitCodexTask,
-} from "@/lib/api";
+} from "@/lib/api/issues";
+import { getCodexTasks, reviewCodexTask, submitCodexTask } from "@/lib/api/tasks";
 import type { CodexIssue, CodexTask, IssueDiffResult } from "@/lib/types";
 import { DiffSplitView } from "@/features/issues/components/DiffSplitView";
 import { DiffStatBar } from "@/features/issues/components/DiffStatBar";

@@ -117,7 +117,12 @@ def _catalog(protocol: str) -> RuntimeCatalog:
                 protocol=protocol,
             )
         ],
-        conductor_llm=ConductorLLMConfig(executor_id="oai", model="gpt-x"),
+        conductor_llm=ConductorLLMConfig(
+            executor_id="oai",
+            model="gpt-x",
+            max_tokens=4321,
+            timeout_s=66.0,
+        ),
     )
 
 
@@ -146,3 +151,15 @@ def test_env_overrides_protocol(monkeypatch):
     cllm = resolve_conductor_llm_context(_catalog("anthropic"))
     assert cllm is not None
     assert cllm.protocol == "openai"  # env wins over executor field
+
+
+def test_invalid_numeric_env_falls_back_to_catalog_config(monkeypatch):
+    monkeypatch.setenv("CONDUCTOR_LLM_MAX_TOKENS", "not-an-int")
+    monkeypatch.setenv("CONDUCTOR_LLM_TIMEOUT", "not-a-float")
+    monkeypatch.delenv("CONDUCTOR_LLM_PROTOCOL", raising=False)
+
+    cllm = resolve_conductor_llm_context(_catalog("openai"))
+
+    assert cllm is not None
+    assert cllm.ctx.max_tokens == 4321
+    assert cllm.ctx.timeout_s == 66.0

@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  deletePrototype,
   getPrototypeStreamUrl,
   getPrototypeVersion,
-} from "@/lib/api";
+} from "@/lib/api/prototypes";
 import type { Prototype, PrototypeVersion } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { useToast } from "@/components/ui/toast";
@@ -224,7 +225,6 @@ export function PrototypeCanvas({
   const handleDelete = useCallback(async () => {
     if (!window.confirm(t("prototype.deleteConfirm"))) return;
     try {
-      const { deletePrototype } = await import("@/lib/api");
       await deletePrototype(prototype.id);
       onPrototypeDeleted();
     } catch (err) {

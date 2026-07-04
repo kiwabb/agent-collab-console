@@ -1,28 +1,28 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
 import { API_BASE, handleResponse } from "./fetch";
-import type { Prototype, PrototypeDetail } from "../types";
+import type { Prototype, PrototypeCodeCandidatesResponse, PrototypeDetail } from "../types";
 
-export async function listPrototypes(projectId: string): Promise<import("../types").Prototype[]> {
+export async function listPrototypes(projectId: string): Promise<Prototype[]> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/prototypes`);
-  return handleResponse<import("../types").Prototype[]>(response);
+  return handleResponse<Prototype[]>(response);
 }
 export async function createPrototype(
   projectId: string,
   body: { title: string; brief: string },
-): Promise<import("../types").Prototype> {
+): Promise<Prototype> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/prototypes`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  return handleResponse<import("../types").Prototype>(response);
+  return handleResponse<Prototype>(response);
 }
 export async function getPrototype(
   prototypeId: string,
-): Promise<import("../types").PrototypeDetail> {
+): Promise<PrototypeDetail> {
   const response = await fetch(`${API_BASE}/prototypes/${prototypeId}`);
-  return handleResponse<import("../types").PrototypeDetail>(response);
+  return handleResponse<PrototypeDetail>(response);
 }
 export async function getPrototypeVersion(
   prototypeId: string,
@@ -51,4 +51,17 @@ export function getPrototypeStreamUrl(prototypeId: string, instruction?: string)
  */
 export function getRegenerateAllStreamUrl(projectId: string): string {
   return `${API_BASE}/projects/${encodeURIComponent(projectId)}/prototypes/regenerate-all/stream`;
+}
+
+export async function listPrototypeCodeCandidates(
+  projectId: string,
+): Promise<PrototypeCodeCandidatesResponse> {
+  const response = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/prototypes/code-candidates`,
+  );
+  return handleResponse<PrototypeCodeCandidatesResponse>(response);
+}
+
+export function getGenerateFromCodeStreamUrl(projectId: string): string {
+  return `${API_BASE}/projects/${encodeURIComponent(projectId)}/prototypes/generate-from-code/stream`;
 }

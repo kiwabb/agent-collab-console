@@ -8,20 +8,22 @@ import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 import {
   getAgentMesh,
-  getCodexIssue,
-  getCodexIssueArtifacts,
-  getCodexTasks,
   getSubAgentResults,
   pauseConductor,
   resumeConductor,
   restartConductor,
   resetIssue,
-  steerCodexIssue,
-  getCodexIssueChecklist,
   type AgentMessage,
   type SubAgentResultPayload,
+} from "@/lib/api/conductors";
+import {
+  getCodexIssue,
+  getCodexIssueArtifacts,
+  steerCodexIssue,
+  getCodexIssueChecklist,
   type IssueChecklist,
-} from "@/lib/api";
+} from "@/lib/api/issues";
+import { getCodexTasks } from "@/lib/api/tasks";
 import type { Artifact, CodexIssue, CodexTask } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";

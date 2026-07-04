@@ -89,6 +89,8 @@ def _proc(task_id: str, status: str, cost: float | None) -> ExecutionProcess:
 EXPECTED_FIELDS = {
     "issue_id",
     "spent_usd",
+    "reserved_usd",
+    "effective_spend_usd",
     "budget_usd",
     "remaining_usd",
     "used_ratio",
@@ -116,6 +118,8 @@ def test_budget_status_dict_has_stable_shape():
     assert payload["issue_id"] == "i"
     assert payload["has_ceiling"] is True
     assert payload["spent_usd"] == 1.0
+    assert payload["reserved_usd"] == 0.0
+    assert payload["effective_spend_usd"] == 1.0
     assert payload["budget_usd"] == 2.0
     assert payload["remaining_usd"] == 1.0
     assert payload["used_ratio"] == 0.5

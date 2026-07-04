@@ -59,6 +59,40 @@ def test_codex_stats_returns_basic_counts_across_projects(client, tmp_path):
     assert "last_activity_at" in body
 
 
+def test_codex_stats_counts_tasks_not_issues(client, tmp_path):
+    project = _create_project(client, tmp_path, name="stats-task-source")
+    workspace = client.post(
+        "/api/codex/workspaces",
+        json={"title": "Stats Workspace", "project_id": project["id"]},
+    ).json()
+    issue_a = client.post(
+        "/api/codex/issues",
+        json={"session_id": workspace["id"], "title": "Issue A"},
+    ).json()
+    client.post(
+        "/api/codex/issues",
+        json={"session_id": workspace["id"], "title": "Issue B"},
+    )
+    task_resp = client.post(
+        "/api/codex/tasks",
+        json={
+            "session_id": workspace["id"],
+            "issue_id": issue_a["id"],
+            "title": "Only task",
+            "prompt": "Do it",
+            "role": "engineer",
+        },
+    )
+    assert task_resp.status_code == 201, task_resp.text
+
+    resp = client.get("/api/codex/stats")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tasks_total"] == 1
+    assert body["tasks_pending"] == 1
+
+
 def test_codex_stats_returns_503_when_store_unavailable(client, monkeypatch):
     """When codex_store is None the endpoint must return 503."""
     from app.interfaces import api as api_module

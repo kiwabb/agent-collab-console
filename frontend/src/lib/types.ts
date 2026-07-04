@@ -106,6 +106,7 @@ export interface Project {
   default_branch: string;
   origin_url: string | null;
   setup_script: string | null;
+  run_command: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -117,6 +118,15 @@ export interface GitBranch {
   last_commit_date: string | null;
   last_commit_sha: string | null;
 }
+
+export type {
+  Prototype,
+  PrototypeCodeCandidate,
+  PrototypeCodeCandidateAction,
+  PrototypeCodeCandidatesResponse,
+  PrototypeDetail,
+  PrototypeVersion,
+} from "./types/prototypes";
 
 export type GitMergeStatus = "open" | "merged" | "abandoned";
 
@@ -250,25 +260,10 @@ export interface HelpRequest {
 
 // Normalized log entry types for UI
 export type NormalizedEntryType =
-  | "status"
-  | "error"
-  | "assistant"
-  | "thinking"
-  | "command"
-  | "tool"
-  | "help"
-  | "raw";
+  "status" | "error" | "assistant" | "thinking" | "command" | "tool" | "help" | "raw";
 
 export type ToolCategory =
-  | "bash"
-  | "read"
-  | "edit"
-  | "search"
-  | "todo"
-  | "web"
-  | "mcp"
-  | "fileChange"
-  | "other";
+  "bash" | "read" | "edit" | "search" | "todo" | "web" | "mcp" | "fileChange" | "other";
 
 export interface NormalizedEntry {
   id: string;
@@ -328,6 +323,42 @@ export interface UpdateProjectRequest {
   name?: string;
   default_branch?: string;
   setup_script?: string;
+  run_command?: string;
+}
+
+export interface ProjectScriptSuggestionResponse {
+  setup_script: string;
+  run_command: string;
+  agent_name: string;
+  access_url: string | null;
+  notes: string[];
+  verification: {
+    status: "verified" | "started" | "failed" | "skipped";
+    message: string;
+    exit_code?: number | null;
+    access_url?: string | null;
+    logs?: string[];
+  } | null;
+}
+
+export interface ProjectScriptSuggestionRequest {
+  setup_script?: string | null;
+  run_command?: string | null;
+  verify?: boolean;
+}
+
+export interface ProjectScriptTaskRequest extends ProjectScriptSuggestionRequest {
+  executor?: string | null;
+  provider?: string | null;
+  model?: string | null;
+}
+
+export interface ProjectScriptTaskResponse {
+  task_id: string;
+  status: string;
+  title: string;
+  execution_process_id?: string | null;
+  reused: boolean;
 }
 
 export interface MergeIssueResult {
@@ -565,21 +596,10 @@ export interface UpdateAgentRequest {
 }
 
 export type WorkflowNodeStatus =
-  | "pending"
-  | "blocked"
-  | "ready"
-  | "running"
-  | "done"
-  | "failed"
-  | "skipped"
-  | "needs_rework";
+  "pending" | "blocked" | "ready" | "running" | "done" | "failed" | "skipped" | "needs_rework";
 
 export type WorkflowEdgeType =
-  | "sequence"
-  | "parallel-fanout"
-  | "refine-loop"
-  | "retry-on-fail"
-  | "conditional";
+  "sequence" | "parallel-fanout" | "refine-loop" | "retry-on-fail" | "conditional";
 
 export interface WorkflowNode {
   id: string;

@@ -3,27 +3,27 @@ from __future__ import annotations
 """Per-issue cost/budget awareness (cost-aware conductor scheduling, PR2 + PR3).
 
 Cost is recorded after the fact on every ``ExecutionProcess`` row
-(``total_cost_usd``). PR2 turned that record into a *decision-time* input for
+(``total_cost_usd``), and running processes reserve an estimated in-flight
+amount. PR2 turned that record into a *decision-time* input for
 the Conductor: aggregate the spend an issue has already accrued, resolve its
 budget (explicit per-issue value, else the global default from ``timeouts``),
 and render a short, human-readable summary that the conductor loop injects into
 its system prompt so the orchestrating brain can *see* how much budget remains.
 
-PR3 makes the budget *steer* decisions (still as prompt guidance, not a hard
-constraint — see the task ADR):
+PR3 makes the budget *steer* decisions:
   - candidate model unit prices (PR1 price fields) are injected, sorted cheap →
     expensive, so the Conductor can pick a model by cost;
   - at the soft-warning threshold the block escalates to warning tone (prefer
     cheaper models / dispatch less);
-  - over budget it escalates to a strong wind-down steer (finalize soon, no new
-    expensive dispatches). The loop is NEVER hard-killed here — that is the
-    max_wall ceiling's job; this is soft semantics only.
+  - over budget it escalates to a strong wind-down steer and conductor_tools
+    applies a dispatch-time hard gate that rejects new subagents before task,
+    node, execution process, or batch worktree creation. The loop is NEVER
+    hard-killed here — that is the max_wall ceiling's job; only new dispatch is
+    blocked.
 
-Aggregation rule: only **completed** runs are summed. A run is completed when
-its ``ExecutionProcess.status`` is one of the terminal states
-(``Completed`` / ``Failed`` / ``Killed``). In-flight ``Running`` rows are
-excluded — their ``total_cost_usd`` is not yet final and would double-count
-once the run lands. This matches the PRD constraint ("只算已完成 run").
+Aggregation rule: terminal runs contribute exact spend. In-flight ``Running``
+rows contribute a separate conservative reservation used for new-dispatch
+decisions, while the exact terminal total remains visible as ``actual_spent``.
 """
 from dataclasses import dataclass  # noqa: E402
 
@@ -31,7 +31,7 @@ from app.application import timeouts  # noqa: E402
 from app.domain.models import CodexIssue, RuntimeCatalog  # noqa: E402
 
 # Terminal execution-process states whose cost is final and safe to sum.
-COMPLETED_PROCESS_STATES = frozenset({"Completed", "Failed", "Killed"})
+COMPLETED_PROCESS_STATES = frozenset({"Completed", "Failed", "Killed", "Cancelled", "Canceled"})
 
 
 @dataclass
@@ -43,6 +43,7 @@ class IssueBudgetStatus:
     budget_usd: float  # <= 0 means "no ceiling" (unlimited)
     budget_source: str  # "issue" | "default"
     soft_warn_ratio: float
+    reserved_usd: float = 0.0
 
     @property
     def has_ceiling(self) -> bool:
@@ -53,14 +54,18 @@ class IssueBudgetStatus:
         """Remaining budget; ``None`` when there is no ceiling."""
         if not self.has_ceiling:
             return None
-        return self.budget_usd - self.spent_usd
+        return self.budget_usd - self.effective_spend_usd
+
+    @property
+    def effective_spend_usd(self) -> float:
+        return self.spent_usd + self.reserved_usd
 
     @property
     def used_ratio(self) -> float | None:
         """Fraction of budget consumed; ``None`` when there is no ceiling."""
         if not self.has_ceiling:
             return None
-        return self.spent_usd / self.budget_usd
+        return self.effective_spend_usd / self.budget_usd
 
     @property
     def soft_warn(self) -> bool:
@@ -71,7 +76,7 @@ class IssueBudgetStatus:
     @property
     def over_budget(self) -> bool:
         """True once spend meets or exceeds the hard ceiling."""
-        return self.has_ceiling and self.spent_usd >= self.budget_usd
+        return self.has_ceiling and self.effective_spend_usd >= self.budget_usd
 
     def to_dict(self) -> dict:
         """A JSON-serializable snapshot for the read endpoint.
@@ -86,6 +91,8 @@ class IssueBudgetStatus:
         return {
             "issue_id": self.issue_id,
             "spent_usd": round(self.spent_usd, 6),
+            "reserved_usd": round(self.reserved_usd, 6),
+            "effective_spend_usd": round(self.effective_spend_usd, 6),
             "budget_usd": round(self.budget_usd, 6),
             "remaining_usd": (None if self.remaining_usd is None else round(self.remaining_usd, 6)),
             "used_ratio": (None if self.used_ratio is None else round(self.used_ratio, 6)),
@@ -119,17 +126,34 @@ async def aggregate_issue_spend_usd(store, issue_id: str) -> float:
     return total
 
 
+async def estimate_issue_inflight_spend_usd(store, issue_id: str) -> float:
+    """Reserve estimated spend for running execution processes on an issue."""
+    running = 0
+    task_rows = await _maybe_await(store.list_codex_tasks(issue_id=issue_id))
+    for row in task_rows or []:
+        task_id = row.get("id") if isinstance(row, dict) else getattr(row, "id", None)
+        if not task_id:
+            continue
+        processes = await _maybe_await(store.list_execution_processes(task_id=task_id))
+        for proc in processes or []:
+            if proc.status == "Running":
+                running += 1
+    return running * timeouts.estimated_agent_cost_usd()
+
+
 async def compute_issue_budget_status(store, issue: CodexIssue) -> IssueBudgetStatus:
     """Resolve an issue's budget and aggregate its accrued spend."""
     explicit = getattr(issue, "budget_usd", None)
     budget = timeouts.resolve_issue_budget_usd(explicit)
     spent = await aggregate_issue_spend_usd(store, issue.id)
+    reserved = await estimate_issue_inflight_spend_usd(store, issue.id)
     return IssueBudgetStatus(
         issue_id=issue.id,
         spent_usd=spent,
         budget_usd=budget,
         budget_source="issue" if explicit is not None else "default",
         soft_warn_ratio=timeouts.budget_soft_warn_ratio(),
+        reserved_usd=reserved,
     )
 
 
@@ -244,7 +268,8 @@ def render_budget_summary(
 
     if not status.has_ceiling:
         lines.append(
-            f"Spent so far: ${status.spent_usd:.4f}. "
+            f"Spent so far: ${status.spent_usd:.4f}"
+            f" (+ ${status.reserved_usd:.4f} reserved in-flight). "
             "No budget ceiling is configured for this issue (unlimited): "
             "choose models for quality without a cost gate."
         )
@@ -254,7 +279,10 @@ def render_budget_summary(
     remaining = status.remaining_usd or 0.0
     source = "per-issue override" if status.budget_source == "issue" else "global default"
     lines.append(
-        f"Spent so far: ${status.spent_usd:.4f} / Budget: ${status.budget_usd:.4f} "
+        f"Spent so far: ${status.spent_usd:.4f}"
+        f" (+ ${status.reserved_usd:.4f} reserved in-flight)"
+        f" / Effective: ${status.effective_spend_usd:.4f}"
+        f" / Budget: ${status.budget_usd:.4f} "
         f"({source}) / Remaining: ${remaining:.4f}."
     )
 
@@ -296,6 +324,8 @@ def budget_steering_event(status: IssueBudgetStatus) -> dict | None:
     base = {
         "issue_id": status.issue_id,
         "spent_usd": round(status.spent_usd, 6),
+        "reserved_usd": round(status.reserved_usd, 6),
+        "effective_spend_usd": round(status.effective_spend_usd, 6),
         "budget_usd": round(status.budget_usd, 6),
         "remaining_usd": round(status.remaining_usd or 0.0, 6),
         "used_ratio": round(status.used_ratio or 0.0, 6),

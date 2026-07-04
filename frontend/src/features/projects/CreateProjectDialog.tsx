@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
-import { createProject, selectDirectory } from "@/lib/api";
+import { createProject, selectDirectory } from "@/lib/api/projects";
 import { emitDataEvent } from "@/lib/dataEvents";
 import type { Project } from "@/lib/types";
 import { FolderOpen } from "lucide-react";

@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable  # noqa: UP035
 
 import httpx
 
+from app.application import timeouts
 from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.domain.models import RuntimeExecutorConfig
 
@@ -29,6 +29,23 @@ logger = logging.getLogger(__name__)
 # user edited it.
 LLM_RUNNER_TYPE = Callable[[str], Awaitable[str | None]]
 DeltaCallback = Callable[[int, str, str], Awaitable[None] | None]
+
+
+@dataclass(frozen=True)
+class WorkflowOrchestratorLLMConfig:
+    preferred_executor_id: str | None
+    preferred_model_id: str | None
+    timeout_s: float
+    max_tokens: int
+
+
+def _workflow_orchestrator_llm_config() -> WorkflowOrchestratorLLMConfig:
+    return WorkflowOrchestratorLLMConfig(
+        preferred_executor_id=timeouts.workflow_orchestrator_executor_id(),
+        preferred_model_id=timeouts.workflow_orchestrator_model(),
+        timeout_s=timeouts.workflow_orchestrator_timeout_s(),
+        max_tokens=timeouts.workflow_orchestrator_max_tokens(),
+    )
 
 
 def _audit_autoplan(
@@ -152,29 +169,16 @@ def _resolve_model(executor: RuntimeExecutorConfig, preferred_model: str | None)
 
 def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
     """Return an async callable that turns a prompt into assistant text."""
-    preferred_executor_id = os.getenv("WORKFLOW_ORCHESTRATOR_EXECUTOR_ID") or None
-    preferred_model_id = os.getenv("WORKFLOW_ORCHESTRATOR_MODEL") or None
-    # 28s default — Next.js dev proxy has a hard 30s rewrite window, so the
-    # backend must finish (or fall back to the heuristic) within it. Sonnet
-    # 4.6 fits ~26-29s; Haiku 4.5 fits ~5s. Use Haiku via
-    # WORKFLOW_ORCHESTRATOR_MODEL=claude-haiku-4-5 if responses are too slow.
-    timeout_s = float(os.getenv("WORKFLOW_ORCHESTRATOR_TIMEOUT", "28"))
-    # 8192 leaves comfortable headroom for: a) the DAG JSON itself, b) the
-    # chain-of-thought / preamble some models (notably MiniMax) emit before
-    # the actual JSON, and c) Chinese-language rationale (≈2× the token  # noqa: RUF003
-    # density of English). Streaming means we don't pay the round-trip for
-    # unused budget — tokens flow as they're generated and the bound only
-    # matters as an upper cap.
-    max_tokens = int(os.getenv("WORKFLOW_ORCHESTRATOR_MAX_TOKENS", "8192"))
+    config = _workflow_orchestrator_llm_config()
 
     async def runner(prompt: str) -> str | None:
         try:
             catalog = await catalog_service.load_catalog()
-            executor = _pick_executor(catalog, preferred_executor_id)
+            executor = _pick_executor(catalog, config.preferred_executor_id)
             if executor is None:
                 logger.info("Auto-plan: no usable executor configured; falling back to heuristic")
                 return None
-            model = _resolve_model(executor, preferred_model_id)
+            model = _resolve_model(executor, config.preferred_model_id)
             if not model:
                 logger.info(
                     "Auto-plan: executor %s has no resolvable model; falling back", executor.id
@@ -187,7 +191,7 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
             # before returning so json.loads sees a complete object.
             payload = {
                 "model": model,
-                "max_tokens": max_tokens,
+                "max_tokens": config.max_tokens,
                 "messages": [
                     {"role": "user", "content": prompt},
                     {"role": "assistant", "content": "{"},
@@ -199,10 +203,10 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                 "llm_call",
                 executor_id=executor.id,
                 model=model,
-                payload={"prompt_chars": len(prompt), "max_tokens": max_tokens},
+                payload={"prompt_chars": len(prompt), "max_tokens": config.max_tokens},
             )
             _call_started = time.monotonic()
-            async with _llm_http_client(timeout_s) as client:
+            async with _llm_http_client(config.timeout_s) as client:
                 response = await client.post(
                     url,
                     headers={
@@ -257,7 +261,7 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                 return "{" + text
             return text
         except httpx.TimeoutException:
-            logger.warning("Auto-plan: LLM request timed out after %ss", timeout_s)
+            logger.warning("Auto-plan: LLM request timed out after %ss", config.timeout_s)
             return None
         except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("Auto-plan: LLM runner error: %s", exc)
@@ -303,15 +307,11 @@ def resolve_streaming_context(catalog) -> StreamingPlanContext | None:
     """Mirror of the picks build_llm_runner makes, but exposed so the SSE
     endpoint can announce which model is about to be called before the first
     token arrives."""
-    preferred_executor_id = os.getenv("WORKFLOW_ORCHESTRATOR_EXECUTOR_ID") or None
-    preferred_model_id = os.getenv("WORKFLOW_ORCHESTRATOR_MODEL") or None
-    timeout_s = float(os.getenv("WORKFLOW_ORCHESTRATOR_TIMEOUT", "28"))
-    # Same default as the non-streaming runner — see comment there.
-    max_tokens = int(os.getenv("WORKFLOW_ORCHESTRATOR_MAX_TOKENS", "8192"))
-    executor = _pick_executor(catalog, preferred_executor_id)
+    config = _workflow_orchestrator_llm_config()
+    executor = _pick_executor(catalog, config.preferred_executor_id)
     if executor is None:
         return None
-    model = _resolve_model(executor, preferred_model_id)
+    model = _resolve_model(executor, config.preferred_model_id)
     if not model:
         return None
     return StreamingPlanContext(
@@ -320,8 +320,8 @@ def resolve_streaming_context(catalog) -> StreamingPlanContext | None:
         model=model,
         endpoint=executor.api_endpoint.rstrip("/"),
         api_key=executor.api_key,
-        max_tokens=max_tokens,
-        timeout_s=timeout_s,
+        max_tokens=config.max_tokens,
+        timeout_s=config.timeout_s,
     )
 
 

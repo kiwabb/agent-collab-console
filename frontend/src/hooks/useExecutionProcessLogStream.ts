@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getProcessLogsUrl } from "@/lib/api";
+import { getProcessLogsUrl } from "@/lib/api/tasks";
 import type { LogEvent } from "@/lib/types";
 
 function sortLogs<T extends { created_at?: string | null }>(logs: T[]): T[] {

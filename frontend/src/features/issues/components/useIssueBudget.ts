@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getIssueBudget } from "@/lib/api";
+import { getIssueBudget } from "@/lib/api/stats";
 import type { IssueBudgetStatus } from "@/lib/types";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 
@@ -96,7 +96,7 @@ export function useIssueBudget(
       // already guards this, but the meter is user-facing enough to
       // double up).
       if (!mountedRef.current) return;
-      const evt = event as unknown as IssueBudgetStatus & { type: string };
+      const evt = event as IssueBudgetStatus & { type: string };
       const next = {
         issue_id: evt.issue_id,
         spent_usd: evt.spent_usd,

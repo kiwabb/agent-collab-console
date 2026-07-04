@@ -104,6 +104,7 @@ class Project(BaseModel):
     default_branch: str = "main"
     origin_url: str | None = None  # Set when project was created via `git clone`
     setup_script: str | None = None  # Optional shell snippet run after worktree creation (e.g. `npm install`)
+    run_command: str | None = None  # Long-running command run in project root (e.g. `npm run dev`).
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -116,6 +117,10 @@ class Prototype(BaseModel):
     title: str
     framework: str
     current_version: int
+    source_kind: Literal["manual", "code"] = "manual"
+    source_ref: str | None = None
+    source_hash: str | None = None
+    source_meta_json: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

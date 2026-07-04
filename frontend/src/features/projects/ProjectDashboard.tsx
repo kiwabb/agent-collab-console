@@ -2,13 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import {
-  createWorkspace,
-  getProject,
-  getProjectBranches,
-  getProjectStats,
-  getWorkspaces,
-} from "@/lib/api";
+import { createWorkspace, getWorkspaces } from "@/lib/api/workspaces";
+import { getProject, getProjectBranches, getProjectStats } from "@/lib/api/projects";
 import type { GitBranch, Project, ProjectStats, Workspace } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Plus, FolderGit2, GitBranch as GitBranchIcon } from "lucide-react";

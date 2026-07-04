@@ -29,6 +29,7 @@ that should be closed.
 | [Directory Structure](./directory-structure.md) | Layered module organization (domain / application / adapters / interfaces) | Filled |
 | [Database Guidelines](./database-guidelines.md) | aiosqlite store patterns, migrations, durable leases | Filled |
 | [Error Handling](./error-handling.md) | Typed errors, transport mapping, background loop safety | Filled |
+| [Project Resume API Contract](./project-resume-api.md) | Project-level resume markdown storage and PDF import API contract | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Forbidden / required patterns, tests, run kinds, QA workflow | Filled |
 | [Logging Guidelines](./logging-guidelines.md) | stdlib logging, level conventions, what not to log | Filled |
 
@@ -56,11 +57,11 @@ that should be closed.
 
 ## Cross-cutting conventions
 
-- **All concurrency / cost / timeout knobs** live in
-  `application/timeouts.py` and are read through accessors
+- **All concurrency / cost / timeout / feature-flag knobs** live in
+  `application/timeouts.py` and are read through typed accessors
   (`timeouts.default_issue_budget_usd()`,
-  `timeouts.budget_soft_warn_ratio()`, ...). `os.getenv` is
-  reserved for the boot-time setup in `timeouts.validate()`.
+  `timeouts.budget_soft_warn_ratio()`, ...). Env parsing, defaults,
+  coercion, and invalid-value fallback stay inside those accessors.
   Feature code never reaches into env vars directly.
 - **The store is the only place that writes SQL.** A service
   that needs to read a row goes through a typed store method,

@@ -47,6 +47,16 @@ async def create_prototype(project_id: str, body: dict):
     return await prototype_service.create(project_id, title, brief)
 
 
+@router.get("/projects/{project_id}/prototypes/code-candidates")
+async def list_prototype_code_candidates(project_id: str):
+    if prototype_service is None:
+        raise HTTPException(status_code=503, detail="prototype service unavailable")
+    try:
+        return await prototype_service.list_code_candidates(project_id)
+    except PrototypeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/prototypes/{prototype_id}")
 async def get_prototype(prototype_id: str):
     if prototype_service is None:
@@ -101,6 +111,21 @@ async def stream_prototype(prototype_id: str, instruction: str | None = None):
                     return
         except Exception as exc:  # noqa: BLE001
             yield _to_event("error", {"message": str(exc)})
+
+    return StreamingResponse(event_iter(), media_type="text/event-stream")
+
+
+@router.get("/projects/{project_id}/prototypes/generate-from-code/stream")
+async def generate_prototypes_from_code(project_id: str):
+    if prototype_service is None:
+        raise HTTPException(status_code=503, detail="prototype service unavailable")
+    project = await prototype_service.store.load_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+
+    async def event_iter():
+        async for ev in prototype_service.generate_all_from_code_stream(project_id):
+            yield _serialize_stream_event(ev.event, ev.data)
 
     return StreamingResponse(event_iter(), media_type="text/event-stream")
 

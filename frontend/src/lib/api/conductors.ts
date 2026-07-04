@@ -9,7 +9,7 @@ export async function getIssueGraph(issueId: string): Promise<WorkflowGraph | nu
   return handleResponse<WorkflowGraph>(response);
 }
 export async function autoStartIssueGraph(issueId: string): Promise<WorkflowGraph> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/auto-start`, {
+  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/start`, {
     method: "POST",
   });
   return handleResponse<WorkflowGraph>(response);

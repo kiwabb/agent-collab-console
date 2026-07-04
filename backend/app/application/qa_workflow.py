@@ -9,9 +9,11 @@ import time
 from pydantic import BaseModel, Field, ValidationError
 
 from app.application.command_safety import REFUSED_COMMAND_PATTERNS as _REFUSED_COMMAND_PATTERNS  # noqa: F401
+from app.application.command_safety import parse_allowed_command as _parse_allowed_command
 from app.application.command_safety import refuse_reason as _shared_refuse_reason
 from app.application.issue_artifact_documents import IssueArtifactDocuments
 from app.application.qa_failure_summary import format_qa_failure_narrative
+from app.application import timeouts
 
 
 logger = logging.getLogger(__name__)
@@ -23,14 +25,13 @@ class QAWorkflowError(ValueError):
 
 # Per-command timeout when executing QA verification commands. Keep short —
 # a stuck pytest run shouldn't hold the whole pipeline.
-QA_COMMAND_TIMEOUT_S = int(os.getenv("QA_COMMAND_TIMEOUT_S", "120"))
+QA_COMMAND_TIMEOUT_S = timeouts.qa_command_timeout_s()
 # Total time budget across ALL verification commands for one QA pass.
-QA_TOTAL_BUDGET_S = int(os.getenv("QA_TOTAL_BUDGET_S", "300"))
-# Whether to actually execute verification commands. Default ON in real-CLI
-# mode. Disable for offline tests / quick demos.
-QA_EXECUTE_COMMANDS = (
-    os.getenv("QA_EXECUTE_COMMANDS", os.getenv("REAL_CLI", "true")).lower() == "true"
-)
+QA_TOTAL_BUDGET_S = timeouts.qa_total_budget_s()
+# Whether to actually execute verification commands. Default OFF: commands are
+# LLM-proposed and may include prompt-injected content, so execution requires an
+# explicit operator opt-in via QA_EXECUTE_COMMANDS=true.
+QA_EXECUTE_COMMANDS = timeouts.qa_execute_commands()
 
 # Patterns we refuse to run even if the LLM proposes them live in the shared
 # `command_safety` module (also used by the project dev-server runner). Imported
@@ -318,7 +319,8 @@ class QAWorkflow:
                     }
                 )
                 continue
-            refusal = self._refuse_reason(cmd)
+            argv, allow_error = _parse_allowed_command(cmd)
+            refusal = allow_error or self._refuse_reason(cmd)
             if refusal:
                 results.append(
                     {
@@ -334,12 +336,13 @@ class QAWorkflow:
             t0 = time.monotonic()
             try:
                 proc = subprocess.run(
-                    cmd,
-                    shell=True,
+                    argv or [],
+                    shell=False,
                     cwd=workspace_path,
                     capture_output=True,
                     text=True,
                     timeout=QA_COMMAND_TIMEOUT_S,
+                    env={"PATH": os.environ.get("PATH", ""), "CI": "1"},
                 )
                 results.append(
                     {

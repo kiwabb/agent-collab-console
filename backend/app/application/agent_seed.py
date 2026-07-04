@@ -76,11 +76,20 @@ _BUILTIN_SPECS: list[tuple[str, str, str, str, str, bool, bool]] = [
         False,
         True,  # QA failed → replan can decide whether to loop back to engineer or architect
     ),
+    (
+        "operations_engineer",
+        "Operations Engineer",
+        "Performs setup and startup validation for local project scripts.",
+        "operations_engineer",
+        "operations",
+        False,
+        False,
+    ),
 ]
 
 
 async def seed_builtin_agents(store) -> int:
-    """Ensure the 4 built-in agents exist. Returns count of newly created."""
+    """Ensure built-in agents exist. Returns count of newly created."""
     if store is None:
         return 0
     existing = {a.role_key for a in await store.list_agents(workspace_id=None)}

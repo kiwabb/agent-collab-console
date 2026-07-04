@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { WorkbenchShell } from "@/features/workbench/WorkbenchShell";
 import { IssueDetailPage } from "@/features/issues/IssueDetailPage";
-import { getCodexIssue } from "@/lib/api";
+import { getCodexIssue } from "@/lib/api/issues";
 
 import { Loader } from "@/components/ui/loader";
 

@@ -24,9 +24,11 @@ from app.domain.models import CodexIssue, ExecutionProcess, Project
 def _reset_singletons():
     TaskCompletionRegistry._instance = None
     RoleConcurrencyLimiter._instance = None
+    ct._DISPATCH_START_LOCKS_BY_ISSUE.clear()
     yield
     TaskCompletionRegistry._instance = None
     RoleConcurrencyLimiter._instance = None
+    ct._DISPATCH_START_LOCKS_BY_ISSUE.clear()
 
 
 def _issue(budget_usd):
@@ -88,18 +90,55 @@ class _Store:
         return [_ep(self._spent_cost)]
 
 
+class _ChangingBudgetStore(_Store):
+    def __init__(self, issue, project):
+        super().__init__(issue, project, spent_cost=0.0)
+        self.execution_process_calls = 0
+
+    async def list_execution_processes(self, task_id=None):
+        self.execution_process_calls += 1
+        # Initial batch preflight is healthy; per-agent gates after that see
+        # over-budget spend and must stop before worktree preparation.
+        cost = 0.0 if self.execution_process_calls == 1 else 12.0
+        return [_ep(cost)]
+
+
+class _SecondGateOverBudgetStore(_Store):
+    def __init__(self, issue, project):
+        super().__init__(issue, project, spent_cost=0.0)
+        self.execution_process_calls = 0
+
+    async def list_execution_processes(self, task_id=None):
+        self.execution_process_calls += 1
+        # Batch preflight and the first per-agent gate are healthy; the second
+        # per-agent gate sees over-budget spend. A serial dispatch gate must
+        # stop the second agent before it prepares a worktree.
+        cost = 0.0 if self.execution_process_calls <= 2 else 12.0
+        return [_ep(cost)]
+
+
 class _WorktreeManagerStub:
+    def __init__(self):
+        self.prepared: list[str] = []
+        self.cleaned: list[str] = []
+
     async def prepare_agent_worktree(self, project, issue, agent_key):
+        self.prepared.append(agent_key)
         return f"swarm/{agent_key}", f"/tmp/wt/{agent_key}", issue.git_branch
 
     async def cleanup_agent_worktree(self, project, issue, agent_key):
-        pass
+        self.cleaned.append(agent_key)
 
     async def commit_issue_worktree(self, issue, message=None):
         return None
 
     async def merge_agent_worktrees(self, project, issue, agents):
         return {"merged": [{**a, "sha": "x"} for a in agents], "conflict": None, "skipped": []}
+
+
+class _FailingMergeWorktreeManagerStub(_WorktreeManagerStub):
+    async def merge_agent_worktrees(self, project, issue, agents):
+        raise RuntimeError("merge infrastructure unavailable")
 
 
 def _build(store, wm):
@@ -176,18 +215,18 @@ async def test_comfortable_budget_keeps_configured_cap(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_healthy_small_budget_keeps_configured_cap(monkeypatch):
+async def test_healthy_small_budget_downscales_to_affordable_cap(monkeypatch):
     monkeypatch.setenv("MAX_PARALLEL_DISPATCH_PER_BATCH", "3")
     monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
-    # Budget 1, spent 0 -> healthy (below soft-warning), so a tiny independent
-    # three-agent batch should still get the full configured fan-out.
+    # Budget 1, spent 0 -> healthy, but only two 0.50 agents fit inside the
+    # remaining budget at once. The configured cap is still an upper bound.
     store = _Store(_issue(budget_usd=1.0), _project(), spent_cost=0.0)
     reg = _build(store, _WorktreeManagerStub())
 
     out, peak = await _measure_peak_concurrency(reg, n_agents=4)
 
     assert out["status"] == "batch_complete"
-    assert peak == 3
+    assert peak == 2
 
 
 @pytest.mark.asyncio
@@ -208,17 +247,76 @@ async def test_tight_budget_downscales_effective_concurrency(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_over_budget_squeezes_concurrency_to_one(monkeypatch):
+async def test_over_budget_rejects_batch_without_dispatch(monkeypatch):
     monkeypatch.setenv("MAX_PARALLEL_DISPATCH_PER_BATCH", "3")
     monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
-    # spent 12 > budget 10 -> over budget -> concurrency floor 1 (no batch=0).
+    # spent 12 > budget 10 -> hard gate rejects new dispatches.
+    store = _Store(_issue(budget_usd=10.0), _project(), spent_cost=12.0)
+    wm = _WorktreeManagerStub()
+    reg = _build(store, wm)
+
+    out = await reg.tools["dispatch_batch"](
+        {"agents": [{"role": "role0", "prompt": "0"}, {"role": "role1", "prompt": "1"}]}
+    )
+
+    assert out["status"] == "budget_exceeded"
+    assert "budget" in out
+    assert out["budget"]["budget_usd"] == 10.0
+    assert wm.prepared == []
+
+
+@pytest.mark.asyncio
+async def test_batch_per_agent_budget_gate_stops_before_worktree_when_budget_changes(monkeypatch):
+    monkeypatch.setenv("MAX_PARALLEL_DISPATCH_PER_BATCH", "1")
+    monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
+    store = _ChangingBudgetStore(_issue(budget_usd=10.0), _project())
+    wm = _WorktreeManagerStub()
+    reg = _build(store, wm)
+
+    out = await reg.tools["dispatch_batch"](
+        {"agents": [{"role": "role0", "prompt": "0"}, {"role": "role1", "prompt": "1"}]}
+    )
+
+    assert out["status"] == "batch_complete"
+    assert out["succeeded_count"] == 0
+    assert out["failed_count"] == 2
+    assert all(result["status"] == "budget_exceeded" for result in out["results"])
+    assert wm.prepared == []
+    assert wm.cleaned == []
+
+
+@pytest.mark.asyncio
+async def test_batch_budget_gate_serializes_before_each_worktree(monkeypatch):
+    monkeypatch.setenv("MAX_PARALLEL_DISPATCH_PER_BATCH", "2")
+    monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
+    store = _SecondGateOverBudgetStore(_issue(budget_usd=10.0), _project())
+    wm = _WorktreeManagerStub()
+    reg = _build(store, wm)
+
+    out = await reg.tools["dispatch_batch"](
+        {"agents": [{"role": "role0", "prompt": "0"}, {"role": "role1", "prompt": "1"}]}
+    )
+
+    assert out["status"] == "batch_complete"
+    assert out["succeeded_count"] == 1
+    assert out["failed_count"] == 1
+    assert len(wm.prepared) == 1
+    assert wm.prepared[0].startswith("role0-batch-")
+    assert out["results"][0]["status"] == "done"
+    assert out["results"][1]["status"] == "budget_exceeded"
+    assert wm.cleaned == []
+
+
+@pytest.mark.asyncio
+async def test_over_budget_rejects_dispatch_subagent(monkeypatch):
+    monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
     store = _Store(_issue(budget_usd=10.0), _project(), spent_cost=12.0)
     reg = _build(store, _WorktreeManagerStub())
 
-    out, peak = await _measure_peak_concurrency(reg, n_agents=3)
+    out = await reg.tools["dispatch_subagent"]({"role": "engineer", "prompt": "fix it"})
 
-    assert peak == 1
-    assert out["agent_count"] == 3
+    assert out["status"] == "budget_exceeded"
+    assert out["budget"]["budget_usd"] == 10.0
 
 
 @pytest.mark.asyncio
@@ -232,3 +330,19 @@ async def test_unlimited_budget_does_not_downscale(monkeypatch):
     out, peak = await _measure_peak_concurrency(reg, n_agents=4)  # noqa: RUF059
 
     assert peak == 3  # configured cap, not compressed
+
+
+@pytest.mark.asyncio
+async def test_merge_failure_reports_error_not_noop(monkeypatch):
+    monkeypatch.setenv("MAX_PARALLEL_DISPATCH_PER_BATCH", "2")
+    monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
+    store = _Store(_issue(budget_usd=10.0), _project(), spent_cost=0.0)
+    reg = _build(store, _FailingMergeWorktreeManagerStub())
+
+    out, peak = await _measure_peak_concurrency(reg, n_agents=2)  # noqa: RUF059
+
+    assert out["status"] == "batch_complete"
+    assert out["succeeded_count"] == 2
+    assert out["merge_status"] == "error"
+    assert "merge infrastructure unavailable" in out["merge_error"]
+    assert "MERGE ERROR" in out["note"]

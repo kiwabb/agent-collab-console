@@ -170,12 +170,57 @@ async def test_failed_workflow_task_auto_retries_once_before_marking_node_failed
         and event.get("max_retries") == 1
         for event in events
     )
-    assert any(
-        event.get("type") == "task_status"
-        and event.get("task_id") == retry_task.id
-        and event.get("status") == "pending"
+    retry_status = next(
+        event
         for event in events
+        if event.get("type") == "task_status" and event.get("task_id") == retry_task.id
     )
+    assert retry_status["project_id"] == retry_task.project_id
+    assert retry_status["issue_id"] == retry_task.issue_id
+    assert retry_status["workspace_id"] == retry_task.session_id
+    assert retry_status["session_id"] == retry_task.session_id
+    assert retry_status["role"] == retry_task.role
+    assert retry_status["task_kind"] == retry_task.task_kind
+    assert retry_status["status"] == "pending"
+    assert retry_status["execution_process_id"] == retry_task.last_execution_process_id
+
+
+@pytest.mark.asyncio
+async def test_failed_specialist_child_unblocks_parent_without_auto_retry():
+    issue = _issue()
+    node = _node(retries=0, max_retries=1)
+    graph = _graph(node)
+    store = _store(node, graph, issue)
+    events: list[dict] = []
+    dispatcher = AsyncMock()
+    parent = _done_task(
+        id="parent-task",
+        status="waiting_for_specialist",
+        blocked_by_help_id="specialist:task-failed",
+        task_kind="normal",
+    )
+    child = _failed_task(
+        id="task-failed",
+        parent_task_id=parent.id,
+        task_kind="specialist_child",
+        role="specialist:security_reviewer",
+        result="specialist crashed",
+    )
+
+    async def load_task(task_id: str):
+        return {"parent-task": parent, "task-failed": child}.get(task_id)
+
+    store.load_codex_task = AsyncMock(side_effect=load_task)
+    scheduler = WorkflowScheduler(store, task_dispatcher=dispatcher, event_bus=_event_bus(events))
+
+    await scheduler.on_task_completed(child)
+
+    dispatcher.assert_not_called()
+    saved_parent = store.save_codex_task.await_args.args[0]
+    assert saved_parent.id == parent.id
+    assert saved_parent.status == "ready_to_resume"
+    assert saved_parent.blocked_by_help_id is None
+    assert any(event.get("type") == "specialist_failed" for event in events)
 
 
 @pytest.mark.asyncio
@@ -196,6 +241,12 @@ async def test_failed_workflow_task_marks_node_failed_when_retry_budget_exhauste
 
 @pytest.mark.asyncio
 async def test_failed_workflow_task_marks_node_failed_when_retry_dispatch_fails():
+    from app.application.task_completion_registry import TaskCompletionRegistry
+
+    TaskCompletionRegistry._instance = None
+    registry = TaskCompletionRegistry.get()
+    registry.register("task-failed")
+
     issue = _issue()
     node = _node(retries=0, max_retries=1)
     graph = _graph(node)
@@ -225,6 +276,11 @@ async def test_failed_workflow_task_marks_node_failed_when_retry_dispatch_fails(
         and "runner unavailable" in str(event.get("error"))
         for event in events
     )
+    retry_result = await registry.wait_for("task-failed", timeout=0.1)
+    assert retry_result["task_id"] == failed_retry_task.id
+    assert retry_result["status"] == "failed"
+    assert "runner unavailable" in retry_result["error"]
+    TaskCompletionRegistry._instance = None
 
 
 @pytest.mark.asyncio

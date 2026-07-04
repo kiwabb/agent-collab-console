@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
-import type { ExecutionProcess, LogEvent } from "@/lib/types";
+import type { CodexTask, ExecutionProcess, LogEvent, Project } from "@/lib/types";
 
 // Event types that come through the event bus stream
 export type BusEventType =
@@ -25,6 +25,8 @@ export type BusEventType =
   | "issue_abandoned"
   | "issue_restored"
   | "issue_steered"
+  | "project_updated"
+  | "project_script_updated"
   | "workflow_node_updated"
   | "worktree_dirty"
   | "conductor_decision"
@@ -93,6 +95,24 @@ export interface BusIssueDeletedEvent {
   type: "issue_deleted";
   issue_id: string;
   session_id?: string;
+}
+
+export interface BusProjectUpdatedEvent {
+  type: "project_updated";
+  project_id: string;
+  session_id?: string;
+  project?: Project;
+  setup_script?: string | null;
+  run_command?: string | null;
+}
+
+export interface BusProjectScriptUpdatedEvent {
+  type: "project_script_updated";
+  project_id: string;
+  session_id?: string;
+  task_id?: string;
+  setup_script?: string | null;
+  run_command?: string | null;
 }
 
 export interface BusWorkflowNodeUpdatedEvent {
@@ -202,7 +222,10 @@ export function isBusIssueAbandonedEvent(event: BusEvent): event is BusIssueAban
 export interface BusTaskStatusEvent {
   type: "task_status";
   task_id: string;
+  project_id?: string | null;
   session_id?: string;
+  role?: string | null;
+  task_kind?: string | null;
   status: string;
   result?: string | null;
   review_comment?: string | null;
@@ -211,13 +234,7 @@ export interface BusTaskStatusEvent {
 
 export interface BusTaskCreatedEvent {
   type: "task_created";
-  task: {
-    id: string;
-    session_id: string;
-    title: string;
-    status: string;
-    [key: string]: unknown;
-  };
+  task: CodexTask;
 }
 
 export function isBusTaskStatusEvent(event: BusEvent): event is BusTaskStatusEvent {
@@ -226,6 +243,12 @@ export function isBusTaskStatusEvent(event: BusEvent): event is BusTaskStatusEve
 
 export function isBusTaskCreatedEvent(event: BusEvent): event is BusTaskCreatedEvent {
   return event.type === "task_created";
+}
+
+export function isBusProjectScriptUpdatedEvent(
+  event: BusEvent,
+): event is BusProjectScriptUpdatedEvent {
+  return event.type === "project_script_updated";
 }
 
 export type BusEvent =
@@ -238,6 +261,8 @@ export type BusEvent =
   | BusIssueRestoredEvent
   | BusIssueSteeredEvent
   | BusIssueDeletedEvent
+  | BusProjectUpdatedEvent
+  | BusProjectScriptUpdatedEvent
   | BusWorkflowNodeUpdatedEvent
   | BusWorktreeDirtyEvent
   | BusConductorDecisionEvent

@@ -7,11 +7,11 @@ import {
   deleteCodexIssue,
   exportCodexIssues,
   getCodexIssues,
-  getProject,
-  getRuntimeCatalog,
-  getWorkspace,
   importCodexIssues,
-} from "@/lib/api";
+} from "@/lib/api/issues";
+import { getProject } from "@/lib/api/projects";
+import { getRuntimeCatalog } from "@/lib/api/runtime";
+import { getWorkspace } from "@/lib/api/workspaces";
 import type { CodexIssue, Project, RuntimeCatalog, Workspace } from "@/lib/types";
 import { IssueGrid } from "@/features/issues/IssueGrid";
 import { useToast } from "@/components/ui/toast";

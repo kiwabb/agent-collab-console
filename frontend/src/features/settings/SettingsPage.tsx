@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useTheme, type ThemePreference } from "@/providers/ThemeProvider";
 import { usePreferences, type FontSize } from "@/providers/PreferencesProvider";
 import { useI18n } from "@/providers/I18nProvider";
-import { getRuntimeCatalog, updateRuntimeCatalog } from "@/lib/api";
+import { getRuntimeCatalog, updateRuntimeCatalog } from "@/lib/api/runtime";
 import { RuntimeCatalogEditor } from "@/components/runtime/RuntimeCatalogEditor";
 import { AgentCatalogPanel } from "@/features/workflow/AgentCatalogPanel";
 import { Button } from "@/components/ui/button";

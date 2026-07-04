@@ -11,14 +11,9 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
-import {
-  answerCodexTaskClarification,
-  getCodexIssues,
-  getCodexTasks,
-  getPendingApprovals,
-  resolveApproval,
-  reviewCodexTask,
-} from "@/lib/api";
+import { getCodexIssues } from "@/lib/api/issues";
+import { getPendingApprovals, resolveApproval } from "@/lib/api/approvals";
+import { answerCodexTaskClarification, getCodexTasks, reviewCodexTask } from "@/lib/api/tasks";
 import type { Approval, CodexIssue, CodexTask } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

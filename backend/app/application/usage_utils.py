@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Shared utilities for extracting and pricing token usage."""
 
-import os  # noqa: E402
 from typing import Any, cast
+
+from app.application import timeouts
 
 
 def extract_usage(obj: Any) -> dict[str, Any] | None:
@@ -41,9 +42,9 @@ def extract_message_id(obj) -> str | None:
 def _env_rates() -> tuple[float, float, float]:
     """Global flat per-million-tokens USD rates from env (the legacy fallback)."""
     return (
-        float(os.getenv("COST_USD_PER_M_INPUT", "0.30")),
-        float(os.getenv("COST_USD_PER_M_OUTPUT", "1.20")),
-        float(os.getenv("COST_USD_PER_M_CACHE_READ", "0.075")),
+        timeouts.cost_usd_per_m_input(),
+        timeouts.cost_usd_per_m_output(),
+        timeouts.cost_usd_per_m_cache_read(),
     )
 
 

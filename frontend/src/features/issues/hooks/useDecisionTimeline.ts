@@ -6,7 +6,7 @@ import {
   getConductorTurns,
   type ConductorTurn,
   type SubAgentResultPayload,
-} from "@/lib/api";
+} from "@/lib/api/conductors";
 import type { CodexTask } from "@/lib/types";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 

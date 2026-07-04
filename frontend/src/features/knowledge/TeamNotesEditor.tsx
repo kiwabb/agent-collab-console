@@ -9,7 +9,7 @@ import {
   restoreTeamNotesBlock,
   type TeamNoteBlock,
   type TeamNotesResponse,
-} from "@/lib/api";
+} from "@/lib/api/knowledge";
 import type { Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { Loader } from "@/components/ui/loader";

@@ -15,10 +15,20 @@ import subprocess
 from app.bootstrap import session_service, orchestration_service, approval_service, codex_store, get_codex_process_manager, check_codex_available, event_bus, MockCodexProcessManager, get_help_orchestrator, project_service, worktree_manager, git_service
 from app.domain.models import CodexIssue, Project
 from app.application.codex_task_runner import CodexTaskRunner
+from app.application import timeouts
 from app.application.product_manager_service import ProductManagerArtifactError, ProductManagerService
 from app.application.role_workflow_service import RoleWorkflowService
+from app.application.task_status_events import build_task_status_event
+from app.application.task_statuses import (
+    is_task_active_status,
+    is_task_failure_status,
+    is_task_pending_status,
+    is_task_success_status,
+    is_task_waiting_for_help_status,
+)
 from app.application.process_runtime_common import is_agent_message_item_type
 from app.application.project_service import ProjectError
+from app.application.project_script_suggestions import suggest_project_scripts
 from app.application.resume_service import (
     MAX_PDF_IMPORT_BYTES,
     ResumeDependencyError,
@@ -117,6 +127,7 @@ def _serialize_task_payload(task) -> dict:
     return {
         "id": task.id,
         "session_id": task.session_id,
+        "project_id": task.project_id,
         "issue_id": task.issue_id,
         "phase": task.phase,
         "title": task.title,
@@ -132,6 +143,10 @@ def _serialize_task_payload(task) -> dict:
         "blocked_by_help_id": task.blocked_by_help_id,
         "resume_session_id": task.resume_session_id,
         "workspace_path": task.workspace_path,
+        "git_branch": task.git_branch,
+        "git_base_branch": task.git_base_branch,
+        "git_worktree_path": task.git_worktree_path,
+        "last_execution_process_id": task.last_execution_process_id,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "updated_at": task.updated_at.isoformat() if task.updated_at else None,
     }
@@ -261,7 +276,7 @@ async def _refresh_task_result(task):
         )
         if latest_result:
             task.result = latest_result
-    if task.status == "done" and task.result:
+    if is_task_success_status(task.status) and task.result:
         workspace = await codex_store.load_codex_workspace(task.session_id)
         workspace_title = workspace.title if workspace is not None else None
         artifact = await role_workflow_service.persist_result(task, workspace_title=workspace_title)
@@ -291,25 +306,13 @@ async def _refresh_task_result(task):
                     parent_task.review_comment = "\n".join(review_parts)
                     parent_task.updated_at = datetime.now()
                     await codex_store.save_codex_task(parent_task)
-                    await event_bus.append({
-                        "type": "task_status",
-                        "task_id": parent_task.id,
-                        "session_id": parent_task.session_id,
-                        "status": parent_task.status,
-                        "review_comment": parent_task.review_comment,
-                    })
-                    
-                    # Push to WebSocket for real-time update
-                    try:
-                        from app.interfaces.codex_ws import stream_manager
-                        stream_manager.buffer_pending(parent_task.session_id, {
-                            "type": "task_status",
-                            "task_id": parent_task.id,
-                            "status": parent_task.status,
-                            "review_comment": parent_task.review_comment,
-                        })
-                    except Exception:
-                        pass
+                    from app.application.task_status_events import build_task_status_event
+
+                    parent_status_event = build_task_status_event(
+                        parent_task,
+                        review_comment=parent_task.review_comment,
+                    )
+                    await event_bus.append(parent_status_event)
 
 
 async def _latest_assistant_message_content(task_id: str) -> str | None:
@@ -333,13 +336,6 @@ async def _build_execution_process_payload(process):
         limit=1000,
     ) if codex_store is not None else []
     return build_execution_process_view(process, task, messages, logs)
-
-
-
-def _is_task_running(status: str | None) -> bool:
-    # Only running/responding states block transitions. Pending tasks are queued, not active.
-    return str(status or "").lower() in {"running", "responding"}
-
 
 def _delete_issue_artifact_root(workspace_path: str | None, issue_id: str):
     if not workspace_path:
@@ -645,6 +641,27 @@ class UpdateProjectRequest(BaseModel):
     name: str | None = None
     default_branch: str | None = None
     setup_script: str | None = None
+    run_command: str | None = None
+
+
+class ScriptSuggestionRequest(BaseModel):
+    setup_script: str | None = None
+    run_command: str | None = None
+    verify: bool = False
+
+
+class ScriptTaskRequest(ScriptSuggestionRequest):
+    executor: str | None = None
+    provider: str | None = None
+    model: str | None = None
+
+
+class ScriptTaskResponse(BaseModel):
+    task_id: str
+    status: str
+    title: str
+    execution_process_id: str | None = None
+    reused: bool = False
 
 
 class ResumeResponse(BaseModel):
@@ -734,6 +751,7 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
             name=request.name,
             default_branch=request.default_branch,
             setup_script=request.setup_script,
+            run_command=request.run_command,
         )
     except ProjectError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -789,6 +807,341 @@ async def import_project_resume_pdf(
         size_bytes=draft.size_bytes,
         warnings=draft.warnings,
     )
+
+
+@router.post("/projects/{project_id}/script-suggestion")
+async def suggest_project_script(project_id: str, request: ScriptSuggestionRequest):
+    svc = _require_project_service()
+    try:
+        project = await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    from app.application.llm_runner import build_llm_runner
+
+    async def no_op_runner(prompt: str) -> str | None:
+        return None
+
+    existing_setup_script = request.setup_script
+    if existing_setup_script is None:
+        existing_setup_script = project.setup_script
+
+    existing_run_command = request.run_command
+    if existing_run_command is None:
+        existing_run_command = project.run_command
+
+    try:
+        llm_runner = build_llm_runner(_get_runtime_catalog_service())
+
+        async def _run_prompt(prompt: str) -> str | None:
+            return await llm_runner(prompt)
+
+        active_runner = _run_prompt
+    except Exception:
+        active_runner = no_op_runner
+
+    suggestion = await suggest_project_scripts(
+        project=project,
+        runner=active_runner,
+        existing_setup_script=existing_setup_script,
+        existing_run_command=existing_run_command,
+        verify=request.verify,
+    )
+
+    if suggestion is None:
+        return {
+            "setup_script": existing_setup_script or "",
+            "run_command": existing_run_command or "",
+            "agent_name": "Operations Engineer",
+            "access_url": None,
+            "notes": ["Operations Engineer could not infer a suggestion."],
+            "verification": None,
+        }
+
+    return suggestion.model_dump()
+
+
+@router.post("/projects/{project_id}/script-task")
+async def start_project_script_task(project_id: str, request: ScriptTaskRequest):
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    svc = _require_project_service()
+    try:
+        project = await svc.get(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    async def _ensure_project_script_workspace() -> str:
+        load_workspace = getattr(codex_store, "load_codex_workspace", None)
+        save_workspace = getattr(codex_store, "save_codex_workspace", None)
+        if not callable(load_workspace) or not callable(save_workspace):
+            return project.id
+        existing_workspace = await load_workspace(project.id)
+        if existing_workspace is not None:
+            return project.id
+        from app.domain.models import CodexWorkspace
+
+        now = datetime.now()
+        workspace = CodexWorkspace(
+            id=project.id,
+            title=project.name,
+            cwd=project.repo_path,
+            project_id=project.id,
+            status="idle",
+            created_at=now,
+            last_active_at=now,
+            log_path=None,
+            messages=[],
+        )
+        await save_workspace(workspace)
+        await event_bus.append(
+            {
+                "type": "session_created",
+                "session": {
+                    "id": workspace.id,
+                    "title": workspace.title,
+                    "project_id": workspace.project_id,
+                    "status": workspace.status,
+                },
+            }
+        )
+        return project.id
+
+    existing_tasks = await codex_store.list_codex_tasks(project_id=project.id)
+    sorted_existing_tasks = sorted(
+        existing_tasks or [],
+        key=lambda row: row.get("updated_at") or row.get("created_at") or "",
+        reverse=True,
+    )
+
+    def _is_reusable_script_task_status(status: object | None) -> bool:
+        return is_task_pending_status(status) or is_task_active_status(status)
+
+    async def _active_execution_process_known(task_id: str, execution_process_id: str | None) -> bool | None:
+        if not execution_process_id:
+            return False
+        list_processes = getattr(codex_store, "list_execution_processes", None)
+        if not callable(list_processes):
+            return None
+        try:
+            processes = await list_processes(task_id=task_id)
+        except TypeError:
+            processes = await list_processes()
+        active_statuses = {"running", "starting", "pending", "queued"}
+        for process in processes or []:
+            if str(getattr(process, "id", "") or "") != execution_process_id:
+                continue
+            return str(getattr(process, "status", "") or "").lower() in active_statuses
+        return False
+
+    async def _mark_stale_script_task_failed(task, execution_process_id: str | None) -> None:
+        task.status = "failed"
+        task.result = (
+            "Stale project script task was still marked active, but no active "
+            "execution process exists; starting a fresh Operations Engineer task."
+        )
+        task.updated_at = datetime.now()
+        await codex_store.save_codex_task(task)
+        await event_bus.append(
+            build_task_status_event(
+                task,
+                "failed",
+                result=task.result,
+                execution_process_id=execution_process_id,
+            )
+        )
+
+    for row in sorted_existing_tasks:
+        if row.get("task_kind") != "project_script_suggestion":
+            continue
+        row_role = row.get("role")
+        if row_role is not None and row_role != "operations_engineer":
+            continue
+        if not _is_reusable_script_task_status(row.get("status")):
+            continue
+        existing_task = None
+        load_task = getattr(codex_store, "load_codex_task", None)
+        if callable(load_task):
+            existing_task = await load_task(row["id"])
+        if (
+            existing_task is not None
+            and getattr(existing_task, "role", None) is not None
+            and getattr(existing_task, "role", None) != "operations_engineer"
+        ):
+            continue
+        if existing_task is not None and not _is_reusable_script_task_status(
+            existing_task.status
+        ):
+            continue
+        reused_status = row.get("status") or "running"
+        reused_title = row.get("title") or "Generate Startup Scripts"
+        reused_execution_process_id = row.get("last_execution_process_id")
+        if existing_task is not None:
+            reused_status = existing_task.status or reused_status
+            reused_title = existing_task.title or reused_title
+            reused_execution_process_id = (
+                existing_task.last_execution_process_id or reused_execution_process_id
+            )
+        active_process = await _active_execution_process_known(row["id"], reused_execution_process_id)
+        if active_process is False:
+            if existing_task is not None:
+                await _mark_stale_script_task_failed(existing_task, reused_execution_process_id)
+            else:
+                await event_bus.append(
+                    {
+                        "type": "task_status",
+                        "task_id": row["id"],
+                        "project_id": project.id,
+                        "issue_id": None,
+                        "workspace_id": project.id,
+                        "session_id": project.id,
+                        "role": row.get("role") or "operations_engineer",
+                        "task_kind": row.get("task_kind") or "project_script_suggestion",
+                        "status": "failed",
+                        "result": (
+                            "Stale project script task was still marked active, but no active "
+                            "execution process exists; starting a fresh Operations Engineer task."
+                        ),
+                        "review_comment": row.get("review_comment"),
+                        "execution_process_id": reused_execution_process_id,
+                    }
+                )
+            continue
+        if existing_task is not None:
+            await event_bus.append(
+                build_task_status_event(
+                    existing_task,
+                    reused_status,
+                    execution_process_id=reused_execution_process_id,
+                )
+            )
+        else:
+            await event_bus.append(
+                {
+                    "type": "task_status",
+                    "task_id": row["id"],
+                    "project_id": project.id,
+                    "issue_id": None,
+                    "workspace_id": project.id,
+                    "session_id": project.id,
+                    "role": row.get("role") or "operations_engineer",
+                    "task_kind": row.get("task_kind") or "project_script_suggestion",
+                    "status": reused_status,
+                    "result": row.get("result"),
+                    "review_comment": row.get("review_comment"),
+                    "execution_process_id": reused_execution_process_id,
+                }
+            )
+        return ScriptTaskResponse(
+            task_id=row["id"],
+            status=reused_status,
+            title=reused_title,
+            execution_process_id=reused_execution_process_id,
+            reused=True,
+        )
+
+    resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(
+        request.executor or "codex",
+        request.provider,
+        request.model,
+    )
+    from app.domain.models import CodexTask
+
+    task_id = str(uuid4())
+    workspace_id = await _ensure_project_script_workspace()
+    existing_setup_script = (
+        request.setup_script if request.setup_script is not None else project.setup_script
+    ) or ""
+    existing_run_command = (
+        request.run_command if request.run_command is not None else project.run_command
+    ) or ""
+    request_context = json.dumps(
+        {
+            "setup_script": existing_setup_script,
+            "run_command": existing_run_command,
+        },
+        ensure_ascii=False,
+    )
+    prompt = (
+        "Generate startup scripts for this project. "
+        "Return setup_script and run_command as the Operations Engineer. "
+        f"Operations request context JSON: {request_context}"
+    )
+    task = CodexTask(
+        id=task_id,
+        session_id=workspace_id,
+        project_id=project.id,
+        issue_id=None,
+        phase="operations",
+        title="Generate Startup Scripts",
+        prompt=prompt,
+        role="operations_engineer",
+        executor=resolved_executor,
+        provider=resolved_provider,
+        model=resolved_model,
+        status="pending",
+        result=None,
+        parent_task_id=None,
+        task_kind="project_script_suggestion",
+        workspace_path=project.repo_path,
+        git_branch=project.default_branch,
+        git_base_branch=project.default_branch,
+        git_worktree_path=None,
+        resume_session_id=None,
+        resume_message_id=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await codex_store.save_codex_task(task)
+    await event_bus.append(
+        {
+            "type": "task_created",
+            "task": _serialize_task_payload(task),
+            "project_id": project.id,
+            "workspace_id": project.id,
+            "session_id": project.id,
+            "role": "operations_engineer",
+            "task_kind": "project_script_suggestion",
+        }
+    )
+    try:
+        exec_process = await _get_task_runner().start_task_run(task)
+        task.status = "running"
+        task.last_execution_process_id = exec_process.id
+        task.updated_at = datetime.now()
+        await codex_store.save_codex_task(task)
+        await event_bus.append(
+            build_task_status_event(
+                task,
+                "running",
+                execution_process_id=exec_process.id,
+            )
+        )
+        return ScriptTaskResponse(
+            task_id=task.id,
+            status="running",
+            title=task.title,
+            execution_process_id=exec_process.id,
+            reused=False,
+        )
+    except ValueError as exc:
+        task.status = "failed"
+        task.result = str(exc)
+        task.updated_at = datetime.now()
+        await codex_store.save_codex_task(task)
+        await event_bus.append(
+            build_task_status_event(task, "failed", result=task.result)
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        task.status = "failed"
+        task.result = str(exc)
+        task.updated_at = datetime.now()
+        await codex_store.save_codex_task(task)
+        await event_bus.append(
+            build_task_status_event(task, "failed", result=task.result)
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.delete("/projects/{project_id}")
@@ -891,6 +1244,7 @@ async def get_codex_stats():
 
     sessions = await codex_store.list_codex_sessions(project_id=None)
     issues = await codex_store.list_codex_issues(project_id=None)
+    tasks = await codex_store.list_codex_tasks()
 
     sessions_active = 0
     for session in sessions:
@@ -904,17 +1258,24 @@ async def get_codex_stats():
     tasks_failed = 0
     last_activity_at = None
 
-    for issue in issues:
+    for task in tasks:
         tasks_total += 1
-        status = issue.get("status", "pending")
-        if status == "pending":
+        status = task.get("status", "pending")
+        if is_task_pending_status(status):
             tasks_pending += 1
-        elif status in ("running", "responding"):
+        elif is_task_active_status(status):
             tasks_running += 1
-        elif status == "done":
+        elif is_task_success_status(status):
             tasks_completed += 1
-        elif status == "failed":
+        elif is_task_failure_status(status):
             tasks_failed += 1
+
+        updated_at = task.get("updated_at") or task.get("created_at")
+        if updated_at:
+            if last_activity_at is None or updated_at > last_activity_at:
+                last_activity_at = updated_at
+
+    for issue in issues:
         # Track most recent activity timestamp
         updated_at = issue.get("updated_at") or issue.get("created_at")
         if updated_at:
@@ -1193,8 +1554,8 @@ async def update_codex_task(task_id: str, request: UpdateCodexTaskRequest):
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
 
-    if task.status == "running":
-        raise HTTPException(status_code=409, detail="Cannot update a running task")
+    if is_task_active_status(task.status):
+        raise HTTPException(status_code=409, detail="Cannot update an active task")
 
     if request.executor is None and request.provider is None and request.model is None:
         raise HTTPException(status_code=400, detail="Must specify at least one field to update")
@@ -1243,15 +1604,15 @@ async def request_codex_task_help(task_id: str, request: RequestTaskHelpRequest)
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     if task.task_kind == "help_child":
         raise HTTPException(status_code=409, detail="Help child tasks cannot request help")
-    if task.status == "waiting_for_help":
+    if is_task_waiting_for_help_status(task.status):
         raise HTTPException(status_code=409, detail="Task is already waiting for help")
     if request.target_executor == task.executor:
         raise HTTPException(status_code=400, detail="Target executor must differ from task executor")
-
-    if task.status != "running":
-        task.status = "running"
-        task.updated_at = datetime.now()
-        await codex_store.save_codex_task(task)
+    if not is_task_active_status(task.status):
+        raise HTTPException(
+            status_code=409,
+            detail="Task must be running or responding to request help",
+        )
 
     help_title = request.title or f"Help: {task.title}"
     help_prompt = request.prompt or (
@@ -1671,12 +2032,12 @@ async def _scan_and_backfill_artifacts(issue_id: str, session_id: str, store) ->
     if str(fallback_root) not in {str(r) for r in issue_roots}:
         issue_roots.append(fallback_root)
 
-    # PM backfill: for each done pm task, check its own worktree for prd files
+    # PM backfill: for each successful pm task, check its own worktree for prd files
     # and trigger persist_result if missing.
     for task_row in sorted_tasks:
         if task_row.get("role") != "product_manager":
             continue
-        if str(task_row.get("status") or "").lower() != "done":
+        if not is_task_success_status(task_row.get("status")):
             continue
         workspace_path = task_row.get("workspace_path")
         if not workspace_path:
@@ -2053,11 +2414,19 @@ async def get_codex_task_help_requests(task_id: str):
 
 
 @router.get("/codex/tasks")
-async def list_codex_tasks(session_id: str | None = None, issue_id: str | None = None):
-    """List all tasks, optionally filtered by session_id."""
+async def list_codex_tasks(
+    session_id: str | None = None,
+    issue_id: str | None = None,
+    project_id: str | None = None,
+):
+    """List all tasks, optionally filtered by session, issue, or project."""
     if codex_store is None:
         raise HTTPException(status_code=503, detail="SQLite store not available")
-    return await codex_store.list_codex_tasks(session_id=session_id, issue_id=issue_id)
+    return await codex_store.list_codex_tasks(
+        session_id=session_id,
+        issue_id=issue_id,
+        project_id=project_id,
+    )
 
 
 @router.get("/codex/tasks/{task_id}")
@@ -2098,8 +2467,8 @@ async def run_codex_task(task_id: str, request: RunTaskRequest | None = None):
             (t for t in all_tasks if t.get("sequence_index") == prev_index and t.get("sequence_group") == task.sequence_group),
             None,
         )
-        # Check for explicit "done" status (not awaiting_review or rework)
-        if prev_task is None or prev_task.get("status") != "done":
+        # Check for successful completion (not awaiting_review or rework)
+        if prev_task is None or not is_task_success_status(prev_task.get("status")):
             raise HTTPException(status_code=409, detail="需先完成上一个开发任务并通过评审")
 
     resume_session_id = None
@@ -2128,16 +2497,19 @@ async def run_codex_task(task_id: str, request: RunTaskRequest | None = None):
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         task.status = "failed"
+        task.result = str(e)
         task.updated_at = datetime.now()
         await codex_store.save_codex_task(task)
-        await event_bus.append({
-            "type": "task_status",
-            "task_id": task.id,
-            "session_id": task.session_id,
-            "status": "failed",
-            "result": str(e),
-            "execution_process_id": task.last_execution_process_id,
-        })
+        from app.application.task_status_events import build_task_status_event
+
+        await event_bus.append(
+            build_task_status_event(
+                task,
+                "failed",
+                result=str(e),
+                execution_process_id=task.last_execution_process_id,
+            )
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2218,14 +2590,16 @@ async def _run_task_with_user_content(task_id: str, content: str, kind: str):
             await _refresh_task_result(current_task)
         await codex_store.save_codex_task(current_task)
         await codex_store.update_execution_process_status(exec_process.id, "Completed", exit_code=0, completed_at=datetime.now())
-        await event_bus.append({
-            "type": "task_status",
-            "task_id": task_id,
-            "session_id": current_task.session_id,
-            "status": "done",
-            "result": current_task.result,
-            "execution_process_id": exec_process.id,
-        })
+        from app.application.task_status_events import build_task_status_event
+
+        await event_bus.append(
+            build_task_status_event(
+                current_task,
+                "done",
+                result=current_task.result,
+                execution_process_id=exec_process.id,
+            )
+        )
         # The assistant reply is whatever the run produced. For chat it lives only
         # in the message log; for refine/rerun it's also the new task.result.
         assistant_content = current_task.result or "Task updated."
@@ -2268,7 +2642,7 @@ async def _run_task_with_user_content(task_id: str, content: str, kind: str):
 
     # Real manager: return immediately; notification handler will update task state
     assistant_message = None
-    if task.status == "done":
+    if is_task_success_status(task.status):
         assistant_message = await _finalize_completed_task(task)
     return {"message": message, "assistant_message": assistant_message, "task": task, "execution_process": exec_process}
 
@@ -2414,7 +2788,7 @@ async def rerun_codex_task(task_id: str, request: RerunRequest | None = None):
             (t for t in all_tasks if t.get("sequence_index") == prev_index and t.get("sequence_group") == task.sequence_group),
             None,
         )
-        if prev_task is None or prev_task.get("status") != "done":
+        if prev_task is None or not is_task_success_status(prev_task.get("status")):
             raise HTTPException(status_code=409, detail="需先完成上一个开发任务并通过评审")
 
     try:
@@ -2464,7 +2838,7 @@ async def submit_codex_task_for_review(task_id: str):
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    if task.status != "done":
+    if not is_task_success_status(task.status):
         raise HTTPException(status_code=409, detail="Task must be completed before submission")
     
     # 1. Update original task status
@@ -2472,15 +2846,17 @@ async def submit_codex_task_for_review(task_id: str):
     task.updated_at = datetime.now()
     await codex_store.save_codex_task(task)
     
-    await event_bus.append({
-        "type": "task_status",
-        "task_id": task.id,
-        "session_id": task.session_id,
-        "status": "awaiting_review",
-    })
+    from app.application.task_status_events import build_task_status_event
+
+    await event_bus.append(build_task_status_event(task, "awaiting_review"))
 
     # 2. Automatically spawn an Architect Review task
-    print(f"DEBUG: Spawning automated review task for parent_task={task.id}")
+    import logging
+
+    logging.getLogger(__name__).debug(
+        "spawning automated review task for parent_task=%s",
+        task.id,
+    )
     from app.domain.models import CodexTask
     review_task_id = str(uuid4())
     review_executor, review_provider, review_model, _, _ = await _resolve_task_runtime_config(task)
@@ -2543,13 +2919,11 @@ async def review_codex_task(task_id: str, request: TaskReviewRequest):
     task.updated_at = datetime.now()
     await codex_store.save_codex_task(task)
     
-    await event_bus.append({
-        "type": "task_status",
-        "task_id": task.id,
-        "session_id": task.session_id,
-        "status": task.status,
-        "review_comment": task.review_comment,
-    })
+    from app.application.task_status_events import build_task_status_event
+
+    await event_bus.append(
+        build_task_status_event(task, task.status, review_comment=task.review_comment)
+    )
     return task
 
 
@@ -2968,7 +3342,6 @@ async def propose_issue_plan(issue_id: str):
     response can't be parsed/validated, or `WORKFLOW_ORCHESTRATOR_LLM` is
     explicitly set to "false".
     """
-    import os
     store = _require_agent_store()
     issue = await store.load_codex_issue(issue_id)
     if issue is None:
@@ -2976,7 +3349,7 @@ async def propose_issue_plan(issue_id: str):
     from app.application.workflow_orchestrator import WorkflowOrchestrator
     from app.application.llm_runner import build_llm_runner
 
-    llm_disabled = os.getenv("WORKFLOW_ORCHESTRATOR_LLM", "").lower() == "false"
+    llm_disabled = not timeouts.workflow_orchestrator_llm_enabled()
     llm_runner = None if llm_disabled else build_llm_runner(_get_runtime_catalog_service())
     orchestrator = WorkflowOrchestrator(store=store, llm_runner=llm_runner)
     try:

@@ -21,9 +21,21 @@ from app.application.conductor_main_loop import (
     transition_conductor_phase,
 )
 from app.application.phase_duration_estimator import get_phase_duration_estimator
+from app.application.task_statuses import normalize_task_status
 from app.domain.models import ConductorTask
 
 logger = logging.getLogger(__name__)
+
+TERMINAL_ISSUE_STATUSES_FOR_RELAUNCH = frozenset(
+    {
+        "done",
+        "completed",
+        "abandoned",
+        "failed",
+        "merged",
+    }
+)
+ACTIVE_CONDUCTOR_STATUSES_FOR_RELAUNCH = frozenset({"running", "paused"})
 
 
 async def _maybe_await(value):
@@ -58,13 +70,9 @@ def _lease_owner_pid(owner: str | None) -> int | None:
 
 def _max_relaunches() -> int:
     """Max orphan-relaunch attempts per issue before the breaker trips."""
-    raw = os.getenv("CONDUCTOR_MAX_RELAUNCHES")
-    if not raw:
-        return 3
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return 3
+    from app.application import timeouts
+
+    return timeouts.conductor_max_relaunches()
 
 
 async def _count_orphan_stalls(store, issue_id: str) -> int:
@@ -223,8 +231,7 @@ async def _try_relaunch(
         return
 
     # Only relaunch for active issues
-    terminal_statuses = {"done", "completed", "abandoned", "failed", "merged"}
-    if str(issue.status).lower() in terminal_statuses:
+    if normalize_task_status(issue.status) in TERMINAL_ISSUE_STATUSES_FOR_RELAUNCH:
         logger.info(
             "conductor relaunch skipped: issue %s is in terminal status %s",
             issue_id,
@@ -241,7 +248,7 @@ async def _try_relaunch(
         if (
             latest is not None
             and latest.id != conductor_task.id
-            and str(latest.status).lower() in {"running", "paused"}
+            and normalize_task_status(latest.status) in ACTIVE_CONDUCTOR_STATUSES_FOR_RELAUNCH
         ):
             logger.info(
                 "conductor relaunch skipped: active conductor %s already running for issue %s",
@@ -309,25 +316,60 @@ async def _try_relaunch(
         logger.warning("conductor relaunch skipped: issue %s has no project_id", issue_id)
         return
 
-    # Create a fresh empty WorkflowGraph for the new run
-    from app.domain.models import WorkflowGraph  # noqa: I001
-    from uuid import uuid4
-
     now = datetime.now()
-    graph = WorkflowGraph(
-        id=str(uuid4()),
-        issue_id=issue_id,
-        dag_json="{}",
-        status="running",
-        created_by="conductor",
-        created_at=now,
-        updated_at=now,
-        nodes=[],
-        edges=[],
-    )
+    load_graph = getattr(store, "load_workflow_graph_for_issue", None)
     save_graph = getattr(store, "save_workflow_graph", None)
-    if callable(save_graph):
-        await _maybe_await(save_graph(graph, nodes=[], edges=[]))
+    graph = await _maybe_await(load_graph(issue_id)) if callable(load_graph) else None
+    graph_saved = False
+    if graph is not None:
+        graph.status = "running"
+        graph.updated_at = now
+        if callable(save_graph):
+            try:
+                await _maybe_await(save_graph(graph))
+            except TypeError:
+                await _maybe_await(
+                    save_graph(
+                        graph,
+                        nodes=getattr(graph, "nodes", []) or [],
+                        edges=getattr(graph, "edges", []) or [],
+                    )
+                )
+            graph_saved = True
+    else:
+        from app.domain.models import WorkflowGraph  # noqa: I001
+        from uuid import uuid4
+
+        graph = WorkflowGraph(
+            id=str(uuid4()),
+            issue_id=issue_id,
+            dag_json="{}",
+            status="running",
+            created_by="conductor",
+            created_at=now,
+            updated_at=now,
+            nodes=[],
+            edges=[],
+        )
+    if callable(save_graph) and not graph_saved:
+        try:
+            await _maybe_await(save_graph(graph))
+        except TypeError:
+            await _maybe_await(
+                save_graph(
+                    graph,
+                    nodes=getattr(graph, "nodes", []) or [],
+                    edges=getattr(graph, "edges", []) or [],
+                )
+            )
+
+    recovery_context = await _build_relaunch_recovery_context(
+        store,
+        stalled_task=conductor_task,
+        graph=graph,
+        relaunches_done=relaunches_done,
+        max_relaunches=max_relaunches,
+    )
 
     logger.info("conductor relaunch: starting new loop for issue %s", issue_id)
 
@@ -348,6 +390,7 @@ async def _try_relaunch(
             store=store,
             event_bus=event_bus,
             task_dispatcher_fn=task_dispatcher_fn,
+            recovery_context=recovery_context,
         ),
         name=f"conductor-relaunch-{issue_id[:8]}",
     )
@@ -358,6 +401,65 @@ async def _try_relaunch(
         )
         return
     handle.task.add_done_callback(_done_callback)
+
+
+async def _build_relaunch_recovery_context(
+    store,
+    *,
+    stalled_task: ConductorTask,
+    graph,
+    relaunches_done: int,
+    max_relaunches: int,
+) -> str:
+    payload = stalled_task.payload if isinstance(stalled_task.payload, dict) else {}
+    lines = [
+        "\n\n## RECOVERY CONTEXT",
+        "This Conductor loop was relaunched after the previous in-memory runner was orphaned.",
+        f"Stalled conductor task: {stalled_task.id}",
+        f"Previous phase: {payload.get('previous_phase') or payload.get('phase') or 'unknown'}",
+        f"Previous detail: {payload.get('previous_detail') or payload.get('detail') or 'unknown'}",
+        f"Relaunch attempts used: {relaunches_done}/{max_relaunches}",
+        "Resume from persisted state. Do not repeat nodes that are already done; recover unresolved, failed, or conflicted nodes first.",
+    ]
+    nodes = list(getattr(graph, "nodes", None) or [])
+    if nodes:
+        lines.append("\nWorkflow node status:")
+        for node in nodes[:20]:
+            lines.append(
+                "- "
+                f"{getattr(node, 'node_key', '') or 'unknown'}: "
+                f"status={getattr(node, 'status', '') or 'unknown'}, "
+                f"task_id={getattr(node, 'task_id', None) or 'none'}, "
+                f"retries={getattr(node, 'retries', 0)}/{getattr(node, 'max_retries', 0)}"
+            )
+        if len(nodes) > 20:
+            lines.append(f"- ... {len(nodes) - 20} more nodes omitted")
+
+    list_turns = getattr(store, "list_conductor_turns", None)
+    if callable(list_turns) and stalled_task.issue_id:
+        try:
+            turns = await _maybe_await(list_turns(stalled_task.issue_id, limit=8)) or []
+        except Exception:
+            turns = []
+        if turns:
+            lines.append("\nRecent conductor turns:")
+            for turn in turns[-8:]:
+                kind = getattr(turn, "kind", None) or "unknown"
+                turn_index = getattr(turn, "turn_index", None)
+                sub_index = getattr(turn, "sub_index", None)
+                turn_payload = getattr(turn, "payload", None)
+                if not isinstance(turn_payload, dict):
+                    turn_payload = {}
+                summary = (
+                    turn_payload.get("name")
+                    or turn_payload.get("status")
+                    or turn_payload.get("reason_code")
+                    or turn_payload.get("answer")
+                    or turn_payload.get("result")
+                    or ""
+                )
+                lines.append(f"- turn={turn_index}.{sub_index} kind={kind}: {str(summary)[:240]}")
+    return "\n".join(lines)
 
 
 async def _mark_stalled(

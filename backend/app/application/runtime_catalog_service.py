@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Runtime catalog service for managing executor/provider/model configurations."""
 
-import os  # noqa: E402, I001
 from typing import Any  # noqa: E402, F401
 
+from app.application import timeouts  # noqa: E402
 from app.domain.models import (  # noqa: E402
     RuntimeCatalog,
     RuntimeExecutorConfig,
@@ -306,7 +306,7 @@ class RuntimeCatalogService:
         # (not even the base URL) so the spawned CLI falls back entirely to its own
         # logged-in default. A base URL without a key is a broken half-state that
         # points the local CLI at the wrong endpoint with no way to authenticate.
-        has_key = bool(executor.api_key) or bool(os.getenv("ANTHROPIC_API_KEY"))
+        has_key = bool(executor.api_key) or timeouts.anthropic_api_key_configured()
         if has_key:
             if executor.api_endpoint:
                 env["ANTHROPIC_BASE_URL"] = executor.api_endpoint

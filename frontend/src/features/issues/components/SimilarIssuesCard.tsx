@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { GitBranch, Sparkles } from "lucide-react";
-import { getSimilarIssues, type SimilarIssue } from "@/lib/api";
+import { getSimilarIssues, type SimilarIssue } from "@/lib/api/knowledge";
 import { useI18n } from "@/providers/I18nProvider";
 
 export function SimilarIssuesCard({ issueId }: { issueId: string }) {

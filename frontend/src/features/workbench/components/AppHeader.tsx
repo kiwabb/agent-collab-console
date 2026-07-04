@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/features/workbench/components/CommandPalette";
 import { AccountPopover } from "@/features/workbench/components/AccountPopover";
 import { useSelection } from "@/features/workbench/state/SelectionProvider";
-import { listProjects } from "@/lib/api";
+import { listProjects } from "@/lib/api/projects";
 import type { Project } from "@/lib/types";
 import {
   DropdownMenu,

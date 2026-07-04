@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
-import { checkBackendHealth } from "@/lib/api";
+import { checkBackendHealth } from "@/lib/api/health";
 
 export type BackendStatus = "online" | "reconnecting" | "offline";
 

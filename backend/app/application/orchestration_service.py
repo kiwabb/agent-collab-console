@@ -3,6 +3,7 @@ from __future__ import annotations  # noqa: I001
 from datetime import datetime  # noqa: I001, RUF100
 from uuid import uuid4
 
+from app.application.task_statuses import is_task_failure_status, is_task_success_status
 from app.domain.models import Task, Message, Artifact, AgentRun
 
 
@@ -106,7 +107,9 @@ class OrchestrationService:
                     session.runs.append(agent_run)
                     session.messages.append(message)
                     await self.session_service.update_session(session)
-                    event_type = "run.completed" if run_status == "completed" else "run.failed"
+                    event_type = (
+                        "run.completed" if is_task_success_status(run_status) else "run.failed"
+                    )
                     await self.event_bus.append(
                         {"type": event_type, "task_id": task.id, "agent_id": result["agent_id"]}
                     )
@@ -118,7 +121,7 @@ class OrchestrationService:
         for session in list(self.session_service.sessions.values()):
             for task in session.tasks:
                 if task.id == task_id:
-                    if task.status != "failed":
+                    if not is_task_failure_status(task.status):
                         raise ValueError(f"Task {task_id} is not in failed state, cannot retry")
                     task.status = "pending"
                     await self.session_service.update_session(session)

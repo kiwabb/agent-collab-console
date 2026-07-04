@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { getProject } from "@/lib/api";
+import { getProject } from "@/lib/api/projects";
 import type { Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { useToast } from "@/components/ui/toast";

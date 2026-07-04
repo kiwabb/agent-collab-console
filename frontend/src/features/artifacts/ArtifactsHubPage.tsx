@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileBox, RefreshCw, ChevronRight, Search } from "lucide-react";
 
-import { getCodexIssueArtifacts, getCodexIssues } from "@/lib/api";
+import { getCodexIssueArtifacts, getCodexIssues } from "@/lib/api/issues";
 import type { Artifact, CodexIssue } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

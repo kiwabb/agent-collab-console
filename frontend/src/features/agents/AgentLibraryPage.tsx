@@ -9,7 +9,7 @@ import {
   deleteAgent,
   listAgents,
   updateAgent,
-} from "@/lib/api";
+} from "@/lib/api/agents";
 import type { Agent, CreateAgentRequest, UpdateAgentRequest } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

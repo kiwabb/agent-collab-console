@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, XCircle, Clock, Pause, ChevronRight } from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import { getCodexTasks } from "@/lib/api";
+import { getCodexTasks } from "@/lib/api/tasks";
 import type { CodexTask } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";

@@ -47,8 +47,13 @@ def _issue_dispatch_lock(issue_id: str) -> asyncio.Lock:
     return lock
 
 
+def normalize_role(role: str) -> str:
+    key = role.lower().strip()
+    return _ROLE_ALIASES.get(key, key)
+
+
 def _normalize_role(role: str) -> str:
-    return _ROLE_ALIASES.get(role.lower().strip(), role)
+    return normalize_role(role)
 
 
 def _summarize_dispatch_body(role: str, prompt: str | None, *, is_fallback: bool = False) -> str:
@@ -98,10 +103,9 @@ async def dispatch_role(
     """
     role = _normalize_role(role)
     agents = await store.list_agents(workspace_id=None)
-    agent = next(
-        (a for a in agents if a.role_key == role or a.role_key.startswith(role)),
-        None,
-    )
+    agent = next((a for a in agents if a.role_key == role), None)
+    if agent is None:
+        agent = next((a for a in agents if a.role_key.startswith(f"{role}:")), None)
     if agent is None:
         raise ValueError(f"No agent found for role '{role}'")
 
@@ -277,5 +281,52 @@ async def dispatch_role(
                 await result
         except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("dispatch_role task runner failed: %s", exc)
+            task.status = "failed"
+            task.result = f"Task runner failed to start: {exc}"
+            task.updated_at = datetime.now()
+            await store.save_codex_task(task)
+            try:
+                await store.update_workflow_node(
+                    node.id,
+                    status="failed",
+                    task_id=task.id,
+                    completed_at=datetime.now(),
+                )
+            except Exception as node_exc:  # noqa: BLE001
+                logger.warning("dispatch_role failed to mark workflow node failed: %s", node_exc)
+            if event_bus is not None:
+                try:
+                    from app.application.task_status_events import build_task_status_event
+
+                    await event_bus.append(
+                        build_task_status_event(task, "failed", result=task.result)
+                    )
+                    await event_bus.append(
+                        {
+                            "type": "workflow_node_updated",
+                            "issue_id": issue.id,
+                            "session_id": issue.session_id,
+                            "node_id": node.id,
+                            "node_key": node_key,
+                            "status": "failed",
+                            "task_id": task.id,
+                            "batch_key": batch_key,
+                        }
+                    )
+                except Exception as emit_exc:  # noqa: BLE001
+                    logger.warning("dispatch_role failed to emit runner-start failure: %s", emit_exc)
+            if register_completion:
+                from app.application.task_completion_registry import TaskCompletionRegistry
+
+                TaskCompletionRegistry.get().signal(
+                    task.id,
+                    {
+                        "status": "failed",
+                        "task_id": task.id,
+                        "node_id": node_id,
+                        "role": task.role,
+                        "error": task.result,
+                    },
+                )
 
     return task.id, node_id

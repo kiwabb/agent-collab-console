@@ -21,7 +21,9 @@ import {
   ScrollText,
   FileText,
 } from "lucide-react";
-import { getCodexIssues, getWorkspaces, listProjects } from "@/lib/api";
+import { getCodexIssues } from "@/lib/api/issues";
+import { listProjects } from "@/lib/api/projects";
+import { getWorkspaces } from "@/lib/api/workspaces";
 import type { CodexIssue, Project, Workspace } from "@/lib/types";
 import { useSelection } from "@/features/workbench/state/SelectionProvider";
 import { cn } from "@/lib/utils";

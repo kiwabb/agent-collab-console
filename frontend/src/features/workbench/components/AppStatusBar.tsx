@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useBackendStatus } from "@/hooks/useBackendStatus";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
-import { getCodexCostStats, getEmbeddingStatus, type CodexCostStats, type EmbeddingStatus } from "@/lib/api";
+import { getCodexCostStats, type CodexCostStats } from "@/lib/api/stats";
+import { getEmbeddingStatus, type EmbeddingStatus } from "@/lib/api/knowledge";
 import { formatTok } from "@/lib/format";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -125,4 +126,3 @@ export function AppStatusBar() {
     </footer>
   );
 }
-

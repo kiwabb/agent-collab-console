@@ -1,6 +1,7 @@
 from __future__ import annotations  # noqa: I001
 
 from datetime import datetime
+import json
 
 from app.application.architect_workflow import ArchitectWorkflow
 from app.application.clarification import (
@@ -15,7 +16,8 @@ from app.application.qa_workflow import QAWorkflow
 
 
 ENGINEER_ROLES = frozenset({"engineer", "engineer_frontend", "engineer_backend"})
-MANAGED_ROLES = frozenset({"product_manager", "architect", "qa"}) | ENGINEER_ROLES
+OPERATIONS_ROLES = frozenset({"operations_engineer"})
+MANAGED_ROLES = frozenset({"product_manager", "architect", "qa"}) | ENGINEER_ROLES | OPERATIONS_ROLES
 
 
 class RoleWorkflowService:
@@ -54,8 +56,10 @@ class RoleWorkflowService:
             base = self._pm_service.build_prompt(task, workspace_title)
         elif role == "architect":
             base = self._architect_service.build_prompt(task, workspace_title)
+        elif role == "operations_engineer":
+            base = await self._build_operations_engineer_prompt(task)
         elif role in ENGINEER_ROLES:
-            # All engineer variants share the same workflow; scope hint
+            # All engineer-like variants share the same workflow; scope hint
             # (frontend/backend only) is added inside EngineerWorkflow
             # based on task.role.
             base = self._engineer_service.build_prompt(task, workspace_title)
@@ -129,6 +133,8 @@ class RoleWorkflowService:
             doc = self._pm_service.persist_prd_from_result(task, workspace_title)
         elif role == "architect":
             doc = self._architect_service.persist_result(task, workspace_title)
+        elif role == "operations_engineer":
+            doc = await self._persist_operations_engineer_result(task)
         elif role in ENGINEER_ROLES:
             doc = self._engineer_service.persist_result(task, workspace_title)
         elif role == "qa":
@@ -182,8 +188,15 @@ class RoleWorkflowService:
                 # FTS index: synchronous in-band (cheap).
                 try:  # noqa: SIM105
                     await knowledge_index_service.index_artifact(self.codex_store, artifact_row)
-                except Exception:  # noqa: BLE001, RUF100
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "Failed to index artifact %s for task_id=%s: %s",
+                        artifact_row["id"],
+                        task.id,
+                        exc,
+                    )
                 # Embedding: fire-and-forget, never blocks the task.
                 emb = get_embedding_service()
                 if emb.enabled:
@@ -263,28 +276,195 @@ class RoleWorkflowService:
     ) -> None:
         """Phase 4: Request specialist help from Engineer/QA task."""
         if not self.codex_store:
-            return
+            raise RuntimeError("Cannot request specialist without a codex store")
         try:
-            from app.application.specialist_orchestrator import SpecialistOrchestrator  # noqa: F401, I001
-            from app.application.event_bus import event_bus  # noqa: F401
+            from app.application.event_bus import event_bus
+            from app.application.specialist_orchestrator import SpecialistOrchestrator
+            from app.bootstrap import get_task_runner
 
-            # Initialize orchestrator with dependencies from the task runner
-            # In production, this would be injected. For now, we instantiate it here.
-            # The task_runner is needed to start the specialist child task.
-            # We defer this initialization to the scheduler layer where task_runner is available.
-            # For now, just mark the task as wanting specialist help;
-            # the scheduler will detect and act on it.
+            async def _noop_refresh(_task):
+                return None
 
-            # Actually, we can't start the specialist child directly from here because
-            # we don't have task_runner. Instead, we'll set a flag on the task that
-            # the scheduler will detect and handle. The scheduler has all the pieces.
-
-            # Set a marker so workflow_scheduler knows to invoke SpecialistOrchestrator
-            task.review_comment = (
-                f"[PENDING_SPECIALIST_CALL] role_key={specialist_role_key}\n"
-                f"prompt={specialist_prompt}\nwhy={why}"
+            orchestrator = SpecialistOrchestrator(
+                self.codex_store,
+                event_bus,
+                get_task_runner(_noop_refresh),
+            )
+            await orchestrator.request_specialist(
+                parent_task=task,
+                specialist_role_key=specialist_role_key,
+                specialist_prompt=specialist_prompt,
+                why=why,
             )
         except Exception as exc:  # noqa: BLE001, RUF100
             import logging
 
             logging.getLogger(__name__).warning("_request_specialist setup failed: %s", exc)
+            raise
+
+    async def _build_operations_engineer_prompt(self, task) -> str:
+        if not self.codex_store or not getattr(task, "project_id", None):
+            return self._fallback_operations_prompt(task)
+        try:
+            project = await self.codex_store.load_project(task.project_id)
+        except Exception:  # noqa: BLE001, RUF100
+            project = None
+        if project is None:
+            return self._fallback_operations_prompt(task)
+        try:
+            from app.application.project_script_suggestions import (
+                build_project_script_suggestion_prompt,
+                collect_project_script_context,
+            )
+
+            repo_context = collect_project_script_context(project.repo_path)
+            request_context = self._read_operations_request_context(task)
+            return build_project_script_suggestion_prompt(
+                project=project,
+                repo_context=repo_context,
+                existing_setup_script=(
+                    request_context["setup_script"]
+                    if "setup_script" in request_context
+                    else project.setup_script
+                ),
+                existing_run_command=(
+                    request_context["run_command"]
+                    if "run_command" in request_context
+                    else project.run_command
+                ),
+            )
+        except Exception:  # noqa: BLE001, RUF100
+            return self._fallback_operations_prompt(task)
+
+    @staticmethod
+    def _read_operations_request_context(task) -> dict[str, str]:
+        prompt = getattr(task, "prompt", "") or ""
+        marker = "Operations request context JSON:"
+        if marker not in prompt:
+            return RoleWorkflowService._read_legacy_operations_request_context(prompt)
+        raw = prompt.split(marker, 1)[1].strip()
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(raw)
+        except (json.JSONDecodeError, TypeError):
+            return RoleWorkflowService._read_legacy_operations_request_context(prompt)
+        if not isinstance(parsed, dict):
+            return RoleWorkflowService._read_legacy_operations_request_context(prompt)
+        out: dict[str, str] = {}
+        for key in ("setup_script", "run_command"):
+            value = parsed.get(key)
+            if isinstance(value, str):
+                out[key] = value
+        return out
+
+    @staticmethod
+    def _read_legacy_operations_request_context(prompt: str) -> dict[str, str]:
+        out: dict[str, str] = {}
+        lines = prompt.splitlines()
+        prefixes = {
+            "Existing setup_script:": "setup_script",
+            "Existing run_command:": "run_command",
+        }
+        for line in lines:
+            for prefix, key in prefixes.items():
+                if line.startswith(prefix):
+                    value = line.removeprefix(prefix).strip()
+                    out[key] = "" if value == "(empty)" else value
+        return out
+
+    @staticmethod
+    def _fallback_operations_prompt(task) -> str:
+        return (
+            "You are an Operations Engineer. Inspect the current project and output exactly one "
+            "raw JSON object with this schema:\n"
+            '{"setup_script":"one-time setup command(s), or empty string",'
+            '"run_command":"long-running local dev command, or empty string",'
+            '"access_url":"local URL or null","notes":["short note"]}\n'
+            "Do not wrap the JSON in markdown. Do not add extra prose.\n\n"
+            f"User/project request:\n{getattr(task, 'prompt', '')}"
+        )
+
+    async def _persist_operations_engineer_result(self, task):
+        from app.application.project_script_suggestions import parse_project_script_suggestion
+
+        raw_result = task.result or ""
+        suggestion = parse_project_script_suggestion(raw_result) if raw_result.strip() else None
+        if suggestion is None:
+            from app.application.project_script_suggestions import infer_project_script_suggestion
+
+            workspace_path = getattr(task, "workspace_path", None)
+            suggestion = infer_project_script_suggestion(workspace_path) if workspace_path else None
+        if suggestion is None:
+            raise ValueError("Operations Engineer could not produce a project script suggestion")
+
+        if self.codex_store and getattr(task, "project_id", None):
+            project = await self.codex_store.load_project(task.project_id)
+            if project is not None:
+                suggestion = suggestion.model_copy(
+                    update={
+                        "setup_script": suggestion.setup_script or (project.setup_script or ""),
+                        "run_command": suggestion.run_command or (project.run_command or ""),
+                    }
+                )
+                project.setup_script = suggestion.setup_script
+                project.run_command = suggestion.run_command
+                project.updated_at = datetime.now()
+                await self.codex_store.save_project(project)
+                try:
+                    from app.application.event_bus import event_bus
+
+                    await event_bus.append(
+                        {
+                            "type": "project_updated",
+                            "project_id": project.id,
+                            "session_id": project.id,
+                            "project": {
+                                "id": project.id,
+                                "name": project.name,
+                                "repo_path": project.repo_path,
+                                "default_branch": project.default_branch,
+                                "origin_url": project.origin_url,
+                                "setup_script": project.setup_script,
+                                "run_command": project.run_command,
+                                "created_at": (
+                                    project.created_at.isoformat()
+                                    if project.created_at
+                                    else None
+                                ),
+                                "updated_at": (
+                                    project.updated_at.isoformat()
+                                    if project.updated_at
+                                    else None
+                                ),
+                            },
+                            "setup_script": project.setup_script,
+                            "run_command": project.run_command,
+                        }
+                    )
+                    await event_bus.append(
+                        {
+                            "type": "project_script_updated",
+                            "project_id": project.id,
+                            "session_id": project.id,
+                            "task_id": task.id,
+                            "setup_script": project.setup_script,
+                            "run_command": project.run_command,
+                        }
+                    )
+                except Exception:  # noqa: BLE001, RUF100
+                    pass
+        task.result = suggestion.model_dump_json()
+        note_lines = [
+            "[OPERATIONS SCRIPT UPDATED]",
+            f"setup_script: {suggestion.setup_script or '(empty)'}",
+            f"run_command: {suggestion.run_command or '(empty)'}",
+        ]
+        if suggestion.access_url:
+            note_lines.append(f"access_url: {suggestion.access_url}")
+        if suggestion.notes:
+            note_lines.append("notes:")
+            note_lines.extend(f"- {note}" for note in suggestion.notes)
+        task.review_comment = "\n".join(note_lines)
+        task.updated_at = datetime.now()
+        if self.codex_store:
+            await self.codex_store.save_codex_task(task)
+        return suggestion

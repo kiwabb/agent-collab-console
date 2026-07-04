@@ -4,12 +4,13 @@ import asyncio  # noqa: I001, RUF100
 import contextlib
 import inspect
 import logging
-import os
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Dict, Set  # noqa: UP035
 
 from app.bootstrap import codex_store
+from app.application import timeouts
+from app.application.task_statuses import is_task_terminal_status
 from app.interfaces.execution_process_views import build_execution_process_view
 
 
@@ -24,23 +25,12 @@ logger = logging.getLogger(__name__)
 # sender task — owned by the endpoint, the socket's SOLE writer — drains that
 # queue to the socket. If a queue overflows the subscriber is evicted (closed
 # with a non-1000 code) so the client reconnects and re-syncs full state.
-def _queue_maxsize(env_name: str, default: int) -> int:
-    raw = os.getenv(env_name)
-    if not raw:
-        return default
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return default
-
-
-WORKSPACE_QUEUE_MAXSIZE = _queue_maxsize("WS_WORKSPACE_QUEUE_MAXSIZE", 256)
-LOG_QUEUE_MAXSIZE = _queue_maxsize("WS_LOG_QUEUE_MAXSIZE", 2048)
-MESSAGE_QUEUE_MAXSIZE = _queue_maxsize("WS_MESSAGE_QUEUE_MAXSIZE", 512)
+WORKSPACE_QUEUE_MAXSIZE = timeouts.ws_workspace_queue_maxsize()
+LOG_QUEUE_MAXSIZE = timeouts.ws_log_queue_maxsize()
+MESSAGE_QUEUE_MAXSIZE = timeouts.ws_message_queue_maxsize()
 
 _QUEUE_CLOSED = object()  # sentinel: tells the sender task to stop and close
 _PONG = object()  # sentinel: tells the sender task to send_text("pong")
-
 
 class WsSubscriber:
     """One connected client: a raw WebSocket plus a bounded outbound queue.
@@ -143,6 +133,17 @@ class ExecutionProcessWorkspaceStreamManager:
 
     def buffer_pending(self, workspace_id: str, event: dict):
         self._pending_events.setdefault(workspace_id, []).append(event)
+
+    def consume_pending_events(self, workspace_id: str) -> list[dict]:
+        return self._pending_events.pop(workspace_id, [])
+
+    def restore_pending_events(self, workspace_id: str, events: list[dict]) -> None:
+        if not events:
+            return
+        self._pending_events[workspace_id] = events + self._pending_events.get(
+            workspace_id,
+            [],
+        )
 
     async def publish_patch(self, workspace_id: str, patch: list):
         """Publish JSON Patch and any pending events to all subscribers of a workspace."""
@@ -319,29 +320,65 @@ class ExecutionProcessWorkspaceStreamManager:
         status: str,
         result: str = None,  # noqa: RUF013
         execution_process_id: str | None = None,
+        fallback_event: dict | None = None,
     ):
         """Refresh a process view after task status changes and send task_status event."""
-        # First, publish the event to notify frontend immediately
-        task = (
-            await self._maybe_await(codex_store.load_codex_task(task_id)) if codex_store else None
-        )
+        from app.application.task_status_events import build_task_status_event
+
+        # First, publish the task event independently so it cannot be stranded
+        # behind an execution-process JsonPatch refresh.
+        try:
+            task = (
+                await self._maybe_await(codex_store.load_codex_task(task_id))
+                if codex_store
+                else None
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "task_status task load failed; using fallback event: workspace_id=%s task_id=%s error=%s",
+                workspace_id,
+                task_id,
+                exc,
+            )
+            task = None
         if task:
-            event = {
+            event = build_task_status_event(
+                task,
+                status=status,
+                result=result if result is not None else getattr(task, "result", None),
+                review_comment=getattr(task, "review_comment", None),
+                execution_process_id=execution_process_id,
+            )
+        else:
+            event = fallback_event or {
                 "type": "task_status",
                 "task_id": task_id,
+                "project_id": None,
+                "issue_id": None,
+                "workspace_id": workspace_id,
                 "session_id": workspace_id,
-                "status": task.status,
-                "result": result if result is not None else getattr(task, "result", None),
-                "review_comment": getattr(task, "review_comment", None),
+                "role": None,
+                "task_kind": None,
+                "status": status,
+                "result": result,
+                "review_comment": None,
                 "execution_process_id": execution_process_id,
             }
-            self.buffer_pending(workspace_id, event)
+        await self.publish_event(workspace_id, event)
         # Then refresh the execution process view
-        await self.publish_execution_process(
-            workspace_id,
-            execution_process_id=execution_process_id,
-            task_id=task_id,
-        )
+        try:
+            await self.publish_execution_process(
+                workspace_id,
+                execution_process_id=execution_process_id,
+                task_id=task_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "task_status process refresh failed after event delivery: workspace_id=%s task_id=%s error=%s",
+                workspace_id,
+                task_id,
+                exc,
+            )
 
     async def add_task(
         self, workspace_id: str, task: dict, execution_process_id: str | None = None
@@ -560,7 +597,11 @@ async def _serve_subscriber(
         unsubscribe()
 
 
-async def _send_workspace_initial_snapshot(websocket: WebSocket, state: dict) -> bool:
+async def _send_workspace_initial_snapshot(
+    websocket: WebSocket,
+    state: dict,
+    pending_events: list[dict] | None = None,
+) -> bool:
     initial_patch = [
         {
             "op": "replace",
@@ -569,7 +610,10 @@ async def _send_workspace_initial_snapshot(websocket: WebSocket, state: dict) ->
         }
     ]
     try:
-        await websocket.send_json({"JsonPatch": initial_patch})
+        message = {"JsonPatch": initial_patch}
+        if pending_events:
+            message["Events"] = pending_events
+        await websocket.send_json(message)
         await websocket.send_json({"Ready": True})
     except WebSocketDisconnect:
         return False
@@ -593,14 +637,18 @@ async def execution_process_workspace_stream(websocket: WebSocket, workspace_id:
 
     await websocket.accept()
 
+    sub = WsSubscriber(websocket, maxsize=WORKSPACE_QUEUE_MAXSIZE)
+    workspace_stream_manager.subscribe(workspace_id, sub)
     state = await workspace_stream_manager.get_state(workspace_id)
-    if not await _send_workspace_initial_snapshot(websocket, state):
+    pending_events = workspace_stream_manager.consume_pending_events(workspace_id)
+    if not await _send_workspace_initial_snapshot(websocket, state, pending_events):
+        workspace_stream_manager.restore_pending_events(workspace_id, pending_events)
+        workspace_stream_manager.unsubscribe(workspace_id, sub)
         return
 
-    sub = WsSubscriber(websocket, maxsize=WORKSPACE_QUEUE_MAXSIZE)
     await _serve_subscriber(
         websocket,
-        lambda: workspace_stream_manager.subscribe(workspace_id, sub),
+        lambda: None,
         lambda: workspace_stream_manager.unsubscribe(workspace_id, sub),
         sub,
     )
@@ -628,8 +676,7 @@ async def execution_process_log_stream(websocket: WebSocket, process_id: str):
     for log in await raw_log_stream_manager.get_initial_logs(process_id):
         await websocket.send_json(log)
 
-    terminal_statuses = {"completed", "failed", "killed", "done"}
-    if str(process.status or "").lower() in terminal_statuses:
+    if is_task_terminal_status(process.status):
         await websocket.send_json({"finished": True})
         await websocket.close(code=1000, reason="finished")
         return
@@ -662,8 +709,7 @@ async def execution_process_message_stream(websocket: WebSocket, process_id: str
     for message in await message_stream_manager.get_initial_messages(process_id):
         await websocket.send_json(message)
 
-    terminal_statuses = {"completed", "failed", "killed", "done"}
-    if str(process.status or "").lower() in terminal_statuses:
+    if is_task_terminal_status(process.status):
         await websocket.send_json({"finished": True})
         await websocket.close(code=1000, reason="finished")
         return

@@ -163,6 +163,62 @@ async def test_codex_task_runner_clears_stale_result_before_rerun_refresh():
     assert process.status == "Completed"
 
 
+@pytest.mark.asyncio
+async def test_codex_task_runner_refresh_failure_emits_complete_task_status():
+    now = datetime.now()
+    task = CodexTask(
+        id="task-refresh-fail",
+        session_id="workspace-1",
+        project_id="project-1",
+        issue_id="issue-1",
+        title="Operations task",
+        prompt="generate scripts",
+        role="operations_engineer",
+        executor="codex",
+        status="pending",
+        task_kind="project_script_suggestion",
+        workspace_path="/tmp/workspace",
+        created_at=now,
+        updated_at=now,
+    )
+    workspace = CodexSession(
+        id="workspace-1",
+        title="Workspace",
+        cwd="/tmp/workspace",
+        created_at=now,
+        last_active_at=now,
+    )
+    store = StoreStub(task, workspace)
+    bus = EventBusStub()
+
+    async def refresh_task_result(task):
+        raise RuntimeError("persist failed")
+
+    runner = CodexTaskRunner(
+        codex_store=store,
+        event_bus=bus,
+        process_manager_factory=lambda: MockManager(),
+        mock_manager_cls=MockManager,
+        refresh_task_result=refresh_task_result,
+    )
+
+    process = await runner.start_task_run(task)
+
+    assert process.status == "Failed"
+    assert store.task.status == "failed"
+    event = [event for event in bus.events if event.get("type") == "task_status"][-1]
+    assert event["task_id"] == task.id
+    assert event["project_id"] == "project-1"
+    assert event["issue_id"] == "issue-1"
+    assert event["workspace_id"] == "workspace-1"
+    assert event["session_id"] == "workspace-1"
+    assert event["role"] == "operations_engineer"
+    assert event["task_kind"] == "project_script_suggestion"
+    assert event["status"] == "failed"
+    assert event["result"] == "persist failed"
+    assert event["execution_process_id"] == process.id
+
+
 class RuntimeStoreStub:
     def __init__(self, task: CodexTask, workspace: CodexSession | None = None):
         self.task = task

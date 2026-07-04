@@ -27,12 +27,13 @@ facade in `audit.recorders`; they never import this writer directly.
 
 import asyncio
 import json
-import os
 import sys
 import threading
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
+
+from app.application import timeouts
 
 # Payload truncation budget. Same 8000-char ceiling + `__truncated__` marker
 # strategy as conductor_main_loop._prepare_payload (intentionally duplicated to
@@ -55,7 +56,7 @@ _PAYLOAD_LIMIT = 8000
 # Dropping the newest keeps the contiguous already-accepted prefix intact and is
 # O(1) (no peek/evict). Dropped entries are counted and a throttled WARNING is
 # emitted so the loss is observable rather than silent.
-_DEFAULT_MAX_QUEUE = int(os.getenv("AUDIT_LOG_MAX_QUEUE", "10000"))
+_DEFAULT_MAX_QUEUE = timeouts.audit_log_max_queue()
 # Emit a dropped-count WARNING at most once per this many drops (avoids a log
 # storm when the queue is saturated for a sustained period).
 _DROP_WARN_EVERY = 500

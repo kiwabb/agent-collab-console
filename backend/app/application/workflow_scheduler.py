@@ -22,6 +22,11 @@ import logging  # noqa: E402
 from datetime import datetime  # noqa: E402
 from uuid import uuid4  # noqa: E402
 
+from app.application.task_status_events import build_task_status_event  # noqa: E402
+from app.application.task_statuses import (  # noqa: E402
+    is_task_failure_status,
+    is_task_success_status,
+)
 from app.domain.models import (  # noqa: E402
     Agent,  # noqa: F401
     AgentMessage,
@@ -155,11 +160,15 @@ class WorkflowScheduler:
                 await self.store.save_codex_task(task)
                 await self._emit_diff_guard_failed(task, node, issue_for_event, diff_guard_reason)
                 terminal = "failed"
-            if terminal == "failed" and await self._maybe_auto_retry_failed_node(
+            if (
+                terminal == "failed"
+                and task.task_kind != "specialist_child"
+                and await self._maybe_auto_retry_failed_node(
                 task,
                 node,
                 graph,
                 issue_for_event,
+                )
             ):
                 return
         await self.store.update_workflow_node(
@@ -221,10 +230,25 @@ class WorkflowScheduler:
                     },
                 )
 
-        # Phase 4: specialist_child → resume parent with findings.
-        if task.task_kind == "specialist_child" and task.status == "done":  # noqa: SIM102
-            if await self._maybe_resume_from_specialist(task, graph):
-                return
+        # Phase 4: specialist_child → resume or unblock parent with findings.
+        # Keep the state-machine boundary in SpecialistOrchestrator so stale
+        # children and failed children use the same parent-lock checks.
+        if task.task_kind == "specialist_child":
+            try:
+                from app.application.specialist_orchestrator import SpecialistOrchestrator
+
+                orchestrator = SpecialistOrchestrator(
+                    self.store,
+                    self._event_bus,
+                    self._task_dispatcher,
+                )
+                await orchestrator.complete_specialist_request(
+                    task.id,
+                    task.result or "",
+                )
+            except Exception as exc:  # noqa: BLE001, RUF100
+                logger.warning("Specialist child completion handling failed: %s", exc)
+            return
 
         # Keep the issue's `current_phase` label in step with completed roles.
         await self._maybe_advance_phase(graph)
@@ -299,6 +323,9 @@ class WorkflowScheduler:
             retry_number=retry_number,
             max_retries=node.max_retries,
         )
+        from app.application.task_completion_registry import TaskCompletionRegistry
+
+        TaskCompletionRegistry.get().transfer(task.id, retry_task.id)
         try:
             result = self._task_dispatcher(retry_task)
             if asyncio.iscoroutine(result):
@@ -315,6 +342,15 @@ class WorkflowScheduler:
             retry_task.result = f"Auto retry dispatch failed: {exc}"
             retry_task.updated_at = datetime.now()
             await self.store.save_codex_task(retry_task)
+            TaskCompletionRegistry.get().signal(
+                retry_task.id,
+                {
+                    "task_id": retry_task.id,
+                    "role": retry_task.role,
+                    "status": "failed",
+                    "error": retry_task.result,
+                },
+            )
             node.task_id = task.id
             await self._emit_retry_failed_event(node, issue, retry_task, exc)
             return False
@@ -362,14 +398,11 @@ class WorkflowScheduler:
                 }
             )
             await self._event_bus.append(
-                {
-                    "type": "task_status",
-                    "task_id": retry_task.id,
-                    "issue_id": retry_task.issue_id,
-                    "session_id": retry_task.session_id,
-                    "status": retry_task.status,
-                    "review_comment": retry_task.review_comment,
-                }
+                build_task_status_event(
+                    retry_task,
+                    retry_task.status,
+                    review_comment=retry_task.review_comment,
+                )
             )
         except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("workflow_node_retrying emit failed: %s", exc)
@@ -397,14 +430,11 @@ class WorkflowScheduler:
                 }
             )
             await self._event_bus.append(
-                {
-                    "type": "task_status",
-                    "task_id": retry_task.id,
-                    "issue_id": retry_task.issue_id,
-                    "session_id": retry_task.session_id,
-                    "status": retry_task.status,
-                    "review_comment": retry_task.review_comment,
-                }
+                build_task_status_event(
+                    retry_task,
+                    retry_task.status,
+                    review_comment=retry_task.review_comment,
+                )
             )
         except Exception as emit_exc:  # noqa: BLE001, RUF100
             logger.debug("workflow_node_retry_failed emit failed: %s", emit_exc)
@@ -462,15 +492,9 @@ class WorkflowScheduler:
                         "specialist_role": specialist_child_task.role,
                     }
                 )
-                await self._event_bus.append(
-                    {
-                        "type": "task_status",
-                        "task_id": parent.id,
-                        "issue_id": parent.issue_id,
-                        "session_id": parent.session_id,
-                        "status": parent.status,
-                    }
-                )
+                from app.application.task_status_events import build_task_status_event
+
+                await self._event_bus.append(build_task_status_event(parent, parent.status))
             except Exception:  # noqa: BLE001, RUF100
                 pass
 
@@ -497,9 +521,9 @@ class WorkflowScheduler:
 
     @staticmethod
     def _task_status_to_node_status(task_status: str) -> str | None:
-        if task_status == "done":
+        if is_task_success_status(task_status):
             return "done"
-        if task_status in {"failed", "error"}:
+        if is_task_failure_status(task_status):
             return "failed"
         return None
 
@@ -528,7 +552,9 @@ class WorkflowScheduler:
         target_phase = None
         for role in ("product_manager", "architect", "engineer", "qa"):
             statuses = statuses_by_role.get(role)
-            if statuses and statuses <= {"done", "skipped"}:
+            if statuses and all(
+                status == "skipped" or is_task_success_status(status) for status in statuses
+            ):
                 target_phase = self._ROLE_TO_NEXT_PHASE.get(role)
         if target_phase is None or target_phase == issue.current_phase:
             return

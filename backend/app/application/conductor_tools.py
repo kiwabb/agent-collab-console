@@ -3,30 +3,62 @@
 from __future__ import annotations  # noqa: I001
 
 import asyncio
-import os
 import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable  # noqa: UP035
 from uuid import uuid4
 
 from app.application.project_conductor import ProjectConductor
+from app.application.task_statuses import (
+    TASK_FAILURE_STATUSES,
+    TASK_SUCCESS_STATUSES,
+    is_task_success_status,
+    is_task_terminal_status,
+    normalize_task_status,
+)
+from app.application.task_dispatcher import normalize_role
 
 
 ToolCallable = Callable[[dict[str, Any]], Awaitable[Any]]
 ToolStatusCallback = Callable[[str, str | None], Awaitable[None] | None]
+
+PLANNING_ONLY_FINALIZE_ROLES = {"product_manager", "architect"}
+IMPLEMENTATION_FINALIZE_ROLES = {
+    "engineer",
+    "engineer_backend",
+    "engineer_frontend",
+    "operations_engineer",
+    "specialist:doc_writer",
+}
+VERIFICATION_FINALIZE_ROLES = {
+    "qa",
+    "specialist:accessibility_reviewer",
+    "specialist:api_contract_checker",
+    "specialist:code_reviewer",
+    "specialist:dependency_auditor",
+    "specialist:i18n_checker",
+    "specialist:performance_reviewer",
+    "specialist:security_reviewer",
+}
+
+_DISPATCH_START_LOCKS_BY_ISSUE: dict[str, asyncio.Lock] = {}
+
+
+def _dispatch_start_lock_for_issue(issue_id: str) -> asyncio.Lock:
+    lock = _DISPATCH_START_LOCKS_BY_ISSUE.get(issue_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _DISPATCH_START_LOCKS_BY_ISSUE[issue_id] = lock
+    return lock
 
 
 def _max_dispatches_per_role() -> int:
     """GAP G: max times the Conductor may dispatch the same role for one issue
     before the tool returns `retries_exhausted`. Allows the initial run plus a
     few reworks (e.g. engineer after QA failure) without unbounded looping."""
-    raw = os.getenv("CONDUCTOR_MAX_DISPATCHES_PER_ROLE")
-    if not raw:
-        return 4
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return 4
+    from app.application import timeouts
+
+    return timeouts.conductor_max_dispatches_per_role()
 
 
 @dataclass(frozen=True)
@@ -67,6 +99,7 @@ def build_conductor_tools(
         (role, role#1, role#2…); past the budget the Conductor is stuck in a
         rework loop. Returns a terminal `retries_exhausted` dict when exhausted,
         else None. Shared by dispatch_subagent and dispatch_batch."""
+        role = normalize_role(role)
         if not role or not issue_id:
             return None
         try:
@@ -104,6 +137,224 @@ def build_conductor_tools(
             ),
         }
 
+    async def _check_budget_gate(issue, *, tool: str) -> dict[str, Any] | None:
+        """Hard gate new dispatches once issue spend reaches its ceiling."""
+        try:
+            from app.application.budget_service import compute_issue_budget_status
+
+            budget_status = await compute_issue_budget_status(store, issue)
+        except Exception:
+            return None
+        if not budget_status.over_budget:
+            return None
+        remaining = budget_status.remaining_usd
+        payload = {
+            "tool": tool,
+            "issue_id": issue.id,
+            "status": "budget_exceeded",
+            "spent_usd": round(budget_status.spent_usd, 6),
+            "reserved_usd": round(budget_status.reserved_usd, 6),
+            "budget_usd": round(budget_status.budget_usd, 6),
+            "remaining_usd": None if remaining is None else round(remaining, 6),
+        }
+        await _emit(event_bus, "conductor_tool", payload)
+        return {
+            "status": "budget_exceeded",
+            "error": (
+                "issue budget is exhausted; do not dispatch new subagents. "
+                "Finalize with the current result, ask the user for more budget, "
+                "or choose a no-cost recovery path."
+            ),
+            "budget": {
+                "spent_usd": payload["spent_usd"],
+                "reserved_usd": payload["reserved_usd"],
+                "budget_usd": payload["budget_usd"],
+                "remaining_usd": payload["remaining_usd"],
+            },
+        }
+
+    async def _check_batch_redispatch_budget(
+        specs: list[dict[str, Any]],
+        *,
+        tool: str,
+    ) -> dict[str, Any] | None:
+        """Atomically reject batch fan-out that would exceed per-role limits."""
+        if not issue_id:
+            return None
+        try:
+            graph = await store.load_workflow_graph_for_issue(issue_id)
+        except Exception:
+            graph = None
+        if graph is None:
+            return None
+        max_dispatches = _max_dispatches_per_role()
+        existing_by_role: dict[str, int] = {}
+        for node in graph.nodes or []:
+            node_key = str(getattr(node, "node_key", "") or "")
+            base_role = normalize_role(node_key.split("#", 1)[0])
+            if base_role:
+                existing_by_role[base_role] = existing_by_role.get(base_role, 0) + 1
+        requested_by_role: dict[str, int] = {}
+        for spec in specs:
+            role = normalize_role(str(spec.get("role") or ""))
+            if role:
+                requested_by_role[role] = requested_by_role.get(role, 0) + 1
+        exhausted = [
+            {
+                "role": role,
+                "dispatches": existing_by_role.get(role, 0),
+                "requested": requested,
+                "max_dispatches": max_dispatches,
+            }
+            for role, requested in requested_by_role.items()
+            if existing_by_role.get(role, 0) + requested > max_dispatches
+        ]
+        if not exhausted:
+            return None
+        await _emit(
+            event_bus,
+            "conductor_tool",
+            {
+                "tool": tool,
+                "status": "retries_exhausted",
+                "roles": exhausted,
+            },
+        )
+        return {
+            "status": "retries_exhausted",
+            "error": "batch would exceed per-role dispatch limits; narrow the batch or choose different roles",
+            "roles": exhausted,
+        }
+
+    async def _check_finalize_success_gate() -> dict[str, Any] | None:
+        """Reject model-reported success when the persisted graph is not clean.
+
+        ``finalize_task`` is the Conductor's terminal switch. The model can
+        decide *when* to request completion, but the backend owns the invariant
+        that a successful issue cannot have unfinished, failed, or conflicted
+        workflow nodes.
+        """
+        if not issue_id:
+            return None
+        try:
+            graph = await store.load_workflow_graph_for_issue(issue_id)
+        except Exception as exc:  # noqa: BLE001, RUF100
+            return {
+                "status": "failed",
+                "reason": "workflow graph could not be loaded; cannot finalize as done",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        if graph is None:
+            return {
+                "status": "failed",
+                "reason": "workflow graph is missing; cannot finalize as done",
+            }
+        nodes = list(getattr(graph, "nodes", None) or [])
+        if not nodes:
+            return {
+                "status": "failed",
+                "reason": "workflow graph has no nodes; cannot finalize as done",
+            }
+        completed_statuses = TASK_SUCCESS_STATUSES
+        allowed_done_statuses = {*completed_statuses, "skipped"}
+        blocker_statuses = TASK_FAILURE_STATUSES | {
+            "blocked",
+            "rework",
+            "conflict",
+            "merge_conflict",
+            "artifact_invalid",
+            "retries_exhausted",
+            "timeout",
+            "timed_out",
+        }
+        unfinished_statuses = {
+            "pending",
+            "queued",
+            "running",
+            "responding",
+            "waiting",
+            "waiting_for_help",
+            "waiting_for_specialist",
+            "ready_to_resume",
+            "awaiting_review",
+            "awaiting_approval",
+            "awaiting_merge",
+        }
+        blocking_nodes: list[dict[str, Any]] = []
+        has_completed_work = False
+        completed_base_roles: set[str] = set()
+        for node in nodes:
+            node_status = normalize_task_status(getattr(node, "status", None))
+            node_key = str(getattr(node, "node_key", "") or "")
+            base_role = normalize_role(node_key.split("#", 1)[0])
+            if node_status in allowed_done_statuses:
+                if node_status in completed_statuses:
+                    has_completed_work = True
+                    if base_role:
+                        completed_base_roles.add(base_role)
+                continue
+            if node_status in blocker_statuses or node_status in unfinished_statuses:
+                blocking_nodes.append({"node_key": node_key, "status": node_status or "unknown"})
+            elif node_status:
+                blocking_nodes.append({"node_key": node_key, "status": node_status})
+        if blocking_nodes:
+            return {
+                "status": "failed",
+                "reason": "workflow graph still has unresolved nodes; cannot finalize as done",
+                "blocking_nodes": blocking_nodes[:10],
+            }
+        if not has_completed_work:
+            return {
+                "status": "failed",
+                "reason": "workflow graph has no completed work node; cannot finalize as done",
+            }
+        if completed_base_roles and completed_base_roles.issubset(
+            PLANNING_ONLY_FINALIZE_ROLES
+        ):
+            return {
+                "status": "failed",
+                "reason": (
+                    "workflow graph only has planning/design completed; cannot finalize as done "
+                    "without implementation or delivery evidence"
+                ),
+            }
+        if completed_base_roles and completed_base_roles.issubset(VERIFICATION_FINALIZE_ROLES):
+            return {
+                "status": "failed",
+                "reason": (
+                    "workflow graph only has verification completed; cannot finalize as done "
+                    "without implementation or delivery evidence"
+                ),
+            }
+        has_implementation = bool(
+            completed_base_roles.intersection(IMPLEMENTATION_FINALIZE_ROLES)
+        )
+        has_verification = bool(completed_base_roles.intersection(VERIFICATION_FINALIZE_ROLES))
+        if completed_base_roles and not has_implementation:
+            recognized_roles = (
+                PLANNING_ONLY_FINALIZE_ROLES
+                | IMPLEMENTATION_FINALIZE_ROLES
+                | VERIFICATION_FINALIZE_ROLES
+            )
+            unclassified_roles = sorted(completed_base_roles - recognized_roles)
+            return {
+                "status": "failed",
+                "reason": (
+                    "workflow graph has no recognized implementation or delivery evidence; "
+                    "cannot finalize as done"
+                ),
+                "unclassified_roles": unclassified_roles,
+            }
+        if has_implementation and not has_verification:
+            return {
+                "status": "failed",
+                "reason": (
+                    "workflow graph has implementation completed but no verification node completed; "
+                    "cannot finalize as done"
+                ),
+            }
+        return None
+
     async def _run_single_dispatch(
         *,
         issue,
@@ -113,6 +364,8 @@ def build_conductor_tools(
         agent_worktree_path: str | None,
         tool: str,
         batch_key: str | None = None,
+        dispatch_start_lock: asyncio.Lock | None = None,
+        pre_dispatch_check: Callable[[], Awaitable[dict[str, Any] | None]] | None = None,
     ) -> dict[str, Any]:
         """Run one subagent dispatch end-to-end: acquire a per-role concurrency
         slot, dispatch the role task, then activity-aware wait for completion.
@@ -124,9 +377,9 @@ def build_conductor_tools(
         structured status/error dict (role_busy / timeout / value error)."""
         from datetime import datetime  # noqa: I001
         from app.application import task_activity, timeouts
+        from app.application import task_dispatcher as task_dispatcher_module
         from app.application.role_concurrency import RoleConcurrencyLimiter
         from app.application.task_completion_registry import TaskCompletionRegistry
-        from app.application.task_dispatcher import dispatch_role
 
         detail = role or prev_node_key or "subagent"
 
@@ -137,6 +390,7 @@ def build_conductor_tools(
         # If every slot is busy past role_slot_wait_s, return a structured
         # `role_busy` so the Conductor re-plans instead of blocking forever.
         limiter = RoleConcurrencyLimiter.instance()
+        role = normalize_role(role)
         slot_role = role or "subagent"
         slot_wait = timeouts.role_slot_wait_s()
         async with limiter.slot(slot_role, timeout=slot_wait) as acquired:
@@ -165,26 +419,72 @@ def build_conductor_tools(
 
             try:
                 await _notify_status(on_status, "dispatching_subagent", detail)
+                effective_agent_worktree_path = agent_worktree_path
+                if dispatch_start_lock is None:
+                    if pre_dispatch_check is not None:
+                        pre_dispatch_result = await pre_dispatch_check()
+                        if pre_dispatch_result is not None:
+                            if "result" in pre_dispatch_result:
+                                return pre_dispatch_result["result"]
+                            effective_agent_worktree_path = pre_dispatch_result.get(
+                                "agent_worktree_path",
+                                effective_agent_worktree_path,
+                            )
+                    task_id, node_id = await task_dispatcher_module.dispatch_role(  # noqa: RUF059
+                        issue=issue,
+                        role=role,
+                        prompt_override=prompt_override,
+                        store=store,
+                        task_dispatcher_fn=task_dispatcher_fn,
+                        event_bus=event_bus,
+                        prev_node_key=prev_node_key,
+                        agent_worktree_path=effective_agent_worktree_path,
+                        batch_key=batch_key,
+                        register_completion=True,
+                    )
+                else:
+                    async with dispatch_start_lock:
+                        if pre_dispatch_check is not None:
+                            pre_dispatch_result = await pre_dispatch_check()
+                            if pre_dispatch_result is not None:
+                                if "result" in pre_dispatch_result:
+                                    return pre_dispatch_result["result"]
+                                effective_agent_worktree_path = pre_dispatch_result.get(
+                                    "agent_worktree_path",
+                                    effective_agent_worktree_path,
+                                )
+                        task_id, node_id = await task_dispatcher_module.dispatch_role(  # noqa: RUF059
+                            issue=issue,
+                            role=role,
+                            prompt_override=prompt_override,
+                            store=store,
+                            task_dispatcher_fn=task_dispatcher_fn,
+                            event_bus=event_bus,
+                            prev_node_key=prev_node_key,
+                            agent_worktree_path=effective_agent_worktree_path,
+                            batch_key=batch_key,
+                            register_completion=True,
+                        )
                 # register_completion=True makes dispatch_role register the task
                 # in the completion registry BEFORE launching its runner, so an
                 # instantly-completing task (e.g. executor_failed_to_start
                 # fail-fast) can't signal before we're listening. This closes the
                 # signal-before-register race that stalled dispatch until
                 # hard_timeout (and leaked agent worktrees in dispatch_batch).
-                task_id, node_id = await dispatch_role(  # noqa: RUF059
-                    issue=issue,
-                    role=role,
-                    prompt_override=prompt_override,
-                    store=store,
-                    task_dispatcher_fn=task_dispatcher_fn,
-                    event_bus=event_bus,
-                    prev_node_key=prev_node_key,
-                    agent_worktree_path=agent_worktree_path,
-                    batch_key=batch_key,
-                    register_completion=True,
-                )
             except ValueError as exc:
                 return {"error": str(exc), "role": role}
+            except Exception as exc:
+                await _emit(
+                    event_bus,
+                    "conductor_tool",
+                    {
+                        "tool": tool,
+                        "role": role,
+                        "status": "dispatch_failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                return {"error": f"{type(exc).__name__}: {exc}", "role": role}
 
             registry = TaskCompletionRegistry.get()
             # Idempotent safety net: dispatch_role already registered task_id
@@ -221,10 +521,61 @@ def build_conductor_tools(
                     activity_age=_activity_age,
                 )
             except TimeoutError:
+                timeout_error = (
+                    f"subagent timed out (idle >{idle_timeout:.0f}s or total >{hard_timeout:.0f}s)"
+                )
+                node_key = await _load_workflow_node_key(issue.id, node_id, fallback=role)
+                try:
+                    from app.bootstrap import get_codex_process_manager
+
+                    mgr = get_codex_process_manager()
+                    terminate_task = getattr(mgr, "terminate_task", None)
+                    if terminate_task is not None:
+                        terminated = terminate_task(task_id)
+                        if asyncio.iscoroutine(terminated):
+                            await terminated
+                except Exception:
+                    pass
+                try:
+                    task = await store.load_codex_task(task_id)
+                    if task is not None and not is_task_terminal_status(task.status):
+                        task.status = "failed"
+                        task.result = timeout_error
+                        task.updated_at = datetime.now()
+                        await store.save_codex_task(task)
+                        from app.application.task_status_events import build_task_status_event
+
+                        await _emit(
+                            event_bus,
+                            "task_status",
+                            build_task_status_event(task, "failed", result=task.result),
+                        )
+                except Exception:
+                    pass
+                try:
+                    await store.update_workflow_node(
+                        node_id,
+                        status="failed",
+                        task_id=task_id,
+                        completed_at=datetime.now(),
+                    )
+                    await _emit(
+                        event_bus,
+                        "workflow_node_updated",
+                        {
+                            "issue_id": issue.id,
+                            "session_id": issue.session_id,
+                            "node_id": node_id,
+                            "node_key": node_key,
+                            "status": "failed",
+                            "task_id": task_id,
+                            "batch_key": batch_key,
+                        },
+                    )
+                except Exception:
+                    pass
                 return {
-                    "error": (
-                        f"subagent timed out (idle >{idle_timeout:.0f}s or total >{hard_timeout:.0f}s)"
-                    ),
+                    "error": timeout_error,
                     "task_id": task_id,
                     "role": role,
                 }
@@ -245,7 +596,7 @@ def build_conductor_tools(
             await _emit(event_bus, "conductor_tool", {"tool": "dispatch_subagent", **payload})
             return payload
 
-        role = str(tool_input.get("role") or "")
+        role = normalize_role(str(tool_input.get("role") or ""))
         prompt_override = tool_input.get("prompt") or None
         prev_node_key = tool_input.get("prev_node_key") or None
 
@@ -253,9 +604,22 @@ def build_conductor_tools(
         if issue is None:
             return {"error": f"Issue {issue_id} not found"}
 
+        budget_blocked = await _check_budget_gate(issue, tool="dispatch_subagent")
+        if budget_blocked is not None:
+            return budget_blocked
+
         exhausted = await _check_redispatch_budget(role, tool="dispatch_subagent")
         if exhausted is not None:
             return exhausted
+
+        async def _pre_dispatch_check() -> dict[str, Any] | None:
+            budget_blocked = await _check_budget_gate(issue, tool="dispatch_subagent")
+            if budget_blocked is not None:
+                return {"result": budget_blocked}
+            exhausted = await _check_redispatch_budget(role, tool="dispatch_subagent")
+            if exhausted is not None:
+                return {"result": exhausted}
+            return None
 
         # Serial path: no per-agent worktree, the task runs in the shared issue
         # worktree exactly as before.
@@ -266,6 +630,8 @@ def build_conductor_tools(
             prev_node_key=prev_node_key,
             agent_worktree_path=None,
             tool="dispatch_subagent",
+            dispatch_start_lock=_dispatch_start_lock_for_issue(issue.id),
+            pre_dispatch_check=_pre_dispatch_check,
         )
 
     async def dispatch_batch(tool_input: dict[str, Any]) -> dict[str, Any]:
@@ -292,21 +658,32 @@ def build_conductor_tools(
         if issue is None:
             return {"error": f"Issue {issue_id} not found"}
 
+        budget_blocked = await _check_budget_gate(issue, tool="dispatch_batch")
+        if budget_blocked is not None:
+            return budget_blocked
+
         project = await store.load_project(issue.project_id)
         if project is None:
             return {"error": f"Project {issue.project_id} not found"}
 
         wm = _resolve_worktree_manager()
 
+        # One shared batch_key tags every node this dispatch_batch call creates, so
+        # the WorkflowGraph / mesh UI can render the concurrent agents in a single
+        # parallel swimlane (vs. the serial chain). Short, sortable, unique enough.
+        batch_key = f"batch-{uuid4().hex[:8]}"
+
         # Normalize specs and assign a unique agent_key per spec (used for the
-        # per-agent worktree branch/path and for cleanup). Same role twice in one
-        # batch gets distinct keys (role, role-2, …) so worktrees never collide.
+        # user-facing result key). Same role twice in one batch gets distinct keys
+        # (role, role-2, …). The worktree key also includes batch_key so concurrent
+        # dispatch_batch calls for the same issue/role never share an agent branch
+        # or directory.
         specs: list[dict[str, Any]] = []
         seen_keys: dict[str, int] = {}
         for idx, raw in enumerate(raw_agents):
             if not isinstance(raw, dict):
                 return {"error": f"agents[{idx}] must be an object with at least a 'role'"}
-            role = str(raw.get("role") or "").strip()
+            role = normalize_role(str(raw.get("role") or "").strip())
             if not role:
                 return {"error": f"agents[{idx}] is missing 'role'"}
             base_key = _sanitize_agent_key(role)
@@ -316,11 +693,16 @@ def build_conductor_tools(
             specs.append(
                 {
                     "agent_key": agent_key,
+                    "worktree_key": f"{agent_key}-{batch_key}",
                     "role": role,
                     "prompt": raw.get("prompt") or None,
                     "prev_node_key": raw.get("prev_node_key") or None,
                 }
             )
+
+        batch_exhausted = await _check_batch_redispatch_budget(specs, tool="dispatch_batch")
+        if batch_exhausted is not None:
+            return batch_exhausted
 
         # Budget-aware concurrency (PR3): the configured fan-out cap is the upper
         # bound, but a tight remaining budget dynamically downscales the EFFECTIVE
@@ -343,11 +725,7 @@ def build_conductor_tools(
         except Exception:  # noqa: BLE001, RUF100
             cap = configured_cap
         sem = asyncio.Semaphore(cap)
-
-        # One shared batch_key tags every node this dispatch_batch call creates, so
-        # the WorkflowGraph / mesh UI can render the concurrent agents in a single
-        # parallel swimlane (vs. the serial chain). Short, sortable, unique enough.
-        batch_key = f"batch-{uuid4().hex[:8]}"
+        dispatch_gate_lock = _dispatch_start_lock_for_issue(issue.id)
 
         # Upstream-visibility fix (PR1 check): isolated agent worktrees fork from
         # the issue branch and only see what's committed there. Flush any
@@ -386,43 +764,70 @@ def build_conductor_tools(
 
         async def _run_one(spec: dict[str, Any]) -> dict[str, Any]:
             agent_key = spec["agent_key"]
+            worktree_key = spec["worktree_key"]
             role = spec["role"]
             async with sem:
-                # Budget check per role, mirroring dispatch_subagent.
-                exhausted = await _check_redispatch_budget(role, tool="dispatch_batch")
-                if exhausted is not None:
-                    return {"agent_key": agent_key, **exhausted}
-
                 worktree_path: str | None = None
                 agent_branch: str | None = None
                 cleanup_on_exit = False
                 try:
-                    agent_branch, worktree_path, _ = await wm.prepare_agent_worktree(
-                        project, issue, agent_key
-                    )
+                    async def _pre_dispatch_check() -> dict[str, Any] | None:
+                        nonlocal agent_branch, worktree_path
+                        # Budget gate after acquiring the batch slot, before
+                        # creating any task/node/worktree. The batch-level
+                        # preflight can be stale after earlier agents reserve
+                        # or spend budget.
+                        budget_blocked = await _check_budget_gate(issue, tool="dispatch_batch")
+                        if budget_blocked is not None:
+                            return {
+                                "result": {
+                                    "agent_key": agent_key,
+                                    "role": role,
+                                    **budget_blocked,
+                                }
+                            }
+
+                        # Dispatch-count check per role, mirroring dispatch_subagent.
+                        exhausted = await _check_redispatch_budget(role, tool="dispatch_batch")
+                        if exhausted is not None:
+                            return {"result": {"agent_key": agent_key, **exhausted}}
+
+                        agent_branch, worktree_path, _ = await wm.prepare_agent_worktree(
+                            project, issue, worktree_key
+                        )
+                        return {"agent_worktree_path": worktree_path}
+
                     result = await _run_single_dispatch(
                         issue=issue,
                         role=role,
                         prompt_override=spec["prompt"],
                         prev_node_key=spec["prev_node_key"],
-                        agent_worktree_path=worktree_path,
+                        agent_worktree_path=None,
                         tool="dispatch_batch",
                         batch_key=batch_key,
+                        dispatch_start_lock=dispatch_gate_lock,
+                        pre_dispatch_check=_pre_dispatch_check,
                     )
                     # PR3 will merge these per-agent branches back into the issue
                     # branch, so on success we KEEP the worktree (its commits are
                     # the agent's output). Failed/never-dispatched agents have no
                     # mergeable output → clean their worktree now to avoid leaks.
                     status = result.get("status")
-                    if "error" in result or not _is_successful_subagent_status(status):
+                    if (
+                        "error" in result or not _is_successful_subagent_status(status)
+                    ) and (agent_branch or worktree_path):
                         cleanup_on_exit = True
                     return {
+                        **result,
                         "agent_key": agent_key,
                         "role": role,
                         "branch": agent_branch,
                         "worktree_path": worktree_path,
-                        **result,
                     }
+                except asyncio.CancelledError:
+                    if agent_branch or worktree_path:
+                        cleanup_on_exit = True
+                    raise
                 except Exception as exc:  # noqa: BLE001, RUF100
                     cleanup_on_exit = True
                     return {
@@ -435,7 +840,7 @@ def build_conductor_tools(
                 finally:
                     if cleanup_on_exit:
                         try:  # noqa: SIM105
-                            await wm.cleanup_agent_worktree(project, issue, agent_key)
+                            await wm.cleanup_agent_worktree(project, issue, worktree_key)
                         except Exception:  # noqa: BLE001, RUF100
                             pass
 
@@ -527,7 +932,9 @@ def build_conductor_tools(
 
         conflict = merge_summary.get("conflict")
         merge_status = (
-            "conflict" if conflict else ("merged" if merge_summary.get("merged") else "noop")
+            "error"
+            if merge_summary.get("error")
+            else ("conflict" if conflict else ("merged" if merge_summary.get("merged") else "noop"))
         )
 
         out: dict[str, Any] = {
@@ -554,6 +961,14 @@ def build_conductor_tools(
                 "Agents merged before the conflict are already on the issue branch and "
                 "were NOT rolled back."
             )
+        elif merge_summary.get("error"):
+            out["merge_error"] = merge_summary["error"]
+            out["note"] = (
+                "MERGE ERROR during join: successful agents finished, but their "
+                "per-agent worktrees could not be reconciled into the issue branch. "
+                "The merge error is preserved in 'merge_error'; inspect the kept "
+                "agent worktrees before retrying or finalizing."
+            )
         else:
             noop_note = ""
             if out["noop_merges"]:
@@ -569,6 +984,21 @@ def build_conductor_tools(
                 + noop_note
             )
         return out
+
+    async def _load_workflow_node_key(
+        issue_id: str,
+        node_id: str,
+        *,
+        fallback: str,
+    ) -> str:
+        try:
+            graph = await store.load_workflow_graph_for_issue(issue_id)
+        except Exception:  # noqa: BLE001, RUF100
+            return fallback
+        for node in getattr(graph, "nodes", None) or []:
+            if str(getattr(node, "id", "") or "") == node_id:
+                return str(getattr(node, "node_key", "") or "") or fallback
+        return fallback
 
     async def spawn_custom_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
         payload = {
@@ -601,15 +1031,54 @@ def build_conductor_tools(
             "project_id": project_id,
             "question": tool_input.get("question"),
             "status": "waiting_for_user",
+            "terminal_status": "needs_user",
         }
         await _emit(event_bus, "conductor_tool", {"tool": "request_user_clarification", **payload})
         return payload
 
     async def finalize_task(tool_input: dict[str, Any]) -> dict[str, Any]:
+        raw_status = normalize_task_status(tool_input.get("status") or "done")
+        if raw_status in TASK_SUCCESS_STATUSES:
+            status = "done"
+        elif raw_status in TASK_FAILURE_STATUSES | {
+            "blocked",
+            "needs_user",
+            "max_wall",
+            "max_turns",
+        }:
+            status = raw_status
+        else:
+            status = "failed"
+        answer = str(tool_input.get("answer") or tool_input.get("summary") or "")
+        summary = str(tool_input.get("summary") or tool_input.get("answer") or "")
+        if status == "done":
+            blocked = await _check_finalize_success_gate()
+            if blocked is not None:
+                await _emit(
+                    event_bus,
+                    "conductor_tool",
+                    {
+                        "tool": "finalize_task",
+                        "status": "finalize_rejected",
+                        "requested_status": raw_status,
+                        "reason": blocked.get("reason"),
+                        "blocking_nodes": blocked.get("blocking_nodes"),
+                    },
+                )
+                reason = str(blocked.get("reason") or "success gate rejected finalize_task")
+                if answer:
+                    answer = f"{answer}\n\n[finalize rejected] {reason}"
+                else:
+                    answer = reason
+                if summary:
+                    summary = f"{summary}\n\n[finalize rejected] {reason}"
+                else:
+                    summary = reason
+                status = str(blocked.get("status") or "failed")
         return {
-            "status": str(tool_input.get("status") or "done"),
-            "answer": str(tool_input.get("answer") or tool_input.get("summary") or ""),
-            "summary": str(tool_input.get("summary") or tool_input.get("answer") or ""),
+            "status": status,
+            "answer": answer,
+            "summary": summary,
         }
 
     tools: dict[str, ToolCallable] = {
@@ -631,7 +1100,7 @@ def _sanitize_agent_key(role: str) -> str:
 
 
 def _is_successful_subagent_status(status: Any) -> bool:
-    return str(status or "").strip().lower() in {"done", "completed", "success", "passed", "ok"}
+    return is_task_success_status(str(status or ""))
 
 
 async def _emit(event_bus, event_type: str, payload: dict[str, Any]) -> None:
@@ -670,11 +1139,11 @@ def _tool_definitions() -> list[dict[str, Any]]:
         ),
         _tool(
             "dispatch_subagent",
-            "Dispatch a workflow sub-agent by role. Waits for completion and returns the result. Available roles: product_manager, architect, engineer, qa. You can also use specialist role keys from the agent catalog.",
+            "Dispatch a workflow sub-agent by role. Waits for completion and returns the result. Available roles: product_manager, architect, engineer, operations_engineer, qa. You can also use specialist role keys from the agent catalog.",
             {
                 "role": {
                     "type": "string",
-                    "description": "Role to dispatch: product_manager, architect, engineer, qa, or a specialist role_key",
+                    "description": "Role to dispatch: product_manager, architect, engineer, operations_engineer, qa, or a specialist role_key",
                 },
                 "prompt": {
                     "type": "string",
@@ -715,7 +1184,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
                         "properties": {
                             "role": {
                                 "type": "string",
-                                "description": "Role to dispatch: product_manager, architect, engineer, qa, or a specialist role_key",
+                                "description": "Role to dispatch: product_manager, architect, engineer, operations_engineer, qa, or a specialist role_key",
                             },
                             "prompt": {
                                 "type": "string",

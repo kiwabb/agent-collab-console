@@ -8,7 +8,7 @@ import {
   askProjectConductor,
   getProjectConductorState,
   scheduleProjectConductorReview,
-} from "@/lib/api";
+} from "@/lib/api/projects";
 import type { ProjectConductorState } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

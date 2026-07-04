@@ -1,6 +1,7 @@
 """Tests for Phase 4 specialist orchestrator (P2P mesh calls)."""
 
 import pytest  # noqa: I001
+from dataclasses import replace
 from datetime import datetime
 from uuid import uuid4  # noqa: F401
 
@@ -66,6 +67,11 @@ class MockTaskRunner:
 
     async def start_task_run(self, task: CodexTask, **kwargs):
         self.started_tasks.append(task)
+
+
+class FailingTaskRunner:
+    async def start_task_run(self, task: CodexTask, **kwargs):
+        raise RuntimeError("runner unavailable")
 
 
 @pytest.fixture
@@ -142,6 +148,7 @@ async def test_request_specialist_pauses_parent(orchestrator, store, parent_task
 
     updated_parent = await store.load_codex_task(parent_task.id)
     assert updated_parent.status == "waiting_for_specialist"
+    assert updated_parent.blocked_by_help_id == f"specialist:{child.id}"
 
 
 @pytest.mark.asyncio
@@ -177,6 +184,41 @@ async def test_request_specialist_invalid_role_key(orchestrator, store, parent_t
 
 
 @pytest.mark.asyncio
+async def test_request_specialist_rejects_empty_prompt(orchestrator, store, parent_task):
+    await store.save_codex_task(parent_task)
+
+    with pytest.raises(SpecialistOrchestratorError, match="prompt"):
+        await orchestrator.request_specialist(
+            parent_task=parent_task,
+            specialist_role_key="specialist:security_reviewer",
+            specialist_prompt="   ",
+            why="Test",
+        )
+
+
+@pytest.mark.asyncio
+async def test_request_specialist_start_failure_marks_parent_ready_to_resume(store, event_bus, parent_task):
+    await store.save_codex_task(parent_task)
+    orchestrator = SpecialistOrchestrator(store, event_bus, FailingTaskRunner())
+
+    with pytest.raises(SpecialistOrchestratorError, match="Failed to start"):
+        await orchestrator.request_specialist(
+            parent_task=parent_task,
+            specialist_role_key="specialist:security_reviewer",
+            specialist_prompt="Review code",
+            why="Security",
+        )
+
+    updated_parent = await store.load_codex_task(parent_task.id)
+    child = next(task for task in store.tasks.values() if task.id != parent_task.id)
+    assert updated_parent.status == "ready_to_resume"
+    assert updated_parent.blocked_by_help_id is None
+    assert "runner unavailable" in (updated_parent.result or "")
+    assert child.status == "failed"
+    assert any(event.get("type") == "specialist_failed" for event in event_bus.events)
+
+
+@pytest.mark.asyncio
 async def test_request_specialist_parent_not_running(orchestrator, store):
     """Test that non-running parent task raises error."""
     parent = CodexTask(
@@ -199,6 +241,21 @@ async def test_request_specialist_parent_not_running(orchestrator, store):
             specialist_role_key="specialist:security_reviewer",
             specialist_prompt="Review",
             why="Test",
+        )
+
+
+@pytest.mark.asyncio
+async def test_request_specialist_uses_latest_parent_state(orchestrator, store, parent_task):
+    stale_parent = parent_task
+    latest_parent = replace(parent_task, status="failed")
+    await store.save_codex_task(latest_parent)
+
+    with pytest.raises(SpecialistOrchestratorError, match="current status: failed"):
+        await orchestrator.request_specialist(
+            parent_task=stale_parent,
+            specialist_role_key="specialist:security_reviewer",
+            specialist_prompt="Review",
+            why="Stale caller",
         )
 
 
@@ -253,6 +310,7 @@ async def test_complete_specialist_request_resumes_parent(orchestrator, store, p
     )
 
     assert resumed_parent.status == "pending"  # Reset to pending for re-run
+    assert resumed_parent.blocked_by_help_id is None
     assert "[SPECIALIST RESULT" in resumed_parent.review_comment
     assert "vulnerabilities" in resumed_parent.review_comment
 
@@ -284,6 +342,135 @@ async def test_complete_specialist_request_injects_result(orchestrator, store, p
 
 
 @pytest.mark.asyncio
+async def test_complete_specialist_request_rejects_failed_child(orchestrator, store, parent_task):
+    await store.save_codex_task(parent_task)
+    child = await orchestrator.request_specialist(
+        parent_task=parent_task,
+        specialist_role_key="specialist:security_reviewer",
+        specialist_prompt="Review",
+        why="Security",
+    )
+    child.status = "failed"
+    child.result = "specialist crashed"
+    await store.save_codex_task(child)
+
+    with pytest.raises(SpecialistOrchestratorError):
+        await orchestrator.complete_specialist_request(
+            specialist_child_task_id=child.id,
+            specialist_result_summary="should not inject",
+        )
+
+    updated_parent = await store.load_codex_task(parent_task.id)
+    assert updated_parent.status == "ready_to_resume"
+    assert updated_parent.blocked_by_help_id is None
+    assert not updated_parent.review_comment
+    assert any(event.get("type") == "specialist_failed" for event in orchestrator.event_bus.events)
+
+
+@pytest.mark.asyncio
+async def test_complete_specialist_request_rejects_error_child(orchestrator, store, parent_task):
+    await store.save_codex_task(parent_task)
+    child = await orchestrator.request_specialist(
+        parent_task=parent_task,
+        specialist_role_key="specialist:security_reviewer",
+        specialist_prompt="Review",
+        why="Security",
+    )
+    child.status = "error"
+    child.result = "specialist runtime error"
+    await store.save_codex_task(child)
+
+    with pytest.raises(SpecialistOrchestratorError):
+        await orchestrator.complete_specialist_request(
+            specialist_child_task_id=child.id,
+            specialist_result_summary="should not inject",
+        )
+
+    updated_parent = await store.load_codex_task(parent_task.id)
+    assert updated_parent.status == "ready_to_resume"
+    assert updated_parent.blocked_by_help_id is None
+    assert not updated_parent.review_comment
+    assert any(event.get("type") == "specialist_failed" for event in orchestrator.event_bus.events)
+
+
+@pytest.mark.asyncio
+async def test_complete_specialist_request_rejects_parent_not_waiting(
+    orchestrator, store, parent_task
+):
+    await store.save_codex_task(parent_task)
+    child = await orchestrator.request_specialist(
+        parent_task=parent_task,
+        specialist_role_key="specialist:security_reviewer",
+        specialist_prompt="Review",
+        why="Security",
+    )
+    child.status = "done"
+    child.result = "Security review: ok"
+    await store.save_codex_task(child)
+    parent_task.status = "failed"
+    await store.save_codex_task(parent_task)
+
+    with pytest.raises(SpecialistOrchestratorError):
+        await orchestrator.complete_specialist_request(
+            specialist_child_task_id=child.id,
+            specialist_result_summary="should not inject",
+        )
+
+    updated_parent = await store.load_codex_task(parent_task.id)
+    assert updated_parent.status == "failed"
+    assert not updated_parent.review_comment
+
+
+@pytest.mark.asyncio
+async def test_complete_specialist_request_rejects_stale_child_not_current_request(
+    orchestrator,
+    store,
+    parent_task,
+):
+    await store.save_codex_task(parent_task)
+    stale_child = await orchestrator.request_specialist(
+        parent_task=parent_task,
+        specialist_role_key="specialist:security_reviewer",
+        specialist_prompt="Review auth",
+        why="Security",
+    )
+    current_child = CodexTask(
+        id="current-specialist-child",
+        session_id=parent_task.session_id,
+        project_id=parent_task.project_id,
+        issue_id=parent_task.issue_id,
+        title="[Specialist] specialist:performance_reviewer",
+        prompt="Review performance",
+        role="specialist:performance_reviewer",
+        executor="claude",
+        status="running",
+        parent_task_id=parent_task.id,
+        task_kind="specialist_child",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    parent = await store.load_codex_task(parent_task.id)
+    parent.status = "waiting_for_specialist"
+    parent.blocked_by_help_id = f"specialist:{current_child.id}"
+    stale_child.status = "done"
+    stale_child.result = "stale result"
+    await store.save_codex_task(parent)
+    await store.save_codex_task(stale_child)
+    await store.save_codex_task(current_child)
+
+    with pytest.raises(SpecialistOrchestratorError, match="different specialist child"):
+        await orchestrator.complete_specialist_request(
+            specialist_child_task_id=stale_child.id,
+            specialist_result_summary="stale result",
+        )
+
+    updated_parent = await store.load_codex_task(parent_task.id)
+    assert updated_parent.status == "waiting_for_specialist"
+    assert updated_parent.blocked_by_help_id == f"specialist:{current_child.id}"
+    assert not updated_parent.review_comment
+
+
+@pytest.mark.asyncio
 async def test_complete_specialist_request_creates_agent_message(orchestrator, store, parent_task):
     """Test that specialist result creates an AgentMessage in the feed."""
     await store.save_codex_task(parent_task)
@@ -310,6 +497,69 @@ async def test_complete_specialist_request_creates_agent_message(orchestrator, s
     assert len(specialist_messages) > 0
     assert specialist_messages[0].from_node_key == "specialist:security_reviewer"
     assert specialist_messages[0].to_node_key == "engineer"
+
+
+@pytest.mark.asyncio
+async def test_complete_specialist_request_uses_persisted_child_result(
+    orchestrator,
+    store,
+    parent_task,
+):
+    await store.save_codex_task(parent_task)
+    child = await orchestrator.request_specialist(
+        parent_task=parent_task,
+        specialist_role_key="specialist:security_reviewer",
+        specialist_prompt="Review",
+        why="Security",
+    )
+    child.status = "done"
+    child.result = "persisted result"
+    await store.save_codex_task(child)
+
+    resumed_parent = await orchestrator.complete_specialist_request(
+        specialist_child_task_id=child.id,
+        specialist_result_summary="stale caller summary",
+    )
+
+    assert "persisted result" in resumed_parent.review_comment
+    assert "stale caller summary" not in resumed_parent.review_comment
+
+
+@pytest.mark.asyncio
+async def test_request_specialist_allows_new_call_after_previous_child_terminal(
+    orchestrator,
+    store,
+    parent_task,
+):
+    completed_child = CodexTask(
+        id="old-specialist-child",
+        session_id=parent_task.session_id,
+        project_id=parent_task.project_id,
+        issue_id=parent_task.issue_id,
+        title="[Specialist] specialist:security_reviewer",
+        prompt="Old review",
+        role="specialist:security_reviewer",
+        executor="claude",
+        status="done",
+        parent_task_id=parent_task.id,
+        task_kind="specialist_child",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await store.save_codex_task(parent_task)
+    await store.save_codex_task(completed_child)
+
+    child = await orchestrator.request_specialist(
+        parent_task=parent_task,
+        specialist_role_key="specialist:performance_reviewer",
+        specialist_prompt="Review performance now",
+        why="Second specialist pass after resume",
+    )
+
+    assert child.id != completed_child.id
+    assert child.role == "specialist:performance_reviewer"
+    updated_parent = await store.load_codex_task(parent_task.id)
+    assert updated_parent.blocked_by_help_id == f"specialist:{child.id}"
 
 
 @pytest.mark.asyncio

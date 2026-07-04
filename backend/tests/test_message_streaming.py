@@ -72,6 +72,42 @@ async def _seed_db(tmp_path, ep_id="ep-stream-1"):
 
 
 @pytest.mark.asyncio
+async def test_terminate_task_emits_complete_task_status_payload(tmp_path):
+    db = await _seed_db(tmp_path, ep_id="ep-kill-1")
+    try:
+        bus = _EventBusSpy()
+        runtime = BaseProcessRuntime(
+            codex_store=db,
+            log_store=db,
+            data_dir=str(tmp_path),
+            event_bus=bus,
+            refresh_task_result=None,
+        )
+        runtime._processes["task-1"] = _make_entry("task-1")
+
+        async def cleanup_entry(process_key, entry):
+            return None
+
+        runtime._owns_entry = lambda entry: True  # type: ignore[method-assign]
+        runtime._cleanup_entry = cleanup_entry  # type: ignore[method-assign]
+
+        await runtime.terminate_task("task-1")
+
+        event = [e for e in bus.events if e.get("type") == "task_status"][-1]
+        assert event["task_id"] == "task-1"
+        assert event["project_id"] is None
+        assert event["issue_id"] is None
+        assert event["workspace_id"] == "ws-1"
+        assert event["session_id"] == "ws-1"
+        assert event["role"] == "product_manager"
+        assert event["task_kind"] == "normal"
+        assert event["status"] == "failed"
+        assert event["execution_process_id"] == "ep-kill-1"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_assistant_partials_emit_message_delta_events(tmp_path):
     """Three growing assistant messages → 3 message_delta events with incremental delta_text + monotonic seq."""
     db = await _seed_db(tmp_path)
@@ -386,6 +422,55 @@ async def test_codex_failed_turn_uses_turn_error_not_prior_final_answer(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_codex_error_turn_status_marks_task_failed(tmp_path):
+    """Codex app-server failure aliases like status=error must not be persisted as done."""
+    db = await _seed_db(tmp_path, ep_id="ep-codex-error-1")
+    try:
+        bus = _EventBusSpy()
+
+        from app.application.codex_app_server_runtime import CodexAppServerRuntime
+
+        runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
+        runtime.codex_store = db
+        runtime._log_store = db
+        runtime._event_bus = bus
+        runtime._processes = {}
+        runtime.help_orchestrator = None
+        runtime._mock_manager_cls = None
+        runtime._data_dir = str(tmp_path)
+        runtime.refresh_task_result = None
+
+        entry = AsyncProcessEntry(
+            proc=None,  # type: ignore[arg-type]
+            output_task=None,
+            alive=True,
+            session_id="ws-1",
+            task_id="task-1",
+            executor="codex",
+            cwd=str(tmp_path),
+            resume_session_id=None,
+        )
+        runtime._processes["task-1"] = entry
+
+        callback = runtime._make_app_server_notification_callback("ws-1", "task-1")
+
+        await callback(
+            "turn.completed",
+            {
+                "status": "error",
+                "error": {"message": "app-server turn crashed"},
+            },
+        )
+
+        task = await db.load_codex_task("task-1")
+        assert task is not None
+        assert task.status == "failed"
+        assert task.result == "app-server turn crashed"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_event_bus_routes_message_delta_to_message_stream_manager(monkeypatch):
     """When event_bus._broadcast_to_ws sees a message_delta event, it must call
     message_stream_manager.publish_delta(execution_process_id, delta_event_dict)."""
@@ -428,3 +513,49 @@ async def test_event_bus_routes_message_delta_to_message_stream_manager(monkeypa
     assert ep_id == "ep-x"
     assert fwd["delta_text"] == "hello"
     assert fwd["seq"] == 7
+
+
+@pytest.mark.asyncio
+async def test_event_bus_treats_error_task_status_as_terminal(monkeypatch):
+    """Failure aliases must close streams and notify the workflow scheduler."""
+    from app.application import event_bus as event_bus_module
+    from app.interfaces import codex_ws as codex_ws_module
+
+    finished: list[tuple[str, str]] = []
+    scheduler_notifications: list[str] = []
+
+    class _MessageMgrStub:
+        async def publish_finished(self, ep_id):
+            finished.append(("message", ep_id))
+
+    class _RawLogMgrStub:
+        async def publish_finished(self, ep_id):
+            finished.append(("raw_log", ep_id))
+
+    class _StreamMgrStub:
+        async def update_task_status(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(codex_ws_module, "message_stream_manager", _MessageMgrStub())
+    monkeypatch.setattr(codex_ws_module, "raw_log_stream_manager", _RawLogMgrStub())
+    monkeypatch.setattr(codex_ws_module, "stream_manager", _StreamMgrStub())
+
+    bus = event_bus_module.EventBus()
+
+    async def _notify(task_id: str) -> None:
+        scheduler_notifications.append(task_id)
+
+    bus._notify_workflow_scheduler = _notify
+
+    await bus._broadcast_to_ws(
+        {
+            "type": "task_status",
+            "task_id": "task-1",
+            "session_id": "ws-1",
+            "status": "error",
+            "execution_process_id": "ep-1",
+        }
+    )
+
+    assert finished == [("message", "ep-1"), ("raw_log", "ep-1")]
+    assert scheduler_notifications == ["task-1"]

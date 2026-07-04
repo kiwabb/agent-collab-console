@@ -82,7 +82,7 @@ export function useConductorAlerts(issueId: string) {
       busEventMatchers.typeIn(...ALERT_TYPES),
     ),
     onEvent: (event) => {
-      const e = event as unknown as Record<string, unknown> & { type: string };
+      const e = event as Record<string, unknown> & { type: string };
       const role = str(e.role);
 
       // A recovered stall resolves its detected-stall alert instead of stacking.

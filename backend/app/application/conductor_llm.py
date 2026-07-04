@@ -10,10 +10,10 @@ chosen executor's protocol is OpenAI.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import Any
 
+from app.application import timeouts
 from app.application.llm_runner import (
     DeltaCallback,
     StreamingPlanContext,
@@ -34,10 +34,6 @@ class ConductorLLMContext:
     protocol: str  # "anthropic" | "openai"
 
 
-def _env_or(value: str | None, fallback):
-    return value if value not in (None, "") else fallback
-
-
 def resolve_conductor_llm_context(catalog) -> ConductorLLMContext | None:
     """Resolve the Conductor's own LLM endpoint/model/protocol from the catalog.
 
@@ -46,27 +42,17 @@ def resolve_conductor_llm_context(catalog) -> ConductorLLMContext | None:
     chosen executor's `protocol` field (overridable via CONDUCTOR_LLM_PROTOCOL).
     """
     cfg = getattr(catalog, "conductor_llm", None)
-    preferred_executor_id = _env_or(
-        os.getenv("CONDUCTOR_LLM_EXECUTOR_ID"),
-        getattr(cfg, "executor_id", None) if cfg else None,
+    preferred_executor_id = timeouts.conductor_llm_executor_id() or (
+        getattr(cfg, "executor_id", None) if cfg else None
     )
-    preferred_model = _env_or(
-        os.getenv("CONDUCTOR_LLM_MODEL"),
-        getattr(cfg, "model", None) if cfg else None,
+    preferred_model = timeouts.conductor_llm_model() or (
+        getattr(cfg, "model", None) if cfg else None
     )
-    max_tokens = int(
-        _env_or(
-            os.getenv("CONDUCTOR_LLM_MAX_TOKENS"),
-            getattr(cfg, "max_tokens", None) if cfg else None,
-        )
-        or 8192
+    max_tokens = timeouts.conductor_llm_max_tokens(
+        getattr(cfg, "max_tokens", None) if cfg else None
     )
-    timeout_s = float(
-        _env_or(
-            os.getenv("CONDUCTOR_LLM_TIMEOUT"),
-            getattr(cfg, "timeout_s", None) if cfg else None,
-        )
-        or 120.0
+    timeout_s = timeouts.conductor_llm_timeout_s(
+        getattr(cfg, "timeout_s", None) if cfg else None
     )
 
     executor = _pick_executor(catalog, preferred_executor_id)
@@ -76,8 +62,7 @@ def resolve_conductor_llm_context(catalog) -> ConductorLLMContext | None:
     if not model:
         return None
     protocol = str(
-        _env_or(os.getenv("CONDUCTOR_LLM_PROTOCOL"), getattr(executor, "protocol", None))
-        or "anthropic"
+        timeouts.conductor_llm_protocol() or getattr(executor, "protocol", None) or "anthropic"
     ).lower()
     if protocol not in ("anthropic", "openai"):
         protocol = "anthropic"

@@ -37,9 +37,14 @@ from uuid import uuid4  # noqa: E402
 import httpx  # noqa: E402
 
 from app.adapters.async_sqlite_store import AsyncSQLiteStore  # noqa: E402
+from app.application.code_prototype_discovery import (  # noqa: E402
+    CodePrototypeCandidate,
+    CodePrototypeDiscoveryService,
+)
 from app.application.llm_runner import (  # noqa: E402
     StreamingPlanContext,
     _llm_http_client,
+    llm_api_url,
     resolve_streaming_context,
 )
 from app.domain.models import Prototype, PrototypeVersion, Project  # noqa: E402
@@ -127,6 +132,26 @@ def build_iteration_system_prompt(latest_html: str, instruction: str) -> str:
     )
 
 
+def build_code_backed_brief(candidate: CodePrototypeCandidate, project: Project) -> str:
+    """Build the seed brief used for a code-backed prototype."""
+    source_paths = ", ".join(candidate.source_paths)
+    return (
+        f"Generate a faithful static HTML prototype for project '{project.name}'.\n"
+        f"Source route: {candidate.route}\n"
+        f"Source file(s): {source_paths}\n"
+        f"Framework hint: {candidate.framework_hint}\n"
+        f"Stable source id: {candidate.id}\n\n"
+        "Use the source excerpt below to infer the actual page structure, "
+        "information architecture, labels, controls, loading/empty/error states, "
+        "and operational density. Use realistic static data where runtime APIs "
+        "are unavailable. Preserve the existing app style implied by class names "
+        "and component names. Include this traceability comment near the top of "
+        f"the HTML: <!-- source: {candidate.route} {candidate.primary_source_path} -->.\n\n"
+        "Source excerpt:\n"
+        f"{candidate.source_excerpt}"
+    )
+
+
 async def _stream_html(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[str]:
     """Stream text deltas from an Anthropic-compatible /v1/messages SSE.
 
@@ -135,7 +160,7 @@ async def _stream_html(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[
     prompt instead to anchor the output format. The parse loop is otherwise
     the same shape (content_block_delta -> text_delta -> yield).
     """
-    url = f"{ctx.endpoint}/v1/messages"
+    url = llm_api_url(ctx.endpoint, "/v1/messages")
     payload = {
         "model": ctx.model,
         "max_tokens": ctx.max_tokens,
@@ -192,9 +217,11 @@ class PrototypeService:
         self,
         store: AsyncSQLiteStore,
         runtime_catalog_service,
+        discovery_service: CodePrototypeDiscoveryService | None = None,
     ) -> None:
         self.store = store
         self.runtime_catalog_service = runtime_catalog_service
+        self.discovery_service = discovery_service or CodePrototypeDiscoveryService()
 
     # --- CRUD pass-throughs ----------------------------------------------------
 
@@ -213,6 +240,7 @@ class PrototypeService:
             title=title_clean,
             framework="html",
             current_version=0,
+            source_kind="manual",
             created_at=now,
             updated_at=now,
         )
@@ -317,7 +345,7 @@ class PrototypeService:
                 )
                 return
             prompt = build_html_system_prompt(seed.instruction or "")
-            next_version = 1
+            next_version = prototype.current_version + 1
             version_instruction = seed.instruction
 
         # Stream + accumulate. We deliberately do NOT write the DB row until
@@ -450,6 +478,235 @@ class PrototypeService:
                 )
 
         yield StreamEvent("all_done", {"ok": ok, "failed": failed})
+
+    # --- Code-driven generation ----------------------------------------------
+
+    async def list_code_candidates(self, project_id: str) -> dict:
+        project = await self.store.load_project(project_id)
+        if project is None:
+            raise PrototypeError(f"project not found: {project_id}")
+        candidates = self.discovery_service.scan_project(project)
+        items = []
+        counts = {"create": 0, "regenerate": 0, "skip": 0, "unsupported": 0}
+        for candidate in candidates:
+            existing = await self.store.load_prototype_by_source(project_id, candidate.id)
+            action = "create"
+            if candidate.unsupported_reason:
+                action = "unsupported"
+            elif (
+                existing
+                and existing.current_version > 0
+                and existing.source_hash == candidate.source_hash
+            ):
+                action = "skip"
+            elif existing:
+                action = "regenerate"
+            counts[action] += 1
+            item = candidate.to_dict()
+            item.update(
+                {
+                    "action": action,
+                    "prototype_id": existing.id if existing else None,
+                }
+            )
+            items.append(item)
+        return {"project_id": project_id, "count": len(items), "counts": counts, "candidates": items}
+
+    async def generate_all_from_code_stream(self, project_id: str) -> AsyncIterator[StreamEvent]:
+        project = await self.store.load_project(project_id)
+        if project is None:
+            raise PrototypeError(f"project not found: {project_id}")
+
+        candidates = self.discovery_service.scan_project(project)
+        classified: list[tuple[CodePrototypeCandidate, Prototype | None, str]] = []
+        counts = {"create": 0, "regenerate": 0, "skip": 0, "unsupported": 0}
+        for candidate in candidates:
+            existing = await self.store.load_prototype_by_source(project_id, candidate.id)
+            if candidate.unsupported_reason:
+                action = "unsupported"
+            elif (
+                existing
+                and existing.current_version > 0
+                and existing.source_hash == candidate.source_hash
+            ):
+                action = "skip"
+            elif existing:
+                action = "regenerate"
+            else:
+                action = "create"
+            counts[action] += 1
+            classified.append((candidate, existing, action))
+
+        yield StreamEvent(
+            "scan_meta",
+            {
+                "count": len(candidates),
+                "created_count": counts["create"],
+                "changed_count": counts["regenerate"],
+                "unchanged_count": counts["skip"],
+                "unsupported_count": counts["unsupported"],
+                "candidates": [
+                    {
+                        **candidate.to_dict(),
+                        "action": action,
+                        "prototype_id": existing.id if existing else None,
+                    }
+                    for candidate, existing, action in classified
+                ],
+            },
+        )
+
+        summary = {"created": 0, "regenerated": 0, "skipped": 0, "failed": 0, "unsupported": 0}
+        for candidate, existing, action in classified:
+            yield StreamEvent(
+                "candidate_start",
+                {
+                    "candidate_id": candidate.id,
+                    "route": candidate.route,
+                    "title": candidate.title,
+                    "action": action,
+                },
+            )
+            if action == "skip":
+                summary["skipped"] += 1
+                yield StreamEvent(
+                    "candidate_skip",
+                    {
+                        "candidate_id": candidate.id,
+                        "prototype_id": existing.id if existing else None,
+                        "reason": "unchanged",
+                    },
+                )
+                continue
+            if action == "unsupported":
+                summary["unsupported"] += 1
+                yield StreamEvent(
+                    "prototype_error",
+                    {
+                        "candidate_id": candidate.id,
+                        "message": candidate.unsupported_reason or "unsupported candidate",
+                    },
+                )
+                continue
+
+            prototype = existing
+            try:
+                if prototype is None:
+                    prototype = await self._create_code_prototype(project, candidate)
+                    yield StreamEvent(
+                        "prototype_created",
+                        {
+                            "candidate_id": candidate.id,
+                            "prototype_id": prototype.id,
+                            "title": prototype.title,
+                        },
+                    )
+                else:
+                    await self._refresh_code_seed(project, prototype, candidate)
+
+                completed = False
+                async for ev in self.stream_events(prototype.id, instruction=None):
+                    if ev.event == "meta":
+                        continue
+                    if ev.event == "delta":
+                        yield StreamEvent(
+                            "prototype_delta",
+                            {
+                                "candidate_id": candidate.id,
+                                "prototype_id": prototype.id,
+                                **ev.data,
+                            },
+                        )
+                    elif ev.event == "done":
+                        completed = True
+                        await self.store.update_prototype_source_metadata(
+                            prototype.id,
+                            candidate.source_hash,
+                            json.dumps(self._candidate_meta(candidate), ensure_ascii=False),
+                        )
+                        if action == "create":
+                            summary["created"] += 1
+                        else:
+                            summary["regenerated"] += 1
+                        yield StreamEvent(
+                            "prototype_done",
+                            {
+                                "candidate_id": candidate.id,
+                                "prototype_id": prototype.id,
+                                **ev.data,
+                            },
+                        )
+                    elif ev.event == "error":
+                        raise PrototypeError(str(ev.data.get("message", "unknown error")))
+                if not completed:
+                    raise PrototypeError("prototype generation ended without a done event")
+            except Exception as exc:
+                summary["failed"] += 1
+                yield StreamEvent(
+                    "prototype_error",
+                    {
+                        "candidate_id": candidate.id,
+                        "prototype_id": prototype.id if prototype else None,
+                        "message": str(exc) or exc.__class__.__name__,
+                    },
+                )
+
+        yield StreamEvent("all_done", summary)
+
+    async def _create_code_prototype(
+        self, project: Project, candidate: CodePrototypeCandidate
+    ) -> Prototype:
+        now = datetime.now()
+        prototype = Prototype(
+            id=str(uuid4()),
+            project_id=project.id,
+            title=candidate.title,
+            framework="html",
+            current_version=0,
+            source_kind="code",
+            source_ref=candidate.id,
+            source_hash=candidate.source_hash,
+            source_meta_json=json.dumps(self._candidate_meta(candidate), ensure_ascii=False),
+            created_at=now,
+            updated_at=now,
+        )
+        await self.store.save_prototype(prototype)
+        seed = PrototypeVersion(
+            id=str(uuid4()),
+            prototype_id=prototype.id,
+            version_no=0,
+            instruction=build_code_backed_brief(candidate, project),
+            html="",
+            disk_path=None,
+            created_at=now,
+        )
+        await self.store.save_prototype_version(seed)
+        return prototype
+
+    async def _refresh_code_seed(
+        self, project: Project, prototype: Prototype, candidate: CodePrototypeCandidate
+    ) -> None:
+        now = datetime.now()
+        seed = PrototypeVersion(
+            id=str(uuid4()),
+            prototype_id=prototype.id,
+            version_no=0,
+            instruction=build_code_backed_brief(candidate, project),
+            html="",
+            disk_path=None,
+            created_at=now,
+        )
+        await self.store.save_prototype_version(seed)
+
+    def _candidate_meta(self, candidate: CodePrototypeCandidate) -> dict:
+        return {
+            "route": candidate.route,
+            "kind": candidate.kind,
+            "framework_hint": candidate.framework_hint,
+            "source_paths": candidate.source_paths,
+            "primary_source_path": candidate.primary_source_path,
+            "signals": candidate.signals,
+        }
 
     # --- Disk helpers ----------------------------------------------------------
 

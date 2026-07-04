@@ -9,7 +9,8 @@ import {
   Settings as SettingsIcon,
   Sun,
 } from "lucide-react";
-import { checkBackendHealth, getCodexCostStats } from "@/lib/api";
+import { checkBackendHealth } from "@/lib/api/health";
+import { getCodexCostStats } from "@/lib/api/stats";
 import { useTheme } from "@/providers/ThemeProvider";
 import { cn } from "@/lib/utils";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";

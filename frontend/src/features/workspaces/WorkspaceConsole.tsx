@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { deleteCodexIssue, getCodexIssues, getCodexTasks, getProject, getRuntimeCatalog, getWorkspace } from "@/lib/api";
+import { deleteCodexIssue, getCodexIssues } from "@/lib/api/issues";
+import { getProject } from "@/lib/api/projects";
+import { getCodexTasks } from "@/lib/api/tasks";
+import { getWorkspace } from "@/lib/api/workspaces";
+import { getRuntimeCatalog } from "@/lib/api/runtime";
 import type { CodexIssue, CodexTask, Project, RuntimeCatalog, Workspace } from "@/lib/types";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { useToast } from "@/components/ui/toast";

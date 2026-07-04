@@ -1,15 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Loader2, Plus, RefreshCw, X } from "lucide-react";
+import { Check, Code2, Loader2, Plus, RefreshCw, X } from "lucide-react";
 
 import {
   createPrototype,
+  getGenerateFromCodeStreamUrl,
   getPrototype,
   getRegenerateAllStreamUrl,
+  listPrototypeCodeCandidates,
   listPrototypes,
-} from "@/lib/api";
-import type { Project, Prototype, PrototypeDetail } from "@/lib/types";
+} from "@/lib/api/prototypes";
+import type { Project, Prototype, PrototypeCodeCandidate, PrototypeDetail } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { useToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
@@ -53,12 +55,48 @@ interface RegenState {
   failedCount: number;
 }
 
+type CodeItemStatus = "pending" | "skipped" | "generating" | "done" | "failed" | "unsupported";
+
+interface CodeGenItem {
+  candidateId: string;
+  title: string;
+  route: string;
+  sourcePath: string;
+  action: PrototypeCodeCandidate["action"];
+  status: CodeItemStatus;
+  prototypeId?: string | null;
+  versionNo?: number;
+  message?: string;
+}
+
+interface CodeGenState {
+  total: number;
+  items: Record<string, CodeGenItem>;
+  done: boolean;
+  created: number;
+  regenerated: number;
+  skipped: number;
+  failed: number;
+  unsupported: number;
+}
+
 const INITIAL_REGEN: RegenState = {
   total: 0,
   items: {},
   done: false,
   okCount: 0,
   failedCount: 0,
+};
+
+const INITIAL_CODE_GEN: CodeGenState = {
+  total: 0,
+  items: {},
+  done: false,
+  created: 0,
+  regenerated: 0,
+  skipped: 0,
+  failed: 0,
+  unsupported: 0,
 };
 
 /**
@@ -99,6 +137,12 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
   const [progressOpen, setProgressOpen] = useState(false);
   const [regen, setRegen] = useState<RegenState>(INITIAL_REGEN);
   const sourceRef = useRef<EventSource | null>(null);
+  const [codeScanOpen, setCodeScanOpen] = useState(false);
+  const [codeCandidates, setCodeCandidates] = useState<PrototypeCodeCandidate[] | null>(null);
+  const [codeScanLoading, setCodeScanLoading] = useState(false);
+  const [codeProgressOpen, setCodeProgressOpen] = useState(false);
+  const [codeGen, setCodeGen] = useState<CodeGenState>(INITIAL_CODE_GEN);
+  const codeSourceRef = useRef<EventSource | null>(null);
 
   const refetchList = useCallback(async () => {
     try {
@@ -212,6 +256,10 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
         sourceRef.current.close();
         sourceRef.current = null;
       }
+      if (codeSourceRef.current) {
+        codeSourceRef.current.close();
+        codeSourceRef.current = null;
+      }
     };
   }, []);
 
@@ -223,6 +271,247 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
     const handle = window.setTimeout(() => setProgressOpen(false), 1200);
     return () => window.clearTimeout(handle);
   }, [regen.done, progressOpen]);
+
+  useEffect(() => {
+    if (!codeGen.done || !codeProgressOpen) return;
+    const handle = window.setTimeout(() => setCodeProgressOpen(false), 1400);
+    return () => window.clearTimeout(handle);
+  }, [codeGen.done, codeProgressOpen]);
+
+  const openCodeScan = useCallback(async () => {
+    setCodeScanOpen(true);
+    setCodeScanLoading(true);
+    setCodeCandidates(null);
+    try {
+      const result = await listPrototypeCodeCandidates(projectId);
+      setCodeCandidates(result.candidates);
+    } catch (err) {
+      addToast({
+        type: "error",
+        title: t("prototype.generateFromCode.scanFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
+      setCodeCandidates([]);
+    } finally {
+      setCodeScanLoading(false);
+    }
+  }, [projectId, addToast, t]);
+
+  const startCodeGeneration = useCallback(() => {
+    setCodeScanOpen(false);
+    setCodeGen(INITIAL_CODE_GEN);
+    setCodeProgressOpen(true);
+
+    if (codeSourceRef.current) {
+      codeSourceRef.current.close();
+      codeSourceRef.current = null;
+    }
+    const source = new EventSource(getGenerateFromCodeStreamUrl(projectId));
+    codeSourceRef.current = source;
+
+    source.addEventListener("scan_meta", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as {
+          count: number;
+          candidates: PrototypeCodeCandidate[];
+        };
+        const items: Record<string, CodeGenItem> = {};
+        for (const candidate of data.candidates) {
+          items[candidate.id] = {
+            candidateId: candidate.id,
+            title: candidate.title,
+            route: candidate.route,
+            sourcePath: candidate.primary_source_path,
+            action: candidate.action,
+            status: candidate.action === "unsupported" ? "unsupported" : "pending",
+            prototypeId: candidate.prototype_id,
+            message: candidate.unsupported_reason ?? undefined,
+          };
+        }
+        setCodeGen((s) => ({ ...s, total: data.count, items }));
+      } catch {
+        // Ignore malformed scanner metadata.
+      }
+    });
+
+    source.addEventListener("candidate_start", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as {
+          candidate_id: string;
+          title: string;
+          route: string;
+          action: PrototypeCodeCandidate["action"];
+        };
+        setCodeGen((s) => {
+          const cur = s.items[data.candidate_id];
+          return {
+            ...s,
+            items: {
+              ...s.items,
+              [data.candidate_id]: {
+                candidateId: data.candidate_id,
+                title: cur?.title ?? data.title,
+                route: cur?.route ?? data.route,
+                sourcePath: cur?.sourcePath ?? "",
+                action: data.action,
+                status: data.action === "unsupported" ? "unsupported" : "generating",
+                prototypeId: cur?.prototypeId,
+                message: cur?.message,
+              },
+            },
+          };
+        });
+      } catch {
+        // Drop malformed frame.
+      }
+    });
+
+    source.addEventListener("candidate_skip", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as {
+          candidate_id: string;
+          prototype_id: string | null;
+        };
+        setCodeGen((s) => {
+          const cur = s.items[data.candidate_id];
+          if (!cur) return s;
+          return {
+            ...s,
+            skipped: s.skipped + 1,
+            items: {
+              ...s.items,
+              [data.candidate_id]: { ...cur, status: "skipped", prototypeId: data.prototype_id },
+            },
+          };
+        });
+      } catch {
+        // Drop malformed frame.
+      }
+    });
+
+    source.addEventListener("prototype_created", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as {
+          candidate_id: string;
+          prototype_id: string;
+        };
+        setCodeGen((s) => {
+          const cur = s.items[data.candidate_id];
+          if (!cur) return s;
+          return {
+            ...s,
+            items: {
+              ...s.items,
+              [data.candidate_id]: { ...cur, prototypeId: data.prototype_id },
+            },
+          };
+        });
+      } catch {
+        // Drop malformed frame.
+      }
+    });
+
+    source.addEventListener("prototype_done", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as {
+          candidate_id: string;
+          prototype_id: string;
+          version_no: number;
+        };
+        setCodeGen((s) => {
+          const cur = s.items[data.candidate_id];
+          if (!cur) return s;
+          return {
+            ...s,
+            items: {
+              ...s.items,
+              [data.candidate_id]: {
+                ...cur,
+                status: "done",
+                prototypeId: data.prototype_id,
+                versionNo: data.version_no,
+              },
+            },
+          };
+        });
+      } catch {
+        // Drop malformed frame.
+      }
+    });
+
+    source.addEventListener("prototype_error", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as {
+          candidate_id: string;
+          prototype_id?: string | null;
+          message: string;
+        };
+        setCodeGen((s) => {
+          const cur = s.items[data.candidate_id];
+          if (!cur) return s;
+          return {
+            ...s,
+            items: {
+              ...s.items,
+              [data.candidate_id]: {
+                ...cur,
+                status: cur.status === "unsupported" ? "unsupported" : "failed",
+                prototypeId: data.prototype_id ?? cur.prototypeId,
+                message: data.message,
+              },
+            },
+          };
+        });
+      } catch {
+        // Drop malformed frame.
+      }
+    });
+
+    source.addEventListener("all_done", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as {
+          created: number;
+          regenerated: number;
+          skipped: number;
+          failed: number;
+          unsupported: number;
+        };
+        setCodeGen((s) => ({ ...s, ...data, done: true }));
+        source.close();
+        if (codeSourceRef.current === source) codeSourceRef.current = null;
+        addToast({
+          type: data.failed > 0 ? "warning" : "success",
+          title: t("prototype.generateFromCode.dialogTitle"),
+          message: t("prototype.generateFromCode.summary", {
+            created: data.created,
+            regenerated: data.regenerated,
+            skipped: data.skipped,
+            failed: data.failed,
+          }),
+        });
+        void refetchList().then((list) => {
+          if (!activeId && list.length > 0) setActiveId(list[0].id);
+          if (activeId) void getPrototype(activeId).then(setDetail).catch(() => {});
+        });
+      } catch {
+        source.close();
+        if (codeSourceRef.current === source) codeSourceRef.current = null;
+        setCodeGen((s) => ({ ...s, done: true }));
+      }
+    });
+
+    source.addEventListener("error", () => {
+      if (codeSourceRef.current !== source) return;
+      source.close();
+      codeSourceRef.current = null;
+      setCodeGen((s) => ({ ...s, done: true }));
+      addToast({
+        type: "error",
+        title: t("prototype.generateFromCode.dialogTitle"),
+        message: t("prototype.toast.iterateFailed"),
+      });
+    });
+  }, [projectId, addToast, t, refetchList, activeId]);
 
   const startBatch = useCallback(() => {
     setConfirmRegenOpen(false);
@@ -439,11 +728,20 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
   const hasPrototypes =
     prototypes !== null && prototypes.length > 0;
   const batchRunning = progressOpen && !regen.done;
+  const codeRunning = codeProgressOpen && !codeGen.done;
   const sortedItems = useMemo(() => {
     return Object.values(regen.items).sort((a, b) =>
       a.title.localeCompare(b.title),
     );
   }, [regen.items]);
+  const sortedCodeItems = useMemo(() => {
+    return Object.values(codeGen.items).sort((a, b) => a.route.localeCompare(b.route));
+  }, [codeGen.items]);
+  const codeCandidateCounts = useMemo(() => {
+    const counts = { create: 0, regenerate: 0, skip: 0, unsupported: 0 };
+    for (const candidate of codeCandidates ?? []) counts[candidate.action] += 1;
+    return counts;
+  }, [codeCandidates]);
 
   return (
     <section className="flex h-full flex-col gap-4">
@@ -463,8 +761,17 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
           <Button
             variant="secondary"
             size="sm"
+            onClick={openCodeScan}
+            disabled={codeScanLoading || codeRunning || batchRunning}
+          >
+            <Code2 size={14} className={cn(codeScanLoading && "animate-pulse")} />
+            {t("prototype.generateFromCode.button")}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setConfirmRegenOpen(true)}
-            disabled={!hasPrototypes || batchRunning}
+            disabled={!hasPrototypes || batchRunning || codeRunning}
             title={
               !hasPrototypes
                 ? t("prototype.regenerateAll.disabledHint")
@@ -550,11 +857,19 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
                           : "border-transparent bg-surface-base text-text-muted hover:text-foreground",
                       )}
                     >
-                      <div className="truncate font-semibold">{p.title}</div>
-                      <div className="text-[11px] text-text-muted/80">
-                        {p.current_version > 0
-                          ? `v${p.current_version}`
-                          : t("prototype.noVersionsYet")}
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1 truncate font-semibold">{p.title}</div>
+                        <SourceBadge prototype={p} t={t} />
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-text-muted/80">
+                        <span>
+                          {p.current_version > 0
+                            ? `v${p.current_version}`
+                            : t("prototype.noVersionsYet")}
+                        </span>
+                        {p.source_kind === "code" && p.source_ref && (
+                          <span className="min-w-0 truncate font-mono">{p.source_ref}</span>
+                        )}
                       </div>
                     </button>
                   </li>
@@ -592,6 +907,129 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
         variant="warning"
         onConfirm={startBatch}
       />
+
+      <Dialog open={codeScanOpen} onOpenChange={setCodeScanOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t("prototype.generateFromCode.scanTitle")}</DialogTitle>
+            <DialogDescription>
+              {codeCandidates
+                ? t("prototype.generateFromCode.scanSummary", {
+                    count: codeCandidates.length,
+                    create: codeCandidateCounts.create,
+                    regenerate: codeCandidateCounts.regenerate,
+                    skip: codeCandidateCounts.skip,
+                  })
+                : t("prototype.generateFromCode.scanSubtitle")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[56vh] overflow-auto rounded-lg border border-border-subtle">
+            {codeScanLoading ? (
+              <div className="flex items-center gap-2 p-4 text-sm text-text-muted">
+                <Loader2 size={14} className="animate-spin" />
+                {t("prototype.generateFromCode.scanLoading")}
+              </div>
+            ) : !codeCandidates || codeCandidates.length === 0 ? (
+              <div className="p-4 text-sm text-text-muted">
+                {t("prototype.generateFromCode.noCandidates")}
+              </div>
+            ) : (
+              <ul className="divide-y divide-border-subtle">
+                {codeCandidates.map((candidate) => (
+                  <li key={candidate.id} className="grid grid-cols-[1fr_auto] gap-3 p-3 text-sm">
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-medium">{candidate.title}</span>
+                        <span className="rounded-full border border-border-subtle px-2 py-0.5 text-[10px] uppercase text-text-muted">
+                          {t(`prototype.generateFromCode.action.${candidate.action}`)}
+                        </span>
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-text-muted">
+                        {candidate.route}
+                      </div>
+                      <div className="mt-1 truncate font-mono text-[11px] text-text-muted/70">
+                        {candidate.primary_source_path}
+                      </div>
+                    </div>
+                    <div className="font-mono text-[10px] text-text-muted/70">
+                      {candidate.source_hash.slice(0, 18)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <DialogFooter showCloseButton>
+            <Button
+              variant="secondary"
+              onClick={() => setCodeScanOpen(false)}
+            >
+              {t("prototype.createCancel")}
+            </Button>
+            <Button
+              onClick={startCodeGeneration}
+              disabled={
+                codeScanLoading ||
+                !codeCandidates ||
+                codeCandidates.filter((c) => c.action === "create" || c.action === "regenerate").length === 0
+              }
+            >
+              {t("prototype.generateFromCode.startButton")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={codeProgressOpen} onOpenChange={(open) => codeGen.done && setCodeProgressOpen(open)}>
+        <DialogContent className="sm:max-w-2xl" showCloseButton={codeGen.done}>
+          <DialogHeader>
+            <DialogTitle>{t("prototype.generateFromCode.dialogTitle")}</DialogTitle>
+            <DialogDescription>
+              {codeGen.total > 0
+                ? t("prototype.generateFromCode.progressSummary", {
+                    done: codeGen.created + codeGen.regenerated + codeGen.skipped + codeGen.failed + codeGen.unsupported,
+                    total: codeGen.total,
+                  })
+                : t("prototype.generateFromCode.scanLoading")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-auto">
+            {sortedCodeItems.length === 0 ? (
+              <div className="flex items-center gap-2 py-6 text-sm text-text-muted">
+                <Loader2 size={14} className="animate-spin" />
+                {t("prototype.generateFromCode.status.pending")}
+              </div>
+            ) : (
+              <ul className="flex flex-col divide-y divide-border-subtle">
+                {sortedCodeItems.map((item) => (
+                  <li key={item.candidateId} className="grid grid-cols-[auto_1fr] gap-3 py-2 text-sm">
+                    <CodeStatusGlyph status={item.status} />
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-medium">{item.title || item.route}</span>
+                        <span className="rounded-full border border-border-subtle px-2 py-0.5 text-[10px] uppercase text-text-muted">
+                          {t(`prototype.generateFromCode.action.${item.action}`)}
+                        </span>
+                      </div>
+                      <div className="font-mono text-xs text-text-muted">{item.route}</div>
+                      <div className="truncate text-xs text-text-muted/80">
+                        {codeStatusLabel(item, t)}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <DialogFooter showCloseButton={codeGen.done}>
+            {codeGen.done && (
+              <Button onClick={() => setCodeProgressOpen(false)}>
+                {t("issue.close")}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={progressOpen} onOpenChange={handleProgressOpenChange}>
         <DialogContent
@@ -636,7 +1074,7 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
           <DialogFooter showCloseButton={regen.done}>
             {regen.done && (
               <Button onClick={() => setProgressOpen(false)}>
-                {t("issue.close") ?? "Close"}
+                {t("issue.close")}
               </Button>
             )}
           </DialogFooter>
@@ -675,6 +1113,57 @@ function StatusGlyph({ status }: { status: RegenItemStatus }) {
   );
 }
 
+function SourceBadge({
+  prototype,
+  t,
+}: {
+  prototype: Prototype;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  const isCode = prototype.source_kind === "code";
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase",
+        isCode
+          ? "border-brand/40 bg-brand/10 text-brand"
+          : "border-border-subtle bg-surface-raised text-text-muted",
+      )}
+    >
+      {isCode ? t("prototype.source.code") : t("prototype.source.manual")}
+    </span>
+  );
+}
+
+function CodeStatusGlyph({ status }: { status: CodeItemStatus }) {
+  if (status === "done" || status === "skipped") {
+    return (
+      <span className="mt-0.5 flex size-5 items-center justify-center rounded-full bg-status-success/15 text-status-success">
+        <Check size={12} />
+      </span>
+    );
+  }
+  if (status === "failed" || status === "unsupported") {
+    return (
+      <span className="mt-0.5 flex size-5 items-center justify-center rounded-full bg-status-failed/15 text-status-failed">
+        <X size={12} />
+      </span>
+    );
+  }
+  if (status === "generating") {
+    return (
+      <span className="mt-0.5 flex size-5 items-center justify-center text-brand">
+        <Loader2 size={14} className="animate-spin" />
+      </span>
+    );
+  }
+  return (
+    <span className="mt-0.5 flex size-5 items-center justify-center rounded-full border border-border-subtle text-text-muted/60">
+      <span className="size-1.5 rounded-full bg-current" />
+    </span>
+  );
+}
+
 function statusLabel(item: RegenItem, t: (key: string, params?: Record<string, string | number>) => string): string {
   if (item.status === "done" && item.versionNo !== undefined) {
     return t("prototype.regenerateAll.statusDone", { version: item.versionNo });
@@ -688,4 +1177,24 @@ function statusLabel(item: RegenItem, t: (key: string, params?: Record<string, s
     return t("prototype.regenerateAll.statusStreaming");
   }
   return t("prototype.regenerateAll.statusPending");
+}
+
+function codeStatusLabel(
+  item: CodeGenItem,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
+  if (item.status === "done") {
+    return item.versionNo !== undefined
+      ? t("prototype.generateFromCode.status.doneVersion", { version: item.versionNo })
+      : t("prototype.generateFromCode.status.done");
+  }
+  if (item.status === "skipped") return t("prototype.generateFromCode.status.skipped");
+  if (item.status === "failed") {
+    return t("prototype.generateFromCode.status.failed", { message: item.message ?? "" });
+  }
+  if (item.status === "unsupported") {
+    return t("prototype.generateFromCode.status.unsupported");
+  }
+  if (item.status === "generating") return t("prototype.generateFromCode.status.generating");
+  return t("prototype.generateFromCode.status.pending");
 }

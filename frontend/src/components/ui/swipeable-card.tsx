@@ -1,8 +1,10 @@
 "use client";
 
 import { useRef, useState, useCallback, type ReactNode } from "react";
-import { motion, useMotionValue, useTransform, PanInfo } from "framer-motion";
+import { motion, useMotionValue, useTransform, type PanInfo } from "framer-motion";
 import { cn } from "@/lib/utils";
+
+type MotionDragEvent = MouseEvent | TouchEvent | PointerEvent;
 
 interface SwipeableCardProps {
   children: ReactNode;
@@ -49,7 +51,7 @@ export function SwipeableCard({
   const rotate = useTransform(x, [-200, 200], [-15, 15]);
 
   const handleDragEnd = useCallback(
-    (_: any, info: PanInfo) => {
+    (_: MotionDragEvent, info: PanInfo) => {
       setIsSwiping(false);
       const tx = info.offset.x;
       const ty = info.offset.y;
@@ -73,7 +75,7 @@ export function SwipeableCard({
   }, []);
 
   const handleDrag = useCallback(
-    (_: any, info: PanInfo) => {
+    (_: MotionDragEvent, info: PanInfo) => {
       const tx = info.offset.x;
       const ty = info.offset.y;
       const absX = Math.abs(tx);

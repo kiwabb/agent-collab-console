@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
-import type { ConductorTurn } from "@/lib/api";
+import type { ConductorTurn } from "@/lib/api/conductors";
 import { useI18n } from "@/providers/I18nProvider";
 
 function asRecord(value: unknown): Record<string, unknown> {

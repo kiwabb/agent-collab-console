@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bot, Play, RadioTower, Wrench } from "lucide-react";
 
-import { API_BASE, startProjectConductorLoop } from "@/lib/api";
+import { API_BASE } from "@/lib/api/fetch";
+import { startProjectConductorLoop } from "@/lib/api/projects";
 import type { ProjectConductorLoopResult, ProjectConductorToolEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";

@@ -5,7 +5,7 @@ import { Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import { sendConductorMessage } from "@/lib/api";
+import { sendConductorMessage } from "@/lib/api/conductors";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";

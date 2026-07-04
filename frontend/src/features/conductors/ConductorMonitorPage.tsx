@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertCircle, AlertTriangle, CheckCircle2, Pause, RefreshCw } from "lucide-react";
 
-import { getConductors, type ConductorSession } from "@/lib/api";
+import { getConductors, type ConductorSession } from "@/lib/api/projects";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";

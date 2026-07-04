@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Optional embedding provider for semantic search.
 
-Configuration source: environment variables (so it doesn't require a UI in
+Configuration source: application/timeouts.py env accessors (so it doesn't require a UI in
 this iteration — `runtime_catalog_settings` already exists but embedding
 providers are a new concept). Drop-in additions:
 
@@ -17,12 +17,13 @@ Failure mode: any missing config → service is disabled, all callers no-op.
 import asyncio  # noqa: E402
 import hashlib  # noqa: E402
 import logging  # noqa: E402
-import os  # noqa: E402
 from collections import OrderedDict  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402, F401
 from typing import Iterable  # noqa: E402, UP035
 
 import httpx  # noqa: E402
+
+from app.application import timeouts  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class EmbeddingService:
     @property
     def enabled(self) -> bool:
         c = self.config
-        if os.getenv("EMBEDDING_DISABLED") == "1":
+        if timeouts.embedding_disabled():
             return False
         return bool(c.endpoint and c.api_key and c.model)
 
@@ -154,11 +155,11 @@ class EmbeddingService:
     @staticmethod
     def _load_from_env() -> EmbeddingConfig:
         return EmbeddingConfig(
-            endpoint=os.getenv("EMBEDDING_API_ENDPOINT", "").strip(),
-            api_key=os.getenv("EMBEDDING_API_KEY", "").strip(),
-            model=os.getenv("EMBEDDING_MODEL", "").strip(),
-            provider_type=os.getenv("EMBEDDING_PROVIDER_TYPE", "openai").strip() or "openai",
-            timeout_s=float(os.getenv("EMBEDDING_TIMEOUT_S", "20")),
+            endpoint=timeouts.embedding_api_endpoint(),
+            api_key=timeouts.embedding_api_key(),
+            model=timeouts.embedding_model(),
+            provider_type=timeouts.embedding_provider_type(),
+            timeout_s=timeouts.embedding_timeout_s(),
         )
 
 

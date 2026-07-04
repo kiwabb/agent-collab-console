@@ -16,14 +16,11 @@ import {
   Library,
 } from "lucide-react";
 
-import {
-  getCodexIssues,
-  getCodexStats,
-  getTeamNotes,
-  getWorkspaces,
-  listProjects,
-  type TeamNoteBlock,
-} from "@/lib/api";
+import { getCodexIssues } from "@/lib/api/issues";
+import { getTeamNotes, type TeamNoteBlock } from "@/lib/api/knowledge";
+import { listProjects } from "@/lib/api/projects";
+import { getCodexStats } from "@/lib/api/stats";
+import { getWorkspaces } from "@/lib/api/workspaces";
 import type { CodexIssue, CodexStats, Project, Workspace } from "@/lib/types";
 import { useDataEvent } from "@/lib/dataEvents";
 import { useI18n } from "@/providers/I18nProvider";

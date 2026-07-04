@@ -3,7 +3,7 @@
 import type { ChangeEvent, RefObject } from "react";
 import { Upload } from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import type { ProjectResume, ProjectResumeImport } from "@/lib/api";
+import type { ProjectResume, ProjectResumeImport } from "@/lib/api/resume";
 import { useI18n } from "@/providers/I18nProvider";
 import { formatByteCount, type ResumeStats } from "./resumeStats";
 

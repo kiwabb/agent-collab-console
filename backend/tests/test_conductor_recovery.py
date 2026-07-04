@@ -13,7 +13,7 @@ from app.application import conductor_recovery
 from app.application.conductor_lease import get_conductor_lease_owner
 from app.application.conductor_recovery import _is_stale, recover_orphaned_conductors
 from app.application.conductor_session_registry import ConductorSessionRegistry
-from app.domain.models import ConductorTask
+from app.domain.models import ConductorTask, WorkflowGraph, WorkflowNode
 
 
 def _make_ct(*, issue_id: str, status: str = "running", expired: bool = True) -> ConductorTask:
@@ -187,3 +187,126 @@ async def test_recover_marks_stalled_but_skips_relaunch_when_live_session_exists
         assert reg.is_alive(issue_id)  # the live session is untouched
     finally:
         await reg.stop(issue_id)
+
+
+async def test_recover_marks_stalled_but_skips_relaunch_for_terminal_issue():
+    issue_id = "issue-terminal"
+    old_ct = _make_ct(issue_id=issue_id, expired=True)
+
+    store = MagicMock()
+    store.list_conductor_tasks = AsyncMock(return_value=[old_ct])
+    store.save_conductor_task = AsyncMock()
+    store.load_codex_issue = AsyncMock(
+        return_value=MagicMock(status="completed", project_id="proj-1", id=issue_id)
+    )
+
+    with (
+        patch.object(conductor_recovery, "transition_conductor_phase", new=AsyncMock()),
+        patch.object(conductor_recovery, "get_phase_duration_estimator", return_value=MagicMock()),
+        patch(
+            "app.application.conductor_main_loop.run_issue_conductor_loop", new=AsyncMock()
+        ) as relaunch,
+    ):
+        recovered = await recover_orphaned_conductors(
+            store,
+            current_owner=get_conductor_lease_owner(),
+            stale_after_s=180,
+            recover_foreign_owner=False,
+            auto_restart=True,
+        )
+
+    assert recovered == 1
+    relaunch.assert_not_called()
+    store.save_conductor_task.assert_awaited()
+
+
+async def test_relaunch_reuses_existing_workflow_graph_nodes():
+    issue_id = "issue-graph"
+    stalled_ct = _make_stall(issue_id)
+    stalled_ct.payload = {
+        **stalled_ct.payload,
+        "previous_phase": "awaiting_subagent",
+        "previous_detail": "engineer",
+    }
+    existing_node = WorkflowNode(
+        id="node-1",
+        graph_id="graph-1",
+        node_key="engineer",
+        agent_id="agent-1",
+        status="done",
+        task_id="task-1",
+    )
+    existing_graph = WorkflowGraph(
+        id="graph-1",
+        issue_id=issue_id,
+        dag_json="{}",
+        status="stalled",
+        nodes=[existing_node],
+        edges=[],
+    )
+    saved_graphs: list[WorkflowGraph] = []
+    save_graph_calls: list[tuple[tuple, dict]] = []
+
+    async def _save_graph(graph, *args, **kwargs):
+        save_graph_calls.append((args, kwargs))
+        saved_graphs.append(graph)
+
+    store = MagicMock()
+    store.load_codex_issue = AsyncMock(
+        return_value=MagicMock(
+            id=issue_id,
+            status="open",
+            project_id="proj-1",
+            session_id="sess-1",
+        )
+    )
+    store.load_latest_conductor_task_for_issue = AsyncMock(return_value=stalled_ct)
+    store.list_conductor_tasks = AsyncMock(return_value=[stalled_ct])
+    store.save_conductor_task = AsyncMock()
+    store.load_workflow_graph_for_issue = AsyncMock(return_value=existing_graph)
+    store.save_workflow_graph = AsyncMock(side_effect=_save_graph)
+    store.list_conductor_turns = AsyncMock(
+        return_value=[
+            MagicMock(
+                turn_index=1,
+                sub_index=0,
+                kind="tool_result",
+                payload={"name": "dispatch_subagent", "status": "done"},
+            )
+        ]
+    )
+    captured: dict[str, str] = {}
+    entered = asyncio.Event()
+
+    async def _fake_run_issue_conductor_loop(*args, **kwargs):
+        captured["recovery_context"] = kwargs.get("recovery_context", "")
+        entered.set()
+
+    with (
+        patch.object(conductor_recovery, "transition_conductor_phase", new=AsyncMock()),
+        patch.object(conductor_recovery, "get_phase_duration_estimator", return_value=MagicMock()),
+        patch("app.application.conductor_main_loop.run_issue_conductor_loop", new=_fake_run_issue_conductor_loop),
+    ):
+        await conductor_recovery._try_relaunch(
+            store,
+            conductor_task=stalled_ct,
+            event_bus=MagicMock(append=AsyncMock()),
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1)
+
+    assert saved_graphs
+    assert saved_graphs[-1].id == existing_graph.id
+    assert saved_graphs[-1].status == "running"
+    assert [node.node_key for node in saved_graphs[-1].nodes] == ["engineer"]
+    assert saved_graphs[-1].nodes[0].task_id == "task-1"
+    assert save_graph_calls[-1] == ((), {})
+    recovery_context = captured["recovery_context"]
+    assert "## RECOVERY CONTEXT" in recovery_context
+    assert f"Stalled conductor task: {stalled_ct.id}" in recovery_context
+    assert "Previous phase: awaiting_subagent" in recovery_context
+    assert "Previous detail: engineer" in recovery_context
+    assert "engineer: status=done, task_id=task-1" in recovery_context
+    assert "dispatch_subagent" in recovery_context
+
+    if ConductorSessionRegistry.instance().is_alive(issue_id):
+        await ConductorSessionRegistry.instance().stop(issue_id)

@@ -1,4 +1,4 @@
-import type { AuditLog } from "@/lib/api";
+import type { AuditLog } from "@/lib/api/audit";
 
 export interface AuditRoleChainEntry {
   entry: AuditLog;

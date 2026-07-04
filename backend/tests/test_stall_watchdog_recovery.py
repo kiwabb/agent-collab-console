@@ -77,3 +77,22 @@ async def test_noop_when_task_already_terminal_done():
     await _recover_nudge_result(store, pm, "task-n")
 
     pm.refresh_task_result.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recovers_from_shared_failure_status():
+    task = _task(status="error")
+
+    async def fake_refresh(t):
+        t.result = '{"status":"passed","summary":"recovered after error"}'
+
+    store = MagicMock()
+    store.load_codex_task = AsyncMock(return_value=task)
+    store.save_codex_task = AsyncMock()
+    pm = MagicMock()
+    pm.refresh_task_result = AsyncMock(side_effect=fake_refresh)
+
+    recovered = await _recover_nudge_result(store, pm, "task-n")
+
+    assert recovered is True
+    assert task.status == "done"

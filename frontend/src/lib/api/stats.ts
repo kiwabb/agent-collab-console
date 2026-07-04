@@ -3,9 +3,9 @@
 import { API_BASE, dedupedFetch, handleResponse } from "./fetch";
 import type { CodexStats, IssueBudgetStatus, IssueOrchestrationPolicy } from "../types";
 
-export async function getCodexStats(): Promise<import("../types").CodexStats> {
+export async function getCodexStats(): Promise<CodexStats> {
   const response = await fetch(`${API_BASE}/codex/stats`);
-  return handleResponse<import("../types").CodexStats>(response);
+  return handleResponse<CodexStats>(response);
 }
 export interface CodexCostStats {
   input_tokens: number;
@@ -40,13 +40,13 @@ export async function getCodexCostStats(
  */
 export async function getIssueBudget(
   issueId: string,
-): Promise<import("../types").IssueBudgetStatus | null> {
+): Promise<IssueBudgetStatus | null> {
   const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}/budget`);
   if (!response.ok) {
     console.error(`getIssueBudget(${issueId}) failed: HTTP ${response.status}`);
     return null;
   }
-  return response.json() as Promise<import("../types").IssueBudgetStatus>;
+  return response.json() as Promise<IssueBudgetStatus>;
 }
 export async function getIssueOrchestrationPolicy(
   issueId: string,

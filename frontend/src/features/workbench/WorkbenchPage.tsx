@@ -13,43 +13,49 @@ import type {
   LogEvent,
   CodexTaskMessage,
   RunMode,
+  RuntimeCatalog,
+  Project,
 } from "@/lib/types";
 import {
-  getWorkspaces,
-  createWorkspace,
-  deleteWorkspace,
-  deleteAllWorkspaces,
-  getCodexIssues,
-  getCodexTasks,
+  createCodexIssue,
+  deleteCodexIssue,
   getCodexIssueArtifacts,
-  updateCodexIssuePhase,
+  getCodexIssues,
   transitionIssueToArchitecture,
   transitionIssueToDevelopment,
   transitionIssueToTesting,
-  createCodexIssue,
-  deleteCodexIssue,
-  createCodexTask,
-  runCodexTask,
+  updateCodexIssuePhase,
+} from "@/lib/api/issues";
+import { getPendingApprovals, resolveApproval } from "@/lib/api/approvals";
+import { getProject, listProjects } from "@/lib/api/projects";
+import { getRuntimeCatalog } from "@/lib/api/runtime";
+import {
   deleteCodexTask,
-  sendCodexTaskMessage,
   chatCodexTask,
-  refineCodexTask,
-  rerunCodexTask,
-  sendCodexTask,
   continueCodexTask,
+  createCodexTask,
+  getCodexTaskMessages,
+  getCodexTasks,
   getExecutionProcessLogs,
   getExecutionProcessMessages,
-  getCodexTaskMessages,
-  getPendingApprovals,
-  resolveApproval,
-  getTaskHelpRequests,
   getExecutionProcesses,
-  submitCodexTask,
+  getTaskHelpRequests,
+  rerunCodexTask,
   reviewCodexTask,
+  runCodexTask,
+  sendCodexTask,
+  sendCodexTaskMessage,
+  submitCodexTask,
   terminateCodexTask,
   updateCodexTask,
-} from "@/lib/api";
-import { getRuntimeCatalog } from "@/lib/api";
+  refineCodexTask,
+} from "@/lib/api/tasks";
+import {
+  createWorkspace,
+  deleteAllWorkspaces,
+  deleteWorkspace,
+  getWorkspaces,
+} from "@/lib/api/workspaces";
 import { ExecutionProcessesProvider } from "@/providers/ExecutionProcessesProvider";
 import { useExecutionProcessesContext, isBusTaskStatusEvent, isBusTaskCreatedEvent, isBusIssueMergedEvent, isBusIssueAbandonedEvent } from "@/contexts/ExecutionProcessesContext";
 import { WorkspaceGrid } from "@/features/workspaces/WorkspaceGrid";
@@ -75,6 +81,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Kbd } from "@/components/ui/kbd";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useI18n } from "@/providers/I18nProvider";
+import type { TranslationKey } from "@/lib/i18n";
 import { useToast } from "@/components/ui/toast";
 import { AsyncBoundary } from "@/components/ui/error-boundary";
 import {
@@ -134,11 +141,11 @@ function WorkbenchInner({
   const [isLoadingIssues, setIsLoadingIssues] = useState(false);
   const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [runtimeCatalog, setRuntimeCatalog] = useState<import("@/lib/types").RuntimeCatalog | null>(null);
+  const [runtimeCatalog, setRuntimeCatalog] = useState<RuntimeCatalog | null>(null);
   const [connectionWarning, setConnectionWarning] = useState<string | null>(null);
   const [wasConnected, setWasConnected] = useState(false);
-  const [currentProject, setCurrentProject] = useState<import("@/lib/types").Project | null>(null);
-  const [allProjects, setAllProjects] = useState<import("@/lib/types").Project[]>([]);
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [allProjects, setAllProjects] = useState<Project[]>([]);
 
   // Most-recently-used project ordering for the switcher: read the lastUsedAt
   // map once and re-render the dropdown by descending recency. Updated when
@@ -441,7 +448,7 @@ function WorkbenchInner({
       const event = lastEvent;
       setTasks((prev) => {
         if (prev.some((t) => t.id === event.task.id)) return prev;
-        return [...prev, event.task as unknown as CodexTask];
+        return [...prev, event.task];
       });
     } else if (isBusIssueMergedEvent(lastEvent)) {
       const event = lastEvent;
@@ -541,13 +548,11 @@ function WorkbenchInner({
       url.searchParams.set("project", fromStorage);
       window.history.replaceState(null, "", url.toString());
     }
-    import("@/lib/api").then(({ getProject, listProjects }) => {
-      getProject(pid).then(setCurrentProject).catch(() => {
-        window.localStorage.removeItem("selectedProjectId");
-        router.push("/projects");
-      });
-      listProjects().then(setAllProjects).catch(() => setAllProjects([]));
+    getProject(pid).then(setCurrentProject).catch(() => {
+      window.localStorage.removeItem("selectedProjectId");
+      router.push("/projects");
     });
+    listProjects().then(setAllProjects).catch(() => setAllProjects([]));
   }, [router]);
 
   // Cross-tab sync: react when selectedProjectId changes in another tab.
@@ -559,7 +564,7 @@ function WorkbenchInner({
         router.push("/projects");
         return;
       }
-      import("@/lib/api").then(({ getProject }) => getProject(next).then(setCurrentProject));
+      getProject(next).then(setCurrentProject).catch(() => {});
       const url = new URL(window.location.href);
       url.searchParams.set("project", next);
       window.history.replaceState(null, "", url.toString());
@@ -798,7 +803,7 @@ function WorkbenchInner({
       const config = PHASE_CONFIG[phase as Phase] ?? PHASE_CONFIG.requirements;
       const task = await createCodexTask(
         currentWorkspaceId,
-        `${t(config.labelKey as any)} - ${currentIssue.title}`,
+        `${t(config.labelKey as TranslationKey)} - ${currentIssue.title}`,
         currentIssue.description || "",
         null,
         executor,

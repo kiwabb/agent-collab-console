@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, ExternalLink, RefreshCw } from "lucide-react";
-import { getCodexIssueArtifacts } from "@/lib/api";
+import { getCodexIssueArtifacts } from "@/lib/api/issues";
 import type { Artifact, CodexIssue } from "@/lib/types";
 import { ArtifactsSplitView } from "@/features/issues/components/ArtifactsSplitView";
 import { EmptyState } from "@/components/ui/empty-state";

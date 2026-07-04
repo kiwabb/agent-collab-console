@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { GitBranch, ListTree } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useI18n } from "@/providers/I18nProvider";
-import type { AuditLog } from "@/lib/api";
+import type { AuditLog } from "@/lib/api/audit";
 import { cn } from "@/lib/utils";
 import { buildAuditRoleGroups, type AuditRoleTurnGroup } from "./auditRoleChains";
 

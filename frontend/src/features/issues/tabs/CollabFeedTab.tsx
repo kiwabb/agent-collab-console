@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, MessageSquareQuote, RefreshCw } from "lucide-react";
 
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import { getAgentMessages, type AgentMessage } from "@/lib/api";
+import { getAgentMessages, type AgentMessage } from "@/lib/api/conductors";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { cn } from "@/lib/utils";
 

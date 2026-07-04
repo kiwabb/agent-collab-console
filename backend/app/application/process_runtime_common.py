@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import signal
 import sys
 import subprocess
 import threading
@@ -8,7 +9,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import uuid4
 
+from app.application import timeouts
+from app.application.help_orchestrator import is_help_request_terminal_status
 from app.domain.models import LogEvent
+from app.application.usage_utils import extract_usage, price_tokens
+from app.application.task_statuses import (
+    is_task_active_status,
+    is_task_success_status,
+    is_task_terminal_status,
+)
 
 
 def is_agent_message_item_type(item_type: str | None) -> bool:
@@ -247,7 +256,7 @@ class BaseProcessRuntime:
                 task = await self.codex_store.load_codex_task(task_id)
             except Exception:
                 task = None
-            if task is None or task.status in {"done", "failed", "cancelled"}:
+            if task is None or is_task_terminal_status(task.status):
                 continue
             task.status = "failed"
             task.updated_at = datetime.now()
@@ -265,16 +274,21 @@ class BaseProcessRuntime:
                     pass
             if self._event_bus is not None:
                 try:
-                    await self._event_bus.append({
-                        "type": "task_status",
-                        "task_id": task_id,
-                        "session_id": task.session_id,
-                        "status": "failed",
-                        "result": task.result,
-                        "execution_process_id": execution_process_id,
-                    })
+                    await self._emit_task_status(
+                        task,
+                        "failed",
+                        result=task.result,
+                        execution_process_id=execution_process_id,
+                    )
                 except Exception:
                     pass
+            else:
+                await self._emit_task_status(
+                    task,
+                    "failed",
+                    result=task.result,
+                    execution_process_id=execution_process_id,
+                )
 
         workspace = await self.codex_store.load_codex_workspace(workspace_id)
         if workspace is not None:
@@ -285,6 +299,7 @@ class BaseProcessRuntime:
 
     async def terminate_task(self, task_id: str):
         """Kill a specific task process."""
+        owned = False
         for process_key, entry in list(self._processes.items()):
             # Check if this entry belongs to the target task
             is_match = (process_key == task_id)
@@ -292,6 +307,7 @@ class BaseProcessRuntime:
                 is_match = True
 
             if is_match and self._owns_entry(entry):
+                owned = True
                 self._processes.pop(process_key, None)
                 await self._cleanup_entry(process_key, entry)
 
@@ -300,7 +316,7 @@ class BaseProcessRuntime:
         # "running" — the UI's run/status badge is derived from the EP so it
         # kept showing "Running" even though the task was killed.
         task = await self.codex_store.load_codex_task(task_id)
-        if task:
+        if task and owned and not is_task_terminal_status(task.status):
             task.status = "failed"
             task.updated_at = datetime.now()
             await self.codex_store.save_codex_task(task)
@@ -318,14 +334,70 @@ class BaseProcessRuntime:
                     pass
 
             if self._event_bus:
-                await self._event_bus.append({
-                    "type": "task_status",
-                    "task_id": task_id,
-                    "session_id": task.session_id,
-                    "status": "failed",
-                    "result": task.result,
-                    "execution_process_id": execution_process_id,
-                })
+                await self._emit_task_status(
+                    task,
+                    "failed",
+                    result=task.result,
+                    execution_process_id=execution_process_id,
+                )
+            else:
+                await self._emit_task_status(
+                    task,
+                    "failed",
+                    result=task.result,
+                    execution_process_id=execution_process_id,
+                )
+
+    async def _is_chat_execution_process(self, execution_process_id: str | None) -> bool:
+        if not execution_process_id or not hasattr(self.codex_store, "load_execution_process"):
+            return False
+        try:
+            ep = await self.codex_store.load_execution_process(execution_process_id)
+            return ep is not None and getattr(ep, "kind", "initial") == "chat"
+        except Exception:
+            return False
+
+    async def _emit_task_status(
+        self,
+        task,
+        status: str,
+        *,
+        result: str | None = None,
+        review_comment: str | None = None,
+        execution_process_id: str | None = None,
+    ) -> None:
+        from app.application.task_status_events import build_task_status_event
+
+        status_event = build_task_status_event(
+            task,
+            status,
+            result=result,
+            review_comment=review_comment,
+            execution_process_id=execution_process_id,
+        )
+        if self._event_bus is not None:
+            await self._event_bus.append(status_event)
+            return
+        try:
+            from app.interfaces.codex_ws import (
+                message_stream_manager,
+                raw_log_stream_manager,
+                stream_manager,
+            )
+
+            await stream_manager.update_task_status(
+                task.session_id,
+                task.id,
+                status,
+                result,
+                execution_process_id=execution_process_id,
+                fallback_event=status_event,
+            )
+            if execution_process_id and is_task_terminal_status(status):
+                await message_stream_manager.publish_finished(execution_process_id)
+                await raw_log_stream_manager.publish_finished(execution_process_id)
+        except Exception:
+            pass
 
     async def terminate_all(self):
         terminated = []
@@ -405,17 +477,6 @@ class BaseProcessRuntime:
         else:
             await self.log_store.append_log_event(event)
 
-        try:
-            from app.interfaces.codex_ws import stream_manager
-            stream_manager.buffer_pending(workspace_id, {
-                "id": event.id,
-                "stream": stream,
-                "content": content,
-                "created_at": event.created_at.isoformat(),
-            })
-        except Exception:
-            pass
-
     async def _log_help_request_outcome(self, workspace_id: str, task_id: str | None, outcome: str, detail: str):
         message = f"request_help {outcome}: {detail}"
         print(f"[HELP] {message}", file=sys.stderr, flush=True)
@@ -436,6 +497,7 @@ class BaseProcessRuntime:
         parsed = self._try_parse_json(line)
         if parsed is None:
             return
+        await self._maybe_persist_usage(task_id, parsed)
 
         if task_id and self.help_orchestrator is not None:
             from app.application.help_event_parser import parse_help_request_event
@@ -443,7 +505,7 @@ class BaseProcessRuntime:
             help_event = parse_help_request_event(parsed, executor=entry.executor)
             if help_event is not None:
                 task = await self.codex_store.load_codex_task(task_id)
-                if task is not None and task.status not in {"running", "responding"}:
+                if task is not None and not is_task_active_status(task.status):
                     await self._log_help_request_outcome(
                         workspace_id,
                         task_id,
@@ -454,7 +516,7 @@ class BaseProcessRuntime:
 
             if help_event is not None:
                 try:
-                    self.help_orchestrator.request_help_from_runtime(
+                    await self.help_orchestrator.request_help_from_runtime(
                         task_id=task_id,
                         workspace_id=workspace_id,
                         **help_event,
@@ -697,6 +759,56 @@ class BaseProcessRuntime:
                     entry.result_text = value.strip()
                     entry.produced_real_turn = True
 
+    async def _maybe_persist_usage(self, task_id: str | None, parsed: dict) -> None:
+        if not task_id or not hasattr(self.codex_store, "update_execution_process_usage"):
+            return
+        usage = extract_usage(parsed)
+        if not usage:
+            return
+
+        def _int_value(*names: str) -> int | None:
+            for name in names:
+                raw = usage.get(name)
+                if raw is None:
+                    continue
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    continue
+            return None
+
+        input_tokens = _int_value("input_tokens", "prompt_tokens")
+        output_tokens = _int_value("output_tokens", "completion_tokens")
+        cache_read_tokens = _int_value(
+            "cache_read_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        )
+        raw_cost = usage.get("total_cost_usd")
+        try:
+            total_cost_usd = float(raw_cost) if raw_cost is not None else None
+        except (TypeError, ValueError):
+            total_cost_usd = None
+        if total_cost_usd is None:
+            total_cost_usd = price_tokens(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read_tokens,
+            )
+        try:
+            task = await self.codex_store.load_codex_task(task_id)
+            execution_process_id = getattr(task, "last_execution_process_id", None) if task else None
+            if execution_process_id:
+                await self.codex_store.update_execution_process_usage(
+                    execution_process_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_read_tokens=cache_read_tokens,
+                    total_cost_usd=total_cost_usd,
+                )
+        except Exception:
+            pass
+
     async def _mark_task_done(self, task_id: str, entry):
         if entry.help_requested:
             return
@@ -707,13 +819,7 @@ class BaseProcessRuntime:
             # Branch on EP kind: chat runs must NOT mutate task.result and must
             # NOT trigger artifact persistence. The assistant reply is captured
             # in the message log only.
-            is_chat = False
-            if execution_process_id and hasattr(self.codex_store, "load_execution_process"):
-                try:
-                    ep = await self.codex_store.load_execution_process(execution_process_id)
-                    is_chat = ep is not None and getattr(ep, "kind", "initial") == "chat"
-                except Exception:
-                    is_chat = False
+            is_chat = await self._is_chat_execution_process(execution_process_id)
 
             task.status = "done"
             if not is_chat and entry.result_text and not is_unusable_result_text(entry.result_text):
@@ -758,27 +864,13 @@ class BaseProcessRuntime:
                 assistant_text = _sanitize_chat_reply(assistant_text)
             await self._persist_assistant_message(task_id, execution_process_id, assistant_text)
 
-            if self._event_bus is not None:
-                await self._event_bus.append({
-                    "type": "task_status",
-                    "task_id": task_id,
-                    "session_id": task.session_id,
-                    "status": task.status,
-                    "result": task.result,
-                    "review_comment": getattr(task, "review_comment", None),
-                    "execution_process_id": execution_process_id,
-                })
-            
-            try:
-                from app.interfaces.codex_ws import stream_manager
-                stream_manager.buffer_pending(task.session_id, {
-                    "type": "task_status",
-                    "task_id": task_id,
-                    "status": task.status,
-                    "review_comment": getattr(task, "review_comment", None),
-                })
-            except Exception:
-                pass
+            await self._emit_task_status(
+                task,
+                task.status,
+                result=task.result,
+                review_comment=getattr(task, "review_comment", None),
+                execution_process_id=execution_process_id,
+            )
 
             await self._complete_help_child_if_needed(task, child_status="done", child_result=task.result)
 
@@ -806,14 +898,19 @@ class BaseProcessRuntime:
             )
 
         if self._event_bus is not None:
-            await self._event_bus.append({
-                "type": "task_status",
-                "task_id": task_id,
-                "session_id": task.session_id,
-                "status": task.status,
-                "result": task.result,
-                "execution_process_id": execution_process_id,
-            })
+            await self._emit_task_status(
+                task,
+                task.status,
+                result=task.result,
+                execution_process_id=execution_process_id,
+            )
+        else:
+            await self._emit_task_status(
+                task,
+                task.status,
+                result=task.result,
+                execution_process_id=execution_process_id,
+            )
         await self._complete_help_child_if_needed(task, child_status="failed", child_result=task.result)
 
     async def _persist_assistant_message(self, task_id: str, execution_process_id: str | None, content: str | None):
@@ -873,6 +970,7 @@ class BaseProcessRuntime:
             await self.codex_store.save_codex_workspace(workspace)
 
         if task_id and task:
+            is_chat = await self._is_chat_execution_process(task.last_execution_process_id)
             if entry.resume_session_id and entry.produced_real_turn:
                 # Only carry a session id that produced a real turn. A control-only
                 # / empty run captured a session id that is effectively dead;
@@ -884,8 +982,11 @@ class BaseProcessRuntime:
                 task.resume_message_id = entry.resume_message_id
             if (
                 entry.result_text
-                and task.status not in {"done", "failed", "cancelled"}
+                and not is_task_terminal_status(task.status)
                 and not is_unusable_result_text(entry.result_text)
+                and not is_chat
+                and not entry.had_error
+                and not entry.idle_timed_out
             ):
                 task.result = entry.result_text
             task.updated_at = datetime.now()
@@ -896,30 +997,34 @@ class BaseProcessRuntime:
             return
 
         task = await self.codex_store.load_codex_task(task_id)
-        if task is None or task.status in {"done", "failed", "cancelled"}:
+        if task is None or is_task_terminal_status(task.status):
             return
 
         import logging as _log2
         _logger = _log2.getLogger(__name__)
 
         execution_process_id = task.last_execution_process_id
+        is_chat = await self._is_chat_execution_process(execution_process_id)
         exit_code = getattr(entry.proc, "returncode", None)
+        fallback_result = None
         if not entry.result_text and not entry.had_error:
             fallback_result = await self._build_idle_timeout_fallback_result(task, entry)
             if fallback_result:
                 entry.result_text = fallback_result
+        if entry.idle_timed_out and not fallback_result:
+            entry.had_error = True
 
         if entry.had_error:
             task.status = "failed"
             process_status = "Failed"
         elif entry.result_text or exit_code == 0:
             task.status = "done"
-            if entry.result_text and not is_unusable_result_text(entry.result_text):
+            if entry.result_text and not is_unusable_result_text(entry.result_text) and not is_chat:
                 task.result = entry.result_text
             task.updated_at = datetime.now()
             
             # Call refresh_task_result to persist artifacts
-            if callable(self.refresh_task_result):
+            if not is_chat and callable(self.refresh_task_result):
                 try:
                     await self.refresh_task_result(task)
                 except Exception as exc:
@@ -931,7 +1036,7 @@ class BaseProcessRuntime:
                     task.status = "failed"
                     task.result = str(exc)
 
-            process_status = "Completed" if task.status == "done" else "Failed"
+            process_status = "Completed" if is_task_success_status(task.status) else "Failed"
         else:
             task.status = "failed"
             if entry.idle_timed_out:
@@ -946,7 +1051,7 @@ class BaseProcessRuntime:
         await self.codex_store.save_codex_task(task)
 
         if execution_process_id:
-            final_exit_code = 0 if task.status == "done" and exit_code is None else exit_code
+            final_exit_code = 0 if is_task_success_status(task.status) and exit_code is None else exit_code
             await self.codex_store.update_execution_process_status(
                 execution_process_id,
                 process_status,
@@ -954,15 +1059,12 @@ class BaseProcessRuntime:
                 completed_at=datetime.now(),
             )
 
-        if self._event_bus is not None:
-            await self._event_bus.append({
-                "type": "task_status",
-                "task_id": task_id,
-                "session_id": task.session_id,
-                "status": task.status,
-                "result": task.result,
-                "execution_process_id": execution_process_id,
-            })
+        await self._emit_task_status(
+            task,
+            task.status,
+            result=task.result,
+            execution_process_id=execution_process_id,
+        )
         await self._complete_help_child_if_needed(task, child_status=task.status, child_result=task.result)
 
     async def _complete_help_child_if_needed(self, task, *, child_status: str, child_result: str | None):
@@ -972,11 +1074,11 @@ class BaseProcessRuntime:
             return
 
         help_request = await self.codex_store.load_help_request(task.blocked_by_help_id)
-        if help_request is None or help_request.status in {"completed", "failed", "timed_out", "consumed"}:
+        if help_request is None or is_help_request_terminal_status(help_request.status):
             return
 
-        normalized_status = "done" if child_status == "done" else "failed"
-        self.help_orchestrator.complete_help_request(
+        normalized_status = "done" if is_task_success_status(child_status) else "failed"
+        await self.help_orchestrator.complete_help_request(
             task.blocked_by_help_id,
             child_status=normalized_status,
             child_result=child_result,
@@ -1044,6 +1146,43 @@ class BaseProcessRuntime:
 
     # --- Async Process Management ---
 
+    async def _terminate_process_tree(self, proc, *, grace_s: float = 2.0) -> None:
+        if proc is None or getattr(proc, "returncode", None) is not None:
+            return
+        pid = getattr(proc, "pid", None)
+        sent_group_signal = False
+        if pid and os.name != "nt":
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
+                sent_group_signal = True
+            except Exception:
+                sent_group_signal = False
+        if not sent_group_signal:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=grace_s)
+            return
+        except Exception:
+            pass
+        if pid and os.name != "nt":
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                sent_group_signal = True
+            except Exception:
+                sent_group_signal = False
+        if not sent_group_signal:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=grace_s)
+        except Exception:
+            pass
+
     async def _watchdog(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None, timeout_sec: int):
         try:
             await asyncio.sleep(timeout_sec)
@@ -1051,13 +1190,10 @@ class BaseProcessRuntime:
                 return
             entry.alive = False
             if entry.proc:
-                try:
-                    entry.proc.terminate()
-                except Exception:
-                    pass
+                await self._terminate_process_tree(entry.proc)
             if task_id:
                 task = await self.codex_store.load_codex_task(task_id)
-                if task and task.status not in {"done", "failed", "cancelled"}:
+                if task and not is_task_terminal_status(task.status):
                     task.status = "failed"
                     task.result = f"Process exceeded maximum timeout of {timeout_sec} seconds"
                     task.updated_at = datetime.now()
@@ -1073,15 +1209,12 @@ class BaseProcessRuntime:
                             )
                         except Exception:
                             pass
-                    if self._event_bus:
-                        await self._event_bus.append({
-                            "type": "task_status",
-                            "task_id": task_id,
-                            "session_id": task.session_id,
-                            "status": "failed",
-                            "result": task.result,
-                            "execution_process_id": execution_process_id,
-                        })
+                    await self._emit_task_status(
+                        task,
+                        "failed",
+                        result=task.result,
+                        execution_process_id=execution_process_id,
+                    )
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -1174,8 +1307,8 @@ class BaseProcessRuntime:
     async def _reader_loop(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None):
         """Async reader loop using await stdout.readline()."""
         import time as _time
-        idle_timeout = int(os.getenv("PROCESS_IDLE_TIMEOUT", "180"))
-        max_timeout = int(os.getenv("PROCESS_MAX_TIMEOUT", "1800"))
+        idle_timeout = timeouts.process_idle_timeout_s()
+        max_timeout = timeouts.process_max_timeout_s()
         entry.last_event_at = _time.monotonic()
         watchdog_task = asyncio.create_task(self._watchdog(workspace_id, entry, task_id, max_timeout))
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(workspace_id, entry, task_id))
@@ -1189,6 +1322,9 @@ class BaseProcessRuntime:
                     entry.idle_timeout_seconds = idle_timeout
                     break
                 except Exception:
+                    entry.had_error = True
+                    if not entry.result_text:
+                        entry.result_text = "Runtime reader failed before emitting a final result."
                     break
                 if not line:
                     break
@@ -1224,28 +1360,23 @@ class BaseProcessRuntime:
         finally:
             entry.alive = False
             try:
-                if entry.idle_timed_out and entry.proc and entry.proc.returncode is None:
-                    entry.proc.terminate()
-                    try:
-                        await asyncio.wait_for(entry.proc.wait(), timeout=2)
-                    except Exception:
-                        entry.proc.kill()
-                        await entry.proc.wait()
+                if entry.proc and entry.proc.returncode is None:
+                    await self._terminate_process_tree(entry.proc)
             except Exception:
                 pass
             watchdog_task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(watchdog_task), timeout=1)
-            except Exception:
+            except (asyncio.CancelledError, Exception):
                 pass
             heartbeat_task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(heartbeat_task), timeout=1)
-            except Exception:
+            except (asyncio.CancelledError, Exception):
                 pass
 
             try:
-                stderr = await entry.proc.stderr.read()
+                stderr = await asyncio.wait_for(entry.proc.stderr.read(), timeout=1)
                 if stderr:
                     await self._append_log(workspace_id, "stderr", stderr.decode("utf-8", errors="replace"), task_id)
             except Exception:
@@ -1270,15 +1401,7 @@ class BaseProcessRuntime:
                             await entry.proc.stdin.wait_closed()
                         except Exception:
                             pass
-                    try:
-                        entry.proc.terminate()
-                        await asyncio.wait_for(entry.proc.wait(), timeout=2)
-                    except (asyncio.TimeoutError, Exception):
-                        try:
-                            entry.proc.kill()
-                            await entry.proc.wait()
-                        except Exception:
-                            pass
+                    await self._terminate_process_tree(entry.proc)
                 elif isinstance(entry.proc, subprocess.Popen):
                     try:
                         entry.proc.terminate()
@@ -1295,5 +1418,15 @@ class BaseProcessRuntime:
             entry.output_task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(entry.output_task), timeout=1)
-            except Exception:
+            except (asyncio.CancelledError, Exception):
+                pass
+        if (
+            hasattr(entry, "turn_watchdog_task")
+            and entry.turn_watchdog_task
+            and not entry.turn_watchdog_task.done()
+        ):
+            entry.turn_watchdog_task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(entry.turn_watchdog_task), timeout=1)
+            except (asyncio.CancelledError, Exception):
                 pass

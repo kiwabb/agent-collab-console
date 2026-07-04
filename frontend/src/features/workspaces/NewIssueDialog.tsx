@@ -9,7 +9,8 @@ import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { createIssueAndInitialTask } from "@/features/workbench/workbenchActions";
 import { describeExecutorOption } from "@/components/runtime/ExecutionConfigSelector";
-import { autoStartIssueGraph, createCodexIssue } from "@/lib/api";
+import { autoStartIssueGraph } from "@/lib/api/conductors";
+import { createCodexIssue } from "@/lib/api/issues";
 import type { CodexIssue, Project, RuntimeCatalog } from "@/lib/types";
 import { formatWorkspaceConsoleRepoLabel } from "./workspaceConsoleState";
 

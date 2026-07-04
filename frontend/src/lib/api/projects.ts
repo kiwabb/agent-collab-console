@@ -14,6 +14,10 @@ import type {
   ProjectRunLogsResponse,
   ProjectRunStartReason,
   ProjectRunStatus,
+  ProjectScriptSuggestionRequest,
+  ProjectScriptSuggestionResponse,
+  ProjectScriptTaskRequest,
+  ProjectScriptTaskResponse,
   ProjectStats,
   UpdateProjectRequest,
 } from "../types";
@@ -27,7 +31,7 @@ export async function getProject(projectId: string): Promise<Project> {
   return handleResponse<Project>(response);
 }
 export async function createProject(
-  body: import("../types").CreateProjectRequest,
+  body: CreateProjectRequest,
 ): Promise<Project> {
   const response = await fetch(`${API_BASE}/projects`, {
     method: "POST",
@@ -38,7 +42,7 @@ export async function createProject(
 }
 export async function updateProject(
   projectId: string,
-  updates: import("../types").UpdateProjectRequest,
+  updates: UpdateProjectRequest,
 ): Promise<Project> {
   const response = await fetch(`${API_BASE}/projects/${projectId}`, {
     method: "PATCH",
@@ -46,6 +50,28 @@ export async function updateProject(
     body: JSON.stringify(updates),
   });
   return handleResponse<Project>(response);
+}
+export async function suggestProjectScript(
+  projectId: string,
+  body: ProjectScriptSuggestionRequest,
+): Promise<ProjectScriptSuggestionResponse> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/script-suggestion`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<ProjectScriptSuggestionResponse>(response);
+}
+export async function startProjectScriptTask(
+  projectId: string,
+  body: ProjectScriptTaskRequest,
+): Promise<ProjectScriptTaskResponse> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/script-task`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<ProjectScriptTaskResponse>(response);
 }
 export async function deleteProject(projectId: string, force = false): Promise<unknown> {
   const url = force
@@ -69,36 +95,36 @@ export async function repairProject(
   const response = await fetch(`${API_BASE}/projects/${projectId}/repair`, { method: "POST" });
   return handleResponse(response);
 }
-export async function getProjectStats(projectId: string): Promise<import("../types").ProjectStats> {
+export async function getProjectStats(projectId: string): Promise<ProjectStats> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/stats`);
-  return handleResponse<import("../types").ProjectStats>(response);
+  return handleResponse<ProjectStats>(response);
 }
 export async function getProjectRemoteStatus(
   projectId: string,
   options: { fetch?: boolean } = {},
-): Promise<import("../types").ProjectRemoteStatus> {
+): Promise<ProjectRemoteStatus> {
   const doFetch = options.fetch ?? true;
   const response = await fetch(
     `${API_BASE}/projects/${projectId}/remote-status?fetch=${doFetch ? "true" : "false"}`,
   );
-  return handleResponse<import("../types").ProjectRemoteStatus>(response);
+  return handleResponse<ProjectRemoteStatus>(response);
 }
 export async function pullProject(
   projectId: string,
-): Promise<import("../types").ProjectPullResult> {
+): Promise<ProjectPullResult> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/pull`, { method: "POST" });
   // 200 → the ProjectPullResult directly. 409 → FastAPI wraps our refusal
   // payload as {detail: ProjectPullResult}. Both carry the structured reason we
   // want to show, so unwrap them here rather than throwing on 409.
   if (response.status === 200) {
-    return (await response.json()) as import("../types").ProjectPullResult;
+    return (await response.json()) as ProjectPullResult;
   }
   if (response.status === 409) {
-    const body = (await response.json()) as { detail: import("../types").ProjectPullResult };
+    const body = (await response.json()) as { detail: ProjectPullResult };
     return body.detail;
   }
   // 404 / 500 etc. are genuine errors — surface them.
-  return handleResponse<import("../types").ProjectPullResult>(response);
+  return handleResponse<ProjectPullResult>(response);
 }
 /**
  * Result of starting a project's run_command. On success the live
@@ -107,46 +133,46 @@ export async function pullProject(
  * branch on the reason without catching a thrown error.
  */
 export type StartProjectRunResult =
-  | import("../types").ProjectRunStatus
-  | { error: import("../types").ProjectRunStartReason; pattern?: string };
+  | ProjectRunStatus
+  | { error: ProjectRunStartReason; pattern?: string };
 export function isProjectRunStartError(
   result: StartProjectRunResult,
-): result is { error: import("../types").ProjectRunStartReason; pattern?: string } {
+): result is { error: ProjectRunStartReason; pattern?: string } {
   return "error" in result;
 }
 export async function startProjectRun(projectId: string): Promise<StartProjectRunResult> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/run/start`, { method: "POST" });
   if (response.status === 200) {
-    return (await response.json()) as import("../types").ProjectRunStatus;
+    return (await response.json()) as ProjectRunStatus;
   }
   if (response.status === 409) {
     // FastAPI wraps the refusal payload as {detail: {reason, pattern?}}.
     const body = (await response.json()) as {
-      detail: { reason: import("../types").ProjectRunStartReason; pattern?: string };
+      detail: { reason: ProjectRunStartReason; pattern?: string };
     };
     return { error: body.detail.reason, pattern: body.detail.pattern };
   }
   // 404 / 500 etc. are genuine errors — surface them.
-  return handleResponse<import("../types").ProjectRunStatus>(response);
+  return handleResponse<ProjectRunStatus>(response);
 }
 export async function stopProjectRun(
   projectId: string,
-): Promise<import("../types").ProjectRunStatus> {
+): Promise<ProjectRunStatus> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/run/stop`, { method: "POST" });
-  return handleResponse<import("../types").ProjectRunStatus>(response);
+  return handleResponse<ProjectRunStatus>(response);
 }
 export async function getProjectRunStatus(
   projectId: string,
-): Promise<import("../types").ProjectRunStatus> {
+): Promise<ProjectRunStatus> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/run/status`);
-  return handleResponse<import("../types").ProjectRunStatus>(response);
+  return handleResponse<ProjectRunStatus>(response);
 }
 export async function getProjectRunLogs(
   projectId: string,
   after = 0,
-): Promise<import("../types").ProjectRunLogsResponse> {
+): Promise<ProjectRunLogsResponse> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/run/logs?after=${after}`);
-  return handleResponse<import("../types").ProjectRunLogsResponse>(response);
+  return handleResponse<ProjectRunLogsResponse>(response);
 }
 export async function getProjectConductorState(projectId: string): Promise<ProjectConductorState> {
   const response = await fetch(`${API_BASE}/codex/projects/${projectId}/conductor-state`);
@@ -215,7 +241,7 @@ export async function startProjectConductorLoop(
 export async function getProjectAudit(
   projectId: string,
   limit = 10,
-): Promise<import("../types").ProjectAuditEntry[]> {
+): Promise<ProjectAuditEntry[]> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/audit?limit=${limit}`);
-  return handleResponse<import("../types").ProjectAuditEntry[]>(response);
+  return handleResponse<ProjectAuditEntry[]>(response);
 }

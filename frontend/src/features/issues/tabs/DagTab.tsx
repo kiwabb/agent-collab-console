@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import {
   autoStartIssueGraph,
   getIssueGraph,
+} from "@/lib/api/conductors";
+import {
   getIssueGraphStats,
-  runCodexTask,
   type GraphStatsResponse,
-} from "@/lib/api";
+} from "@/lib/api/issues";
+import { runCodexTask } from "@/lib/api/tasks";
 import type { WorkflowGraph } from "@/lib/types";
 import { WorkflowGraphView, type WorkflowNodeClickPayload } from "@/features/workflow/WorkflowGraphView";
 import { ConductorLogPanel } from "@/features/workflow/ConductorLogPanel";

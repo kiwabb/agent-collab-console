@@ -164,6 +164,7 @@ class SQLiteStore:
                 CREATE TABLE IF NOT EXISTS codex_tasks (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
+                    project_id TEXT,
                     issue_id TEXT,
                     phase TEXT DEFAULT 'requirements',
                     title TEXT NOT NULL,
@@ -179,6 +180,11 @@ class SQLiteStore:
                     task_kind TEXT DEFAULT 'normal',
                     blocked_by_help_id TEXT,
                     workspace_path TEXT,
+                    git_branch TEXT,
+                    git_base_branch TEXT,
+                    git_worktree_path TEXT,
+                    git_merge_status TEXT DEFAULT 'open',
+                    git_last_commit_sha TEXT,
                     resume_session_id TEXT,
                     resume_message_id TEXT,
                     last_execution_process_id TEXT,
@@ -285,6 +291,10 @@ class SQLiteStore:
                 pass  # Column already exists
             # Add executor column to codex_tasks for dual-executor support
             try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN project_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN phase TEXT DEFAULT 'requirements'")
             except sqlite3.OperationalError:
                 pass  # Column already exists
@@ -310,6 +320,26 @@ class SQLiteStore:
                 pass  # Column already exists
             try:
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN workspace_path TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_branch TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_base_branch TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_worktree_path TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_merge_status TEXT DEFAULT 'open'")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_last_commit_sha TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
@@ -1245,10 +1275,19 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO codex_tasks (id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, result_json, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (task.id, task.session_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
+            """INSERT OR REPLACE INTO codex_tasks (
+                id, session_id, project_id, issue_id, phase, title, prompt, role, executor, provider, model,
+                status, result, result_json, parent_task_id, task_kind, blocked_by_help_id, workspace_path,
+                git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha,
+                resume_session_id, resume_message_id, last_execution_process_id,
+                sequence_index, sequence_group, review_comment, workflow_node_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (task.id, task.session_id, task.project_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
              task.provider, task.model, task.status, task.result, task.result_json, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
-             task.workspace_path, task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
+             task.workspace_path,
+             task.git_branch, task.git_base_branch, task.git_worktree_path, task.git_merge_status, task.git_last_commit_sha,
+             task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
+             task.sequence_index, task.sequence_group, task.review_comment, getattr(task, "workflow_node_id", None),
              self._format_datetime(task.created_at),
              self._format_datetime(task.updated_at)),
         )
@@ -1266,6 +1305,7 @@ class SQLiteStore:
         return CodexTask(
             id=row["id"],
             session_id=row["session_id"],
+            project_id=row["project_id"] if "project_id" in row.keys() and row["project_id"] else None,
             issue_id=row["issue_id"] if "issue_id" in row.keys() and row["issue_id"] else None,
             phase=row["phase"] if "phase" in row.keys() and row["phase"] else "requirements",
             title=row["title"],
@@ -1281,38 +1321,51 @@ class SQLiteStore:
             task_kind=row["task_kind"] if "task_kind" in row.keys() and row["task_kind"] else "normal",
             blocked_by_help_id=row["blocked_by_help_id"] if "blocked_by_help_id" in row.keys() and row["blocked_by_help_id"] else None,
             workspace_path=row["workspace_path"] if "workspace_path" in row.keys() and row["workspace_path"] else None,
+            git_branch=row["git_branch"] if "git_branch" in row.keys() and row["git_branch"] else None,
+            git_base_branch=row["git_base_branch"] if "git_base_branch" in row.keys() and row["git_base_branch"] else None,
+            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in row.keys() and row["git_worktree_path"] else None,
+            git_merge_status=row["git_merge_status"] if "git_merge_status" in row.keys() and row["git_merge_status"] else "open",
+            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in row.keys() and row["git_last_commit_sha"] else None,
             resume_session_id=row["resume_session_id"] if "resume_session_id" in row.keys() and row["resume_session_id"] else None,
             resume_message_id=row["resume_message_id"] if "resume_message_id" in row.keys() and row["resume_message_id"] else None,
             last_execution_process_id=row["last_execution_process_id"] if "last_execution_process_id" in row.keys() and row["last_execution_process_id"] else None,
+            sequence_index=row["sequence_index"] if "sequence_index" in row.keys() else None,
+            sequence_group=row["sequence_group"] if "sequence_group" in row.keys() else None,
+            review_comment=row["review_comment"] if "review_comment" in row.keys() else None,
+            workflow_node_id=row["workflow_node_id"] if "workflow_node_id" in row.keys() and row["workflow_node_id"] else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def list_codex_tasks(self, session_id: str | None = None, issue_id: str | None = None) -> list[dict]:
+    def list_codex_tasks(
+        self,
+        session_id: str | None = None,
+        issue_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[dict]:
         """List tasks, optionally filtered by session_id."""
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        select_sql = "SELECT id, session_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, result_json, parent_task_id, task_kind, blocked_by_help_id, workspace_path, resume_session_id, resume_message_id, last_execution_process_id, created_at, updated_at FROM codex_tasks"
-        if session_id and issue_id:
-            rows = conn.execute(
-                f"{select_sql} WHERE session_id = ? AND issue_id = ? ORDER BY created_at ASC",
-                (session_id, issue_id),
-            ).fetchall()
-        elif session_id:
-            rows = conn.execute(
-                f"{select_sql} WHERE session_id = ? ORDER BY created_at ASC",
-                (session_id,),
-            ).fetchall()
-        elif issue_id:
-            rows = conn.execute(
-                f"{select_sql} WHERE issue_id = ? ORDER BY created_at ASC",
-                (issue_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                f"{select_sql} ORDER BY created_at ASC",
-            ).fetchall()
+        select_sql = (
+            "SELECT id, session_id, project_id, issue_id, phase, title, prompt, role, executor, provider, model, status, result, result_json, "
+            "parent_task_id, task_kind, blocked_by_help_id, workspace_path, "
+            "git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, "
+            "resume_session_id, resume_message_id, last_execution_process_id, "
+            "sequence_index, sequence_group, review_comment, workflow_node_id, created_at, updated_at FROM codex_tasks"
+        )
+        clauses, params = [], []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if issue_id:
+            clauses.append("issue_id = ?")
+            params.append(issue_id)
+        if project_id:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(f"{select_sql}{where} ORDER BY created_at ASC", tuple(params)).fetchall()
         conn.close()
         return [dict(r) for r in rows]
 

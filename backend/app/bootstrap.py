@@ -24,17 +24,18 @@ from app.application.prototype_service import PrototypeService
 from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.application.skill_service import SkillService
 from app.application.worktree_manager import WorktreeManager
+from app.application import timeouts
 
 
 # Workflow DAG feature flag. Default ON now that PR5 migrations and PR6
 # replanner are in place. Set WORKFLOW_DAG_ENABLED=false to temporarily roll
 # back to the legacy phase pipeline (transition endpoints are deleted, so the
 # rollback also requires reverting their removal).
-WORKFLOW_DAG_ENABLED = os.getenv("WORKFLOW_DAG_ENABLED", "true").lower() == "true"
+WORKFLOW_DAG_ENABLED = timeouts.workflow_dag_enabled()
 
 
 # Determine store path - default to backend/console.db
-db_path_str = os.getenv("SQLITE_DB_PATH", "console.db")
+db_path_str = timeouts.sqlite_db_path()
 # Make path relative to backend directory if not absolute
 if not os.path.isabs(db_path_str):
     db_path = Path(__file__).parent.parent / db_path_str
@@ -42,14 +43,14 @@ else:
     db_path = Path(db_path_str)
 
 # Create store if SQLite persistence is enabled (default: true for persistence)
-use_sqlite = os.getenv("USE_SQLITE", "true").lower() == "true"
+use_sqlite = timeouts.use_sqlite()
 store = SQLiteStore(db_path) if use_sqlite else None
 async_store = AsyncSQLiteStore(db_path) if use_sqlite else None
 
 # Initialize event bus with store for DB writes
 # Phase 1: Use async store for EventBus when running in full async mode (CODEX_LAUNCH_ENABLED=true)
 # For test/mock mode, use sync store to avoid async/sync mismatch
-use_async_event_bus = os.getenv("CODEX_LAUNCH_ENABLED", "true").lower() != "false" and use_sqlite
+use_async_event_bus = timeouts.codex_launch_enabled() and use_sqlite
 if use_async_event_bus and async_store is not None:
     event_bus.set_log_store(async_store)
 elif async_store is not None:
@@ -74,15 +75,15 @@ session_service = SessionService(store=effective_store)
 # write code instead of returning mock strings. Default ON — without it the
 # Engineer phase never patches the worktree and the system is just a doc
 # generator. Set REAL_CLI=false for offline tests / demos.
-use_real_cli = os.getenv("REAL_CLI", "true").lower() == "true"
+use_real_cli = timeouts.real_cli_enabled()
 
 if use_real_cli:
     # Real CLI adapters - commands configurable via CLAUDE_CMD and CODEX_CMD env vars
     # Values are space-separated shell commands. Defaults try the system
     # `claude` / `codex` binaries — if those aren't installed the adapter
     # call will fail loudly, which is the correct signal to the user.
-    claude_cmd_str = os.getenv("CLAUDE_CMD", "claude")
-    codex_cmd_str = os.getenv("CODEX_CMD", "codex")
+    claude_cmd_str = timeouts.claude_cli_cmd()
+    codex_cmd_str = timeouts.codex_cli_cmd()
     worker_adapter = ClaudeCliAdapter(command=shlex.split(claude_cmd_str))
     master_adapter = CodexCliAdapter(command=shlex.split(codex_cmd_str))
 else:
@@ -314,10 +315,10 @@ class MockCodexProcessManager:
 def get_codex_process_manager():
     global codex_process_manager
     if codex_process_manager is None:
-        if os.getenv("CODEX_LAUNCH_ENABLED", "true").lower() != "false":
+        if timeouts.codex_launch_enabled():
             from app.application.codex_process_manager import CodexProcessManager
 
-            data_dir = os.getenv("CODEX_DATA_DIR", "/tmp")
+            data_dir = timeouts.codex_data_dir()
             codex_process_manager = CodexProcessManager(
                 codex_store=codex_store,
                 log_store=codex_store,

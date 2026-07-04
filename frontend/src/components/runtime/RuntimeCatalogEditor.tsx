@@ -7,12 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
-import type {
-  RuntimeCatalog,
-  RuntimeExecutorConfig,
-} from "@/lib/types";
+import type { RuntimeCatalog, RuntimeExecutorConfig } from "@/lib/types";
 import type { TranslationKey } from "@/lib/i18n";
-import { testRuntimeExecutor, validateRuntimeCatalog } from "@/lib/api";
+import { testRuntimeExecutor, validateRuntimeCatalog } from "@/lib/api/runtime";
 import { CheckCircle, XCircle } from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
@@ -26,7 +23,10 @@ interface RuntimeCatalogEditorProps {
 // api_endpoint defaults to empty so a freshly-added executor runs the local CLI
 // (the backend treats "no endpoint + no key" as local-CLI mode). The user can
 // still type a remote endpoint + key to target a hosted API.
-const EXECUTOR_DEFAULTS: Record<"claude" | "codex", { label: string; api_endpoint: string; default_model: string; protocol: "anthropic" | "openai" }> = {
+const EXECUTOR_DEFAULTS: Record<
+  "claude" | "codex",
+  { label: string; api_endpoint: string; default_model: string; protocol: "anthropic" | "openai" }
+> = {
   claude: {
     label: "Claude",
     api_endpoint: "",
@@ -63,11 +63,7 @@ function stripEmptyApiKeys(catalog: RuntimeCatalog): RuntimeCatalog {
   };
 }
 
-export function RuntimeCatalogEditor({
-  catalog,
-  onChange,
-  className,
-}: RuntimeCatalogEditorProps) {
+export function RuntimeCatalogEditor({ catalog, onChange, className }: RuntimeCatalogEditorProps) {
   const { t } = useI18n();
   const { addToast } = useToast();
   const [localCatalog, setLocalCatalog] = useState<RuntimeCatalog>(() => normalizeCatalog(catalog));
@@ -128,7 +124,7 @@ export function RuntimeCatalogEditor({
     const updatedCatalog = {
       ...localCatalog,
       executors: localCatalog.executors.map((executor, executorIndex) =>
-        executorIndex === index ? { ...executor, ...updates } : executor
+        executorIndex === index ? { ...executor, ...updates } : executor,
       ),
     };
     handleChange(updatedCatalog);
@@ -199,9 +195,7 @@ export function RuntimeCatalogEditor({
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">{t("runtime.configure.title")}</h2>
-          <p className="text-sm text-muted-foreground">
-            {t("runtime.configure.desc")}
-          </p>
+          <p className="text-sm text-muted-foreground">{t("runtime.configure.desc")}</p>
         </div>
         <button
           type="button"
@@ -260,7 +254,9 @@ export function RuntimeCatalogEditor({
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="min-w-0 space-y-1">
-                  <label className="text-xs text-muted-foreground">{t("runtime.executor.label")}</label>
+                  <label className="text-xs text-muted-foreground">
+                    {t("runtime.executor.label")}
+                  </label>
                   <Input
                     value={newExecutorLabel}
                     onChange={(e) => setNewExecutorLabel(e.target.value)}
@@ -268,7 +264,9 @@ export function RuntimeCatalogEditor({
                   />
                 </div>
                 <div className="min-w-0 space-y-1">
-                  <label className="text-xs text-muted-foreground">{t("runtime.executor.type")}</label>
+                  <label className="text-xs text-muted-foreground">
+                    {t("runtime.executor.type")}
+                  </label>
                   <div className="flex gap-4">
                     <label className="flex items-center gap-2 text-sm">
                       <input
@@ -296,7 +294,9 @@ export function RuntimeCatalogEditor({
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="min-w-0 space-y-1">
-                  <label className="text-xs text-muted-foreground">{t("runtime.executor.apiEndpoint")}</label>
+                  <label className="text-xs text-muted-foreground">
+                    {t("runtime.executor.apiEndpoint")}
+                  </label>
                   <Input
                     value={newApiEndpoint}
                     onChange={(e) => setNewApiEndpoint(e.target.value)}
@@ -304,7 +304,9 @@ export function RuntimeCatalogEditor({
                   />
                 </div>
                 <div className="min-w-0 space-y-1">
-                  <label className="text-xs text-muted-foreground">{t("runtime.executor.apiKey")}</label>
+                  <label className="text-xs text-muted-foreground">
+                    {t("runtime.executor.apiKey")}
+                  </label>
                   <Input
                     type="password"
                     value={newApiKey}
@@ -315,7 +317,9 @@ export function RuntimeCatalogEditor({
               </div>
 
               <div className="min-w-0 space-y-1">
-                <label className="text-xs text-muted-foreground">{t("runtime.executor.defaultModel")}</label>
+                <label className="text-xs text-muted-foreground">
+                  {t("runtime.executor.defaultModel")}
+                </label>
                 <Input
                   value={newDefaultModel}
                   onChange={(e) => setNewDefaultModel(e.target.value)}
@@ -340,11 +344,7 @@ export function RuntimeCatalogEditor({
         )}
       </div>
 
-      <ConductorLLMSection
-        catalog={localCatalog}
-        onUpdate={updateConductorLLM}
-        t={t}
-      />
+      <ConductorLLMSection catalog={localCatalog} onUpdate={updateConductorLLM} t={t} />
     </div>
   );
 }
@@ -368,7 +368,9 @@ function ConductorLLMSection({ catalog, onUpdate, t }: ConductorLLMSectionProps)
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="min-w-0 space-y-1">
-            <label className="text-xs text-muted-foreground">{t("runtime.conductor.executor")}</label>
+            <label className="text-xs text-muted-foreground">
+              {t("runtime.conductor.executor")}
+            </label>
             <select
               value={cfg.executor_id ?? ""}
               onChange={(e) => onUpdate({ executor_id: e.target.value || null })}
@@ -407,7 +409,9 @@ interface ExecutorCardProps {
   onUpdate: (updates: Partial<RuntimeExecutorConfig>) => void;
   onRemove: () => void;
   onToggleEnabled: () => void;
-  onTest: (executor: RuntimeExecutorConfig) => Promise<{ success: boolean; latency_ms?: number; error?: string }>;
+  onTest: (
+    executor: RuntimeExecutorConfig,
+  ) => Promise<{ success: boolean; latency_ms?: number; error?: string }>;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }
 
@@ -421,7 +425,12 @@ function ExecutorCard({
 }: ExecutorCardProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; latency_ms?: number; error?: string; mode?: string } | null>(null);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    latency_ms?: number;
+    error?: string;
+    mode?: string;
+  } | null>(null);
 
   // No key configured (neither freshly typed nor persisted on the backend) means
   // this executor runs the local CLI with its own default login.
@@ -446,7 +455,9 @@ function ExecutorCard({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="font-medium">
-              {executor.executor_type === "claude" ? t("runtime.executor.claudeCli") : t("runtime.executor.codexCli")}
+              {executor.executor_type === "claude"
+                ? t("runtime.executor.claudeCli")
+                : t("runtime.executor.codexCli")}
             </span>
             <span className="text-sm text-muted-foreground">{executor.label}</span>
             <span className="text-xs text-muted-foreground">({executor.id})</span>
@@ -457,11 +468,7 @@ function ExecutorCard({
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onToggleEnabled}
-            >
+            <Button variant="outline" size="sm" onClick={onToggleEnabled}>
               {executor.enabled ? t("runtime.executor.enabled") : t("runtime.executor.disabled")}
             </Button>
             <Button
@@ -517,7 +524,9 @@ function ExecutorCard({
         </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="min-w-0 space-y-1">
-            <label className="text-xs text-muted-foreground">{t("runtime.executor.apiEndpoint")}</label>
+            <label className="text-xs text-muted-foreground">
+              {t("runtime.executor.apiEndpoint")}
+            </label>
             <Input
               value={executor.api_endpoint || ""}
               onChange={(e) => onUpdate({ api_endpoint: e.target.value || null })}
@@ -542,16 +551,16 @@ function ExecutorCard({
               </p>
             )}
             {isLocalMode && (
-              <p className="text-[11px] text-brand/80">
-                {t("runtime.executor.localCliHint")}
-              </p>
+              <p className="text-[11px] text-brand/80">{t("runtime.executor.localCliHint")}</p>
             )}
           </div>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="min-w-0 space-y-1">
-            <label className="text-xs text-muted-foreground">{t("runtime.executor.defaultModel")}</label>
+            <label className="text-xs text-muted-foreground">
+              {t("runtime.executor.defaultModel")}
+            </label>
             <Input
               value={executor.default_model || ""}
               onChange={(e) => onUpdate({ default_model: e.target.value || null })}
@@ -559,7 +568,9 @@ function ExecutorCard({
             />
           </div>
           <div className="min-w-0 space-y-1">
-            <label className="text-xs text-muted-foreground">{t("runtime.executor.protocol")}</label>
+            <label className="text-xs text-muted-foreground">
+              {t("runtime.executor.protocol")}
+            </label>
             <select
               value={executor.protocol ?? "anthropic"}
               onChange={(e) => onUpdate({ protocol: e.target.value as "anthropic" | "openai" })}
@@ -568,7 +579,9 @@ function ExecutorCard({
               <option value="anthropic">{t("runtime.executor.protocolAnthropic")}</option>
               <option value="openai">{t("runtime.executor.protocolOpenai")}</option>
             </select>
-            <p className="text-[11px] text-muted-foreground">{t("runtime.executor.protocolHint")}</p>
+            <p className="text-[11px] text-muted-foreground">
+              {t("runtime.executor.protocolHint")}
+            </p>
           </div>
         </div>
 
@@ -585,7 +598,10 @@ function ExecutorCard({
             <div className="mt-3 space-y-3 pl-2">
               <div className="min-w-0 space-y-1">
                 <label className="text-xs text-muted-foreground">
-                  {t("runtime.provider.commandTemplate")} <span className="text-[10px]">(e.g., &quot;model=&#123;model&#125; provider=&#123;provider&#125;&quot;)</span>
+                  {t("runtime.provider.commandTemplate")}{" "}
+                  <span className="text-[10px]">
+                    (e.g., &quot;model=&#123;model&#125; provider=&#123;provider&#125;&quot;)
+                  </span>
                 </label>
                 {executor.providers.map((provider, providerIndex) => (
                   <div key={provider.id}>

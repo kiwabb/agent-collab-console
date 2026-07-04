@@ -15,7 +15,7 @@ import "reactflow/dist/style.css";
 import { Maximize2, Minus, Plus } from "lucide-react";
 
 import type { WorkflowGraph } from "@/lib/types";
-import type { GraphStatsResponse } from "@/lib/api";
+import type { GraphStatsResponse } from "@/lib/api/issues";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import {
   AgentDagNode,

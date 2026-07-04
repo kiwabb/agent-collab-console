@@ -4,7 +4,15 @@ from datetime import datetime  # noqa: I001, RUF100
 from uuid import uuid4
 
 from app.domain.models import ExecutionProcess
+from app.application.help_orchestrator import is_help_request_terminal_status
 from app.application.role_workflow_service import RoleWorkflowService
+from app.application.task_status_events import build_task_status_event
+from app.application.task_statuses import (
+    is_task_active_status,
+    is_task_failure_status,
+    is_task_success_status,
+    is_task_terminal_status,
+)
 
 
 class CodexTaskRunner:
@@ -78,8 +86,8 @@ class CodexTaskRunner:
         kind: str = "initial",
         triggering_message_id: str | None = None,
     ):
-        if task.status == "running":
-            raise ValueError("Task already running")
+        if is_task_active_status(task.status):
+            raise ValueError("Task already running or responding")
 
         # Issue tasks MUST run inside their git worktree. If the worktree path
         # was never set (setup race or failure), reject now rather than letting
@@ -130,15 +138,7 @@ class CodexTaskRunner:
             triggering_message_id=triggering_message_id,
         )
         await self.event_bus.append(
-            {
-                "type": "task_status",
-                "task_id": task.id,
-                "issue_id": task.issue_id,
-                "workspace_id": task.session_id,
-                "session_id": task.session_id,
-                "status": "running",
-                "execution_process_id": exec_process.id,
-            }
+            build_task_status_event(task, "running", execution_process_id=exec_process.id)
         )
 
         mgr = self._process_manager_factory()
@@ -183,20 +183,12 @@ class CodexTaskRunner:
                 exec_process.id, "Failed", exit_code=-1, completed_at=datetime.now()
             )
             await self.event_bus.append(
-                {
-                    "type": "task_status",
-                    "task_id": task.id,
-                    "issue_id": task.issue_id,
-                    "workspace_id": task.session_id,
-                    "session_id": task.session_id,
-                    "status": "failed",
-                    "execution_process_id": exec_process.id,
-                }
+                build_task_status_event(task, "failed", execution_process_id=exec_process.id)
             )
             raise
 
         task = await self.codex_store.load_codex_task(task.id) or task
-        if task.status in {"done", "failed", "cancelled"}:
+        if is_task_terminal_status(task.status):
             effective_status = task.status
         else:
             effective_status = final_status
@@ -217,16 +209,12 @@ class CodexTaskRunner:
             )
             exec_process.status = "Failed"
             await self.event_bus.append(
-                {
-                    "type": "task_status",
-                    "task_id": task.id,
-                    "issue_id": task.issue_id,
-                    "workspace_id": task.session_id,
-                    "session_id": task.session_id,
-                    "status": task.status,
-                    "result": task.result,
-                    "execution_process_id": exec_process.id,
-                }
+                build_task_status_event(
+                    task,
+                    task.status,
+                    result=task.result,
+                    execution_process_id=exec_process.id,
+                )
             )
             await self._complete_help_child_if_needed(task)
             return exec_process
@@ -234,7 +222,7 @@ class CodexTaskRunner:
 
         # After a successful run, snapshot the worktree HEAD onto the owning
         # issue so the FE can show "N commits ahead of base" / merge-readiness.
-        if task.status == "done" and task.issue_id and task.git_worktree_path:
+        if is_task_success_status(task.status) and task.issue_id and task.git_worktree_path:
             try:
                 from app.application.git_service import git_service as _git
 
@@ -248,10 +236,10 @@ class CodexTaskRunner:
                 # Don't fail the run on a bookkeeping update.
                 pass
 
-        if task.status == "done":
+        if is_task_success_status(task.status):
             exec_final_status = "Completed"
             exec_exit_code: int | None = 0
-        elif task.status == "failed":
+        elif is_task_failure_status(task.status):
             exec_final_status = "Failed"
             exec_exit_code = -1
         else:
@@ -261,21 +249,17 @@ class CodexTaskRunner:
             exec_process.id,
             exec_final_status,
             exit_code=exec_exit_code,
-            completed_at=datetime.now() if task.status in {"done", "failed"} else None,
+            completed_at=datetime.now() if is_task_terminal_status(task.status) else None,
         )
         exec_process.status = exec_final_status
         await self.event_bus.append(
-            {
-                "type": "task_status",
-                "task_id": task.id,
-                "issue_id": task.issue_id,
-                "workspace_id": task.session_id,
-                "session_id": task.session_id,
-                "status": task.status,
-                "result": task.result,
-                "review_comment": task.review_comment,
-                "execution_process_id": exec_process.id,
-            }
+            build_task_status_event(
+                task,
+                task.status,
+                result=task.result,
+                review_comment=task.review_comment,
+                execution_process_id=exec_process.id,
+            )
         )
         await self._complete_help_child_if_needed(task)
 
@@ -399,17 +383,12 @@ class CodexTaskRunner:
             or not task.blocked_by_help_id
         ):
             return
-        if task.status not in {"done", "failed"}:
+        if not is_task_terminal_status(task.status):
             return
 
         help_orchestrator = self._help_orchestrator_factory()
         help_request = await self.codex_store.load_help_request(task.blocked_by_help_id)
-        if help_request is None or help_request.status in {
-            "completed",
-            "failed",
-            "timed_out",
-            "consumed",
-        }:
+        if help_request is None or is_help_request_terminal_status(help_request.status):
             return
 
         await help_orchestrator.complete_help_request(

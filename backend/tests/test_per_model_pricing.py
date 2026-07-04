@@ -95,6 +95,16 @@ def test_pricing_none_is_legacy_behavior(monkeypatch):
     assert cost == pytest.approx(0.30 + 1.20 + 0.075)
 
 
+def test_invalid_global_env_rates_fall_back_to_defaults(monkeypatch):
+    monkeypatch.setenv("COST_USD_PER_M_INPUT", "oops")
+    monkeypatch.setenv("COST_USD_PER_M_OUTPUT", "oops")
+    monkeypatch.setenv("COST_USD_PER_M_CACHE_READ", "oops")
+
+    cost = price_tokens(1_000_000, 1_000_000, 1_000_000)
+
+    assert cost == pytest.approx(0.30 + 1.20 + 0.075)
+
+
 def test_partial_model_prices_mix_with_env_fallback(monkeypatch):
     """Only input priced explicitly; output/cache fall back to env."""
     monkeypatch.setenv("COST_USD_PER_M_OUTPUT", "1.20")

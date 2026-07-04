@@ -31,9 +31,25 @@ def test_enabled_when_all_present(monkeypatch):
 
 
 def test_env_flag_force_disables(monkeypatch):
-    monkeypatch.setenv("EMBEDDING_DISABLED", "1")
+    monkeypatch.setenv("EMBEDDING_DISABLED", "true")
     svc = EmbeddingService(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
     assert not svc.enabled
+
+
+def test_load_from_env_uses_safe_defaults(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_API_ENDPOINT", " https://emb.example/v1 ")
+    monkeypatch.setenv("EMBEDDING_API_KEY", " key-1 ")
+    monkeypatch.setenv("EMBEDDING_MODEL", " model-1 ")
+    monkeypatch.setenv("EMBEDDING_PROVIDER_TYPE", " ")
+    monkeypatch.setenv("EMBEDDING_TIMEOUT_S", "not-a-float")
+
+    cfg = EmbeddingService._load_from_env()
+
+    assert cfg.endpoint == "https://emb.example/v1"
+    assert cfg.api_key == "key-1"
+    assert cfg.model == "model-1"
+    assert cfg.provider_type == "openai"
+    assert cfg.timeout_s == 20.0
 
 
 @pytest.mark.asyncio

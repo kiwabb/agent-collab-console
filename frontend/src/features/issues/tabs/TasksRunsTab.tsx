@@ -6,13 +6,13 @@ import {
   chatCodexTask,
   getCodexTasks,
   getExecutionProcesses,
-  getRuntimeCatalog,
   refineCodexTask,
   rerunCodexTask,
   runCodexTask,
   terminateCodexTask,
   updateCodexTask,
-} from "@/lib/api";
+} from "@/lib/api/tasks";
+import { getRuntimeCatalog } from "@/lib/api/runtime";
 import { useExecutionProcessLogStream } from "@/hooks/useExecutionProcessLogStream";
 import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
 import type { CodexIssue, CodexTask, CodexTaskMessage, ExecutionProcess, RuntimeCatalog } from "@/lib/types";

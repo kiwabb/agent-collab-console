@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 
-import { getAuditLog, type AuditLog, type AuditLogCategory } from "@/lib/api";
+import { getAuditLog, type AuditLog, type AuditLogCategory } from "@/lib/api/audit";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";

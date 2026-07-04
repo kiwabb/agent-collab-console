@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getCodexTaskMessages } from "@/lib/api";
+import { getCodexTaskMessages } from "@/lib/api/tasks";
 import { buildTaskConversationDetail } from "@/lib/taskConversationDetailUtils";
 import type { CodexTaskMessage, ExecutionProcess } from "@/lib/types";
 

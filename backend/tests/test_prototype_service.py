@@ -29,6 +29,7 @@ from app.application.prototype_service import (
     build_iteration_system_prompt,
     strip_markdown_fence,
 )
+from app.application.code_prototype_discovery import CodePrototypeDiscoveryService
 from app.application.runtime_catalog_service import RuntimeCatalogService  # noqa: F401
 from app.domain.models import Project, RuntimeExecutorConfig
 
@@ -471,3 +472,134 @@ async def test_regenerate_all_raises_for_unknown_project(svc: PrototypeService):
     with pytest.raises(PrototypeError, match="project not found"):
         async for _ in svc.regenerate_all_stream("no-such-project"):
             pass
+
+
+# ---------------------------------------------------------------------------
+# Code-driven discovery + generation
+# ---------------------------------------------------------------------------
+
+
+def _write_page(repo: Path, rel: str, body: str) -> None:
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+def test_code_discovery_detects_supported_pages_and_ignores_heavy_dirs(project: Project):
+    repo = Path(project.repo_path)
+    _write_page(repo, "frontend/src/app/projects/[id]/prototypes/page.tsx", "export default function ProjectPrototypesPage() { return <main /> }")
+    _write_page(repo, "pages/api/hello.tsx", "export default function Api() { return null }")
+    _write_page(repo, "node_modules/pkg/src/app/ignored/page.tsx", "export default function Ignored() { return null }")
+    _write_page(repo, "src/features/audit/AuditPage.tsx", "export function AuditPage() { return <section /> }")
+
+    candidates = CodePrototypeDiscoveryService().scan_project(project)
+    by_route = {candidate.route: candidate for candidate in candidates}
+
+    assert "/projects/:id/prototypes" in by_route
+    assert by_route["/projects/:id/prototypes"].framework_hint == "next-app-router"
+    assert by_route["/projects/:id/prototypes"].primary_source_path == "frontend/src/app/projects/[id]/prototypes/page.tsx"
+    assert any(candidate.route == "/audit/audit" for candidate in candidates)
+    assert not any("node_modules" in candidate.primary_source_path for candidate in candidates)
+    assert not any(candidate.route.startswith("/api") for candidate in candidates)
+
+
+async def _collect_code_batch(svc: PrototypeService, project_id: str):
+    return [ev async for ev in svc.generate_all_from_code_stream(project_id)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_code_generation_creates_then_skips_unchanged(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    _write_page(
+        Path(project.repo_path),
+        "frontend/src/app/page.tsx",
+        "export default function HomePage() { return <main>Home</main> }",
+    )
+
+    first = await _collect_code_batch(svc, project.id)
+    assert first[0].event == "scan_meta"
+    assert first[-1].event == "all_done"
+    assert first[-1].data["created"] == 1
+    created = [ev for ev in first if ev.event == "prototype_done"]
+    assert len(created) == 1
+
+    listing = await svc.list_for_project(project.id)
+    assert len(listing) == 1
+    assert listing[0].source_kind == "code"
+    assert listing[0].source_ref == "next-app-router--home"
+    assert listing[0].current_version == 1
+
+    second = await _collect_code_batch(svc, project.id)
+    assert [ev.event for ev in second] == ["scan_meta", "candidate_start", "candidate_skip", "all_done"]
+    assert second[-1].data["skipped"] == 1
+    assert (await svc.get(listing[0].id)).current_version == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_code_generation_changed_source_appends_new_version(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    page = Path(project.repo_path) / "src/app/settings/page.tsx"
+    _write_page(project.repo_path and Path(project.repo_path), "src/app/settings/page.tsx", "export default function SettingsPage() { return <main>One</main> }")
+    await _collect_code_batch(svc, project.id)
+    proto = (await svc.list_for_project(project.id))[0]
+
+    page.write_text(
+        "export default function SettingsPage() { return <main>Two changed</main> }",
+        encoding="utf-8",
+    )
+    second = await _collect_code_batch(svc, project.id)
+    assert second[-1].data["regenerated"] == 1
+    assert (await svc.get(proto.id)).current_version == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_code_generation_failure_continues_with_remaining(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    _write_page(Path(project.repo_path), "src/app/a/page.tsx", "export default function APage() { return <main>A</main> }")
+    _write_page(Path(project.repo_path), "src/app/b/page.tsx", "export default function BPage() { return <main>B</main> }")
+    calls = {"n": 0}
+
+    async def conditional_stream(prompt, ctx):  # noqa: ARG001, RUF100
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("upstream 502")
+            yield ""  # pragma: no cover
+        async for chunk in _fake_stream_html_chunks(prompt, ctx):
+            yield chunk
+
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        conditional_stream,
+    )
+
+    events = await _collect_code_batch(svc, project.id)
+    assert events[-1].data["failed"] == 1
+    assert events[-1].data["created"] == 1
+    assert len([ev for ev in events if ev.event == "prototype_error"]) == 1
+    assert len([ev for ev in events if ev.event == "prototype_done"]) == 1
+
+    retry_preview = await svc.list_code_candidates(project.id)
+    retry_actions = {item["route"]: item["action"] for item in retry_preview["candidates"]}
+    assert sorted(retry_actions.values()) == ["regenerate", "skip"]
+
+
+@pytest.mark.asyncio
+async def test_list_code_candidates_reports_actions(svc: PrototypeService, project: Project):
+    _write_page(Path(project.repo_path), "src/app/page.tsx", "export default function HomePage() { return <main /> }")
+    preview = await svc.list_code_candidates(project.id)
+    assert preview["count"] == 1
+    assert preview["candidates"][0]["action"] == "create"

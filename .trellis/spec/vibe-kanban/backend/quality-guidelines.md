@@ -38,10 +38,18 @@ store gets a real-async-store migration test.
   at review time. Use `object` + a type guard, or define a
   narrow union. The exception is bridging a third-party type
   we cannot change — narrow as soon as you cross the bridge.
-- **`os.getenv` from feature code.** All env reads go through
-  `application/timeouts.py` accessors. The boot-time setup
-  in `timeouts.validate()` is the only place that reads
-  env vars.
+- **`os.getenv` / `os.environ.get` from feature code.** Config parsing belongs
+  in `application/timeouts.py` accessors, including defaults, bool parsing,
+  numeric coercion, and invalid-value fallback. Feature/application/interface
+  code consumes typed accessors only. Copying environment values into a child
+  process environment, such as preserving `PATH`, is allowed because it is not
+  configuration parsing.
+- **Hand-rolled CodexTask status sets.** Task lifecycle checks go through
+  `application/task_statuses.py`: pending, active (`running` / `responding`),
+  waiting-for-help, waiting-for-specialist, success, failure, and terminal. Do
+  not write local `{ "done", "failed", ... }` or `{ "running", "responding" }`
+  sets in feature code; otherwise aliases like `success`, `error`, `timeout`,
+  or whitespace/case variants drift.
 - **Catching `Exception` to "always return a value".** Let
   unexpected exceptions propagate to the loop boundary or the
   transport layer, where they can be logged with a traceback.
@@ -273,9 +281,11 @@ Wrong:
 Correct:
 
 ```python
+from app.application import timeouts
+
 {
     "api_key_configured": bool(executor.api_key),
-    "sqlite_db_path_configured": bool(os.getenv("SQLITE_DB_PATH")),
+    "sqlite_enabled": timeouts.use_sqlite(),
 }
 ```
 
@@ -1649,6 +1659,233 @@ return {
 
 ---
 
+### Scenario: Project Operations Engineer Startup Script Task
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing project startup-script generation, Operations
+  Engineer task creation, project script persistence, or project update events.
+- This is a cross-layer contract: a Projects UI action creates a backend
+  `CodexTask`, the task runner executes `operations_engineer`, the role
+  workflow persists `Project.setup_script` / `Project.run_command`, and the UI
+  refreshes from task/project events.
+
+#### 2. Signatures
+
+- API: `POST /api/projects/{project_id}/script-task`
+- Request model: `ScriptTaskRequest(setup_script?: str, run_command?: str,
+  verify?: bool, executor?: str, provider?: str, model?: str)`
+- Response model: `ScriptTaskResponse(task_id: str, status: str, title: str,
+  execution_process_id?: str, reused: bool = False)`
+- Created task fields: `role="operations_engineer"`,
+  `task_kind="project_script_suggestion"`, `project_id`, `session_id`,
+  `workspace_path`, `git_branch`, `git_base_branch`, `executor`, `provider`,
+  `model`.
+- Events: `task_created`, runner-owned `task_status`, role-owned
+  `project_updated` and `project_script_updated`.
+
+#### 3. Contracts
+
+- The endpoint must create a real `CodexTask` and start it via the task
+  runner. It must not perform the role work synchronously in the request path.
+- Pending/running/responding `project_script_suggestion` tasks for the same
+  project are idempotent: duplicate calls return the existing task with
+  `reused=true`.
+- The task prompt must preserve the current request's setup/run command
+  context, including explicit empty strings. Do not fall back to stale project
+  values merely because the request value is `""`.
+- `RoleWorkflowService` builds the Operations Engineer prompt from repository
+  evidence and request/project script context. New JSON prompt context must
+  remain compatible with legacy `Existing setup_script/run_command` prompt
+  lines for already-created tasks.
+- Operations persistence parses structured model output first. If parsing fails
+  or the output is empty, it may fall back to repository inference before
+  failing the task.
+- Project script persistence updates `Project.setup_script`,
+  `Project.run_command`, and `Project.updated_at`, then emits
+  `project_updated` and `project_script_updated`.
+- `task_status` event ownership stays in the task runner. Role persistence
+  should not emit duplicate terminal `task_status` events.
+- Store methods must round-trip `CodexTask.project_id`, `provider`, and `model`
+  in both async and sync stores so duplicate detection and UI task lookups stay
+  project-aware.
+
+#### 4. Validation & Error Matrix
+
+- Unknown project id -> HTTP `404`.
+- Store unavailable -> HTTP `503`, detail `"SQLite store not available"`.
+- Invalid runtime catalog selection -> HTTP `400` from runtime config
+  validation.
+- Duplicate active operations task -> HTTP `200`, existing task response with
+  `reused=true`.
+- Task runner startup raises -> mark task `failed`, persist the error in
+  `task.result`, emit failed `task_status`, and return HTTP `500`.
+- Operations output unparsable and repository inference unavailable -> task
+  persistence raises, runner marks the task failed.
+- Project update event emission fails -> script persistence still succeeds;
+  events are best-effort observability.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: clicking "Call operations engineer" creates one durable operations
+  task, starts a process, and later updates the project scripts plus emits
+  project update events.
+- Good: a second click while the first task is running returns the first task
+  id and does not start a second process.
+- Base: legacy synchronous `/script-suggestion` remains available for
+  compatibility, but the one-click role path uses `/script-task`.
+- Bad: a direct LLM suggestion endpoint updates scripts without a durable
+  `operations_engineer` task.
+- Bad: storing a task without `project_id`, causing duplicate detection and
+  `/projects` polling to lose the project association.
+- Bad: role persistence emits its own terminal `task_status` while the runner
+  also emits one, creating duplicate terminal notifications.
+
+#### 6. Tests Required
+
+- Endpoint test: creating a script task persists the expected role,
+  `task_kind`, project id, workspace path, runtime config, and emits
+  `task_created`.
+- Endpoint test: duplicate active task returns `reused=true` and does not start
+  another task runner process.
+- Role workflow test: JSON request context preserves explicit empty strings and
+  falls back to legacy prompt lines for older tasks.
+- Role workflow test: unparsable/empty result attempts repository inference
+  before failing.
+- Store parity test: async and sync stores save/list/load script tasks with
+  `project_id`, `provider`, and `model`.
+- Event test: Operations persistence emits project update/script update events
+  and relies on the runner for terminal `task_status`.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+# Direct suggestion path: no durable task, no project-aware process state.
+suggestion = await suggest_project_scripts(project=project, runner=llm)
+project.setup_script = suggestion.setup_script
+await store.save_project(project)
+```
+
+Correct:
+
+```python
+task = CodexTask(
+    project_id=project.id,
+    session_id=project.id,
+    role="operations_engineer",
+    task_kind="project_script_suggestion",
+    workspace_path=project.repo_path,
+    status="pending",
+)
+await store.save_codex_task(task)
+await task_runner.start_task_run(task)
+```
+
+
+---
+
+### Scenario: Conductor Task Status and Dispatch Terminal Contracts
+
+#### 1. Scope / Trigger
+
+- Trigger: changing Conductor dispatch, `CodexTaskRunner`, process runtime termination, specialist orchestration, budget gating, or any code that emits `task_status`.
+- This is a backend-to-frontend and scheduler contract: a task terminal event must carry enough correlation fields for UI, retry logic, and waiting registries to agree on what changed.
+
+#### 2. Signatures
+
+- Event helper: `build_task_status_event(task, status=None, execution_process_id=None, **extra) -> dict`.
+- Required event fields: `type`, `task_id`, `project_id`, `issue_id`, `workspace_id`, `session_id`, `role`, `task_kind`, `status`, `execution_process_id`.
+- Conductor success aliases: `done`, `success`, `completed`, `passed`, `ok` normalize to `done`.
+- Non-success statuses: `failed`, `blocked`, `cancelled`, `canceled`, `error`, `needs_user`, `max_wall`, `max_turns`, `protocol_error`.
+- Budget gate result: `{"status": "budget_exceeded", "error": str, "budget": {...}}`.
+
+#### 3. Contracts
+
+- All `task_status` emitters must use `build_task_status_event` unless they can prove they emit the exact same field set.
+- Missing optional values are explicit `None`, not omitted, so consumers can rely on a stable schema.
+- Runner-start failure, result-persist failure, process kill, retry, specialist wait, and timeout paths must emit the same correlation fields as the happy path.
+- `dispatch_role(register_completion=True)` must signal `TaskCompletionRegistry` if runner startup fails; Conductor must not wait until idle/hard timeout for a task that never started.
+- Subagent timeout must best-effort terminate the real task, mark task and workflow node failed, and emit terminal events.
+- Specialist child startup failure must mark the child failed and the parent `ready_to_resume`; the parent must not remain `waiting_for_specialist`.
+- Specialist request failure from an Engineer/QA artifact is a task failure, not a warning-only side effect.
+- Over-budget issues must not dispatch new subagents or create batch worktrees. The Conductor receives `budget_exceeded` and should finalize, request user input, or choose a no-cost recovery path.
+- `dispatch_batch` must serialize the short pre-run gate for each agent:
+  budget check, per-role redispatch check, worktree preparation, and task/node
+  creation. The long subagent wait may still run concurrently, but agents must
+  not simultaneously pass the same stale budget snapshot and both create
+  worktrees/tasks.
+- Conductor completion requires a `finalize_task` tool call. Plain text without tool use is a protocol error after correction attempts.
+
+#### 4. Validation & Error Matrix
+
+- `task_status` missing `role` / `task_kind` -> invalid emitter; replace with `build_task_status_event`.
+- Runner startup raises after completion registration -> save task failed, mark node failed, emit events, signal registry failed result.
+- `wait_for_active` times out -> terminate task when possible, mark task/node failed, emit terminal state, return structured timeout.
+- Specialist child runner raises -> child failed + parent `ready_to_resume` + both task status events.
+- Unknown `finalize_task.status` -> normalize to `failed`, never success.
+- LLM response has no tool use -> append correction message; if still no tool use by the final turn, return `protocol_error`.
+- Budget status is over ceiling -> return `budget_exceeded`; do not create task, workflow node, execution process, or worktree.
+- Batch budget changes after the first agent starts -> later agents re-check
+  under the dispatch gate and stop before worktree preparation when over
+  budget.
+- Budget status cannot be computed -> degrade open, because store errors must not hide unrelated dispatch behavior.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: Operations Engineer `/script-task` startup failure emits `task_status` with `project_id`, `workspace_id`, `role="operations_engineer"`, and `task_kind="project_script_suggestion"`.
+- Good: a killed QA task emits the same correlation fields as a normally failed QA task.
+- Good: over-budget `dispatch_batch` returns `budget_exceeded` before `prepare_agent_worktree`.
+- Good: batch cap is 2, first agent starts, second per-agent budget gate now
+  sees over-budget and returns `budget_exceeded` with no second worktree.
+- Base: unlimited budget (`budget_usd <= 0`) does not block dispatch.
+- Bad: emitting `{"type": "task_status", "task_id": id, "status": "failed"}` directly from a side path.
+- Bad: swallowing specialist request failure and allowing the parent Engineer task to look successful.
+- Bad: running all per-agent budget checks concurrently, letting multiple
+  agents pass before any dispatch-side effect can be observed.
+- Bad: treating `blocked`, `needs_user`, `maybe`, or free-form text as a completed Conductor issue.
+
+#### 6. Tests Required
+
+- Unit test: `build_task_status_event` includes all shared correlation fields and preserves extra fields.
+- Loop test: a plain-text Conductor response without tool use becomes `protocol_error` unless corrected with `finalize_task`.
+- Loop test: unknown `finalize_task.status` fails closed.
+- Tool test: over-budget `dispatch_batch` returns `budget_exceeded` and does not create worktrees.
+- Tool test: with batch concurrency >1 and a budget that changes after the
+  first per-agent gate, only the first agent prepares a worktree; later agents
+  return `budget_exceeded`.
+- Dispatcher test: runner-start failure signals `TaskCompletionRegistry` and marks task/node failed.
+- Runtime test: `terminate_task` and workspace termination emit complete task-status payloads.
+- Specialist test: child startup failure marks parent and child failed.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+await event_bus.append({
+    "type": "task_status",
+    "task_id": task.id,
+    "status": "failed",
+})
+```
+
+Correct:
+
+```python
+await event_bus.append(
+    build_task_status_event(
+        task,
+        "failed",
+        result=task.result,
+        execution_process_id=task.last_execution_process_id,
+    )
+)
+```
+
+---
+
 ## Testing Requirements
 
 - **All new code is covered by tests.** Service logic,
@@ -1717,3 +1954,716 @@ following before approving:
       or task handoff.
 - [ ] The change does not introduce a new external dependency
       without a sentence explaining why.
+
+### Scenario: Conductor Orchestration Safety Gates
+
+#### 1. Scope / Trigger
+
+- Trigger: changing Conductor loop termination, `finalize_task`, `dispatch_subagent`, `dispatch_batch`, help/specialist parent-child flows, retry scheduling, relaunch recovery, or `task_status` event payloads.
+- These paths are a cross-layer state-machine contract. A task can be persisted correctly and still appear stuck if the event payload is incomplete, or appear complete when the graph still has unresolved nodes.
+
+#### 2. Signatures
+
+- Tool: `finalize_task({ status, answer?, summary? }) -> { status, answer, summary }`.
+- Tool: `request_user_clarification({ question }) -> { status: "waiting_for_user", terminal_status: "needs_user", question }`.
+- Helper: `build_task_status_event(task, status=None, execution_process_id=None, **extra) -> dict`.
+- Runtime config: `timeouts.conductor_max_dispatches_per_role() -> int` reads `CONDUCTOR_MAX_DISPATCHES_PER_ROLE`.
+- Relaunch entry: `run_issue_conductor_loop(..., recovery_context="")` injects persisted graph and turn context into the prompt.
+- Retry signal: `TaskCompletionRegistry.signal(retry_task.id, failed_payload)` must fire when an auto-retry runner fails to start after `transfer(old_task, retry_task)`.
+
+#### 3. Contracts
+
+- Successful `finalize_task(status="done")` is not model-owned. The backend must reject success when the persisted workflow graph is empty, has no completed work, or contains unresolved `pending`, `running`, `waiting_*`, `awaiting_*`, `failed`, `rework`, `conflict`, `artifact_invalid`, `retries_exhausted`, or timeout nodes. `skipped` is allowed as a non-blocking node status, but a graph with only skipped nodes still has no completed work.
+- `finalize_task` must not be accepted in the same Conductor turn as another tool. If a turn dispatches work and finalizes at the same time, the finalize result is a tool error and the loop feeds all tool results back to the model; non-finalize tools in that turn still execute through the normal concurrent multi-tool path.
+- `skip_llm` and missing Conductor LLM configuration must never synthesize `done`. They finalize as `blocked` or another non-success terminal status.
+- `request_user_clarification` is terminal for the current loop turn. It returns `needs_user` and must not be followed by speculative dispatch.
+- Every `task_status` event emitted to the event bus or websocket must use `build_task_status_event` or an exactly equivalent complete payload including `task_id`, `project_id`, `issue_id`, `workspace_id`, `session_id`, `role`, `task_kind`, `status`, and `execution_process_id`.
+- Websocket `task_status` events must be independently published. They must not depend on execution-process JsonPatch generation or `buffer_pending` flushes.
+- Raw log/message websocket endpoints must share the same execution-process
+  terminal status set, including `done`, `completed`, `failed`, `killed`,
+  `cancelled`, and `canceled`, so reconnecting to a cancelled process returns
+  the initial history plus `{finished: true}` instead of hanging.
+- Role aliases must be canonicalized before concurrency slots, redispatch budgets, batch requested-role counts, and per-agent worktree keys are computed.
+- `dispatch_batch` must run its per-agent budget gate after acquiring a
+  per-agent semaphore and inside a short serialized dispatch gate that also
+  covers redispatch-budget check, worktree preparation, and task/node creation.
+  The batch-level preflight is not enough, and concurrent per-agent gates must
+  not all pass against the same stale budget snapshot.
+- Help and specialist parent-child flows must validate non-empty title/prompt inputs before mutating parent state, and must leave parent, child, and request records in explicit terminal or resumable states when child launch or parent resume fails.
+- Relaunch recovery must reuse the existing workflow graph when present and inject recovery context that names previous phase/detail, node statuses, task ids, retry counts, and recent turns.
+- Relaunch recovery's production contract is scheduling/registering a new
+  conductor session through `ConductorSessionRegistry.try_start`, not proving the
+  runner has executed its first line. Tests that need to observe runner entry
+  must use an explicit `asyncio.Event` or equivalent signal from the fake runner,
+  not rely on `await asyncio.sleep(0)`.
+
+#### 4. Validation & Error Matrix
+
+- Graph has unresolved nodes + `finalize_task(done)` -> return `status="failed"` with a rejection reason. A `skipped` node may be non-blocking, but it does not count as completed work evidence.
+- Same turn contains `dispatch_subagent` and `finalize_task` -> mark finalize tool result as `protocol_error`; do not end the loop from that finalize.
+- Same turn contains multiple non-finalize tools plus `finalize_task` -> mark only
+  `finalize_task` as `protocol_error`; execute the non-finalize tools
+  concurrently and preserve original tool-result order.
+- Clarification tool succeeds -> return loop status `needs_user` with the question text.
+- `skip_llm` policy action -> return `blocked`, not `done`.
+- Websocket cannot load an execution process view -> still publish complete `task_status` independently.
+- Raw log/message websocket opens for a cancelled process -> send initial
+  history, send `{finished: true}`, close cleanly.
+- Batch per-agent budget gate sees over-budget after an earlier agent started
+  -> return `budget_exceeded` for that agent and do not prepare its worktree.
+- Auto-retry runner start raises after registry transfer -> save retry task failed, emit retry failure events, and signal the registry using the retry task id.
+- Help title/prompt or specialist prompt is empty -> reject before saving child tasks or mutating parent state.
+- Help child start raises -> child `failed`, help request `failed`, parent `ready_to_resume`, and complete task status events emitted.
+- Help parent auto-resume raises -> help request `resume_failed`, parent `ready_to_resume`, assistant continuation message persisted.
+- Specialist child is not `done` or parent is not `waiting_for_specialist` -> raise `SpecialistOrchestratorError` and do not mutate parent review comment or status.
+- Issue is `awaiting_review` and graph seals failed -> issue status becomes `failed`; awaiting states are protected only on successful seals.
+- Recovery relaunch scheduled -> `_try_relaunch` may return once the new session
+  task is registered; immediate runner-side effects require an explicit runner
+  entry signal.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a script-generation task emits `task_status` with task and project ids, and the project page clears loading by matching the tracked task id.
+- Good: recovery relaunch prompt tells the model that `engineer` is already done and `qa` failed, so the next action is QA recovery rather than repeating engineer.
+- Good: recovery relaunch test awaits a fake runner `entered` event before
+  asserting captured `recovery_context`.
+- Good: a batch with `eng` and `dev` counts both as `engineer` for redispatch caps.
+- Good: batch fan-out keeps long subagent waits concurrent but serializes the
+  short gate/create section so budget and dispatch-count checks observe earlier
+  starts.
+- Good: a same-turn `dispatch_subagent + dispatch_reviewer + finalize_task`
+  runs the two dispatch tools concurrently, returns a protocol error only for
+  finalize, and waits for a later standalone finalize.
+- Base: project-memory recording fails after a successful seal; the issue remains completed and only a warning is logged.
+- Base: a route without an execution-process provider polls the tracked task id and handles duplicate WS/poll terminal notifications once.
+- Bad: `finalize_task(done)` seals an issue while QA is pending or a merge conflict is unresolved.
+- Bad: `task_status` is manually emitted with only `task_id` and `status`.
+- Bad: help or specialist child launch failure leaves the parent stuck in `waiting_for_help` or `waiting_for_specialist`.
+
+#### 6. Tests Required
+
+- Loop test: mixed dispatch plus finalize in one turn does not finish until a later standalone finalize.
+- Loop test: mixed finalize with multiple non-finalize tools keeps the
+  non-finalize tools concurrent and preserves result order.
+- Tool test: `finalize_task(done)` rejects unresolved graph nodes.
+- Loop test: `request_user_clarification` returns `needs_user` immediately.
+- Issue-loop test: `skip_llm` returns `blocked` and does not call the LLM.
+- Event test: representative terminal task paths emit full `task_status` fields.
+- Websocket test/source check: raw log and message streams use one shared
+  terminal status set that includes `cancelled` and `canceled`.
+- Websocket/source test: terminal script-task handling matches tracked `task_id` before falling back to `project_id`.
+- Help tests: empty title/prompt rejects before mutation; child start failure and parent auto-resume failure produce explicit states.
+- Specialist tests: empty prompt rejects before mutation; failed child and non-waiting parent are rejected without parent mutation.
+- Scheduler test: auto-retry dispatch failure signals `TaskCompletionRegistry`.
+- Recovery test: relaunch context includes stalled task id, previous phase/detail, node statuses, task ids, and recent turns.
+- Recovery test: relaunch runner entry is observed through an explicit event,
+  not through one event-loop yield.
+- Budget test: batch per-agent budget gate rejects before worktree preparation when budget changes after preflight.
+- Budget test: with `MAX_PARALLEL_DISPATCH_PER_BATCH > 1`, a second agent that
+  becomes over-budget after the first agent starts does not prepare a worktree.
+- Alias test: `eng` and `dev` share the canonical `engineer` dispatch budget.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+await event_bus.append({"type": "task_status", "task_id": task.id, "status": task.status})
+```
+
+Correct:
+
+```python
+await event_bus.append(
+    build_task_status_event(
+        task,
+        task.status,
+        result=task.result,
+        execution_process_id=task.last_execution_process_id,
+    )
+)
+```
+
+Wrong:
+
+```python
+if policy_decision.action == "skip_llm":
+    return {"name": "finalize_task", "input": {"status": "done"}}
+```
+
+Correct:
+
+```python
+if policy_decision.action == "skip_llm":
+    return {"name": "finalize_task", "input": {"status": "blocked", "answer": reason}}
+```
+
+Wrong:
+
+```python
+stream_manager.buffer_pending(task.session_id, {"type": "task_status", "task_id": task.id})
+await stream_manager.publish_execution_process(task.session_id, task_id=task.id)
+```
+
+Correct:
+
+```python
+await stream_manager.publish_event(task.session_id, build_task_status_event(task, task.status))
+await stream_manager.publish_execution_process(task.session_id, task_id=task.id)
+```
+
+---
+
+## Scenario: Conductor Tool-Turn Side-Effect Safety
+
+### 1. Scope / Trigger
+
+- Trigger: changing `run_conductor_loop`, `finalize_task`, `request_user_clarification`, or any Conductor tool that can dispatch tasks, resume work, mutate workflow graph state, or terminate an issue.
+- The Conductor may receive multiple tool calls in one model turn, but some tools are terminal or pausing boundaries and must not be mixed with side-effecting work.
+
+### 2. Signatures
+
+- Loop helper: `run_conductor_loop(..., tools: dict[str, ToolCallable], tool_definitions: list[dict[str, Any]]) -> ConductorLoopResult`.
+- Tool executor: `_execute_tool_uses(tool_uses, tools) -> list[dict[str, Any]]`.
+- Protocol-error helper: `_tool_protocol_error(tool_use, error) -> dict[str, Any]`.
+- Terminal tool: `finalize_task({ status, answer })`.
+- Pause tool: `request_user_clarification({ question })`.
+
+### 3. Contracts
+
+- `finalize_task` must be the only tool in its turn when it is used. If it appears with other tools, the loop may execute the non-finalize tools, but `finalize_task` itself must be converted to a protocol error before execution.
+- `request_user_clarification` must be the only tool in its turn. If it appears with any other tool, every tool in that turn must be converted to protocol errors before execution, because asking the user is a pause point and dispatching work before the answer is a side effect.
+- `finalize_task(status="done")` must fail closed when `issue_id` exists but the workflow graph is missing or cannot be loaded.
+- `finalize_task(status="done")` must require at least one completed non-skipped work node and no unresolved/failed/conflicted/timeout nodes.
+- `skipped` nodes may be non-blocking, but they are not evidence that work completed.
+
+### 4. Validation & Error Matrix
+
+- `finalize_task + dispatch_subagent` in one turn -> dispatch may run; finalize result is `protocol_error`; loop continues.
+- `request_user_clarification + dispatch_subagent` in one turn -> both results are `protocol_error`; no dispatch side effect occurs; loop continues.
+- `finalize_task(done)` with missing graph -> result status `failed`; answer explains graph is missing.
+- `finalize_task(done)` with graph load exception -> result status `failed`; answer explains graph could not be loaded.
+- `finalize_task(done)` with only `skipped` nodes -> result status `failed`; answer explains no completed work node exists.
+- `request_user_clarification` alone -> loop terminates with `needs_user` and the user-facing question.
+
+### 5. Good/Base/Bad Cases
+
+- Good: model asks one clarification question, the loop returns `needs_user`, and no subagent is started until the next user answer.
+- Good: model dispatches `qa`, receives the result in a later turn, then calls `finalize_task` by itself.
+- Base: model emits plain text without a tool; loop prompts it to call a tool and eventually fails as `protocol_error` if it never does.
+- Bad: graph storage is unavailable and `finalize_task(done)` succeeds because the backend treats graph verification as best-effort.
+- Bad: model asks the user a question and dispatches `engineer` in the same turn, causing code changes before the requested user decision exists.
+
+### 6. Tests Required
+
+- Loop test: mixed `finalize_task + dispatch_subagent` does not execute finalize and does not terminate the loop in that turn.
+- Loop test: mixed `request_user_clarification + dispatch_subagent` executes neither tool and records protocol errors.
+- Tool test: `finalize_task(done)` rejects a missing graph.
+- Tool test: `finalize_task(done)` rejects graph load exceptions.
+- Tool test: `finalize_task(done)` rejects graphs with unresolved nodes.
+- Tool test: `finalize_task(done)` rejects graphs where every node is `skipped`.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+events = await _execute_tool_uses(tool_uses, tools)
+# Later mutate finalize/clarification results after side effects already ran.
+```
+
+Correct:
+
+```python
+if clarification_mixed_with_work:
+    events = [_tool_protocol_error(tool_use, error) for tool_use in tool_uses]
+elif finalize_mixed_with_work:
+    events = []
+    for tool_use in tool_uses:
+        if tool_use["name"] == "finalize_task":
+            events.append(_tool_protocol_error(tool_use, error))
+        else:
+            events.append(await _execute_tool_use(tool_use, tools))
+else:
+    events = await _execute_tool_uses(tool_uses, tools)
+```
+
+---
+
+## Scenario: Help and Specialist Child Completion Safety
+
+### 1. Scope / Trigger
+
+- Trigger: changing `HelpOrchestrator`, `SpecialistOrchestrator`, workflow scheduler child-completion handling, or parent/child task status transitions.
+- Help and specialist children are recovery/continuation flows. A child startup or completion problem must not silently mutate the wrong parent or permanently strand a parent in a waiting state.
+
+### 2. Signatures
+
+- Help create: `HelpOrchestrator.request_help(parent_task_id, target_executor, title, prompt, context_summary=None)`.
+- Help complete: `HelpOrchestrator.complete_help_request(help_request_id, *, child_status, child_result)`.
+- Specialist create: `SpecialistOrchestrator.request_specialist(parent_task, specialist_role_key, specialist_prompt, why="")`.
+- Specialist complete: `SpecialistOrchestrator.complete_specialist_request(specialist_child_task_id, specialist_result_summary)`.
+- Parent recoverable status: `ready_to_resume`.
+- Specialist wait lock: while `parent.status == "waiting_for_specialist"`,
+  `parent.blocked_by_help_id` stores `specialist:<child_task_id>`. The field
+  name is legacy, but the status namespace distinguishes it from
+  `waiting_for_help` help request ids.
+
+### 3. Contracts
+
+- Help completion must reload the persisted child task and validate `task_kind == "help_child"`, `parent_task_id`, and real terminal status before mutating the parent.
+- Help completion must reject already-terminal help requests such as `completed`, `failed`, `consumed`, or `resume_failed`.
+- Help completion must reject a parent that is not currently `waiting_for_help` for that exact `help_request.id`.
+- Help auto-resume must set the parent to a runnable state before calling the task runner; if resume fails, the parent falls back to `ready_to_resume`.
+- Specialist child startup failure must mark the child `failed` and the parent `ready_to_resume`, not `failed`, unless product policy explicitly decides that specialist startup failure is terminal for the parent.
+- Specialist completion must only inject results from a persisted child with `task_kind == "specialist_child"`, `status == "done"`, and a parent currently `waiting_for_specialist`.
+- Specialist completion must also verify the parent is waiting for the exact
+  child id via `blocked_by_help_id == f"specialist:{child.id}"`. A stale
+  completed specialist child from an older request must not resume or mutate a
+  parent now waiting on a newer specialist child.
+- Specialist duplicate protection must block only the current specialist wait
+  lock or active specialist children (`pending`, `running`, `responding`).
+  Historical terminal specialist children (`done`, `failed`, `cancelled`) are
+  not unresolved and must not prevent a resumed parent from making a later,
+  legitimate specialist request.
+- Specialist completion must prefer the persisted `child.result` over the
+  caller-provided `specialist_result_summary`; scheduler callbacks can be
+  stale, but the stored child is authoritative.
+- Specialist startup failure and specialist terminal failure handling must clear
+  the specialist wait lock when moving the parent to `ready_to_resume`.
+
+### 4. Validation & Error Matrix
+
+- Missing help request -> `KeyError(help_request_id)`.
+- Help request already terminal -> `ValueError` and no parent mutation.
+- Help child not terminal -> `ValueError` and no parent mutation.
+- Help child belongs to a different parent -> `ValueError` and no parent mutation.
+- Help auto-resume runner raises -> help request `resume_failed`; parent `ready_to_resume`; assistant continuation message persisted.
+- Specialist child startup runner raises -> child `failed`; parent `ready_to_resume`; emit `specialist_failed`; raise `SpecialistOrchestratorError`.
+- Specialist failed child completion for the currently locked child -> emit
+  child task status, move parent to `ready_to_resume`, clear the wait lock,
+  emit `specialist_failed`, raise `SpecialistOrchestratorError`, and leave
+  parent review comment unchanged.
+- Specialist completion for a child that belongs to the parent but does not
+  match the current `specialist:<child_task_id>` lock -> raise
+  `SpecialistOrchestratorError` and do not mutate parent status, lock, or review
+  comment.
+- Parent has only terminal historical specialist children and is otherwise
+  runnable -> a new `request_specialist()` call may create a new child and set a
+  new `specialist:<child_task_id>` wait lock.
+
+### 5. Good/Base/Bad Cases
+
+- Good: help child finishes `done`, parent is waiting for that help id, auto-resume starts from the parent's own resume session.
+- Good: specialist runner cannot start, parent shows a recoverable state instead of being marked failed.
+- Good: parent waits on `specialist:child-b`; stale `child-a` finishes later and
+  is rejected without resuming the parent.
+- Good: parent resumes after `child-a` completed, runs again, and then creates
+  `child-b` for a fresh specialist pass.
+- Base: completed specialist child injects a concise continuation into `parent.review_comment` and resets parent to `pending`.
+- Bad: trusting a scheduler-provided `child_status="done"` while the stored child is still `running`.
+- Bad: completing the same help request twice and starting the parent twice.
+- Bad: specialist start failure marks the parent `failed`, making an infrastructure problem look like task failure.
+
+### 6. Tests Required
+
+- Help test: non-terminal stored child is rejected even if caller passes `child_status="done"`.
+- Help test: already-terminal help request cannot be completed again.
+- Help test: parent not waiting for that help id is rejected without mutation.
+- Help test: auto-resume failure falls back to `ready_to_resume` and records `resume_error`.
+- Specialist test: child startup failure marks parent `ready_to_resume`, child `failed`, and emits `specialist_failed`.
+- Specialist test: failed child completion does not mutate parent review comment.
+- Specialist test: parent not waiting for specialist rejects completion without mutation.
+- Specialist test: stale child whose id does not match the parent's current
+  specialist wait lock is rejected without mutation.
+- Specialist test: done child completion injects persisted `child.result`, not a
+  stale caller-provided summary.
+- Specialist test: terminal historical children do not block a new specialist
+  request after the parent is runnable again.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+help_request.status = "completed" if child_status == "done" else "failed"
+parent.blocked_by_help_id = None
+await store.save_codex_task(parent)
+```
+
+Correct:
+
+```python
+child = await store.load_codex_task(help_request.child_task_id)
+if child.task_kind != "help_child" or child.parent_task_id != parent.id:
+    raise ValueError("invalid help child")
+if child.status not in TERMINAL_CHILD_STATUSES:
+    raise ValueError("Help child task is not terminal")
+```
+
+---
+
+## Scenario: Workspace WebSocket Task-Status Event Delivery
+
+### 1. Scope / Trigger
+
+- Trigger: changing `ExecutionProcessWorkspaceStreamManager`, `EventBus._broadcast_to_ws`, process runtime task completion/failure paths, or frontend consumers of workspace `task_status` events.
+- `task_status` is a semantic event contract, not merely an execution-process JsonPatch side effect. It must reach existing subscribers immediately and reconnecting subscribers through the initial snapshot path.
+
+### 2. Signatures
+
+- Event builder: `build_task_status_event(task, status, ..., execution_process_id=None) -> dict`.
+- Workspace manager methods:
+  - `publish_event(workspace_id, event)`.
+  - `buffer_pending(workspace_id, event)`.
+  - `consume_pending_events(workspace_id) -> list[dict]`.
+  - `get_state(workspace_id) -> dict`.
+- Initial snapshot helper: `_send_workspace_initial_snapshot(websocket, state, pending_events=None) -> bool`.
+
+### 3. Contracts
+
+- Existing workspace subscribers receive `task_status` via an immediate `{"Events": [...]}` frame.
+- If no subscriber is connected, `task_status` is buffered as pending for that workspace.
+- A reconnecting workspace websocket must receive pending events in the initial snapshot frame along with the JsonPatch state, then the pending buffer is consumed exactly once.
+- Process runtime terminal paths must choose one fanout source. If an `EventBus` is present, append the event to it and let `EventBus._broadcast_to_ws` publish to workspace streams. Only direct-publish to `stream_manager` when there is no `EventBus`.
+- Frontend consumers must still de-duplicate terminal handling by `task_id`, because websocket and polling can race.
+
+### 4. Validation & Error Matrix
+
+- No subscribers when event occurs -> event stored under `_pending_events[workspace_id]`.
+- Subscriber connects after pending event -> first snapshot frame includes both `JsonPatch` and `Events`, then `Ready` follows.
+- `EventBus` present on process completion -> exactly one event path feeds workspace WS.
+- `EventBus` absent on process completion -> direct `stream_manager.publish_event` keeps UI feedback working.
+- Pending event has no matching execution-process row -> still sent; event delivery does not depend on JsonPatch process state.
+
+### 5. Good/Base/Bad Cases
+
+- Good: project script task completes while `/projects` is disconnected; on reconnect the pending `task_status` is delivered in the initial frame and the button clears.
+- Base: active workbench subscriber receives `task_status` immediately and then a process JsonPatch refresh.
+- Bad: buffering a pure event and waiting for a future `publish_patch()` that may never happen.
+- Bad: appending to `EventBus` and also direct-publishing the same terminal event to `stream_manager`, causing duplicate toasts in consumers without task-id dedupe.
+
+### 6. Tests Required
+
+- Workspace stream test: initial snapshot includes pending `task_status` events and then sends `Ready`.
+- Workspace stream test: `update_task_status` buffers full builder-shaped events when no subscriber exists.
+- Runtime test: terminal success path with `EventBus` appends one `task_status` and does not directly publish a duplicate.
+- Frontend test: duplicate websocket/poll terminal notifications for one `task_id` are handled once.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+await event_bus.append(status_event)
+await stream_manager.publish_event(task.session_id, status_event)
+```
+
+Correct:
+
+```python
+if event_bus is not None:
+    await event_bus.append(status_event)
+else:
+    await stream_manager.publish_event(task.session_id, status_event)
+```
+
+---
+
+## Scenario: Conductor Terminal Seal Fault Isolation
+
+### 1. Scope / Trigger
+
+- Trigger: changing `_seal_graph_and_issue_status`, Conductor recovery relaunch, terminal issue status updates, project-memory recording, self-improvement extraction, or swarm worktree cleanup.
+- Terminal sealing crosses several best-effort subsystems. A failure in graph persistence, memory extraction, proposal extraction, or cleanup must not hide the issue's terminal status.
+
+### 2. Signatures
+
+- Seal helper: `_seal_graph_and_issue_status(store, issue, event_bus, result_status)`.
+- Recovery relaunch: `_try_relaunch(store, conductor_task, event_bus=None, task_dispatcher_fn=None)`.
+- Best-effort post-success hooks:
+  - `record_project_memory(graph.id, store)`.
+  - `record_issue_self_improvement(issue, store)`.
+  - `worktree_manager.cleanup_issue_swarm_worktrees(project, issue)`.
+
+### 3. Contracts
+
+- `result_status in {"done", "success", "completed"}` maps to graph status `done`; every other status maps to `failed`.
+- Workflow graph load/save is best-effort for terminal issue sealing. It may warn, but issue terminal status must still be attempted.
+- Project memory and self-improvement extraction are best-effort post-success hooks. They must never turn a successful issue into a failed issue or prevent status persistence.
+- Issue status persistence and `issue_updated` emission are their own fault boundary.
+- Recovery relaunch should yield once after scheduling the new Conductor task so immediate observers/tests can see the scheduled relaunch begin without relying on a later watchdog tick.
+
+### 4. Validation & Error Matrix
+
+- Graph load raises -> warn; still set issue status based on `result_status` and emit `issue_updated` if save succeeds.
+- Graph save raises -> warn; still attempt project-memory/self-improvement when graph object exists and still attempt issue status.
+- `record_project_memory` raises -> warn; keep terminal status behavior.
+- `record_issue_self_improvement` raises -> warn; keep terminal status behavior.
+- Issue status save raises -> warn; cleanup may still run best-effort.
+- Swarm cleanup raises -> warn only.
+
+### 5. Good/Base/Bad Cases
+
+- Good: graph store is temporarily unavailable, but a failed Conductor still marks the issue `failed` so the UI does not show it as running forever.
+- Good: self-improvement proposal extraction crashes after a done issue; the issue remains completed and the failure is only logged.
+- Base: awaiting-review/awaiting-merge statuses are preserved only for successful seals.
+- Bad: wrapping graph save, memory recording, self-improvement extraction, and issue status save in one broad `try` so an early failure skips issue terminal status.
+
+### 6. Tests Required
+
+- Seal test: graph load failure still saves issue terminal status and emits `issue_updated`.
+- Seal test: self-improvement failure does not prevent successful issue completion.
+- Recovery test: relaunch context includes persisted graph nodes and recent turns.
+- Recovery test: relaunch circuit breaker seals issue failed and emits `conductor_relaunch_exhausted`.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+try:
+    graph = await store.load_workflow_graph_for_issue(issue.id)
+    await store.save_workflow_graph(graph)
+    await record_project_memory(graph.id, store)
+    await record_issue_self_improvement(issue, store)
+    await store.save_codex_issue(issue)
+except Exception:
+    logger.warning("terminal seal failed")
+```
+
+Correct:
+
+```python
+try:
+    graph = await store.load_workflow_graph_for_issue(issue.id)
+except Exception:
+    graph = None
+
+if graph is not None:
+    try:
+        await store.save_workflow_graph(graph)
+    except Exception:
+        logger.warning("workflow graph status seal failed")
+
+try:
+    await store.save_codex_issue(issue)
+    await _append_event(event_bus, {"type": "issue_updated", "status": issue.status})
+except Exception:
+    logger.warning("issue terminal status seal failed")
+```
+
+> Specialist parent freshness addendum: `request_specialist()` must reload the parent task from the store before validating status or mutating it. The caller's `parent_task` object may be stale because result persistence, scheduler callbacks, and recovery can interleave. A stale `running` object must not create a child when the stored parent is already `failed`, `waiting_for_specialist`, or otherwise non-runnable.
+
+> Runtime task-status fanout addendum: process runtimes should route terminal task status through a single helper (for example `_emit_task_status`). The helper appends to `EventBus` when available, because `EventBus._broadcast_to_ws` owns workspace fanout and scheduler notifications. Only when no `EventBus` exists should it direct-publish to `stream_manager`. Avoid call sites that do both.
+
+---
+
+## Scenario: Operations Engineer Startup-Script Task Contract
+
+### 1. Scope / Trigger
+
+- Trigger: changing `POST /api/projects/{project_id}/script-task`, Operations Engineer task creation, project startup-script generation, or the `/projects` frontend button that starts script generation.
+- The Projects page button is user-facing orchestration: it must create or reuse exactly one Operations Engineer task and emit enough task-status metadata for standalone pages to track it.
+
+### 2. Signatures
+
+- API: `POST /api/projects/{project_id}/script-task`.
+- Request model: `ScriptTaskRequest` / frontend `ProjectScriptTaskRequest`.
+- Response model: `ScriptTaskResponse` / frontend `ProjectScriptTaskResponse` with `task_id`, `status`, `title`, `execution_process_id`, and `reused`.
+- Task fields:
+  - `role="operations_engineer"`.
+  - `phase="operations"`.
+  - `task_kind="project_script_suggestion"`.
+  - `session_id == project.id`.
+  - `project_id == project.id`.
+
+### 3. Contracts
+
+- If an active `project_script_suggestion` task exists in `pending`, `running`, or `responding`, the API returns it with `reused=true` and does not start another runner.
+- New tasks must preserve request context as JSON in the prompt, including explicit empty strings for `setup_script` and `run_command`.
+- New tasks must resolve executor/provider/model through the runtime catalog and persist those fields on the task.
+- After runner startup succeeds, the API must emit a builder-shaped `task_status` event with `status="running"`, `role="operations_engineer"`, `task_kind="project_script_suggestion"`, `project_id`, `workspace_id/session_id`, and `execution_process_id`.
+- If runner startup fails, the API must mark the task `failed`, persist `task.result`, and emit a builder-shaped `task_status` event with the same role/task_kind/project/workspace fields.
+
+### 4. Validation & Error Matrix
+
+- Store unavailable -> HTTP `503`, detail `SQLite store not available`.
+- Unknown project -> HTTP `404`.
+- Active script task exists -> HTTP `200`, `reused=true`, no new task, no runner start.
+- Runtime config invalid/start conflict -> HTTP `409` from runner/config error.
+- Runner raises unexpectedly -> HTTP `500`, task `failed`, `task_status(status="failed")` emitted.
+
+### 5. Good/Base/Bad Cases
+
+- Good: `/projects` button starts task `abc`, receives `task_status(task_id=abc, status=running)`, then tracks only that task id until terminal.
+- Good: explicit empty setup/run command inputs stay empty in the prompt and are not replaced by stale project values.
+- Base: active task reuse returns `reused=true` and the frontend keeps the same loading flow.
+- Bad: creating a generic task with no `role`, causing audit and status bar to render it as an unassigned agent.
+- Bad: runner starts successfully but no `task_status=running` event is emitted, leaving standalone pages dependent on polling only.
+
+### 6. Tests Required
+
+- API test: new script task has `role="operations_engineer"`, `task_kind="project_script_suggestion"`, project/session fields, runtime fields, and prompt JSON context.
+- API test: startup success emits `task_created` then `task_status=running` with `execution_process_id`.
+- API test: active script task is reused without runner start.
+- API test: runner startup failure marks task failed and emits builder-shaped `task_status=failed`.
+- Frontend test: Projects page button calls `startProjectScriptTask`, stores returned `task_id`, and ignores terminal events for other task ids.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+await event_bus.append({"type": "task_status", "task_id": task.id, "status": "running"})
+```
+
+Correct:
+
+```python
+await event_bus.append(
+    build_task_status_event(
+        task,
+        "running",
+        execution_process_id=exec_process.id,
+    )
+)
+```
+
+> Operations script task reuse addendum: when `POST /projects/{project_id}/script-task` reuses an active `project_script_suggestion` task, it must still emit a full `task_status` event for the reused task. Reuse must not start a second runner, but it must give standalone project pages the same tracking signal as a fresh start.
+
+> API task-status fanout addendum: HTTP handlers that already have the global `event_bus` must append builder-shaped `task_status` events to `event_bus` only. They must not also direct-publish the same event through `stream_manager`; EventBus owns websocket fanout and scheduler notification.
+
+> Operations script task row-fallback addendum: if the active reused task cannot be loaded as a full `CodexTask`, the API must still emit a `task_status` fallback payload with `role="operations_engineer"`, `task_kind="project_script_suggestion"`, `project_id`, `workspace_id/session_id`, `result`, `review_comment`, and `execution_process_id`. Do not emit a minimal `{task_id, status}` payload.
+
+> Operations script task reuse consistency addendum: the reused response and the reused `task_status` event must use the same normalized `status`, `title`, and `execution_process_id` values. If the full task loads, prefer its fields; otherwise fall back to the list row. Do not let the response say `running` while the event says `responding`, or vice versa.
+
+> Operations script task stale-row addendum: if the active-task list row says a script task is active but loading the full `CodexTask` shows a terminal status, the API must ignore that row and create/start a new task. Full task state wins over list-row state.
+
+> Operations script task zombie-process addendum: active `project_script_suggestion`
+> task reuse must be backed by an active `ExecutionProcess`. If
+> `last_execution_process_id` is missing, cannot be found, or points at a
+> non-running process, the API must mark the old full task `failed`, emit a
+> builder-shaped `task_status=failed`, and create/start a fresh Operations
+> Engineer task. A stale `pending`/`running`/`responding` task without a live
+> process must not permanently block the Projects page button.
+
+> Operations script persistence addendum: an Operations Engineer suggestion
+> with an empty `setup_script` or `run_command` must not erase an existing
+> project field. Persist an effective suggestion where each empty field falls
+> back to the current project value, and use that effective value consistently
+> for `project_updated`, `project_script_updated`, `task.result`, and
+> `review_comment`.
+
+> Conductor finalize evidence addendum: `finalize_task(done)` must not accept planning-only graphs. Completed `product_manager`/`architect` nodes prove requirements/design, not delivery. If a completed implementation role such as `engineer` or `operations_engineer` exists, a completed verification role such as `qa` must also exist before success can seal. This is a backend safety gate, not just prompt guidance.
+
+> Operations Engineer finalize note: `operations_engineer` counts as an implementation/delivery role for Conductor graph sealing. A startup-script generation issue may be small, but if it is represented in the workflow graph and sealed by Conductor, success still needs verification evidence (`qa` or another future verification role) rather than treating generated scripts as self-verifying.
+
+> Finalize role-set maintenance addendum: backend finalize evidence roles live in `PLANNING_ONLY_FINALIZE_ROLES`, `IMPLEMENTATION_FINALIZE_ROLES`, and `VERIFICATION_FINALIZE_ROLES`. Adding a delivery or verification role requires updating these constants and the success-gate tests; changing only the Conductor prompt is insufficient.
+
+> Verification-only finalize addendum: completed verification roles such as `qa` are not delivery evidence by themselves. `finalize_task(done)` must reject QA-only graphs just as it rejects planning-only graphs; verification only completes the success proof when paired with implementation/delivery evidence.
+
+> Specialist finalize classification addendum: built-in implementation roles include `engineer_frontend`, `engineer_backend`, `operations_engineer`, and `specialist:doc_writer`. Built-in verification roles include reviewer/checker/auditor specialists such as `specialist:security_reviewer`, `specialist:performance_reviewer`, `specialist:accessibility_reviewer`, `specialist:api_contract_checker`, `specialist:dependency_auditor`, `specialist:i18n_checker`, and `specialist:code_reviewer`. Unclassified specialist-only graphs must not finalize as done; classify the role first and add success-gate tests.
+
+> Recognized finalize evidence addendum: any completed-role set with no recognized implementation role and no recognized verification role must be rejected, even if it mixes planning roles with unclassified specialists. Unknown or unclassified roles may provide context, but they are not success evidence until explicitly classified in the backend role sets.
+
+> Delivery-first finalize addendum: recognized verification evidence is never sufficient without recognized implementation/delivery evidence. Graphs such as `architect + qa` or `qa + unclassified specialist` must be rejected because they prove review/planning activity, not delivered work. The success proof is delivery first, then verification.
+
+> Delivery specialist positive-case addendum: success-gate tests must include at least one classified delivery specialist positive path, currently `specialist:doc_writer + qa`, so the backend role classification is not only constrained by negative unknown-specialist cases.
+
+> Finalize unclassified-role diagnostics addendum: when `finalize_task(done)` rejects a graph because it has completed roles but no recognized implementation/delivery role, the result should include `unclassified_roles` for completed roles that are outside the planning, implementation, and verification role sets. This makes catalog drift visible without silently accepting unknown specialists as success evidence.
+
+> Operations script task running-state addendum: after `start_task_run()` succeeds, the script-task API must persist the task as `status="running"` and set `last_execution_process_id` before emitting `task_status=running` or returning the response. The database task, websocket event, and HTTP response must agree on running state and execution process id.
+
+> Operations script task workspace addendum: project-level `operations_engineer`
+> startup-script tasks must ensure a backing Codex workspace exists before
+> calling `start_task_run()`. Runtimes load a workspace by `task.session_id`, so
+> using `project.id` as `session_id` is only valid when a lightweight workspace
+> with `id=project.id`, `project_id=project.id`, and `cwd=project.repo_path` has
+> been created or already exists. This preserves project-scoped event identity
+> while preventing runtime failures such as `Workspace {project_id} not found`.
+
+> Task runner startup failure addendum: when an API starts a task runner and startup raises unexpectedly, persist `task.status="failed"` and `task.result=str(exc)` before emitting `task_status=failed`. The database task and event payload must agree; do not only put the error in the event.
+
+> Dispatch batch start-lock addendum: `dispatch_batch` may serialize the per-agent start gate to keep budget checks, redispatch checks, worktree preparation, and `dispatch_role()` task/node creation consistent. That lock must not cover the long subagent wait (`TaskCompletionRegistry.wait_for_active`) or the batch silently becomes serial. Tests for dispatch batch budget/concurrency should prove healthy batches still overlap while budget-blocked agents stop before worktree preparation.
+
+> Dispatch start-lock scope addendum: `dispatch_subagent` and `dispatch_batch`
+> must share an issue-scoped dispatch-start lock for the same issue. The lock
+> covers budget gate re-checks, redispatch budget re-checks, per-agent worktree
+> preparation, and `dispatch_role()` node/task creation so concurrent tool calls
+> cannot all pass against the same stale workflow graph. The lock must still be
+> released before `TaskCompletionRegistry.wait_for_active()`.
+
+> Issue budget reservation addendum: `compute_issue_budget_status()` must
+> distinguish actual terminal spend from in-flight reservation. Terminal
+> execution processes contribute their recorded `total_cost_usd` to
+> `spent_usd`; `Running` execution processes must not contribute their partial
+> recorded cost to `spent_usd`, but each one must reserve
+> `timeouts.estimated_agent_cost_usd()` in `reserved_usd`. Hard gates and
+> remaining budget calculations use `effective_spend_usd = spent_usd +
+> reserved_usd`.
+
+> Dispatch batch isolation addendum: user-facing `agent_key` values only need to
+> be unique inside a batch, but worktree/branch keys must also include the
+> `batch_key` so concurrent `dispatch_batch` calls for the same issue and role
+> never share a swarm worktree. Subagent completion results must not override
+> backend-recorded lineage fields (`agent_key`, `branch`, `worktree_path`) used
+> for merge candidates. If `merge_agent_worktrees()` raises, the tool result
+> must report `merge_status="error"` and include `merge_error`; never collapse a
+> merge infrastructure failure into `noop` or copy that claims merge success.
+> If a batch coroutine is cancelled after preparing a per-agent worktree, it
+> must preserve cancellation semantics while still cleaning that prepared
+> worktree in `finally`.
+
+> Specialist child completion addendum: `workflow_scheduler.on_task_completed()` must route every terminal `specialist_child` status through `SpecialistOrchestrator.complete_specialist_request()`. Scheduler-local specialist resume logic is forbidden because it bypasses the parent `blocked_by_help_id == specialist:<child_id>` stale-child guard. Failed, error, cancelled/canceled, and killed specialist children must clear the current parent lock and move the parent to `ready_to_resume` rather than auto-retrying the specialist node.
+
+> Help request API state addendum: `POST /api/codex/tasks/{task_id}/request-help`
+> must not mutate a parent task into `running` to satisfy
+> `HelpOrchestrator.request_help()` preconditions. Only tasks that are already
+> `running` or `responding` may enter the help wait-lock flow; pending, done,
+> failed, ready-to-resume, and terminal tasks must receive `409` without a task
+> save.
+
+> Help completion ready-state addendum: whenever `HelpOrchestrator` moves a
+> parent task to `ready_to_resume`, it must also clear `blocked_by_help_id`.
+> The system must not persist `waiting_for_help` or `ready_to_resume` states
+> that point at an already completed/failed/consumed help request.
+
+> Help completion save-order addendum: without a store-level transaction,
+> `HelpOrchestrator.complete_help_request()` must first save the parent as
+> `ready_to_resume` with `blocked_by_help_id=None`, then save the help request
+> terminal payload, and only then attempt auto-resume. This ordering minimizes
+> crash windows that would otherwise leave a parent waiting on a help request
+> that has already become terminal.
+> The same parent-ready-before-terminal-request ordering applies when
+> `request_help()` fails to start the help child task.
+
+> Help request reconcile addendum: before creating a new help request,
+> `HelpOrchestrator.request_help()` must reconcile unresolved help requests for
+> the parent. If a running help request exists but the parent is not locked on
+> it, restore `parent.status="waiting_for_help"` and
+> `blocked_by_help_id=<help_request_id>`. If that child is already terminal,
+> complete the existing help request first, then re-load and re-check the parent
+> preconditions; do not immediately create a second help request for a parent
+> that was moved to `ready_to_resume`.
+
+> Help child context addendum: help child tasks must inherit the parent
+> `project_id`, `issue_id`, and `phase`, and must carry a non-empty role such
+> as `help:<target_executor>`. Task status events, audit rows, and task lists
+> should be able to attribute help children to the same project/issue as the
+> parent.
+
+> Help child running-state addendum: after `request_help()` successfully starts
+> the help child runner, it must persist the child as `status="running"`, record
+> `last_execution_process_id` when the runner returns one, and emit a
+> builder-shaped `task_status=running` event. The child task row, websocket
+> event, and execution process id must agree before the API returns.
+
+> Task terminal status addendum: backend application code must use
+> `app.application.task_statuses` for shared task terminal/success/failure
+> checks. The terminal set includes success spellings (`done`, `completed`,
+> `success`, `passed`, `ok`) and failure spellings (`failed`, `error`,
+> `cancelled`, `canceled`, `killed`, `timeout`, `timed_out`,
+> `protocol_error`). Do not hand-roll partial sets such as
+> `{done, failed, cancelled}` in runtime, websocket, help, or specialist
+> orchestration paths.

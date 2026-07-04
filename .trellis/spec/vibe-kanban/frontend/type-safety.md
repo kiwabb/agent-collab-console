@@ -1,6 +1,6 @@
 # Type Safety
 
-> Type safety patterns in the vibe-kanban frontend package.
+> Type safety patterns in the ccgui frontend package.
 
 ---
 
@@ -46,6 +46,11 @@ and `noImplicitOverride` enabled. Types are colocated with their owner:
   thrown error for endpoints that must surface failures.
 - `dedupedFetch` (in `lib/api.ts`) handles in-flight deduplication; do
   not roll your own cache.
+- When a monolithic API function is split into `lib/api/<domain>.ts`,
+  preserve any existing `@/lib/api` import surface with a **narrow**
+  explicit re-export. Do not use broad `export *` from every domain
+  module inside `lib/api.ts`; it can collide with local monolithic
+  definitions and create ambiguous build-time exports.
 
 ### Hook return types
 
@@ -74,6 +79,68 @@ not need schema validation.
 ---
 
 ## Common Patterns
+
+### Narrow compatibility re-exports for split API modules
+
+When moving a function from `frontend/src/lib/api.ts` to a domain
+module, first search for existing imports from `@/lib/api`. If callers
+still use the monolithic entrypoint, add an explicit compatibility
+re-export for only the missing symbols:
+
+```ts
+export {
+  getEmbeddingStatus,
+  searchKnowledge,
+} from "./api/knowledge";
+export type { EmbeddingStatus } from "./api/knowledge";
+```
+
+Do not paper over missing exports with a catch-all barrel:
+
+```ts
+// Wrong: risks duplicate exports with functions still defined below.
+export * from "./api/knowledge";
+export * from "./api/tasks";
+export * from "./api/projects";
+```
+
+**Why**: A broad barrel can introduce duplicate names such as
+`getCodexTask` or `listProjects`, while missing compatibility exports
+surface as runtime errors like `getEmbeddingStatus is not a function`.
+
+**Check**: Search for the symbol and its import site:
+
+```bash
+rg -n "getEmbeddingStatus|from \"@/lib/api\"" frontend/src
+```
+
+Confirm the monolithic entrypoint exports the symbol exactly once.
+
+### Static imports for split API modules
+
+Runtime feature code imports split API modules statically:
+
+```ts
+import { submitCodexTask } from "@/lib/api/tasks";
+```
+
+Do not dynamically destructure split API modules from runtime code:
+
+```ts
+// Wrong: source-contract checks can miss missing exported names here.
+const { submitCodexTask } = await import("@/lib/api/tasks");
+```
+
+**Why**: The project had runtime failures such as
+`getEmbeddingStatus is not a function` after API functions moved between the
+monolithic barrel and split modules. Static named imports are visible to the
+split API export-contract test and fail earlier than a browser-only dynamic
+chunk path.
+
+**Check**: `frontend/tests/sourceHygiene.test.ts` rejects runtime dynamic
+imports matching `import("@/lib/api/<domain>")`. If a split API call genuinely
+needs lazy loading, add a documented exception and extend the contract test to
+verify the destructured names.
 
 ### Narrowing with type guards
 
@@ -128,3 +195,59 @@ then drives exhaustive switches in the consumer.
 - **Loose `Record<string, any>` for API responses.** Use the typed
   shape from `lib/api.ts` (or `lib/types.ts` for shared domain types).
   A loose record disables the value of TypeScript entirely.
+
+---
+
+## Scenario: Project Script Task Response Typing
+
+### 1. Scope / Trigger
+
+- Trigger: changing `ProjectScriptTaskResponse`, `startProjectScriptTask`, or the Projects page Operations Engineer startup-script button.
+
+### 2. Signatures
+
+- API client: `startProjectScriptTask(projectId, body) -> Promise<ProjectScriptTaskResponse>`.
+- Frontend type: `ProjectScriptTaskResponse`.
+- Required response fields: `task_id`, `status`, `title`, `reused`.
+- Optional nullable field: `execution_process_id?: string | null`.
+
+### 3. Contracts
+
+- `reused` is a required boolean. The backend always serializes it, using `false` for a fresh task and `true` for an active reused task.
+- Frontend code must branch on `task.reused` directly, not treat absence as false.
+- Terminal handling must still track the returned `task_id`; reused tasks do not relax task-id-specific matching.
+
+### 4. Validation & Error Matrix
+
+- `reused=true` -> show already-running copy and keep tracking returned `task_id`.
+- `reused=false` -> show started copy and keep tracking returned `task_id`.
+- Missing `reused` in mock fixtures -> update the fixture; do not make the type optional.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Projects page receives `{ task_id, status: "running", title, reused: true }` and displays the already-running toast.
+- Base: Fresh task response has `reused: false` and emits running status separately over websocket.
+- Bad: `reused?: boolean` lets tests and components forget the reused branch.
+
+### 6. Tests Required
+
+- Source/API compatibility test: `ProjectScriptTaskResponse.reused` remains required.
+- Projects source test: both `scriptSuggestionSuccess` and `scriptSuggestionAlreadyRunning` copy paths are wired.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+export interface ProjectScriptTaskResponse {
+  reused?: boolean;
+}
+```
+
+Correct:
+
+```ts
+export interface ProjectScriptTaskResponse {
+  reused: boolean;
+}
+```

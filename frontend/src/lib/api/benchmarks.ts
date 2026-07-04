@@ -9,34 +9,34 @@ import type {
   CalibrationReport,
 } from "../types";
 
-export async function listBenchmarkRuns(limit = 50): Promise<import("../types").BenchmarkRun[]> {
+export async function listBenchmarkRuns(limit = 50): Promise<BenchmarkRun[]> {
   const response = await dedupedFetch(`${API_BASE}/codex/benchmark/runs?limit=${limit}`);
   if (!response.ok) {
     console.error(`listBenchmarkRuns failed: HTTP ${response.status}`);
     return [];
   }
   const body = await response.json();
-  return (body.runs ?? []) as import("../types").BenchmarkRun[];
+  return (body.runs ?? []) as BenchmarkRun[];
 }
 export async function getBenchmarkRun(
   runId: string,
-): Promise<import("../types").BenchmarkRun | null> {
+): Promise<BenchmarkRun | null> {
   const response = await dedupedFetch(`${API_BASE}/codex/benchmark/runs/${runId}`);
   if (!response.ok) {
     console.error(`getBenchmarkRun(${runId}) failed: HTTP ${response.status}`);
     return null;
   }
-  return response.json() as Promise<import("../types").BenchmarkRun>;
+  return response.json() as Promise<BenchmarkRun>;
 }
 export async function getBenchmarkRunDiff(
   runId: string,
-): Promise<import("../types").BenchmarkDiff | null> {
+): Promise<BenchmarkDiff | null> {
   const response = await dedupedFetch(`${API_BASE}/codex/benchmark/runs/${runId}/diff`);
   if (!response.ok) {
     console.error(`getBenchmarkRunDiff(${runId}) failed: HTTP ${response.status}`);
     return null;
   }
-  return response.json() as Promise<import("../types").BenchmarkDiff>;
+  return response.json() as Promise<BenchmarkDiff>;
 }
 export interface TriggerBenchmarkBody {
   label?: string;
@@ -50,7 +50,7 @@ export interface TriggerBenchmarkBody {
 }
 export interface TriggerBenchmarkResponse {
   job_id: string;
-  status: import("../types").BenchmarkJobStatus;
+  status: BenchmarkJobStatus;
   status_url: string;
 }
 export async function triggerBenchmarkRun(
@@ -71,22 +71,22 @@ export async function triggerBenchmarkRun(
 }
 export async function getBenchmarkJob(
   jobId: string,
-): Promise<import("../types").BenchmarkJob | null> {
+): Promise<BenchmarkJob | null> {
   const response = await dedupedFetch(`${API_BASE}/codex/benchmark/jobs/${jobId}`);
   if (!response.ok) {
     console.error(`getBenchmarkJob(${jobId}) failed: HTTP ${response.status}`);
     return null;
   }
-  return response.json() as Promise<import("../types").BenchmarkJob>;
+  return response.json() as Promise<BenchmarkJob>;
 }
-export async function getBaselineRun(): Promise<import("../types").BenchmarkRun | null> {
+export async function getBaselineRun(): Promise<BenchmarkRun | null> {
   const response = await dedupedFetch(`${API_BASE}/codex/benchmark/baseline`);
   if (!response.ok) {
     console.error(`getBaselineRun failed: HTTP ${response.status}`);
     return null;
   }
   const body = await response.json();
-  return (body.baseline ?? null) as import("../types").BenchmarkRun | null;
+  return (body.baseline ?? null) as BenchmarkRun | null;
 }
 export async function setBaselineRun(runId: string): Promise<boolean> {
   const response = await fetch(`${API_BASE}/codex/benchmark/baseline/${runId}`, { method: "POST" });
@@ -98,11 +98,11 @@ export async function setBaselineRun(runId: string): Promise<boolean> {
 }
 export async function getCalibrationReport(
   floor = 0.7,
-): Promise<import("../types").CalibrationReport | null> {
+): Promise<CalibrationReport | null> {
   const response = await dedupedFetch(`${API_BASE}/codex/benchmark/calibration?floor=${floor}`);
   if (!response.ok) {
     console.error(`getCalibrationReport failed: HTTP ${response.status}`);
     return null;
   }
-  return response.json() as Promise<import("../types").CalibrationReport>;
+  return response.json() as Promise<CalibrationReport>;
 }

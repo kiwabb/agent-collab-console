@@ -19,7 +19,7 @@ import {
   setBaselineRun as apiSetBaseline,
   triggerBenchmarkRun,
   type TriggerBenchmarkResponse,
-} from "@/lib/api";
+} from "@/lib/api/benchmarks";
 import { cn } from "@/lib/utils";
 import {
   classifyDelta,

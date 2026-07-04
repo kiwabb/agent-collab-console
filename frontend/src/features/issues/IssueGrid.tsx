@@ -1,7 +1,7 @@
 "use client";
 
 import type { CodexIssue, GitBranch, RuntimeCatalog } from "@/lib/types";
-import { getProjectBranches } from "@/lib/api";
+import { getProjectBranches } from "@/lib/api/projects";
 import { ListTodo, Plus, ChevronRight, MessageSquare, Trash2, Search, X, Clock } from "lucide-react";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
