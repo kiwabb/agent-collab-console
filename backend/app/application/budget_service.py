@@ -25,13 +25,66 @@ Aggregation rule: terminal runs contribute exact spend. In-flight ``Running``
 rows contribute a separate conservative reservation used for new-dispatch
 decisions, while the exact terminal total remains visible as ``actual_spent``.
 """
+from collections.abc import Awaitable, Mapping, Sequence  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
+from typing import Protocol, TypedDict  # noqa: E402
 
 from app.application import timeouts  # noqa: E402
 from app.domain.models import CodexIssue, RuntimeCatalog  # noqa: E402
 
 # Terminal execution-process states whose cost is final and safe to sum.
 COMPLETED_PROCESS_STATES = frozenset({"Completed", "Failed", "Killed", "Cancelled", "Canceled"})
+
+
+type MaybeAwaitable[T] = T | Awaitable[T]
+
+
+class IssueBudgetPayload(TypedDict):
+    issue_id: str
+    spent_usd: float
+    reserved_usd: float
+    effective_spend_usd: float
+    budget_usd: float
+    remaining_usd: float | None
+    used_ratio: float | None
+    soft_warn: bool
+    over_budget: bool
+    soft_warn_ratio: float
+    has_ceiling: bool
+    budget_source: str
+
+
+class BudgetSteeringEvent(TypedDict, total=False):
+    type: str
+    issue_id: str
+    spent_usd: float
+    reserved_usd: float
+    effective_spend_usd: float
+    budget_usd: float
+    remaining_usd: float
+    used_ratio: float
+    budget_source: str
+    soft_warn_ratio: float
+
+
+class BudgetTaskObject(Protocol):
+    id: object
+
+
+BudgetTaskRow = Mapping[str, object] | BudgetTaskObject
+
+
+class BudgetExecutionProcess(Protocol):
+    status: str
+    total_cost_usd: float | None
+
+
+class BudgetStore(Protocol):
+    def list_codex_tasks(self, *, issue_id: str | None = None) -> MaybeAwaitable[Sequence[BudgetTaskRow]]: ...
+
+    def list_execution_processes(
+        self, session_id: str | None = None, task_id: str | None = None
+    ) -> MaybeAwaitable[Sequence[BudgetExecutionProcess]]: ...
 
 
 @dataclass
@@ -78,7 +131,7 @@ class IssueBudgetStatus:
         """True once spend meets or exceeds the hard ceiling."""
         return self.has_ceiling and self.effective_spend_usd >= self.budget_usd
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> IssueBudgetPayload:
         """A JSON-serializable snapshot for the read endpoint.
 
         Mirrors the field set on the WS steering payload (``budget_steering_event``)
@@ -104,7 +157,7 @@ class IssueBudgetStatus:
         }
 
 
-async def aggregate_issue_spend_usd(store, issue_id: str) -> float:
+async def aggregate_issue_spend_usd(store: BudgetStore, issue_id: str) -> float:
     """Sum ``total_cost_usd`` across an issue's **completed** execution runs.
 
     Walks the issue's tasks, then each task's execution processes, summing the
@@ -113,12 +166,12 @@ async def aggregate_issue_spend_usd(store, issue_id: str) -> float:
     """
     total = 0.0
     task_rows = await _maybe_await(store.list_codex_tasks(issue_id=issue_id))
-    for row in task_rows or []:
-        task_id = row.get("id") if isinstance(row, dict) else getattr(row, "id", None)
+    for row in task_rows:
+        task_id = _task_id(row)
         if not task_id:
             continue
         processes = await _maybe_await(store.list_execution_processes(task_id=task_id))
-        for proc in processes or []:
+        for proc in processes:
             if proc.status not in COMPLETED_PROCESS_STATES:
                 continue
             if proc.total_cost_usd:
@@ -126,27 +179,46 @@ async def aggregate_issue_spend_usd(store, issue_id: str) -> float:
     return total
 
 
-async def estimate_issue_inflight_spend_usd(store, issue_id: str) -> float:
+async def estimate_issue_inflight_spend_usd(store: BudgetStore, issue_id: str) -> float:
     """Reserve estimated spend for running execution processes on an issue."""
     running = 0
     task_rows = await _maybe_await(store.list_codex_tasks(issue_id=issue_id))
-    for row in task_rows or []:
-        task_id = row.get("id") if isinstance(row, dict) else getattr(row, "id", None)
+    for row in task_rows:
+        task_id = _task_id(row)
         if not task_id:
             continue
         processes = await _maybe_await(store.list_execution_processes(task_id=task_id))
-        for proc in processes or []:
+        for proc in processes:
             if proc.status == "Running":
                 running += 1
     return running * timeouts.estimated_agent_cost_usd()
 
 
-async def compute_issue_budget_status(store, issue: CodexIssue) -> IssueBudgetStatus:
+async def _aggregate_issue_budget_usage_usd(
+    store: BudgetStore, issue_id: str
+) -> tuple[float, float]:
+    """Return completed spend and in-flight reservation in one store scan."""
+    spent = 0.0
+    running = 0
+    task_rows = await _maybe_await(store.list_codex_tasks(issue_id=issue_id))
+    for row in task_rows:
+        task_id = _task_id(row)
+        if not task_id:
+            continue
+        processes = await _maybe_await(store.list_execution_processes(task_id=task_id))
+        for proc in processes:
+            if proc.status in COMPLETED_PROCESS_STATES and proc.total_cost_usd:
+                spent += float(proc.total_cost_usd)
+            elif proc.status == "Running":
+                running += 1
+    return spent, running * timeouts.estimated_agent_cost_usd()
+
+
+async def compute_issue_budget_status(store: BudgetStore, issue: CodexIssue) -> IssueBudgetStatus:
     """Resolve an issue's budget and aggregate its accrued spend."""
-    explicit = getattr(issue, "budget_usd", None)
+    explicit = issue.budget_usd
     budget = timeouts.resolve_issue_budget_usd(explicit)
-    spent = await aggregate_issue_spend_usd(store, issue.id)
-    reserved = await estimate_issue_inflight_spend_usd(store, issue.id)
+    spent, reserved = await _aggregate_issue_budget_usage_usd(store, issue.id)
     return IssueBudgetStatus(
         issue_id=issue.id,
         spent_usd=spent,
@@ -203,14 +275,14 @@ def collect_candidate_model_prices(catalog: RuntimeCatalog | None) -> list[Candi
     candidates: list[CandidateModelPrice] = []
     if catalog is None:
         return candidates
-    for executor in getattr(catalog, "executors", None) or []:
-        if not getattr(executor, "enabled", True):
+    for executor in catalog.executors:
+        if not executor.enabled:
             continue
-        for provider in getattr(executor, "providers", None) or []:
-            if not getattr(provider, "enabled", True):
+        for provider in executor.providers:
+            if not provider.enabled:
                 continue
-            for model in getattr(provider, "models", None) or []:
-                if not getattr(model, "enabled", True):
+            for model in provider.models:
+                if not model.enabled:
                     continue
                 candidates.append(
                     CandidateModelPrice(
@@ -312,7 +384,7 @@ def render_budget_summary(
     return "\n".join(lines)
 
 
-def budget_steering_event(status: IssueBudgetStatus) -> dict | None:
+def budget_steering_event(status: IssueBudgetStatus) -> BudgetSteeringEvent | None:
     """Build a structured budget steering event payload, or None when not needed.
 
     Emitted by the conductor loop for observability / the frontend. ``None`` when
@@ -321,7 +393,7 @@ def budget_steering_event(status: IssueBudgetStatus) -> dict | None:
     """
     if not status.has_ceiling:
         return None
-    base = {
+    base: BudgetSteeringEvent = {
         "issue_id": status.issue_id,
         "spent_usd": round(status.spent_usd, 6),
         "reserved_usd": round(status.reserved_usd, 6),
@@ -338,7 +410,12 @@ def budget_steering_event(status: IssueBudgetStatus) -> dict | None:
     return None
 
 
-async def _maybe_await(value):
-    if hasattr(value, "__await__"):
+async def _maybe_await[T](value: MaybeAwaitable[T]) -> T:
+    if isinstance(value, Awaitable):
         return await value
     return value
+
+
+def _task_id(row: BudgetTaskRow) -> str | None:
+    value = row.get("id") if isinstance(row, Mapping) else row.id
+    return value if isinstance(value, str) else None

@@ -94,57 +94,50 @@ def build_conductor_tools(
         top_k = int(tool_input.get("top_k") or 3)
         return {"memories": await conductor.retrieve_cold(query, top_k=max(1, min(top_k, 10)))}
 
-    async def _check_redispatch_budget(role: str, *, tool: str) -> dict[str, Any] | None:
-        """GAP G: bound re-dispatch. Each dispatch of a role adds a graph node
-        (role, role#1, role#2…); past the budget the Conductor is stuck in a
-        rework loop. Returns a terminal `retries_exhausted` dict when exhausted,
-        else None. Shared by dispatch_subagent and dispatch_batch."""
-        role = normalize_role(role)
-        if not role or not issue_id:
-            return None
-        try:
-            graph = await store.load_workflow_graph_for_issue(issue_id)
-        except Exception:  # noqa: BLE001, RUF100
-            graph = None
-        if graph is None:
-            return None
-        same_role = sum(
-            1
-            for n in (graph.nodes or [])
-            if n.node_key == role or n.node_key.startswith(f"{role}#")
-        )
-        max_dispatches = _max_dispatches_per_role()
-        if same_role < max_dispatches:
-            return None
+    async def _governance_failure(
+        *,
+        tool: str,
+        gate: str,
+        error: Exception,
+        issue_ref: str | None,
+    ) -> dict[str, Any]:
+        detail = f"{type(error).__name__}: {error}"
         await _emit(
             event_bus,
             "conductor_tool",
             {
                 "tool": tool,
-                "role": role,
-                "status": "retries_exhausted",
-                "dispatches": same_role,
+                "issue_id": issue_ref,
+                "status": "governance_unavailable",
+                "gate": gate,
+                "error": detail,
             },
         )
         return {
-            "status": "retries_exhausted",
-            "role": role,
-            "dispatches": same_role,
-            "max_dispatches": max_dispatches,
-            "note": (
-                f"role '{role}' already dispatched {same_role} times "
-                f"(max {max_dispatches}); do not re-dispatch it"
+            "status": "failed",
+            "gate": gate,
+            "error": (
+                f"{gate} governance could not be evaluated; refusing to dispatch "
+                "until the required state is readable again"
             ),
+            "details": detail,
         }
 
-    async def _check_budget_gate(issue, *, tool: str) -> dict[str, Any] | None:
-        """Hard gate new dispatches once issue spend reaches its ceiling."""
-        try:
-            from app.application.budget_service import compute_issue_budget_status
+    async def _compute_budget_status(issue, *, tool: str):
+        from app.application.budget_service import compute_issue_budget_status
 
-            budget_status = await compute_issue_budget_status(store, issue)
-        except Exception:
-            return None
+        try:
+            return await compute_issue_budget_status(store, issue), None
+        except Exception as exc:  # noqa: BLE001, RUF100
+            failure = await _governance_failure(
+                tool=tool,
+                gate="budget",
+                error=exc,
+                issue_ref=issue.id,
+            )
+            return None, failure
+
+    async def _budget_exceeded_result(issue, budget_status, *, tool: str) -> dict[str, Any] | None:
         if not budget_status.over_budget:
             return None
         remaining = budget_status.remaining_usd
@@ -173,24 +166,91 @@ def build_conductor_tools(
             },
         }
 
+    async def _check_budget_gate(issue, *, tool: str) -> dict[str, Any] | None:
+        """Hard gate new dispatches once issue spend reaches its ceiling."""
+        budget_status, failure = await _compute_budget_status(issue, tool=tool)
+        if failure is not None:
+            return failure
+        assert budget_status is not None
+        return await _budget_exceeded_result(issue, budget_status, tool=tool)
+
+    async def _load_graph_for_governance(*, tool: str, gate: str):
+        if not issue_id:
+            return None, None
+        try:
+            return await store.load_workflow_graph_for_issue(issue_id), None
+        except Exception as exc:  # noqa: BLE001, RUF100
+            failure = await _governance_failure(
+                tool=tool,
+                gate=gate,
+                error=exc,
+                issue_ref=issue_id,
+            )
+            return None, failure
+
+    async def _check_redispatch_budget(role: str, *, tool: str) -> dict[str, Any] | None:
+        """GAP G: bound re-dispatch. Each dispatch of a role adds a graph node
+        (role, role#1, role#2…); past the budget the Conductor is stuck in a
+        rework loop. Returns a terminal `retries_exhausted` dict when exhausted,
+        else None. Shared by dispatch_subagent and dispatch_batch."""
+        role = normalize_role(role)
+        if not role or not issue_id:
+            return None
+        graph, failure = await _load_graph_for_governance(
+            tool=tool,
+            gate="redispatch_budget",
+        )
+        if failure is not None:
+            return failure
+        if graph is None:
+            return None
+        same_role = sum(
+            1
+            for n in graph.nodes
+            if n.node_key == role or n.node_key.startswith(f"{role}#")
+        )
+        max_dispatches = _max_dispatches_per_role()
+        if same_role < max_dispatches:
+            return None
+        await _emit(
+            event_bus,
+            "conductor_tool",
+            {
+                "tool": tool,
+                "role": role,
+                "status": "retries_exhausted",
+                "dispatches": same_role,
+            },
+        )
+        return {
+            "status": "retries_exhausted",
+            "role": role,
+            "dispatches": same_role,
+            "max_dispatches": max_dispatches,
+            "note": (
+                f"role '{role}' already dispatched {same_role} times "
+                f"(max {max_dispatches}); do not re-dispatch it"
+            ),
+        }
+
     async def _check_batch_redispatch_budget(
         specs: list[dict[str, Any]],
         *,
         tool: str,
     ) -> dict[str, Any] | None:
         """Atomically reject batch fan-out that would exceed per-role limits."""
-        if not issue_id:
-            return None
-        try:
-            graph = await store.load_workflow_graph_for_issue(issue_id)
-        except Exception:
-            graph = None
+        graph, failure = await _load_graph_for_governance(
+            tool=tool,
+            gate="redispatch_budget",
+        )
+        if failure is not None:
+            return failure
         if graph is None:
             return None
         max_dispatches = _max_dispatches_per_role()
         existing_by_role: dict[str, int] = {}
-        for node in graph.nodes or []:
-            node_key = str(getattr(node, "node_key", "") or "")
+        for node in graph.nodes:
+            node_key = str(node.node_key or "")
             base_role = normalize_role(node_key.split("#", 1)[0])
             if base_role:
                 existing_by_role[base_role] = existing_by_role.get(base_role, 0) + 1
@@ -234,22 +294,18 @@ def build_conductor_tools(
         that a successful issue cannot have unfinished, failed, or conflicted
         workflow nodes.
         """
-        if not issue_id:
-            return None
-        try:
-            graph = await store.load_workflow_graph_for_issue(issue_id)
-        except Exception as exc:  # noqa: BLE001, RUF100
-            return {
-                "status": "failed",
-                "reason": "workflow graph could not be loaded; cannot finalize as done",
-                "error": f"{type(exc).__name__}: {exc}",
-            }
+        graph, failure = await _load_graph_for_governance(
+            tool="finalize_task",
+            gate="workflow_graph",
+        )
+        if failure is not None:
+            return failure
         if graph is None:
             return {
                 "status": "failed",
                 "reason": "workflow graph is missing; cannot finalize as done",
             }
-        nodes = list(getattr(graph, "nodes", None) or [])
+        nodes = list(graph.nodes)
         if not nodes:
             return {
                 "status": "failed",
@@ -284,8 +340,8 @@ def build_conductor_tools(
         has_completed_work = False
         completed_base_roles: set[str] = set()
         for node in nodes:
-            node_status = normalize_task_status(getattr(node, "status", None))
-            node_key = str(getattr(node, "node_key", "") or "")
+            node_status = normalize_task_status(node.status)
+            node_key = str(node.node_key or "")
             base_role = normalize_role(node_key.split("#", 1)[0])
             if node_status in allowed_done_statuses:
                 if node_status in completed_statuses:
@@ -529,11 +585,9 @@ def build_conductor_tools(
                     from app.bootstrap import get_codex_process_manager
 
                     mgr = get_codex_process_manager()
-                    terminate_task = getattr(mgr, "terminate_task", None)
-                    if terminate_task is not None:
-                        terminated = terminate_task(task_id)
-                        if asyncio.iscoroutine(terminated):
-                            await terminated
+                    terminated = mgr.terminate_task(task_id)
+                    if asyncio.iscoroutine(terminated):
+                        await terminated
                 except Exception:
                     pass
                 try:
@@ -658,9 +712,20 @@ def build_conductor_tools(
         if issue is None:
             return {"error": f"Issue {issue_id} not found"}
 
-        budget_blocked = await _check_budget_gate(issue, tool="dispatch_batch")
-        if budget_blocked is not None:
-            return budget_blocked
+        budget_status, budget_failure = await _compute_budget_status(
+            issue,
+            tool="dispatch_batch",
+        )
+        if budget_failure is not None:
+            return budget_failure
+        if budget_status is not None:
+            budget_blocked = await _budget_exceeded_result(
+                issue,
+                budget_status,
+                tool="dispatch_batch",
+            )
+            if budget_blocked is not None:
+                return budget_blocked
 
         project = await store.load_project(issue.project_id)
         if project is None:
@@ -712,18 +777,19 @@ def build_conductor_tools(
         # budget-status failure falls back to the plain configured cap.
         configured_cap = timeouts.max_parallel_dispatch_per_batch()
         cap = configured_cap
-        try:
-            from app.application.budget_service import compute_issue_budget_status
-
-            budget_status = await compute_issue_budget_status(store, issue)
+        budget_status, budget_failure = await _compute_budget_status(
+            issue,
+            tool="dispatch_batch",
+        )
+        if budget_failure is not None:
+            return budget_failure
+        if budget_status is not None:
             cap = timeouts.budget_supported_concurrency(
                 budget_status.remaining_usd,
                 configured_cap,
                 soft_warn=budget_status.soft_warn,
                 over_budget=budget_status.over_budget,
             )
-        except Exception:  # noqa: BLE001, RUF100
-            cap = configured_cap
         sem = asyncio.Semaphore(cap)
         dispatch_gate_lock = _dispatch_start_lock_for_issue(issue.id)
 

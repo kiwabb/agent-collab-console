@@ -132,7 +132,7 @@ class WorkflowScheduler:
 
     async def on_task_completed(self, task: CodexTask) -> None:
         """Hook called by the task runner once a task ends."""
-        if not getattr(task, "workflow_node_id", None):
+        if not task.workflow_node_id:
             return
         node = await self.store.find_node_by_task_id(task.id)
         if node is None:
@@ -255,7 +255,7 @@ class WorkflowScheduler:
 
     @staticmethod
     def _engineer_diff_guard_failure_reason(task: CodexTask) -> str | None:
-        if getattr(task, "role", None) not in _ENGINEER_ROLES:
+        if task.role not in _ENGINEER_ROLES:
             return None
         doc = getattr(task, "_subagent_doc", None)
         qa_notes = getattr(doc, "qa_notes", None)

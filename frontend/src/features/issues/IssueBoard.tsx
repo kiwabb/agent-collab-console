@@ -113,7 +113,7 @@ export function IssueBoard({
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const flatIssues = useMemo(() => {
     const all: CodexIssue[] = [];
-    PHASES.forEach(p => all.push(...(byPhase[p] || [])));
+    PHASES.forEach((p) => all.push(...byPhase[p]));
     return all;
   }, [byPhase]);
 

@@ -47,7 +47,7 @@ export function deriveBudgetMeterState(status: IssueBudgetStatus | null): Budget
       toneClass: "text-status-failed",
     };
   }
-  if (status.soft_warn || ratio >= (status.soft_warn_ratio ?? 0.8)) {
+  if (status.soft_warn || ratio >= status.soft_warn_ratio) {
     return {
       state: "soft_warn",
       fillRatio: ratio,

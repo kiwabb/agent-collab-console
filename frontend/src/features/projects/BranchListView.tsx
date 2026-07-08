@@ -37,9 +37,6 @@ export function BranchListView({ branches, defaultBranch }: Props) {
 
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
 }

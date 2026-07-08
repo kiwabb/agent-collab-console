@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Phase 4: Specialist Orchestrator — P2P mesh calls between agents.
 
 Allows Engineer/QA to directly invoke specialist agents (security_reviewer, etc.)
@@ -17,22 +15,81 @@ Core flows:
 
 Mesh depth limit: ≤ 2 (no specialist→specialist calls).
 """
-from datetime import datetime  # noqa: E402, I001
-from uuid import uuid4  # noqa: E402
 
-from app.domain.models import CodexTask, AgentMessage  # noqa: E402
-from app.application.task_status_events import build_task_status_event  # noqa: E402
-from app.application.task_statuses import (  # noqa: E402
+from __future__ import annotations
+
+import logging
+from collections.abc import Awaitable
+from datetime import datetime
+from typing import NoReturn, Protocol, cast
+from uuid import uuid4
+
+from app.application.budget_service import (
+    BudgetExecutionProcess,
+    BudgetStore,
+    compute_issue_budget_status,
+)
+from app.application.role_concurrency import RoleConcurrencyLimiter
+from app.application.task_status_events import build_task_status_event
+from app.application.task_statuses import (
     is_task_active_status,
     is_task_failure_status,
     is_task_pending_status,
     is_task_success_status,
+    is_task_terminal_status,
     is_task_waiting_for_specialist_status,
 )
+from app.domain.models import AgentMessage, CodexIssue, CodexTask
+
+logger = logging.getLogger(__name__)
+_SPECIALIST_ROLE_SLOTS_BY_CHILD: dict[str, str] = {}
 
 
 class SpecialistOrchestratorError(ValueError):
     pass
+
+
+class SpecialistGovernanceError(SpecialistOrchestratorError):
+    def __init__(self, message: str, *, gate: str, detail: str) -> None:
+        super().__init__(message)
+        self.gate = gate
+        self.detail = detail
+
+
+class SpecialistGraphRef(Protocol):
+    id: str
+
+
+class SpecialistStore(BudgetStore, Protocol):
+    async def load_codex_task(self, task_id: str) -> CodexTask | None: ...
+
+    async def save_codex_task(self, task: CodexTask) -> None: ...
+
+    async def load_codex_issue(self, issue_id: str) -> CodexIssue | None: ...
+
+    async def list_execution_processes(
+        self, session_id: str | None = None, task_id: str | None = None
+    ) -> list[BudgetExecutionProcess]: ...
+
+    async def load_workflow_graph_for_issue(self, issue_id: str) -> SpecialistGraphRef | None: ...
+
+    async def save_agent_message(self, msg: AgentMessage) -> None: ...
+
+    async def update_execution_process_status(
+        self, proc_id: str, status: str, completed_at: datetime | None = None
+    ) -> None: ...
+
+
+class SpecialistEventBus(Protocol):
+    async def append(self, event: dict[str, object]) -> None: ...
+
+
+class SpecialistTaskRunner(Protocol):
+    async def start_task_run(self, task: CodexTask) -> object: ...
+
+
+class ListCodexTasksFn(Protocol):
+    def __call__(self, *, parent_task_id: str | None = None) -> Awaitable[list[CodexTask]]: ...
 
 
 def _specialist_blocker_id(child_task_id: str) -> str:
@@ -40,19 +97,85 @@ def _specialist_blocker_id(child_task_id: str) -> str:
 
 
 class SpecialistOrchestrator:
-    def __init__(self, store, event_bus, task_runner):
+    def __init__(
+        self,
+        store: SpecialistStore,
+        event_bus: SpecialistEventBus,
+        task_runner: SpecialistTaskRunner,
+    ) -> None:
         self.store = store
         self.event_bus = event_bus
         self.task_runner = task_runner
 
+    async def _raise_governance_failure(self, *, gate: str, exc: Exception) -> NoReturn:
+        detail = f"{type(exc).__name__}: {exc}"
+        logger.warning("specialist governance unavailable gate=%s error=%s", gate, detail)
+        raise SpecialistGovernanceError(
+            f"specialist {gate} governance could not be evaluated; refusing to launch",
+            gate=gate,
+            detail=detail,
+        ) from exc
+
+    async def _acquire_role_capacity_slot(self, specialist_role_key: str) -> None:
+        try:
+            limiter = RoleConcurrencyLimiter.instance()
+            acquired = await limiter.acquire(specialist_role_key, timeout=0)
+            if not acquired:
+                raise SpecialistOrchestratorError(
+                    f"Role '{specialist_role_key}' is at max concurrency; "
+                    "specialist request refused to avoid unbounded spawning"
+                )
+        except SpecialistOrchestratorError:
+            raise
+        except Exception as exc:
+            await self._raise_governance_failure(gate="concurrency", exc=exc)
+
+    def _release_role_capacity_slot(
+        self,
+        child_task_id: str | None = None,
+        *,
+        specialist_role_key: str | None = None,
+    ) -> None:
+        role_key = specialist_role_key
+        if child_task_id is not None:
+            role_key = _SPECIALIST_ROLE_SLOTS_BY_CHILD.pop(child_task_id, None)
+        if not role_key:
+            return
+        try:
+            RoleConcurrencyLimiter.instance().release(role_key)
+        except Exception:
+            logger.debug(
+                "specialist role slot release failed: child_task_id=%s role=%s",
+                child_task_id,
+                role_key,
+                exc_info=True,
+            )
+
+    async def _enforce_budget_gate(self, parent_task: CodexTask) -> None:
+        if not parent_task.issue_id:
+            return
+        issue = await self.store.load_codex_issue(parent_task.issue_id)
+        if issue is None:
+            raise SpecialistOrchestratorError(
+                f"Issue {parent_task.issue_id} not found for specialist budget check"
+            )
+        try:
+            budget_status = await compute_issue_budget_status(self.store, issue)
+        except Exception as exc:
+            await self._raise_governance_failure(gate="budget", exc=exc)
+        if budget_status.over_budget:
+            raise SpecialistOrchestratorError(
+                "issue budget is exhausted; cannot launch a specialist child"
+            )
+
     async def request_specialist(
         self,
         *,
-        parent_task,
+        parent_task: CodexTask,
         specialist_role_key: str,
         specialist_prompt: str,
         why: str = "",
-    ):
+    ) -> CodexTask:
         """
         Pause the parent task and spawn a specialist child task.
 
@@ -101,136 +224,155 @@ class SpecialistOrchestrator:
                 f"Invalid specialist role key: {specialist_role_key}"
             )
 
-        # Create specialist child task
-        child_id = str(uuid4())
-        now = datetime.now()
-
-        specialist_executor = parent_task.executor or "claude"
-
-        child = CodexTask(
-            id=child_id,
-            session_id=parent_task.session_id,
-            project_id=parent_task.project_id,
-            issue_id=parent_task.issue_id,
-            title=f"[Specialist] {specialist_role_key}",
-            prompt=specialist_prompt,
-            role=specialist_role_key,
-            executor=specialist_executor,
-            status="pending",
-            result=None,
-            parent_task_id=parent_task.id,
-            task_kind="specialist_child",
-            workspace_path=parent_task.workspace_path,
-            git_worktree_path=parent_task.git_worktree_path,
-            git_branch=parent_task.git_branch,
-            git_base_branch=parent_task.git_base_branch,
-            created_at=now,
-            updated_at=now,
-        )
-        await self.store.save_codex_task(child)
-
-        # Pause parent task
-        parent_task.status = "waiting_for_specialist"
-        parent_task.blocked_by_help_id = _specialist_blocker_id(child.id)
-        parent_task.updated_at = now
-        await self.store.save_codex_task(parent_task)
-
-        # If parent has an active execution process, mark it complete
-        if parent_task.last_execution_process_id:
-            await self.store.update_execution_process_status(
-                parent_task.last_execution_process_id,
-                "Completed",
-                completed_at=now,
-            )
-
-        # Record specialist call as AgentMessage for the feed
+        await self._acquire_role_capacity_slot(specialist_role_key)
+        await self._enforce_budget_gate(parent_task)
+        child_id: str | None = None
+        slot_bound_to_child = False
         try:
-            graph = await self.store.load_workflow_graph_for_issue(parent_task.issue_id)
-            msg = AgentMessage(
-                id=str(uuid4()),
+            # Create specialist child task
+            child_id = str(uuid4())
+            now = datetime.now()
+
+            specialist_executor = parent_task.executor or "claude"
+
+            child = CodexTask(
+                id=child_id,
+                session_id=parent_task.session_id,
+                project_id=parent_task.project_id,
                 issue_id=parent_task.issue_id,
-                graph_id=graph.id if graph else "",
-                from_node_key=parent_task.role,  # Engineer or QA
-                to_node_key=specialist_role_key,
-                message_type="specialist_call",
-                body=f"Calling {specialist_role_key}:\n\n{specialist_prompt}\n\n**Why**: {why}",
+                title=f"[Specialist] {specialist_role_key}",
+                prompt=specialist_prompt,
+                role=specialist_role_key,
+                executor=specialist_executor,
+                status="pending",
+                result=None,
+                parent_task_id=parent_task.id,
+                task_kind="specialist_child",
+                workspace_path=parent_task.workspace_path,
+                git_worktree_path=parent_task.git_worktree_path,
+                git_branch=parent_task.git_branch,
+                git_base_branch=parent_task.git_base_branch,
                 created_at=now,
+                updated_at=now,
             )
-            await self.store.save_agent_message(msg)
-        except Exception:  # noqa: BLE001, RUF100
-            pass  # AgentMessage is nice-to-have, don't block on failure
-
-        # Emit events for real-time UI updates
-        await self.event_bus.append(
-            {
-                "type": "specialist_requested",
-                "parent_task_id": parent_task.id,
-                "child_task_id": child_id,
-                "project_id": parent_task.project_id,
-                "specialist_role": specialist_role_key,
-                "reason": why,
-            }
-        )
-        await self.event_bus.append(
-            build_task_status_event(parent_task, parent_task.status)
-        )
-
-        # Start the specialist child task. If the runner cannot start, do not
-        # leave the parent suspended in waiting_for_specialist forever.
-        try:
-            await self.task_runner.start_task_run(child)
-        except Exception as exc:
-            failed_at = datetime.now()
-            child.status = "failed"
-            child.result = f"Specialist child failed to start: {exc}"
-            child.updated_at = failed_at
             await self.store.save_codex_task(child)
+            _SPECIALIST_ROLE_SLOTS_BY_CHILD[child.id] = specialist_role_key
+            slot_bound_to_child = True
 
-            parent_task.status = "ready_to_resume"
-            parent_task.blocked_by_help_id = None
-            parent_task.result = f"Specialist request failed to start: {exc}"
-            parent_task.updated_at = failed_at
+            # Pause parent task
+            parent_task.status = "waiting_for_specialist"
+            parent_task.blocked_by_help_id = _specialist_blocker_id(child.id)
+            parent_task.updated_at = now
             await self.store.save_codex_task(parent_task)
 
+            # If parent has an active execution process, mark it complete
+            if parent_task.last_execution_process_id:
+                await self.store.update_execution_process_status(
+                    parent_task.last_execution_process_id,
+                    "Completed",
+                    completed_at=now,
+                )
+
+            # Record specialist call as AgentMessage for the feed
+            try:
+                if parent_task.issue_id:
+                    graph = await self.store.load_workflow_graph_for_issue(parent_task.issue_id)
+                    msg = AgentMessage(
+                        id=str(uuid4()),
+                        issue_id=parent_task.issue_id,
+                        graph_id=graph.id if graph else "",
+                        from_node_key=parent_task.role,  # Engineer or QA
+                        to_node_key=specialist_role_key,
+                        message_type="specialist_call",
+                        body=f"Calling {specialist_role_key}:\n\n{specialist_prompt}\n\n**Why**: {why}",
+                        created_at=now,
+                    )
+                    await self.store.save_agent_message(msg)
+            except Exception:  # noqa: BLE001, RUF100
+                logger.debug(
+                    "specialist call feed message save failed: parent_task_id=%s",
+                    parent_task.id,
+                    exc_info=True,
+                )
+
+            # Emit events for real-time UI updates
             await self.event_bus.append(
                 {
-                    "type": "specialist_failed",
+                    "type": "specialist_requested",
                     "parent_task_id": parent_task.id,
-                    "child_task_id": child.id,
+                    "child_task_id": child_id,
                     "project_id": parent_task.project_id,
                     "specialist_role": specialist_role_key,
-                    "error": parent_task.result,
+                    "reason": why,
                 }
             )
             await self.event_bus.append(
-                build_task_status_event(
-                    child,
-                    child.status,
-                    result=child.result,
-                )
+                build_task_status_event(parent_task, parent_task.status)
             )
+
+            # Start the specialist child task. If the runner cannot start, do not
+            # leave the parent suspended in waiting_for_specialist forever.
+            try:
+                await self.task_runner.start_task_run(child)
+            except Exception as exc:
+                self._release_role_capacity_slot(child.id)
+                failed_at = datetime.now()
+                child.status = "failed"
+                child.result = f"Specialist child failed to start: {exc}"
+                child.updated_at = failed_at
+                await self.store.save_codex_task(child)
+
+                parent_task.status = "ready_to_resume"
+                parent_task.blocked_by_help_id = None
+                parent_task.result = f"Specialist request failed to start: {exc}"
+                parent_task.updated_at = failed_at
+                await self.store.save_codex_task(parent_task)
+
+                await self.event_bus.append(
+                    {
+                        "type": "specialist_failed",
+                        "parent_task_id": parent_task.id,
+                        "child_task_id": child.id,
+                        "project_id": parent_task.project_id,
+                        "specialist_role": specialist_role_key,
+                        "error": parent_task.result,
+                    }
+                )
+                await self.event_bus.append(
+                    build_task_status_event(
+                        child,
+                        child.status,
+                        result=child.result,
+                    )
+                )
+                await self.event_bus.append(
+                    build_task_status_event(
+                        parent_task,
+                        parent_task.status,
+                        result=parent_task.result,
+                    )
+                )
+                raise SpecialistOrchestratorError(
+                    f"Failed to start specialist child task {child.id}: {exc}"
+                ) from exc
+
             await self.event_bus.append(
-                build_task_status_event(
-                    parent_task,
-                    parent_task.status,
-                    result=parent_task.result,
-                )
+                {
+                    "type": "specialist_child_started",
+                    "parent_task_id": parent_task.id,
+                    "child_task_id": child_id,
+                    "project_id": parent_task.project_id,
+                    "specialist_role": specialist_role_key,
+                }
             )
-            raise SpecialistOrchestratorError(
-                f"Failed to start specialist child task {child.id}: {exc}"
-            ) from exc
 
-        await self.event_bus.append(
-            {
-                "type": "specialist_child_started",
-                "parent_task_id": parent_task.id,
-                "child_task_id": child_id,
-                "project_id": parent_task.project_id,
-                "specialist_role": specialist_role_key,
-            }
-        )
-
-        return child
+            return child
+        except Exception:
+            if slot_bound_to_child and child_id is not None:
+                self._release_role_capacity_slot(child_id)
+            else:
+                self._release_role_capacity_slot(specialist_role_key=specialist_role_key)
+            raise
 
     async def complete_specialist_request(
         self,
@@ -265,6 +407,8 @@ class SpecialistOrchestrator:
             raise SpecialistOrchestratorError(
                 f"Specialist child task {specialist_child_task_id} has no parent task"
             )
+        if is_task_terminal_status(child.status):
+            self._release_role_capacity_slot(child.id)
         if not is_task_success_status(child.status):
             await self.event_bus.append(
                 build_task_status_event(
@@ -354,20 +498,25 @@ class SpecialistOrchestrator:
 
         # Record specialist result as AgentMessage for the feed
         try:
-            graph = await self.store.load_workflow_graph_for_issue(parent.issue_id)
-            msg = AgentMessage(
-                id=str(uuid4()),
-                issue_id=parent.issue_id,
-                graph_id=graph.id if graph else "",
-                from_node_key=child.role,  # specialist
-                to_node_key=parent.role,  # engineer or qa
-                message_type="specialist_result",
-                body=persisted_result_summary[:500],  # Truncate for feed display
-                created_at=now,
-            )
-            await self.store.save_agent_message(msg)
+            if parent.issue_id:
+                graph = await self.store.load_workflow_graph_for_issue(parent.issue_id)
+                msg = AgentMessage(
+                    id=str(uuid4()),
+                    issue_id=parent.issue_id,
+                    graph_id=graph.id if graph else "",
+                    from_node_key=child.role,  # specialist
+                    to_node_key=parent.role,  # engineer or qa
+                    message_type="specialist_result",
+                    body=persisted_result_summary[:500],  # Truncate for feed display
+                    created_at=now,
+                )
+                await self.store.save_agent_message(msg)
         except Exception:  # noqa: BLE001, RUF100
-            pass
+            logger.debug(
+                "specialist result feed message save failed: child_task_id=%s",
+                child.id,
+                exc_info=True,
+            )
 
         # Emit events
         await self.event_bus.append(
@@ -395,19 +544,20 @@ class SpecialistOrchestrator:
         request_specialist reloads the parent and rejects non-runnable waiting
         or pending states before this helper can create another child.
         """
-        try:
-            parent = await self.store.load_codex_task(parent_task_id)
-            if (
-                parent is not None
-                and is_task_waiting_for_specialist_status(parent.status)
-                and str(parent.blocked_by_help_id or "").startswith("specialist:")
-            ):
-                return True
-            children = await self.store.list_codex_tasks(parent_task_id=parent_task_id)
-            return any(
-                c.task_kind == "specialist_child"
-                and (is_task_pending_status(c.status) or is_task_active_status(c.status))
-                for c in children
-            )
-        except Exception:  # noqa: BLE001, RUF100
+        parent = await self.store.load_codex_task(parent_task_id)
+        if (
+            parent is not None
+            and is_task_waiting_for_specialist_status(parent.status)
+            and str(parent.blocked_by_help_id or "").startswith("specialist:")
+        ):
             return True
+        list_tasks_raw = getattr(self.store, "list_codex_tasks", None)
+        if not callable(list_tasks_raw):
+            return False
+        list_tasks = cast(ListCodexTasksFn, list_tasks_raw)
+        children = await list_tasks(parent_task_id=parent_task_id)
+        return any(
+            c.task_kind == "specialist_child"
+            and (is_task_pending_status(c.status) or is_task_active_status(c.status))
+            for c in children
+        )

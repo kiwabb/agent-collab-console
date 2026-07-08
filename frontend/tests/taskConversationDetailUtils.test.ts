@@ -94,9 +94,9 @@ test("buildConversationMessages includes assistant deltas from logs", () => {
   const result = buildConversationMessages(messages, logs);
 
   assert.equal(result.length, 2);
-  assert.equal(result[0].role, "user");
-  assert.equal(result[1].role, "assistant");
-  assert.equal(result[1].content, "你好");
+  assert.equal(result[0]?.role, "user");
+  assert.equal(result[1]?.role, "assistant");
+  assert.equal(result[1]?.content, "你好");
 });
 
 test("buildConversationMessages does not duplicate codex final assistant text after deltas", () => {
@@ -163,8 +163,8 @@ test("buildConversationMessages does not duplicate codex final assistant text af
   const result = buildConversationMessages(messages, logs);
 
   assert.equal(result.length, 1);
-  assert.equal(result[0].role, "assistant");
-  assert.equal(result[0].content, "pong");
+  assert.equal(result[0]?.role, "assistant");
+  assert.equal(result[0]?.content, "pong");
 });
 
 test("buildConversationMessages keeps assistant replies from different execution processes separate", () => {
@@ -207,8 +207,8 @@ test("buildConversationMessages keeps assistant replies from different execution
   const result = buildConversationMessages(messages, logs);
 
   assert.equal(result.length, 2);
-  assert.equal(result[0].content, "pong");
-  assert.equal(result[1].content, "pong");
+  assert.equal(result[0]?.content, "pong");
+  assert.equal(result[1]?.content, "pong");
 });
 
 test("buildTaskConversationDetail derives merged logs and messages from execution process views", () => {
@@ -270,23 +270,37 @@ test("buildTaskConversationDetail derives merged logs and messages from executio
     ],
   } as unknown as ExecutionProcess;
 
-  const detail = buildTaskConversationDetail(
-    [
-      {
-        id: "task-msg-1",
-        task_id: "task-1",
-        role: "user",
-        content: "start",
-        created_at: "2026-04-18T12:00:00Z",
-        execution_process_id: null,
-      },
-    ],
-    [proc1, proc2],
-  );
+  const detail = buildTaskConversationDetail([], [proc1, proc2]);
 
-  assert.deepEqual(detail.logs.map((log) => (log as { id: string }).id), ["log-1", "log-2"]);
-  assert.deepEqual(
-    detail.messages.map((message) => message.id),
-    ["task-msg-1", "msg-1", "msg-2"],
-  );
+  assert.equal(detail.messages.length, 2);
+  assert.equal(detail.logs.length, 2);
+  assert.equal((detail.messages[0] as CodexTaskMessage).content, "first reply");
+  assert.equal((detail.messages[1] as CodexTaskMessage).content, "second reply");
+});
+
+test("buildTaskConversationDetail tolerates process views without messages or logs", () => {
+  const detail = buildTaskConversationDetail([], [makeProcess("proc-1", "task-1", "running")]);
+
+  assert.deepEqual(detail.messages, []);
+  assert.deepEqual(detail.logs, []);
+});
+
+test("buildTaskConversationDetail keeps task messages when execution process list is empty", () => {
+  const task = makeTask("task-1", "issue-1", "done");
+  const taskMessages: CodexTaskMessage[] = [
+    {
+      id: "task-msg-1",
+      task_id: task.id,
+      role: "assistant",
+      content: "persisted reply",
+      execution_process_id: null,
+      created_at: "2026-04-18T12:00:01Z",
+    },
+  ];
+
+  const detail = buildTaskConversationDetail(taskMessages, []);
+
+  assert.equal(detail.messages.length, 1);
+  assert.equal(detail.messages[0]?.content, "persisted reply");
+  assert.deepEqual(detail.logs, []);
 });

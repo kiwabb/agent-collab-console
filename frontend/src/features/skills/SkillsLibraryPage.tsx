@@ -189,7 +189,8 @@ export function SkillsLibraryPage() {
         s.description ?? "",
         s.link,
         s.category ?? "",
-        (s.tags ?? []).join(" "),
+        s.tags.join(" "),
+
       ]
         .join(" ")
         .toLowerCase();
@@ -903,9 +904,9 @@ function SkillEditorDialog({
           link: editing.link,
           description: editing.description ?? "",
           category: editing.category ?? "",
-          tags: editing.tags ?? [],
+          tags: editing.tags,
         });
-        setTagsText((editing.tags ?? []).join(", "));
+        setTagsText(editing.tags.join(", "));
       } else {
         setForm({ name: "", link: "", description: "", category: "", tags: [] });
         setTagsText("");

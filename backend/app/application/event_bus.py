@@ -4,11 +4,14 @@ from collections import deque  # noqa: I001, RUF100
 from datetime import datetime
 from typing import Any
 import asyncio
+import logging
 import threading
-import sys
 
 from app.application import timeouts
 from app.application.task_statuses import is_task_terminal_status
+
+
+logger = logging.getLogger(__name__)
 
 
 class EventBus:
@@ -252,11 +255,8 @@ class EventBus:
                 workspace_id = event.get("session_id") or event.get("workspace_id")
                 if workspace_id:
                     await stream_manager.publish_event(workspace_id, event)
-        except Exception as e:
-            import traceback
-
-            print(f"[EventBus] Error broadcasting event {event.get('type')}: {e}", file=sys.stderr)
-            traceback.print_exc()
+        except Exception:
+            logger.debug("event bus broadcast failed: event_type=%s", event.get("type"), exc_info=True)
 
     async def _notify_workflow_scheduler(self, task_id: str) -> None:
         """Forward a terminal task_status event to the workflow scheduler."""
@@ -265,7 +265,7 @@ class EventBus:
         if async_store is None:
             return
         task = await async_store.load_codex_task(task_id)
-        if task is None or not getattr(task, "workflow_node_id", None):
+        if task is None or not task.workflow_node_id:
             return
         from app.application.workflow_scheduler import WorkflowScheduler
 

@@ -913,7 +913,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                             {t("conductor.panel.payload")}
                           </summary>
                           <pre className="mt-1 text-[10px] font-mono text-text-muted bg-surface-raised rounded px-2 py-1.5 overflow-x-auto whitespace-pre-wrap">
-                            {JSON.stringify(turn.payload ?? {}, null, 2)}
+                            {JSON.stringify(turn.payload, null, 2)}
                           </pre>
                         </details>
                       </li>
@@ -970,7 +970,7 @@ function formatTurnSummary(
   t: (key: string, params?: Record<string, string | number>) => string,
   turn: ConductorTurn,
 ): string {
-  const payload = turn.payload ?? {};
+  const payload = turn.payload;
   if (turn.kind === "llm_request") {
     return t("conductor.turnSummary.llmRequest", { count: Number(payload.message_count ?? 0) });
   }

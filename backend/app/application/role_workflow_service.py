@@ -2,6 +2,7 @@ from __future__ import annotations  # noqa: I001
 
 from datetime import datetime
 import json
+import logging
 
 from app.application.architect_workflow import ArchitectWorkflow
 from app.application.clarification import (
@@ -14,6 +15,8 @@ from app.application.product_manager_service import ProductManagerService
 from app.application.project_memory_service import project_memory
 from app.application.qa_workflow import QAWorkflow
 
+
+logger = logging.getLogger(__name__)
 
 ENGINEER_ROLES = frozenset({"engineer", "engineer_frontend", "engineer_backend"})
 OPERATIONS_ROLES = frozenset({"operations_engineer"})
@@ -51,7 +54,7 @@ class RoleWorkflowService:
         (written via POST /codex/issues/{id}/steer) are injected at the top
         so they win against any other context.
         """
-        role = getattr(task, "role", None)
+        role = task.role
         if role == "product_manager":
             base = self._pm_service.build_prompt(task, workspace_title)
         elif role == "architect":
@@ -81,7 +84,7 @@ class RoleWorkflowService:
             prompt_with_escape = self._format_steer(steer_text) + "\n" + prompt_with_escape
 
         memory_text = None
-        project_id = getattr(task, "project_id", None)
+        project_id = task.project_id
         if project_id and self.codex_store is not None:
             try:
                 from app.application.team_notes_service import team_notes
@@ -89,8 +92,12 @@ class RoleWorkflowService:
                 memory_text = await team_notes.format_for_prompt(
                     self.codex_store, project_id, project_repo_path
                 )
-            except Exception:  # noqa: BLE001, RUF100
-                memory_text = None
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "team notes prompt context unavailable: project_id=%s error=%s",
+                    project_id,
+                    exc,
+                )
         if not memory_text:
             memory_text = project_memory.read_for_prompt(project_repo_path)
         if memory_text:
@@ -99,8 +106,8 @@ class RoleWorkflowService:
 
     @staticmethod
     def _read_steer_notes(task) -> str | None:
-        workspace_path = getattr(task, "workspace_path", None)
-        issue_id = getattr(task, "issue_id", None)
+        workspace_path = task.workspace_path
+        issue_id = task.issue_id
         if not workspace_path or not issue_id:
             return None
         from pathlib import Path
@@ -127,7 +134,7 @@ class RoleWorkflowService:
 
     async def persist_result(self, task, workspace_title: str | None = None) -> any:
         """Persist artifacts for a completed managed role task. No-op for unmanaged roles."""
-        role = getattr(task, "role", None)
+        role = task.role
         doc = None
         if role == "product_manager":
             doc = self._pm_service.persist_prd_from_result(task, workspace_title)
@@ -241,7 +248,7 @@ class RoleWorkflowService:
                 id=str(uuid4()),
                 issue_id=task.issue_id,
                 graph_id=graph.id if graph else "",
-                from_node_key=getattr(task, "role", "engineer"),
+                from_node_key=task.role,
                 to_node_key="architect",
                 message_type="critique",
                 body=critique,
@@ -267,9 +274,7 @@ class RoleWorkflowService:
                 }
             )
         except Exception as exc:  # noqa: BLE001, RUF100
-            import logging
-
-            logging.getLogger(__name__).warning("_record_critique failed: %s", exc)
+            logger.warning("_record_critique failed: %s", exc)
 
     async def _request_specialist(
         self, task, specialist_role_key: str, specialist_prompt: str, why: str
@@ -297,13 +302,11 @@ class RoleWorkflowService:
                 why=why,
             )
         except Exception as exc:  # noqa: BLE001, RUF100
-            import logging
-
-            logging.getLogger(__name__).warning("_request_specialist setup failed: %s", exc)
+            logger.warning("_request_specialist setup failed: %s", exc)
             raise
 
     async def _build_operations_engineer_prompt(self, task) -> str:
-        if not self.codex_store or not getattr(task, "project_id", None):
+        if not self.codex_store or not task.project_id:
             return self._fallback_operations_prompt(task)
         try:
             project = await self.codex_store.load_project(task.project_id)
@@ -338,7 +341,7 @@ class RoleWorkflowService:
 
     @staticmethod
     def _read_operations_request_context(task) -> dict[str, str]:
-        prompt = getattr(task, "prompt", "") or ""
+        prompt = task.prompt or ""
         marker = "Operations request context JSON:"
         if marker not in prompt:
             return RoleWorkflowService._read_legacy_operations_request_context(prompt)
@@ -380,7 +383,7 @@ class RoleWorkflowService:
             '"run_command":"long-running local dev command, or empty string",'
             '"access_url":"local URL or null","notes":["short note"]}\n'
             "Do not wrap the JSON in markdown. Do not add extra prose.\n\n"
-            f"User/project request:\n{getattr(task, 'prompt', '')}"
+            f"User/project request:\n{task.prompt or ''}"
         )
 
     async def _persist_operations_engineer_result(self, task):
@@ -391,12 +394,12 @@ class RoleWorkflowService:
         if suggestion is None:
             from app.application.project_script_suggestions import infer_project_script_suggestion
 
-            workspace_path = getattr(task, "workspace_path", None)
+            workspace_path = task.workspace_path
             suggestion = infer_project_script_suggestion(workspace_path) if workspace_path else None
         if suggestion is None:
             raise ValueError("Operations Engineer could not produce a project script suggestion")
 
-        if self.codex_store and getattr(task, "project_id", None):
+        if self.codex_store and task.project_id:
             project = await self.codex_store.load_project(task.project_id)
             if project is not None:
                 suggestion = suggestion.model_copy(
@@ -450,8 +453,8 @@ class RoleWorkflowService:
                             "run_command": project.run_command,
                         }
                     )
-                except Exception:  # noqa: BLE001, RUF100
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("project script update events failed: %s", exc)
         task.result = suggestion.model_dump_json()
         note_lines = [
             "[OPERATIONS SCRIPT UPDATED]",

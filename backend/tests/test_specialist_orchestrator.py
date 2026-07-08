@@ -1,15 +1,26 @@
 """Tests for Phase 4 specialist orchestrator (P2P mesh calls)."""
 
 import pytest  # noqa: I001
-from dataclasses import replace
 from datetime import datetime
 from uuid import uuid4  # noqa: F401
 
+from app.application.role_concurrency import RoleConcurrencyLimiter
 from app.application.specialist_orchestrator import (
+    _SPECIALIST_ROLE_SLOTS_BY_CHILD,
     SpecialistOrchestrator,
     SpecialistOrchestratorError,
 )
-from app.domain.models import CodexTask, AgentMessage
+from app.domain.models import CodexIssue, CodexTask, AgentMessage
+
+
+@pytest.fixture(autouse=True)
+def _reset_specialist_state():
+    RoleConcurrencyLimiter._instance = None
+    _SPECIALIST_ROLE_SLOTS_BY_CHILD.clear()
+    yield
+    RoleConcurrencyLimiter._instance = None
+    _SPECIALIST_ROLE_SLOTS_BY_CHILD.clear()
+
 
 
 class MockStore:
@@ -26,10 +37,30 @@ class MockStore:
     async def save_codex_task(self, task: CodexTask):
         self.tasks[task.id] = task
 
-    async def list_codex_tasks(self, parent_task_id: str = None):  # noqa: RUF013
-        if parent_task_id is None:
-            return list(self.tasks.values())
-        return [t for t in self.tasks.values() if t.parent_task_id == parent_task_id]
+    async def list_codex_tasks(
+        self,
+        parent_task_id: str | None = None,
+        issue_id: str | None = None,
+    ):
+        tasks = list(self.tasks.values())
+        if parent_task_id is not None:
+            tasks = [t for t in tasks if t.parent_task_id == parent_task_id]
+        if issue_id is not None:
+            tasks = [t for t in tasks if t.issue_id == issue_id]
+        return tasks
+
+    async def load_codex_issue(self, issue_id: str):
+        return CodexIssue(
+            id=issue_id,
+            session_id="session-1",
+            project_id="project-1",
+            title="Test issue",
+            budget_usd=0.0,
+            status="open",
+        )
+
+    async def list_execution_processes(self, session_id=None, task_id=None):
+        return []
 
     async def load_workflow_graph_for_issue(self, issue_id: str):
         # Mock graph object
@@ -139,7 +170,7 @@ async def test_request_specialist_pauses_parent(orchestrator, store, parent_task
     """Test that request_specialist pauses the parent task."""
     await store.save_codex_task(parent_task)
 
-    await orchestrator.request_specialist(
+    child = await orchestrator.request_specialist(
         parent_task=parent_task,
         specialist_role_key="specialist:security_reviewer",
         specialist_prompt="Review auth code",
@@ -247,7 +278,7 @@ async def test_request_specialist_parent_not_running(orchestrator, store):
 @pytest.mark.asyncio
 async def test_request_specialist_uses_latest_parent_state(orchestrator, store, parent_task):
     stale_parent = parent_task
-    latest_parent = replace(parent_task, status="failed")
+    latest_parent = parent_task.model_copy(update={"status": "failed"})
     await store.save_codex_task(latest_parent)
 
     with pytest.raises(SpecialistOrchestratorError, match="current status: failed"):
@@ -328,10 +359,10 @@ async def test_complete_specialist_request_injects_result(orchestrator, store, p
     )
 
     child.status = "done"
-    child.result = "Security review: All good"
+    result_summary = "Security review findings: No critical vulnerabilities found"
+    child.result = result_summary
     await store.save_codex_task(child)
 
-    result_summary = "Security review findings: No critical vulnerabilities found"
     resumed_parent = await orchestrator.complete_specialist_request(
         specialist_child_task_id=child.id,
         specialist_result_summary=result_summary,
@@ -365,6 +396,51 @@ async def test_complete_specialist_request_rejects_failed_child(orchestrator, st
     assert updated_parent.blocked_by_help_id is None
     assert not updated_parent.review_comment
     assert any(event.get("type") == "specialist_failed" for event in orchestrator.event_bus.events)
+
+
+@pytest.mark.asyncio
+async def test_complete_specialist_request_releases_role_slot_for_failed_child(monkeypatch, store, event_bus, parent_task):
+    await store.save_codex_task(parent_task)
+    events: list[tuple[str, str]] = []
+
+    class _Limiter:
+        @classmethod
+        def instance(cls):
+            return cls()
+
+        async def acquire(self, role: str, *, timeout: float) -> bool:
+            events.append(("acquire", role))
+            return True
+
+        def release(self, role: str) -> None:
+            events.append(("release", role))
+
+    monkeypatch.setattr(
+        "app.application.specialist_orchestrator.RoleConcurrencyLimiter",
+        _Limiter,
+    )
+    orchestrator = SpecialistOrchestrator(store, event_bus, task_runner=MockTaskRunner())
+
+    child = await orchestrator.request_specialist(
+        parent_task=parent_task,
+        specialist_role_key="specialist:security_reviewer",
+        specialist_prompt="Review",
+        why="Security",
+    )
+    child.status = "failed"
+    child.result = "specialist crashed"
+    await store.save_codex_task(child)
+
+    with pytest.raises(SpecialistOrchestratorError):
+        await orchestrator.complete_specialist_request(
+            specialist_child_task_id=child.id,
+            specialist_result_summary="should not inject",
+        )
+
+    assert events == [
+        ("acquire", "specialist:security_reviewer"),
+        ("release", "specialist:security_reviewer"),
+    ]
 
 
 @pytest.mark.asyncio

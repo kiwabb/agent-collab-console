@@ -1,6 +1,6 @@
 # State Management
 
-> How state is managed in the ccgui frontend package.
+> How state is managed in the vibe-kanban frontend package.
 
 ---
 
@@ -111,6 +111,33 @@ the failure case. Callers branch on `null`, never on thrown errors.
   event for a value change, do not also poll it. The poll is for
   values whose growth is silent below a threshold (budget spend before
   soft-warn, for example) — not a substitute for the event stream.
+
+---
+
+### Server reload failures preserve stale data
+
+When a component already has server data on screen, a refresh/reload failure must
+not clear that data unless the user explicitly requested a destructive reset.
+Keep the stale data, set an error state, and log with context.
+
+```tsx
+// Wrong — transient reload error wipes the user's view.
+.catch(() => {
+  setProcessLogs([]);
+  setProcessMessages([]);
+});
+
+// Correct — stale data remains visible and the UI can show the failure.
+.catch((err) => {
+  const msg = err instanceof Error ? err.message : "Failed to load process output";
+  console.error("workbench process output reload failed:", err);
+  setError(msg);
+});
+```
+
+This applies to command palette/project sync loads too: `.catch(() => {})` is not
+acceptable for primary navigation or visible panels. Use a local `loadError` /
+`error` state and render a small visible message.
 
 ---
 

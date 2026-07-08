@@ -33,7 +33,7 @@ export function NewIssueDialog({ open, onOpenChange, workspaceId, project, catal
   const [submitting, setSubmitting] = useState(false);
 
   const enabledExecutors = useMemo(
-    () => (catalog?.executors ?? []).filter((entry) => entry.enabled),
+    () => catalog?.executors.filter((entry) => entry.enabled) ?? [],
     [catalog],
   );
   const selectedExecutor = useMemo(
@@ -50,10 +50,10 @@ export function NewIssueDialog({ open, onOpenChange, workspaceId, project, catal
       options.push(value);
     };
     push(selectedExecutor.default_model);
-    for (const provider of selectedExecutor.providers ?? []) {
+    for (const provider of selectedExecutor.providers) {
       if (!provider.enabled) continue;
       push(provider.default_model_id);
-      for (const item of provider.models ?? []) {
+      for (const item of provider.models) {
         if (item.enabled) push(item.id);
       }
     }

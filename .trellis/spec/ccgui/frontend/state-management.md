@@ -114,6 +114,33 @@ the failure case. Callers branch on `null`, never on thrown errors.
 
 ---
 
+### Server reload failures preserve stale data
+
+When a component already has server data on screen, a refresh/reload failure must
+not clear that data unless the user explicitly requested a destructive reset.
+Keep the stale data, set an error state, and log with context.
+
+```tsx
+// Wrong — transient reload error wipes the user's view.
+.catch(() => {
+  setProcessLogs([]);
+  setProcessMessages([]);
+});
+
+// Correct — stale data remains visible and the UI can show the failure.
+.catch((err) => {
+  const msg = err instanceof Error ? err.message : "Failed to load process output";
+  console.error("workbench process output reload failed:", err);
+  setError(msg);
+});
+```
+
+This applies to command palette/project sync loads too: `.catch(() => {})` is not
+acceptable for primary navigation or visible panels. Use a local `loadError` /
+`error` state and render a small visible message.
+
+---
+
 ## Scenario: Active task feedback on routes without a live-event provider
 
 ### 1. Scope / Trigger

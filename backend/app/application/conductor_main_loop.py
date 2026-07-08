@@ -752,7 +752,7 @@ async def run_issue_conductor_loop(
     # Reflect "the Conductor is actively working this issue" at the issue level.
     # Auto-start orchestration otherwise leaves issue.status at "open" (rendered
     # as 排队中) until the terminal seal, so the badge looks queued for the whole run.
-    if getattr(issue, "status", None) in {"open", "queued"}:
+    if issue.status in {"open", "queued"}:
         try:
             issue.status = "in_progress"
             issue.updated_at = datetime.now()

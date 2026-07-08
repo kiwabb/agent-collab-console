@@ -8,27 +8,27 @@ type ProcessConversationFields = ExecutionProcess & {
 
 export function sortMessages<T extends { created_at?: string | null; role?: string }>(messages: T[]): T[] {
   return [...messages].sort((a, b) => {
-    const aTime = a?.created_at ? new Date(a.created_at).getTime() : 0;
-    const bTime = b?.created_at ? new Date(b.created_at).getTime() : 0;
+    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
     if (aTime !== bTime) return aTime - bTime;
-    if (a?.role === b?.role) return 0;
-    if (a?.role === "user") return -1;
-    if (b?.role === "user") return 1;
-    return (a?.role || "").localeCompare(b?.role || "");
+    if (a.role === b.role) return 0;
+    if (a.role === "user") return -1;
+    if (b.role === "user") return 1;
+    return (a.role ?? "").localeCompare(b.role ?? "");
   });
 }
 
 export function sortLogs<T extends { created_at?: string | null }>(logs: T[]): T[] {
   return [...logs].sort((a, b) => {
-    const aTime = a?.created_at ? new Date(a.created_at).getTime() : 0;
-    const bTime = b?.created_at ? new Date(b.created_at).getTime() : 0;
+    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
     return aTime - bTime;
   });
 }
 
 export function mergeById<T extends { id?: string }>(items: T[] | undefined): T[] {
   const merged = new Map<string, T>();
-  for (const item of items || []) {
+  for (const item of items ?? []) {
     if (!item?.id) continue;
     merged.set(item.id, item);
   }
@@ -48,7 +48,7 @@ export function buildConversationMessages(messages: CodexTaskMessage[], logs: un
   const persistedAssistantKeys = new Set<string>();
   const persistedAssistantProcessIds = new Set<string>();
   for (const message of persistedMessages) {
-    if (message?.role !== "assistant" || typeof message?.content !== "string") continue;
+    if (message.role !== "assistant" || typeof message.content !== "string") continue;
     persistedAssistantKeys.add(`${message.execution_process_id || "none"}::${message.content}`);
     if (message.execution_process_id) {
       persistedAssistantProcessIds.add(message.execution_process_id);
@@ -57,7 +57,7 @@ export function buildConversationMessages(messages: CodexTaskMessage[], logs: un
 
   const normalizedLogs = normalizeLogs(logs as Parameters<typeof normalizeLogs>[0]);
   const syntheticMessages: CodexTaskMessage[] = normalizedLogs
-    .filter((entry: NormalizedEntry) => entry?.type === "assistant" && typeof entry?.content === "string" && entry.content)
+    .filter((entry: NormalizedEntry) => entry.type === "assistant" && typeof entry.content === "string" && entry.content)
     .filter((entry: NormalizedEntry) => !entry.executionProcessId || !persistedAssistantProcessIds.has(entry.executionProcessId))
     .filter((entry: NormalizedEntry) => !persistedAssistantKeys.has(`${entry.executionProcessId || "none"}::${entry.content}`))
     .map((entry: NormalizedEntry) => ({
@@ -76,13 +76,13 @@ export function buildTaskConversationDetail(
   taskMessages: CodexTaskMessage[],
   executionProcesses: ExecutionProcess[]
 ): { logs: unknown[]; messages: CodexTaskMessage[] } {
-  const processMessages = (executionProcesses || []).flatMap((process) =>
-    Object.values((process as ProcessConversationFields).messages || {}),
+  const processMessages = executionProcesses.flatMap((process) =>
+    Object.values((process as ProcessConversationFields).messages ?? {}),
   );
-  const processLogs = (executionProcesses || []).flatMap((process) => (process as ProcessConversationFields).logs || []);
+  const processLogs = executionProcesses.flatMap((process) => (process as ProcessConversationFields).logs ?? []);
   const logs = mergeTaskConversationLogs([processLogs]);
   return {
     logs,
-    messages: buildConversationMessages([...(taskMessages || []), ...processMessages as CodexTaskMessage[]], logs),
+    messages: buildConversationMessages([...taskMessages, ...(processMessages as CodexTaskMessage[])], logs),
   };
 }

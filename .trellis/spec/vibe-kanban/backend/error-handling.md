@@ -144,7 +144,125 @@ predictable shape. It indicates "the server is not ready", not
 
 ---
 
-## Common Mistakes
+## Scenario: Fail-Closed Agent Governance Gates
+
+### 1. Scope / Trigger
+
+- Trigger: changing any code that decides whether to launch more agent work:
+  conductor `dispatch_subagent`, conductor `dispatch_batch`, specialist child
+  launch, per-role redispatch caps, budget gates, or role-concurrency gates.
+- These gates protect cost, concurrency, and runaway retry loops. If the gate's
+  own state cannot be read, launching the work is unsafe.
+
+### 2. Signatures
+
+- Conductor tools:
+  - `dispatch_subagent({ role, prompt?, prev_node_key? }) -> JsonObject`
+  - `dispatch_batch({ agents: [{ role, prompt?, prev_node_key? }] }) -> JsonObject`
+- Governance helpers:
+  - `compute_issue_budget_status(store, issue) -> IssueBudgetStatus`
+  - `store.load_workflow_graph_for_issue(issue_id) -> WorkflowGraph | None`
+  - `RoleConcurrencyLimiter.acquire(role, timeout=0) -> bool`
+  - `RoleConcurrencyLimiter.release(role) -> None`
+- Failure result shape for tool-level gate unavailability:
+  `{"status":"failed","gate":"budget|redispatch_budget|workflow_graph", "error": str, "details": str}`.
+- Specialist failure exception:
+  `SpecialistGovernanceError(message, gate="budget|concurrency", detail=str)`.
+
+### 3. Contracts
+
+- Dispatch gates are **fail-closed**:
+  - Budget-status computation error -> refuse launch.
+  - Workflow graph load error for redispatch/finalize governance -> refuse launch
+    or finalize.
+  - Role-concurrency limiter error -> refuse specialist launch.
+- Over-budget is a normal refusal, not an internal crash.
+- Busy role (`acquire(...)` returns `False`) preserves the existing
+  `SpecialistOrchestratorError` max-concurrency refusal.
+- Specialist role slots are held for the child lifetime, not just probed at
+  launch. Release the slot on child terminal completion and on startup failure.
+- Best-effort logging/event mirroring may swallow after logging, but the gate
+  decision itself must not degrade to "allow".
+
+### 4. Validation & Error Matrix
+
+- `compute_issue_budget_status(...)` raises -> conductor returns
+  `status="failed", gate="budget"`; specialist raises
+  `SpecialistGovernanceError(gate="budget")`.
+- `load_workflow_graph_for_issue(...)` raises while checking redispatch cap ->
+  conductor returns `status="failed", gate="redispatch_budget"` before creating
+  tasks/worktrees.
+- `RoleConcurrencyLimiter.acquire(...)` raises -> specialist raises
+  `SpecialistGovernanceError(gate="concurrency")` before creating a child task.
+- `RoleConcurrencyLimiter.acquire(...)` returns `False` -> specialist raises the
+  normal busy-role `SpecialistOrchestratorError` and creates no child task.
+- Child start fails after slot acquire -> parent/child rollback path releases the
+  role slot.
+- Child reaches terminal status -> completion path releases the role slot.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a DB error while reading budget returns a structured refusal and emits a
+  governance-unavailable event; no new task/worktree is created.
+- Good: two concurrent `specialist:security_reviewer` launches cannot both pass
+  the cap; the first holds the role slot until its child completes.
+- Base: issue has `budget_usd=0` (unlimited) -> budget gate succeeds.
+- Bad: `except Exception: return None` in a gate where `None` means "no problem".
+- Bad: acquiring and immediately releasing a specialist role slot before the
+  child is actually running; that only probes capacity and does not enforce it.
+
+### 6. Tests Required
+
+- Backend pytest for conductor budget failure:
+  `backend/tests/test_conductor_governance_fail_closed.py` asserts
+  `gate == "budget"` and no worktree/task is prepared.
+- Backend pytest for conductor graph failure:
+  assert `gate == "redispatch_budget"` and no worktree/task is prepared.
+- Backend pytest for specialist budget/concurrency failures:
+  `backend/tests/test_specialist_governance_fail_closed.py` asserts no child is
+  created and parent remains runnable.
+- Backend pytest for specialist slot lifetime:
+  same-role second launch is refused until the first child reaches terminal
+  completion or startup rollback releases the slot.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+try:
+    budget_status = await compute_issue_budget_status(store, issue)
+except Exception:
+    return None  # None means "dispatch may proceed"
+```
+
+Correct:
+
+```python
+try:
+    budget_status = await compute_issue_budget_status(store, issue)
+except Exception as exc:
+    return await governance_failure(tool="dispatch_batch", gate="budget", error=exc)
+```
+
+Wrong:
+
+```python
+acquired = await limiter.acquire(role, timeout=0)
+if acquired:
+    limiter.release(role)  # releases before child lifetime is protected
+```
+
+Correct:
+
+```python
+acquired = await limiter.acquire(role, timeout=0)
+if not acquired:
+    raise SpecialistOrchestratorError("role is at max concurrency")
+# Hold slot while child is in flight; release on child terminal/startup rollback.
+```
+
+
 
 - **Catching `Exception` too early.** A service that swallows
   everything to "always return a value" hides bugs. Catch the

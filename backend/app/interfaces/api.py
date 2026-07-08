@@ -2672,11 +2672,11 @@ async def send_codex_task_message(task_id: str, request: SendTaskMessageRequest)
 def _has_canonical_artifact_for_task(task) -> bool:
     """Check whether the role's canonical artifact exists on disk."""
     from app.application.issue_artifact_documents import IssueArtifactDocuments
-    if not getattr(task, "workspace_path", None):
+    if not task.workspace_path:
         return False
     docs = IssueArtifactDocuments()
     issue_id = task.issue_id or task.id
-    role = getattr(task, "role", None)
+    role = task.role
     if role == "product_manager":
         return docs.pm_prd_json_path(task.workspace_path, issue_id).exists()
     if role == "architect":

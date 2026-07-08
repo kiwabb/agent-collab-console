@@ -4,11 +4,22 @@ from datetime import datetime
 
 import pytest
 
+from app.application.role_concurrency import RoleConcurrencyLimiter
 from app.application.specialist_orchestrator import (
+    _SPECIALIST_ROLE_SLOTS_BY_CHILD,
     SpecialistOrchestrator,
     SpecialistOrchestratorError,
 )
-from app.domain.models import CodexTask
+from app.domain.models import CodexIssue, CodexTask
+
+
+@pytest.fixture(autouse=True)
+def _reset_specialist_state():
+    RoleConcurrencyLimiter._instance = None
+    _SPECIALIST_ROLE_SLOTS_BY_CHILD.clear()
+    yield
+    RoleConcurrencyLimiter._instance = None
+    _SPECIALIST_ROLE_SLOTS_BY_CHILD.clear()
 
 
 class _EventBus:
@@ -30,9 +41,34 @@ class _Store:
     async def load_codex_task(self, task_id: str):
         return self.tasks.get(task_id)
 
-    async def update_execution_process_status(self, execution_process_id: str, status: str, **kwargs):
+    async def load_codex_issue(self, issue_id: str):
+        return CodexIssue(
+            id=issue_id,
+            session_id="workspace-1",
+            project_id="project-1",
+            title="Issue",
+            budget_usd=0.0,
+            status="open",
+        )
+
+    async def list_codex_tasks(self, parent_task_id: str | None = None, issue_id: str | None = None):
+        tasks = list(self.tasks.values())
+        if parent_task_id is not None:
+            tasks = [task for task in tasks if task.parent_task_id == parent_task_id]
+        if issue_id is not None:
+            tasks = [task for task in tasks if task.issue_id == issue_id]
+        return tasks
+
+    async def list_execution_processes(
+        self, session_id: str | None = None, task_id: str | None = None
+    ):
+        return []
+
+    async def update_execution_process_status(
+        self, proc_id: str, status: str, completed_at: datetime | None = None
+    ) -> None:
         self.execution_updates.append(
-            {"execution_process_id": execution_process_id, "status": status, **kwargs}
+            {"execution_process_id": proc_id, "status": status, "completed_at": completed_at}
         )
 
     async def load_workflow_graph_for_issue(self, issue_id: str):

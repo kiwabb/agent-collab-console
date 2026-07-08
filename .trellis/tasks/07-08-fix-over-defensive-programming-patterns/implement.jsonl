@@ -1,0 +1,11 @@
+{"file":".trellis/spec/vibe-kanban/backend/index.md","reason":"Backend package overview, architecture boundaries, and required cross-cutting conventions for FastAPI/aiosqlite code."}
+{"file":".trellis/spec/vibe-kanban/backend/error-handling.md","reason":"Backend error-handling ownership: typed service errors, HTTP mapping, background loop boundaries, and anti-patterns for early broad catches."}
+{"file":".trellis/spec/vibe-kanban/backend/quality-guidelines.md","reason":"Backend quality gates, source hygiene, hard-gate expectations, and tests required for backend changes."}
+{"file":".trellis/spec/vibe-kanban/backend/logging-guidelines.md","reason":"Logging level and context rules for replacing silent exception swallowing with observable diagnostics."}
+{"file":".trellis/spec/vibe-kanban/backend/database-guidelines.md","reason":"Store/DB boundary guidance for distinguishing typed internal models from raw persisted data."}
+{"file":".trellis/spec/ccgui/frontend/index.md","reason":"Frontend package overview and canonical ccgui frontend spec entrypoint."}
+{"file":".trellis/spec/ccgui/frontend/quality-guidelines.md","reason":"Frontend quality gates, test commands, and dev-server/build collision warning."}
+{"file":".trellis/spec/ccgui/frontend/type-safety.md","reason":"Frontend strict typing rules, runtime boundary validation, and no broad cast guidance."}
+{"file":".trellis/spec/ccgui/frontend/state-management.md","reason":"Frontend data/error state conventions relevant to replacing silent catch/empty-state fallbacks."}
+{"file":".trellis/spec/guides/index.md","reason":"Shared cross-layer and reuse thinking guide for multi-layer cleanup."}
+{"file":".trellis/tasks/07-08-fix-over-defensive-programming-patterns/research/defensive-programming-scan.md","reason":"Verified scan findings and prioritized backend/frontend fix targets for this task."}

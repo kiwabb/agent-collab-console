@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Inbox, FileBox, FileText, GitBranch, Library, Search, ShieldCheck, Users } from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
@@ -58,12 +58,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [ftsIssueHits, setFtsIssueHits] = useState<Hit[]>([]);
   const [ftsArtifactHits, setFtsArtifactHits] = useState<Hit[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const fetchedRef = useRef(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const ftsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Lazy fetch on first open.
   useEffect(() => {
     if (!open) return;
     restoreFocusRef.current = document.activeElement instanceof HTMLElement
@@ -83,8 +83,13 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         setIssues(iss);
         setWorkspaces(ws);
         setProjects(pr);
+        setLoadError(null);
       })
-      .catch(() => {})
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : "Failed to load command palette data";
+        console.error("CommandPalette initial load failed:", err);
+        setLoadError(msg);
+      })
       .finally(() => setLoading(false));
   }, [open]);
 
@@ -95,15 +100,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   useEffect(() => {
     if (open) {
-      // Focus after Sheet animation begins.
       const id = window.setTimeout(() => inputRef.current?.focus(), 50);
       return () => window.clearTimeout(id);
     }
   }, [open]);
 
-  // Knowledge FTS: debounced backend search to back up the local fuzzy match.
-  // Fires only when the query is non-trivial (>=2 chars) so blank palette
-  // doesn't pound the API.
   useEffect(() => {
     if (ftsDebounceRef.current) clearTimeout(ftsDebounceRef.current);
     const q = query.trim();
@@ -145,7 +146,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     };
   }, [open, query]);
 
-  const hits = useMemo<Hit[]>(() => {
+  const hits = useCallback((): Hit[] => {
     const q = query.trim().toLowerCase();
     const match = (text: string) => !q || text.toLowerCase().includes(q);
 
@@ -219,7 +220,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       hint: t(n.hintKey),
     }));
 
-    // Merge FTS hits in front of local fuzzy hits, dedup by id.
     const seen = new Set<string>();
     const merged: Hit[] = [];
     for (const h of [
@@ -236,7 +236,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     const trailing: Hit[] = [...wsHits, ...projHits, ...navHits];
     const out = [...merged, ...trailing];
 
-    // "Search in Knowledge" CTA when query has something
     if (q && (ftsIssueHits.length || ftsArtifactHits.length || out.length)) {
       out.push({
         id: "nav-knowledge-search",
@@ -249,22 +248,24 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     return out;
   }, [query, issues, workspaces, projects, ftsIssueHits, ftsArtifactHits, t]);
 
+  const computedHits = hits();
+
   useEffect(() => {
-    if (selectedIdx >= hits.length) setSelectedIdx(0);
-  }, [hits.length, selectedIdx]);
+    if (selectedIdx >= computedHits.length) setSelectedIdx(0);
+  }, [computedHits.length, selectedIdx]);
 
   if (!open) return null;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIdx((i) => Math.min(i + 1, hits.length - 1));
+      setSelectedIdx((i) => Math.min(i + 1, computedHits.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIdx((i) => Math.max(i - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const hit = hits[selectedIdx];
+      const hit = computedHits[selectedIdx];
       if (hit) {
         router.push(hit.href);
         onClose();
@@ -301,17 +302,22 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             esc
           </kbd>
         </div>
+        {loadError && (
+          <div className="border-b border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
+            {loadError}
+          </div>
+        )}
         <div
           role="listbox"
           aria-label={t("cmd.results")}
           className="max-h-[60vh] overflow-auto py-1"
         >
-          {hits.length === 0 && (
+          {computedHits.length === 0 && (
             <div className="px-3 py-6 text-center text-sm text-text-muted">
               {loading ? t("cmd.loading") : t("cmd.noMatches")}
             </div>
           )}
-          {hits.map((hit, i) => (
+          {computedHits.map((hit, i) => (
             <button
               key={hit.id}
               type="button"
@@ -358,7 +364,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         </div>
         <div className="px-3 py-1.5 border-t border-border-subtle text-[10px] text-text-muted flex justify-between">
           <span>Enter to open · Esc to close · type review, failed, or an issue title</span>
-          <span>{hits.length} {hits.length === 1 ? "result" : "results"}</span>
+          <span>{computedHits.length} {computedHits.length === 1 ? "result" : "results"}</span>
         </div>
       </div>
     </div>

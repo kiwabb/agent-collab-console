@@ -303,6 +303,7 @@ function WorkbenchInner({
     }
   }, [currentTaskId]);
 
+  const executionProcesses = executionProcessesAll;
   const currentTask = tasks.find((task) => task.id === currentTaskId) ?? null;
   const currentTasks = currentIssueId ? tasks.filter((t) => t.issue_id === currentIssueId) : [];
   const hasRequirementsArtifacts = artifacts.some((artifact) =>
@@ -337,7 +338,7 @@ function WorkbenchInner({
   }, [artifacts]);
   
   const hasActiveIssueTask = currentTasks.some((task) => {
-    return isTaskRuntimeActive(task, Object.values(executionProcessesAll) as ExecutionProcess[]);
+    return isTaskRuntimeActive(task, executionProcesses);
   });
   const currentIssueTaskIds = useMemo(
     () => new Set(currentTasks.map((task) => task.id)),
@@ -345,15 +346,15 @@ function WorkbenchInner({
   );
   const currentIssueCompletedProcessKey = useMemo(() => {
     const terminalStatuses = new Set(["completed", "done", "failed", "killed"]);
-    return (Object.values(executionProcessesAll) as ExecutionProcess[])
+    return executionProcesses
       .filter((process) => currentIssueTaskIds.has(process.task_id))
       .filter((process) => terminalStatuses.has(String(process.status || "").toLowerCase()))
       .map((process) => `${process.id}:${process.status}:${process.updated_at || process.completed_at || ""}`)
       .sort()
       .join("|");
-  }, [currentIssueTaskIds, executionProcessesAll]);
+  }, [currentIssueTaskIds, executionProcesses]);
   const selectedProcess: ExecutionProcess | null = selectedProcessId
-    ? ((Object.values(executionProcessesAll) as ExecutionProcess[]).find(
+    ? (executionProcesses.find(
         (p) => p.id === selectedProcessId,
       ) ??
       (optimisticProcess?.id === selectedProcessId ? optimisticProcess : null))
@@ -362,11 +363,11 @@ function WorkbenchInner({
   // executionProcessesAll, drop the placeholder so we don't hold a stale copy.
   useEffect(() => {
     if (!optimisticProcess) return;
-    const arrived = (Object.values(executionProcessesAll) as ExecutionProcess[]).some(
+    const arrived = executionProcesses.some(
       (p) => p.id === optimisticProcess.id,
     );
     if (arrived) setOptimisticProcess(null);
-  }, [optimisticProcess, executionProcessesAll]);
+  }, [optimisticProcess, executionProcesses]);
   const liveProcessLogs = selectedProcess?.logs ?? [];
   const liveProcessMessages = selectedProcess?.messages ? Object.values(selectedProcess.messages) : [];
   const displayedProcessLogs = useMemo(() => {
@@ -502,10 +503,11 @@ function WorkbenchInner({
         setProcessLogs(logs);
         setProcessMessages(msgs);
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
-        setProcessLogs([]);
-        setProcessMessages([]);
+        const msg = err instanceof Error ? err.message : "Failed to load process output";
+        console.error("workbench process output reload failed:", err);
+        setError(msg);
       })
       .finally(() => {
         if (cancelled) return;
@@ -564,7 +566,13 @@ function WorkbenchInner({
         router.push("/projects");
         return;
       }
-      getProject(next).then(setCurrentProject).catch(() => {});
+      getProject(next)
+        .then(setCurrentProject)
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : "Failed to sync selected project";
+          console.error("workbench selectedProjectId sync failed:", err);
+          setError(msg);
+        });
       const url = new URL(window.location.href);
       url.searchParams.set("project", next);
       window.history.replaceState(null, "", url.toString());
@@ -665,7 +673,7 @@ function WorkbenchInner({
   const handleSelectTask = useCallback((id: string) => {
     const task = tasks.find(t => t.id === id);
     const localProcess = pickLatestExecutionProcessForTask(
-      Object.values(executionProcessesAll) as ExecutionProcess[],
+      executionProcesses,
       id,
     );
 
@@ -678,7 +686,7 @@ function WorkbenchInner({
     }
 
     setCurrentTaskId(id);
-  }, [tasks, executionProcessesAll]);
+  }, [tasks, executionProcesses]);
 
   async function handleChangePhase(phase: string) {
     if (!currentIssue) return;
@@ -1171,7 +1179,7 @@ function WorkbenchInner({
             )}
             <TaskBoard
               tasks={currentTasks}
-              executionProcesses={Object.values(executionProcessesAll) as ExecutionProcess[]}
+              executionProcesses={executionProcesses}
               onSelectTask={handleSelectTask}
               onRunPhase={handleRunPhaseRole}
               issueTitle={currentIssue?.title}
@@ -1360,7 +1368,7 @@ function WorkbenchInner({
                       <AgentCoordinationPanel
                         tasks={tasks.filter(t => t.id === currentTaskId)}
                         helpRequests={helpRequests.filter(h => h.parent_task_id === currentTaskId)}
-                        executionProcesses={Object.values(executionProcessesAll).filter(p => (p as ExecutionProcess).task_id === currentTaskId) as ExecutionProcess[]}
+                        executionProcesses={executionProcesses.filter((p) => p.task_id === currentTaskId)}
                         onSelectTask={handleSelectTask}
                         onSelectProcess={setSelectedProcessId}
                       />

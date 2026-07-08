@@ -104,10 +104,7 @@ def _read_artifact_text(path_str: str | None) -> str:
     # Skip likely binary blobs (heuristic: NUL byte in first 4KB).
     if b"\x00" in raw[:4096]:
         return ""
-    try:
-        text = raw.decode("utf-8", errors="ignore")
-    except Exception:  # noqa: BLE001, RUF100
-        return ""
+    text = raw.decode("utf-8", errors="ignore")
     # If JSON, flatten to text for better FTS tokenization.
     if p.suffix.lower() == ".json":
         try:

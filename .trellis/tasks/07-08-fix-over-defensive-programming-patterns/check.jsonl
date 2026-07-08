@@ -1,0 +1,10 @@
+{"file":".trellis/spec/vibe-kanban/backend/index.md","reason":"Check backend changes against architecture boundaries and core conventions."}
+{"file":".trellis/spec/vibe-kanban/backend/error-handling.md","reason":"Verify broad catches are moved to correct boundaries and gate failures no longer fail open."}
+{"file":".trellis/spec/vibe-kanban/backend/quality-guidelines.md","reason":"Verify backend test/lint expectations and source hygiene implications for changed files."}
+{"file":".trellis/spec/vibe-kanban/backend/logging-guidelines.md","reason":"Verify replacement logging for best-effort catches includes useful identifiers and appropriate level."}
+{"file":".trellis/spec/ccgui/frontend/index.md","reason":"Check frontend changes against canonical package conventions."}
+{"file":".trellis/spec/ccgui/frontend/quality-guidelines.md","reason":"Verify frontend quality gates and safe check commands for the current dev-server context."}
+{"file":".trellis/spec/ccgui/frontend/type-safety.md","reason":"Verify redundant fallbacks are removed only where types guarantee non-null values and boundary parsing remains explicit."}
+{"file":".trellis/spec/ccgui/frontend/state-management.md","reason":"Verify error states preserve stale data and avoid silent empty screens."}
+{"file":".trellis/spec/guides/index.md","reason":"Review cross-layer cleanup for duplicated validation and repeated defensive patterns."}
+{"file":".trellis/tasks/07-08-fix-over-defensive-programming-patterns/research/defensive-programming-scan.md","reason":"Checklist of verified findings to confirm implementation covers intended scope without broad unrelated rewrites."}

@@ -1098,9 +1098,9 @@ class BaseProcessRuntime:
         """Recover engineer output when the runtime stalls after file changes."""
         if not entry.idle_timed_out or entry.had_error:
             return None
-        if getattr(task, "role", None) != "engineer":
+        if task.role != "engineer":
             return None
-        if not getattr(task, "workspace_path", None):
+        if not task.workspace_path:
             return None
 
         try:
