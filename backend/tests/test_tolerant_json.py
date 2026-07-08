@@ -46,7 +46,9 @@ def test_minimax_failure_missing_open_quote_on_key():
         "]}"
     )
     result = tolerant_json_loads(s)
+    assert isinstance(result, dict)
     pool = result["requirement_pool"]
+    assert isinstance(pool, list)
     assert len(pool) == 3
     assert pool[1] == {"priority": "P0", "title": "Provider"}
     assert pool[2] == {"priority": "P1", "title": "Config"}
@@ -62,8 +64,12 @@ def test_minimax_failure_missing_open_brace_in_array():
         "]}"
     )
     result = tolerant_json_loads(s)
+    assert isinstance(result, dict)
     pool = result["requirement_pool"]
+    assert isinstance(pool, list)
     assert len(pool) == 2
+    assert isinstance(pool[0], dict)
+    assert isinstance(pool[1], dict)
     assert pool[0]["title"] == "first"
     assert pool[1]["title"] == "Runtime Catalog"
 
@@ -71,8 +77,11 @@ def test_minimax_failure_missing_open_brace_in_array():
 def test_unicode_chinese_payload():
     s = '{"语言": "zh-CN", "需求": ["统一管理 Runtime Catalog", "支持热更新"]}'
     result = tolerant_json_loads(s)
+    assert isinstance(result, dict)
     assert result["语言"] == "zh-CN"
-    assert len(result["需求"]) == 2
+    requirements = result["需求"]
+    assert isinstance(requirements, list)
+    assert len(requirements) == 2
 
 
 def test_deeply_nested():

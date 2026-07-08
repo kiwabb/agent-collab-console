@@ -13,7 +13,20 @@ from app.application.conductor_main_loop import (
 )
 from app.application.conductor_tools import build_conductor_tools
 from app.application.llm_runner import extract_tool_use_blocks
-from app.domain.models import ProjectMemoryEmbedding
+from app.domain.models import CodexIssue, ProjectMemoryEmbedding
+from app.json_safety import JsonObject, object_dict
+
+
+async def _tool_result(registry, name: str, payload: JsonObject) -> JsonObject:
+    try:
+        return object_dict(await registry.tools[name](payload))
+    except (ValueError, RuntimeError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
+def _text(payload: JsonObject, key: str) -> str:
+    value = payload.get(key)
+    return value if isinstance(value, str) else ""
 
 
 def test_conductor_language_directive_auto_is_empty():
@@ -50,7 +63,12 @@ def test_detect_text_language_matches_issue_language():
 
 
 def test_build_issue_conductor_prompt_includes_recovery_context():
-    issue = SimpleNamespace(title="Fix recovery", description="Resume safely")
+    issue = CodexIssue(
+        id="issue-recovery",
+        session_id="session-recovery",
+        title="Fix recovery",
+        description="Resume safely",
+    )
 
     prompt = build_issue_conductor_prompt(
         issue=issue,
@@ -265,12 +283,20 @@ async def test_conductor_loop_unknown_finalize_status_fails_closed():
 async def test_finalize_task_tool_normalizes_statuses():
     registry = build_conductor_tools(project_id="project-1", store=object())
 
-    ok = await registry.tools["finalize_task"]({"status": "completed", "answer": "done"})
-    unknown = await registry.tools["finalize_task"]({"status": "maybe", "answer": "hmm"})
-    blocked = await registry.tools["finalize_task"]({"status": "needs_user", "answer": "blocked"})
-    canceled = await registry.tools["finalize_task"]({"status": "canceled", "answer": "stopped"})
-    killed = await registry.tools["finalize_task"]({"status": "killed", "answer": "stopped"})
-    protocol_error = await registry.tools["finalize_task"](
+    ok = await _tool_result(registry, "finalize_task", {"status": "completed", "answer": "done"})
+    unknown = await _tool_result(registry, "finalize_task", {"status": "maybe", "answer": "hmm"})
+    blocked = await _tool_result(
+        registry, "finalize_task", {"status": "needs_user", "answer": "blocked"}
+    )
+    canceled = await _tool_result(
+        registry, "finalize_task", {"status": "canceled", "answer": "stopped"}
+    )
+    killed = await _tool_result(
+        registry, "finalize_task", {"status": "killed", "answer": "stopped"}
+    )
+    protocol_error = await _tool_result(
+        registry,
+        "finalize_task",
         {"status": "protocol_error", "answer": "bad protocol"}
     )
 
@@ -295,11 +321,11 @@ async def test_finalize_task_tool_rejects_done_with_unresolved_graph_node():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "ship it"})
+    result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "ship it"})
 
     assert result["status"] == "failed"
-    assert "finalize rejected" in result["answer"]
-    assert "unresolved nodes" in result["answer"]
+    assert "finalize rejected" in _text(result, "answer")
+    assert "unresolved nodes" in _text(result, "answer")
 
 
 @pytest.mark.asyncio
@@ -314,10 +340,12 @@ async def test_finalize_task_tool_does_not_count_skipped_as_completed_work():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "nothing ran"})
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "nothing ran"}
+    )
 
     assert result["status"] == "failed"
-    assert "no completed work node" in result["answer"]
+    assert "no completed work node" in _text(result, "answer")
 
 
 @pytest.mark.asyncio
@@ -328,10 +356,10 @@ async def test_finalize_task_tool_fails_closed_when_graph_missing():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "ship it"})
+    result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "ship it"})
 
     assert result["status"] == "failed"
-    assert "graph is missing" in result["answer"]
+    assert "graph is missing" in _text(result, "answer")
 
 
 @pytest.mark.asyncio
@@ -342,10 +370,10 @@ async def test_finalize_task_tool_fails_closed_when_graph_load_raises():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "ship it"})
+    result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "ship it"})
 
     assert result["status"] == "failed"
-    assert "could not be loaded" in result["answer"]
+    assert "could not be loaded" in _text(result, "answer")
 
 
 @pytest.mark.asyncio
@@ -361,10 +389,10 @@ async def test_finalize_task_tool_rejects_planning_only_graph():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "planned"})
+    result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "planned"})
 
     assert result["status"] == "failed"
-    assert "only has planning/design completed" in result["answer"]
+    assert "only has planning/design completed" in _text(result, "answer")
 
 
 @pytest.mark.asyncio
@@ -379,10 +407,12 @@ async def test_finalize_task_tool_rejects_implementation_without_verification():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "implemented"})
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "implemented"}
+    )
 
     assert result["status"] == "failed"
-    assert "no verification node completed" in result["answer"]
+    assert "no verification node completed" in _text(result, "answer")
 
 
 @pytest.mark.asyncio
@@ -397,10 +427,10 @@ async def test_finalize_task_tool_rejects_verification_only_graph():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "verified"})
+    result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "verified"})
 
     assert result["status"] == "failed"
-    assert "only has verification completed" in result["answer"]
+    assert "only has verification completed" in _text(result, "answer")
 
 
 @pytest.mark.asyncio
@@ -416,7 +446,7 @@ async def test_finalize_task_tool_accepts_implementation_with_verification():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "verified"})
+    result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "verified"})
 
     assert result["status"] == "done"
     assert result["answer"] == "verified"
@@ -436,7 +466,7 @@ async def test_finalize_task_tool_accepts_parallel_engineer_with_verification():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "verified"})
+    result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "verified"})
 
     assert result["status"] == "done"
 
@@ -454,8 +484,8 @@ async def test_finalize_task_tool_accepts_operations_engineer_with_verification(
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"](
-        {"status": "done", "answer": "scripts verified"}
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "scripts verified"}
     )
 
     assert result["status"] == "done"
@@ -475,8 +505,8 @@ async def test_finalize_task_tool_accepts_delivery_specialist_with_verification(
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"](
-        {"status": "done", "answer": "docs verified"}
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "docs verified"}
     )
 
     assert result["status"] == "done"
@@ -495,10 +525,12 @@ async def test_finalize_task_tool_rejects_unclassified_specialist_only_graph():
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "summarized"})
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "summarized"}
+    )
 
     assert result["status"] == "failed"
-    assert "no recognized implementation or delivery evidence" in result["answer"]
+    assert "no recognized implementation or delivery evidence" in _text(result, "answer")
     assert result["unclassified_roles"] == ["specialist:log_summarizer"]
 
 
@@ -515,10 +547,12 @@ async def test_finalize_task_tool_rejects_planning_plus_unclassified_specialist_
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "described"})
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "described"}
+    )
 
     assert result["status"] == "failed"
-    assert "no recognized implementation or delivery evidence" in result["answer"]
+    assert "no recognized implementation or delivery evidence" in _text(result, "answer")
     assert result["unclassified_roles"] == ["specialist:log_summarizer"]
 
 
@@ -535,10 +569,10 @@ async def test_finalize_task_tool_rejects_planning_with_verification_but_no_deli
 
     registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
 
-    result = await registry.tools["finalize_task"]({"status": "done", "answer": "reviewed"})
+    result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "reviewed"})
 
     assert result["status"] == "failed"
-    assert "no recognized implementation or delivery evidence" in result["answer"]
+    assert "no recognized implementation or delivery evidence" in _text(result, "answer")
 
 
 @pytest.mark.asyncio
@@ -634,10 +668,11 @@ async def test_seal_graph_load_failure_still_updates_issue_status():
         async def append(self, event):
             self.events.append(event)
 
-    issue = SimpleNamespace(
+    issue = CodexIssue(
         id="issue-1",
         project_id="project-1",
         session_id="session-1",
+        title="Seal graph",
         status="in_progress",
         updated_at=None,
     )
@@ -1109,12 +1144,12 @@ async def test_conductor_tools_expose_phase6_tool_schema_and_memory_lookup(tmp_p
         "request_user_clarification",
         "finalize_task",
     }
-    memory = await registry.tools["retrieve_cold_memory"]({"query": "auth token", "top_k": 2})
+    memory = await _tool_result(registry, "retrieve_cold_memory", {"query": "auth token", "top_k": 2})
     assert memory["memories"] == ["auth token regression happened in refresh flow"]
 
 
 def test_llm_runner_extracts_anthropic_tool_use_blocks():
-    response = {
+    response: JsonObject = {
         "content": [
             {"type": "text", "text": "I need memory."},
             {

@@ -8,7 +8,9 @@ import {
   type SubAgentResultPayload,
 } from "@/lib/api/conductors";
 import type { CodexTask } from "@/lib/types";
+import { isRecord } from "@/lib/utils";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
+import { cleanIssueResultText } from "../issueResultParsing";
 
 export interface DecisionTimelineItem {
   id: string;
@@ -16,21 +18,21 @@ export interface DecisionTimelineItem {
   role: string;
   status: "running" | "done" | "failed" | "waiting" | "info";
   title: string;
-  titleKey?: string;
-  titleParams?: Record<string, string | number>;
+  titleKey?: string | undefined;
+  titleParams?: Record<string, string | number> | undefined;
   summary: string;
-  summaryKey?: string;
-  summaryParams?: Record<string, string | number>;
+  summaryKey?: string | undefined;
+  summaryParams?: Record<string, string | number> | undefined;
   createdAt: string | null;
   durationMs: number | null;
-  toolUseId?: string | null;
-  taskId?: string | null;
-  task?: CodexTask | null;
-  result?: SubAgentResultPayload | null;
+  toolUseId?: string | null | undefined;
+  taskId?: string | null | undefined;
+  task?: CodexTask | null | undefined;
+  result?: SubAgentResultPayload | null | undefined;
   rawTurns: ConductorTurn[];
   thinkingTurns: ConductorTurn[];
-  rationale?: string | null;
-  why?: string | null;
+  rationale?: string | null | undefined;
+  why?: string | null | undefined;
 }
 
 const DISPATCH_TO_ROLE: Record<string, string> = {
@@ -42,67 +44,21 @@ const DISPATCH_TO_ROLE: Record<string, string> = {
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
-}
-
-/** A stray CLI/cmux control envelope (e.g. a SessionStart hook line) that a
- * failed subagent can leave in task.result — must never render as a summary. */
-function looksLikeControlPayload(text: string): boolean {
-  const s = text.trim();
-  if (!(s.startsWith("{") && s.endsWith("}"))) return false;
-  try {
-    const obj = JSON.parse(s) as Record<string, unknown>;
-    if (!obj || typeof obj !== "object") return false;
-    if (obj.type === "system") return true;
-    return ["hook_name", "hook_event", "hook_id"].some((k) => k in obj);
-  } catch {
-    return false;
-  }
-}
-
-function cleanText(value: unknown): string {
-  if (typeof value !== "string") return "";
-  const s = value.trim();
-  if (!s || looksLikeControlPayload(s)) return "";
-  return extractSummaryFromJsonText(s) || s;
-}
-
-function extractSummaryFromJsonText(text: string): string {
-  if (!(text.startsWith("{") && text.endsWith("}"))) return "";
-  try {
-    const obj = JSON.parse(text) as Record<string, unknown>;
-    const candidates = [
-      obj.summary,
-      obj.message,
-      obj.answer,
-      obj.text,
-      obj.content,
-      obj.error,
-      obj.error_message,
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate !== "string") continue;
-      const cleaned = candidate.trim();
-      if (cleaned && !looksLikeControlPayload(cleaned)) return cleaned;
-    }
-  } catch {
-    return "";
-  }
-  return "";
+  return isRecord(value) ? value : {};
 }
 
 function textFromPayload(payload: Record<string, unknown>): string {
   const candidates = [
-    payload.summary,
-    payload.error,
-    payload.error_message,
-    payload.message,
-    payload.answer,
-    payload.text,
-    payload.content,
+    payload["summary"],
+    payload["error"],
+    payload["error_message"],
+    payload["message"],
+    payload["answer"],
+    payload["text"],
+    payload["content"],
   ];
   for (const candidate of candidates) {
-    const cleaned = cleanText(candidate);
+    const cleaned = cleanIssueResultText(candidate);
     if (cleaned) return cleaned;
   }
   return "";
@@ -114,12 +70,12 @@ function rationaleFromThinkingTurns(thinkingTurns: ConductorTurn[]): string {
   for (const turn of thinkingTurns) {
     if (turn.kind !== "llm_response") continue;
     const payload = asRecord(turn.payload);
-    const content = payload.content;
+    const content = payload["content"];
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       const b = asRecord(block);
-      if (b.type === "text" && typeof b.text === "string" && b.text.trim()) {
-        parts.push(b.text.trim());
+      if (b["type"] === "text" && typeof b["text"] === "string" && b["text"].trim()) {
+        parts.push(b["text"].trim());
       }
     }
   }
@@ -138,13 +94,17 @@ function taskStatusToTimeline(status: string | null | undefined): DecisionTimeli
 
 function roleFromTool(toolName: string, input: Record<string, unknown>): string {
   if (toolName === "dispatch_batch") return "conductor";
-  const raw = String(input.role || input.role_key || input.target_node_key || input.node_key || "");
+  const raw = String(
+    input["role"] || input["role_key"] || input["target_node_key"] || input["node_key"] || "",
+  );
   return DISPATCH_TO_ROLE[raw] ?? raw ?? toolName;
 }
 
 function roleFromBatchAgent(agent: unknown): string {
   const input = asRecord(agent);
-  const raw = String(input.role || input.role_key || input.target_node_key || input.node_key || "");
+  const raw = String(
+    input["role"] || input["role_key"] || input["target_node_key"] || input["node_key"] || "",
+  );
   return DISPATCH_TO_ROLE[raw] ?? raw;
 }
 
@@ -152,23 +112,38 @@ function titleForTool(
   toolName: string,
   role: string,
   input: Record<string, unknown>,
-): { title: string; titleKey: string; titleParams?: Record<string, string | number> } {
-  if (toolName === "request_user_clarification") return { title: "Conductor asked for clarification", titleKey: "issue.command.title.clarification" };
-  if (toolName === "retrieve_cold_memory") return { title: "Retrieved cold memory", titleKey: "issue.command.title.memory" };
-  if (toolName === "finalize_task") return { title: "Finalized the issue", titleKey: "issue.command.title.finalize" };
+): { title: string; titleKey: string; titleParams?: Record<string, string | number> | undefined } {
+  if (toolName === "request_user_clarification")
+    return {
+      title: "Conductor asked for clarification",
+      titleKey: "issue.command.title.clarification",
+    };
+  if (toolName === "retrieve_cold_memory")
+    return { title: "Retrieved cold memory", titleKey: "issue.command.title.memory" };
+  if (toolName === "finalize_task")
+    return { title: "Finalized the issue", titleKey: "issue.command.title.finalize" };
   if (toolName === "spawn_custom_subagent") {
     const fallback = role || "custom agent";
-    return { title: `Spawned ${fallback}`, titleKey: "issue.command.title.spawn", titleParams: { role: fallback } };
+    return {
+      title: `Spawned ${fallback}`,
+      titleKey: "issue.command.title.spawn",
+      titleParams: { role: fallback },
+    };
   }
   if (toolName === "dispatch_subagent") {
     const fallback = role || "sub-agent";
-    return { title: `Dispatched ${fallback}`, titleKey: "issue.command.title.dispatch", titleParams: { role: fallback } };
+    return {
+      title: `Dispatched ${fallback}`,
+      titleKey: "issue.command.title.dispatch",
+      titleParams: { role: fallback },
+    };
   }
   if (toolName === "dispatch_batch") {
-    const agents = Array.isArray(input.agents) ? input.agents.length : 0;
+    const agents = Array.isArray(input["agents"]) ? input["agents"].length : 0;
     return {
       title: agents > 0 ? `Planned ${agents} parallel agents` : "Planned parallel agents",
-      titleKey: agents > 0 ? "issue.command.title.dispatchBatchCount" : "issue.command.title.dispatchBatch",
+      titleKey:
+        agents > 0 ? "issue.command.title.dispatchBatchCount" : "issue.command.title.dispatchBatch",
       titleParams: agents > 0 ? { count: agents } : undefined,
     };
   }
@@ -180,13 +155,16 @@ function summaryForTool(
   input: Record<string, unknown>,
 ): { summaryKey?: string; summaryParams?: Record<string, string | number> } {
   if (toolName !== "dispatch_batch") return {};
-  const agents = Array.isArray(input.agents) ? input.agents.length : 0;
+  const agents = Array.isArray(input["agents"]) ? input["agents"].length : 0;
   return agents > 0
     ? { summaryKey: "issue.command.summary.dispatchBatchCount", summaryParams: { count: agents } }
     : { summaryKey: "issue.command.summary.dispatchBatch" };
 }
 
-function titleForBatchTask(role: string, index: number): { title: string; titleKey: string; titleParams: Record<string, string | number> } {
+function titleForBatchTask(
+  role: string,
+  index: number,
+): { title: string; titleKey: string; titleParams: Record<string, string | number> } {
   if (role === "engineer") {
     return {
       title: `Development agent ${index}`,
@@ -201,7 +179,10 @@ function titleForBatchTask(role: string, index: number): { title: string; titleK
   };
 }
 
-function summaryKeyForBatchTask(role: string, status: DecisionTimelineItem["status"]): string | undefined {
+function summaryKeyForBatchTask(
+  role: string,
+  status: DecisionTimelineItem["status"],
+): string | undefined {
   const keyPrefix = role === "engineer" ? "developmentTask" : "batchTask";
   if (status === "done") return `issue.command.summary.${keyPrefix}Done`;
   if (status === "running") return `issue.command.summary.${keyPrefix}Running`;
@@ -234,6 +215,7 @@ export function buildDecisionTimeline(
 
   for (let index = 0; index < sorted.length; index += 1) {
     const turn = sorted[index];
+    if (!turn) continue;
     const payload = asRecord(turn.payload);
     if (turn.kind === "user_message") {
       const body = textFromPayload(payload);
@@ -243,7 +225,9 @@ export function buildDecisionTimeline(
         role: "user",
         status: "info",
         title: body.startsWith("[CLARIFY]") ? "You answered Conductor" : "You interrupted",
-        titleKey: body.startsWith("[CLARIFY]") ? "issue.command.title.youAnswered" : "issue.command.title.youInterrupted",
+        titleKey: body.startsWith("[CLARIFY]")
+          ? "issue.command.title.youAnswered"
+          : "issue.command.title.youInterrupted",
         summary: body,
         createdAt: turn.created_at,
         durationMs: null,
@@ -271,57 +255,72 @@ export function buildDecisionTimeline(
     }
     if (turn.kind !== "tool_use") continue;
 
-    const toolName = String(payload.name || payload.tool || payload.tool_name || "tool");
-    const input = asRecord(payload.input || payload.arguments || payload.args);
-    if (toolName === "dispatch_batch" && Array.isArray(input.agents)) {
-      for (const agent of input.agents) {
+    const toolName = String(payload["name"] || payload["tool"] || payload["tool_name"] || "tool");
+    const input = asRecord(payload["input"] || payload["arguments"] || payload["args"]);
+    if (toolName === "dispatch_batch" && Array.isArray(input["agents"])) {
+      for (const agent of input["agents"]) {
         const role = roleFromBatchAgent(agent);
         if (role) batchRoles.add(role);
       }
     }
-    const toolUseId = String(payload.tool_use_id || payload.id || turn.id);
+    const toolUseId = String(payload["tool_use_id"] || payload["id"] || turn.id);
     const matchingResult = sorted.find((candidate) => {
       if (candidate.kind !== "tool_result") return false;
       const candidatePayload = asRecord(candidate.payload);
-      return String(candidatePayload.tool_use_id || candidatePayload.id || "") === toolUseId;
+      return String(candidatePayload["tool_use_id"] || candidatePayload["id"] || "") === toolUseId;
     });
     const resultPayload = asRecord(matchingResult?.payload);
-    const output = asRecord(resultPayload.output || resultPayload.result || resultPayload);
-    const taskId = typeof output.task_id === "string"
-      ? output.task_id
-      : typeof input.task_id === "string"
-        ? input.task_id
-        : null;
+    const output = asRecord(resultPayload["output"] || resultPayload["result"] || resultPayload);
+    const taskId =
+      typeof output["task_id"] === "string"
+        ? output["task_id"]
+        : typeof input["task_id"] === "string"
+          ? input["task_id"]
+          : null;
     const role = roleFromTool(toolName, input);
-    const task = taskId ? taskById.get(taskId) ?? null : tasks.find((candidate) => candidate.role === role) ?? null;
+    const task = taskId
+      ? (taskById.get(taskId) ?? null)
+      : (tasks.find((candidate) => candidate.role === role) ?? null);
     const status = taskStatusToTimeline(
-      task?.status ?? (typeof output.status === "string" ? output.status : matchingResult ? "done" : "running"),
+      task?.status ??
+        (typeof output["status"] === "string"
+          ? output["status"]
+          : matchingResult
+            ? "done"
+            : "running"),
     );
     const thinkingTurns = sorted.filter((candidate) => {
       if (candidate.turn_index !== turn.turn_index) return false;
       if (candidate.sub_index >= turn.sub_index) return false;
       return candidate.kind === "llm_response" || candidate.kind === "llm_request";
     });
-    const result = task?.id ? resultByTask.get(task.id) ?? null : null;
+    const result = task?.id ? (resultByTask.get(task.id) ?? null) : null;
     if (task?.id) representedTaskIds.add(task.id);
     const createdAt = turn.created_at;
     const endedAt = matchingResult?.created_at ?? task?.updated_at ?? null;
     const durationMs = durationBetween(createdAt, endedAt);
-    const summary = textFromPayload(output) || textFromPayload(input) || cleanText(result?.summary) || "";
+    const summary =
+      textFromPayload(output) ||
+      textFromPayload(input) ||
+      cleanIssueResultText(result?.summary) ||
+      "";
 
     const title = titleForTool(toolName, role, input);
     const toolSummary = summary ? {} : summaryForTool(toolName, input);
     items.push({
       id: `${turn.id}:${toolUseId}`,
-      kind: toolName === "request_user_clarification"
-        ? "clarification"
-        : toolName === "retrieve_cold_memory"
-          ? "memory"
-          : toolName === "finalize_task"
-            ? "finalize"
-            : toolName === "dispatch_subagent" || toolName === "spawn_custom_subagent" || toolName === "dispatch_batch"
-              ? "dispatch"
-              : "tool",
+      kind:
+        toolName === "request_user_clarification"
+          ? "clarification"
+          : toolName === "retrieve_cold_memory"
+            ? "memory"
+            : toolName === "finalize_task"
+              ? "finalize"
+              : toolName === "dispatch_subagent" ||
+                  toolName === "spawn_custom_subagent" ||
+                  toolName === "dispatch_batch"
+                ? "dispatch"
+                : "tool",
       role: role || "conductor",
       status,
       title: title.title,
@@ -339,7 +338,13 @@ export function buildDecisionTimeline(
       rawTurns: matchingResult ? [turn, matchingResult] : [turn],
       thinkingTurns,
       rationale: rationaleFromThinkingTurns(thinkingTurns) || null,
-      why: status === "failed" ? summary || cleanText(task?.result) || cleanText(result?.summary) || "" : null,
+      why:
+        status === "failed"
+          ? summary ||
+            cleanIssueResultText(task?.result) ||
+            cleanIssueResultText(result?.summary) ||
+            ""
+          : null,
     });
   }
 
@@ -357,7 +362,8 @@ export function buildDecisionTimeline(
     taskIndexesByRole.set(task.role, index);
     const status = taskStatusToTimeline(task.status);
     const result = resultByTask.get(task.id) ?? null;
-    const summary = cleanText(result?.summary) || cleanText(task.result) || "";
+    const summary =
+      cleanIssueResultText(result?.summary) || cleanIssueResultText(task.result) || "";
     const title = titleForBatchTask(task.role, index);
 
     items.push({
@@ -369,9 +375,7 @@ export function buildDecisionTimeline(
       titleKey: title.titleKey,
       titleParams: title.titleParams,
       summary,
-      summaryKey: summary
-        ? undefined
-        : summaryKeyForBatchTask(task.role, status),
+      summaryKey: summary ? undefined : summaryKeyForBatchTask(task.role, status),
       createdAt: task.created_at,
       durationMs: durationBetween(task.created_at, task.updated_at),
       taskId: task.id,
@@ -379,7 +383,13 @@ export function buildDecisionTimeline(
       result,
       rawTurns: [],
       thinkingTurns: [],
-      why: status === "failed" ? summary || cleanText(task.result) || cleanText(result?.summary) || "" : null,
+      why:
+        status === "failed"
+          ? summary ||
+            cleanIssueResultText(task.result) ||
+            cleanIssueResultText(result?.summary) ||
+            ""
+          : null,
     });
   }
 
@@ -415,7 +425,7 @@ export function useDecisionTimeline(
     onEvent: (event) => {
       // Once a turn's response is persisted, its rationale shows via refresh —
       // clear the live streaming buffer so we don't double-render it.
-      if (event.type === "conductor_turn" && asRecord(event).kind === "llm_response") {
+      if (event.type === "conductor_turn" && asRecord(event)["kind"] === "llm_response") {
         setLiveThinking("");
         liveTurnRef.current = null;
       }
@@ -432,18 +442,22 @@ export function useDecisionTimeline(
     ),
     onEvent: (event) => {
       const e = asRecord(event);
-      if (e.kind !== "text" || typeof e.chunk !== "string") return;
-      const turnIndex = typeof e.turn_index === "number" ? e.turn_index : null;
+      if (e["kind"] !== "text" || typeof e["chunk"] !== "string") return;
+      const chunk = e["chunk"];
+      const turnIndex = typeof e["turn_index"] === "number" ? e["turn_index"] : null;
       setLiveThinking((prev) => {
         if (liveTurnRef.current !== turnIndex) {
           liveTurnRef.current = turnIndex;
-          return e.chunk as string;
+          return chunk;
         }
-        return prev + (e.chunk as string);
+        return prev + chunk;
       });
     },
   });
 
-  const items = useMemo(() => buildDecisionTimeline(turns, tasks, results), [turns, tasks, results]);
+  const items = useMemo(
+    () => buildDecisionTimeline(turns, tasks, results),
+    [turns, tasks, results],
+  );
   return { turns, items, refresh, liveThinking };
 }

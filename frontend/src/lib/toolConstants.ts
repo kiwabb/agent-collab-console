@@ -1,4 +1,5 @@
 import type { ToolCategory } from "./types";
+import { isRecord } from "./utils";
 
 export const READ_TOOL_NAMES = new Set(["read", "read_file", "readfile", "file_read"]);
 export const EDIT_TOOL_NAMES = new Set([
@@ -57,12 +58,19 @@ export function isEditTool(name: string): boolean {
 
 export function isBashTool(name: string): boolean {
   const n = name.toLowerCase();
-  return BASH_TOOL_NAMES.has(n) || n.includes("bash") || n.includes("shell") || n.includes("terminal");
+  return (
+    BASH_TOOL_NAMES.has(n) || n.includes("bash") || n.includes("shell") || n.includes("terminal")
+  );
 }
 
 export function isSearchTool(name: string): boolean {
   const n = name.toLowerCase();
-  return SEARCH_TOOL_NAMES.has(n) || n.includes("grep") || n.includes("glob") || (n.includes("search") && !n.includes("web"));
+  return (
+    SEARCH_TOOL_NAMES.has(n) ||
+    n.includes("grep") ||
+    n.includes("glob") ||
+    (n.includes("search") && !n.includes("web"))
+  );
 }
 
 export function isWebTool(name: string): boolean {
@@ -122,8 +130,7 @@ export function truncateText(text: string, maxLength = 80): string {
 }
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
+  return isRecord(value) ? value : null;
 }
 
 export function pickString(source: Record<string, unknown> | null, keys: string[]): string {

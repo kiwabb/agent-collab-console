@@ -72,7 +72,9 @@ export function AppSidebar() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const refreshProjects = useCallback(() => {
-    void listProjects().then(setProjects).catch(() => setProjects([]));
+    void listProjects()
+      .then(setProjects)
+      .catch(() => setProjects([]));
   }, []);
 
   const refreshWorkspaces = useCallback(() => {
@@ -80,7 +82,9 @@ export function AppSidebar() {
       setWorkspaces([]);
       return;
     }
-    void getWorkspaces(projectId).then(setWorkspaces).catch(() => setWorkspaces([]));
+    void getWorkspaces(projectId)
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]));
   }, [projectId]);
 
   useEffect(refreshProjects, [refreshProjects]);
@@ -102,11 +106,7 @@ export function AppSidebar() {
   // events, otherwise we get the global WS stream. Either way the bus
   // surfaces session_*/project_*/issue_* events.
   useBusEventEffect({
-    match: busEventMatchers.typeIn(
-      "session_created",
-      "session_updated",
-      "session_deleted",
-    ),
+    match: busEventMatchers.typeIn("session_created", "session_updated", "session_deleted"),
     onEvent: () => {
       refreshWorkspaces();
       emitDataEvent("workspaces:changed");
@@ -114,7 +114,13 @@ export function AppSidebar() {
     throttleMs: 500,
   });
   useBusEventEffect({
-    match: busEventMatchers.typeIn("issue_created", "issue_deleted", "issue_updated", "issue_merged", "issue_abandoned"),
+    match: busEventMatchers.typeIn(
+      "issue_created",
+      "issue_deleted",
+      "issue_updated",
+      "issue_merged",
+      "issue_abandoned",
+    ),
     onEvent: () => {
       // Bust the per-workspace issue cache so the next render fetches fresh
       // status badges; also bump count totals.
@@ -132,7 +138,8 @@ export function AppSidebar() {
 
   // Auto-pick the first project if none selected — keeps sidebar populated.
   useEffect(() => {
-    if (!projectId && projects.length > 0) setProjectId(projects[0].id);
+    const firstProject = projects[0];
+    if (!projectId && firstProject) setProjectId(firstProject.id);
   }, [projectId, projects, setProjectId]);
 
   const ensureIssuesLoaded = useCallback(
@@ -174,7 +181,8 @@ export function AppSidebar() {
     return {
       inbox: allIssues.filter((i) => i.status === "open" || i.status === "in_progress").length,
       myTasks: allIssues.length,
-      approvals: allIssues.filter((i) => i.status === "review" || i.status === "awaiting_approval").length,
+      approvals: allIssues.filter((i) => i.status === "review" || i.status === "awaiting_approval")
+        .length,
     };
   }, [issuesByWs]);
 
@@ -185,12 +193,12 @@ export function AppSidebar() {
         <DropdownMenu>
           <DropdownMenuTrigger className="w-full flex items-center gap-3 p-2 rounded-2xl border border-border-subtle bg-surface-raised/80 hover:bg-surface-hover transition-colors text-left outline-none cursor-default">
             <div className="size-8 shrink-0 rounded-xl bg-brand/15 flex items-center justify-center text-brand font-bold text-xs uppercase">
-              {(projects.find(p => p.id === projectId)?.name || "P").charAt(0)}
+              {(projects.find((p) => p.id === projectId)?.name || "P").charAt(0)}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-[13px] font-semibold truncate text-foreground">
-                  {projects.find(p => p.id === projectId)?.name || t("workbench.projectSwitcher")}
+                  {projects.find((p) => p.id === projectId)?.name || t("workbench.projectSwitcher")}
                 </span>
                 <span className="agent-orb shrink-0" aria-hidden />
               </div>
@@ -203,9 +211,9 @@ export function AppSidebar() {
           <DropdownMenuContent align="start" className="w-56">
             <DropdownMenuGroup>
               <DropdownMenuLabel>{t("workbench.projectSwitcher")}</DropdownMenuLabel>
-              {projects.map(p => (
-                <DropdownMenuItem 
-                  key={p.id} 
+              {projects.map((p) => (
+                <DropdownMenuItem
+                  key={p.id}
                   onClick={() => {
                     setProjectId(p.id);
                     router.push(`/projects/${p.id}`);
@@ -358,7 +366,9 @@ export function AppSidebar() {
               {isOpen && (
                 <div className="pl-5 flex flex-col gap-0.5 mt-0.5 mb-1">
                   {issues.length === 0 && (
-                    <div className="px-2 py-1 text-[11px] text-text-muted">{t("sidebar.empty")}</div>
+                    <div className="px-2 py-1 text-[11px] text-text-muted">
+                      {t("sidebar.empty")}
+                    </div>
                   )}
                   {issues.slice(0, 8).map((issue) => {
                     const active = issue.id === issueId;
@@ -437,7 +447,7 @@ function NavRow({
 }: {
   icon: React.ReactNode;
   label: string;
-  count?: number;
+  count?: number | undefined;
   active: boolean;
   onClick: () => void;
   /** When true, active state uses brand bg highlight (the "Issues" treatment). */
@@ -455,11 +465,7 @@ function NavRow({
             : "text-foreground font-medium bg-surface-hover"
           : "text-text-secondary hover:text-foreground hover:bg-surface-hover",
       )}
-      style={
-        active && highlightActive
-          ? { background: "var(--color-brand-bg)" }
-          : undefined
-      }
+      style={active && highlightActive ? { background: "var(--color-brand-bg)" } : undefined}
     >
       {active && highlightActive && (
         <span
@@ -484,11 +490,7 @@ function NavRow({
               ? "text-brand-strong border border-brand-ring/40 bg-transparent"
               : "text-text-muted border border-border-muted bg-surface-input",
           )}
-          style={
-            active && highlightActive
-              ? { borderColor: "var(--color-brand-ring)" }
-              : undefined
-          }
+          style={active && highlightActive ? { borderColor: "var(--color-brand-ring)" } : undefined}
         >
           {count}
         </span>

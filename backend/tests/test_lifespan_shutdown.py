@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fastapi.dependencies.utils as fastapi_dependency_utils
 import pytest
+from fastapi import FastAPI
 
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
@@ -33,7 +34,7 @@ async def test_lifespan_awaits_async_process_manager_shutdown(monkeypatch):
     monkeypatch.setattr(bootstrap_module, "async_store", _AsyncStore())
     monkeypatch.setattr(bootstrap_module, "codex_process_manager", manager)
 
-    async with lifespan(None):
+    async with lifespan(FastAPI()):
         pass
 
     assert manager.terminated is True
@@ -115,7 +116,7 @@ async def test_lifespan_recovers_conductors_and_runs_watchdog(monkeypatch):
     monkeypatch.setattr(stall_watchdog, "run", fake_stall_watchdog)
     monkeypatch.setattr(asyncio, "create_task", fake_create_task)
 
-    async with lifespan(None):
+    async with lifespan(FastAPI()):
         pass
 
     assert calls[0][0] == "recover"

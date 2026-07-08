@@ -35,7 +35,7 @@ sequential flaky-output study. The PR3 async job layer can layer
 parallelism on top if cost analysis justifies it.
 """
 
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
 import asyncio
 import json
@@ -43,18 +43,21 @@ import time
 import uuid
 from dataclasses import dataclass, field  # noqa: F401
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from inspect import iscoroutinefunction
+from typing import TYPE_CHECKING, Protocol, TypeGuard, runtime_checkable
 
 from .aggregations import (
     FixtureStats,  # noqa: F401
     RunAggregate,
-    aggregate as aggregate_stats,
     per_fixture,
 )
-from .golden_loader import GoldenIssue, load_all
-from .golden_schema import PinnedCommand  # noqa: F401
-from .scorers_impl import default_registry
+from .aggregations import (
+    aggregate as aggregate_stats,
+)
+from .golden_loader import load_all
+from .golden_schema import GoldenIssue, PinnedCommand  # noqa: F401
 from .scorers import ScorerRegistry
+from .scorers_impl import default_registry
 from .store import (
     BenchmarkEpoch,
     BenchmarkRun,
@@ -63,6 +66,9 @@ from .store import (
     make_run_row,
 )
 from .types import CommandResult, IssueArtifacts, Score
+
+if TYPE_CHECKING:
+    from app.domain.models import ExecutionProcess
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +87,28 @@ class IssueExecutor(Protocol):
     """
 
     async def execute(self, fixture: GoldenIssue, epoch_index: int) -> "ExecutorResult": ...  # noqa: UP037
+
+
+@runtime_checkable
+class BenchmarkRuntimeStore(Protocol):
+    async def list_codex_tasks(
+        self,
+        session_id: str | None = None,
+        issue_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[dict[str, object]]: ...
+
+    async def list_execution_processes(
+        self, session_id: str | None = None, task_id: str | None = None
+    ) -> list[ExecutionProcess]: ...
+
+
+def _is_benchmark_runtime_store(store: object) -> TypeGuard[BenchmarkRuntimeStore]:
+    return (
+        isinstance(store, BenchmarkRuntimeStore)
+        and iscoroutinefunction(store.list_codex_tasks)
+        and iscoroutinefunction(store.list_execution_processes)
+    )
 
 
 @dataclass
@@ -191,12 +219,9 @@ class RealConductorExecutor:
     async def execute(self, fixture: GoldenIssue, epoch_index: int) -> ExecutorResult:
         # Defer real imports to call time so unit tests can
         # construct the class without the conductor on the path.
-        from app.bootstrap import (  # noqa: I001
-            codex_store,
-            event_bus,  # noqa: F401
-            get_codex_process_manager,  # noqa: F401
-        )
-        from app.interfaces.api import create_codex_issue
+        from app.application.event_bus import event_bus  # noqa: I001
+        from app.bootstrap import codex_store
+        from app.interfaces.api import CreateIssueRequest, create_codex_issue
         from app.application.conductor_main_loop import run_issue_conductor_loop
 
         started = time.monotonic()
@@ -208,18 +233,29 @@ class RealConductorExecutor:
         out_tok = 0
 
         try:
+            if not _is_benchmark_runtime_store(codex_store):
+                raise RuntimeError("benchmark real executor requires async codex store")
+            description = fixture.description
+            if fixture.acceptance_criteria:
+                criteria = "\n".join(f"- {item}" for item in fixture.acceptance_criteria)
+                description = f"{description or ''}\n\nAcceptance criteria:\n{criteria}".strip()
             issue = await create_codex_issue(
-                title=fixture.title,
-                description=fixture.description,
-                project_id=self._project_id,
-                session_id=self._workspace_id,
-                acceptance_criteria=fixture.acceptance_criteria,
+                CreateIssueRequest(
+                    session_id=self._workspace_id,
+                    title=fixture.title,
+                    description=description,
+                )
             )
             issue_id = issue.id
 
             # Run the conductor to completion. The loop finalises
             # on its own when the LLM calls ``finalize_task``.
-            await run_issue_conductor_loop(issue)
+            await run_issue_conductor_loop(
+                issue,
+                project_id=self._project_id,
+                store=codex_store,
+                event_bus=event_bus,
+            )
 
             # Read the QA real-command results and the engineer's
             # completed task titles from the store.
@@ -239,7 +275,7 @@ class RealConductorExecutor:
         )
 
     async def _collect_artifacts(
-        self, codex_store, fixture: GoldenIssue, issue_id: str
+        self, codex_store: BenchmarkRuntimeStore, fixture: GoldenIssue, issue_id: str
     ) -> IssueArtifacts:
         """Reconstruct ``IssueArtifacts`` from the store.
 
@@ -249,37 +285,36 @@ class RealConductorExecutor:
         back to the ``ExecutionProcess`` exit_code as a
         proxy — ``exit_code == 0`` is treated as pass.
         """
-        from app.application.qa_workflow import get_qa_command_results
-
-        qa_results_data = await get_qa_command_results(codex_store, issue_id)
         qa_results: list[CommandResult] = []
-        for entry in qa_results_data:
-            qa_results.append(
+
+        # Derive a coarse pass/fail from current ExecutionProcess rows.
+        tasks = await codex_store.list_codex_tasks(issue_id=issue_id)
+        for task in tasks:
+            task_id = task.get("id")
+            if not isinstance(task_id, str) or not task_id:
+                continue
+            procs = await codex_store.list_execution_processes(task_id=task_id)
+            qa_results.extend(
                 CommandResult(
-                    command=entry.get("command", ""),
-                    exit_code=int(entry.get("exit_code", 1)),
-                    duration_s=float(entry.get("duration_s", 0.0)),
-                    stdout_tail=entry.get("stdout_tail", ""),
-                    stderr_tail=entry.get("stderr_tail", ""),
-                )
-            )
-        # Fallback: if no persisted QA results, derive a coarse
-        # pass/fail from the engineer's ExecutionProcess rows.
-        if not qa_results:
-            procs = await codex_store.list_execution_processes_for_issue(issue_id)
-            qa_results = [
-                CommandResult(
-                    command=p.get("command", "<engineer>"),
-                    exit_code=int(p.get("exit_code", 1)),
-                    duration_s=float(p.get("duration_s", 0.0)),
+                    command=f"{p.executor or 'executor'}:{p.kind}",
+                    exit_code=int(p.exit_code if p.exit_code is not None else 1),
+                    duration_s=(
+                        max((p.completed_at - p.started_at).total_seconds(), 0.0)
+                        if p.started_at and p.completed_at
+                        else 0.0
+                    ),
                 )
                 for p in procs
-                if p.get("kind") in ("rerun", "refine", "initial")
-            ]
+                if p.kind in ("rerun", "refine", "initial")
+            )
 
         # Engineer completed task titles.
-        tasks = await codex_store.list_codex_tasks(issue_id=issue_id)
-        completed = [t.get("title", "") for t in tasks if t.get("status") in ("done", "completed")]
+        completed = [
+            title
+            for t in tasks
+            if t.get("status") in ("done", "completed")
+            and isinstance(title := t.get("title"), str)
+        ]
 
         return IssueArtifacts(
             issue_id=issue_id,
@@ -288,7 +323,9 @@ class RealConductorExecutor:
             completed_engineer_tasks=completed,
         )
 
-    async def _collect_cost(self, codex_store, issue_id: str) -> tuple[float, int, int]:
+    async def _collect_cost(
+        self, codex_store: BenchmarkRuntimeStore, issue_id: str
+    ) -> tuple[float, int, int]:
         """Sum cost/tokens across completed ExecutionProcess rows for
         this issue. Returns (spent_usd, input_tokens, output_tokens)."""
         from app.application.budget_service import COMPLETED_PROCESS_STATES
@@ -299,7 +336,7 @@ class RealConductorExecutor:
         out_tok = 0
         for t in tasks:
             task_id = t.get("id")
-            if not task_id:
+            if not isinstance(task_id, str) or not task_id:
                 continue
             procs = await codex_store.list_execution_processes(task_id=task_id)
             for p in procs:

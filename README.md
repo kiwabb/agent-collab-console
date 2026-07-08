@@ -71,17 +71,24 @@ Run these before committing user-facing changes:
 
 ```bash
 cd frontend
-npx tsc --noEmit --pretty false
-npm run test
+npm audit --registry=https://registry.npmjs.org
+npm run typecheck
+npm test
 npm run lint
+npm run build
+npm run format:check
 ```
 
 ```bash
 cd backend
-pytest
+.venv/bin/python -m ruff check .
+.venv/bin/python -m mypy app benchmark tests --show-error-codes --no-pretty
+.venv/bin/python -c "from app.main import app"
+.venv/bin/python -m pytest -q --tb=short --disable-warnings
 ```
 
-Backend tests marked `slow` are skipped by default via `backend/pytest.ini`. To run slow tests too:
+Backend tests marked `slow` are skipped by default via `backend/pyproject.toml`.
+To run slow tests too:
 
 ```bash
 cd backend

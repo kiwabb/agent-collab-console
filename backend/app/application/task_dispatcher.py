@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Any  # noqa: F401
+from inspect import isawaitable
+from typing import Protocol
 from uuid import uuid4
 
 from app.domain.models import (
-    Agent,  # noqa: F401
+    Agent,
     AgentMessage,
     CodexIssue,
     CodexTask,
     WorkflowEdge,
-    WorkflowGraph,  # noqa: F401
+    WorkflowGraph,
     WorkflowNode,
 )
 
@@ -37,6 +39,31 @@ _ROLE_ALIASES: dict[str, str] = {
 # read the same node count and mint a COLLIDING node_key. The lock only guards
 # the cheap bookkeeping; the slow subagent run happens outside it in the caller.
 _issue_dispatch_locks: dict[str, asyncio.Lock] = {}
+
+
+class DispatchRoleStore(Protocol):
+    def list_agents(self, *, workspace_id: str | None = None) -> Awaitable[list[Agent]]: ...
+
+    def load_workflow_graph_for_issue(
+        self, issue_id: str
+    ) -> Awaitable[WorkflowGraph | None]: ...
+
+    def save_codex_task(self, task: CodexTask) -> Awaitable[None]: ...
+
+    def add_workflow_node(self, node: WorkflowNode) -> Awaitable[None]: ...
+
+    def add_workflow_edge(self, edge: WorkflowEdge) -> Awaitable[None]: ...
+
+    def save_agent_message(self, message: AgentMessage) -> Awaitable[None]: ...
+
+    def update_workflow_node(self, node_id: str, **updates: object) -> Awaitable[None]: ...
+
+
+class DispatchEventBus(Protocol):
+    def append(self, event: dict[str, object]) -> Awaitable[None]: ...
+
+
+TaskDispatcherFn = Callable[[CodexTask], object | Awaitable[object]]
 
 
 def _issue_dispatch_lock(issue_id: str) -> asyncio.Lock:
@@ -70,13 +97,15 @@ async def dispatch_role(
     issue: CodexIssue,
     role: str,
     prompt_override: str | None = None,
-    store,
-    task_dispatcher_fn,
-    event_bus=None,
+    store: DispatchRoleStore,
+    task_dispatcher_fn: TaskDispatcherFn | None,
+    event_bus: DispatchEventBus | None = None,
     prev_node_key: str | None = None,
     agent_worktree_path: str | None = None,
     batch_key: str | None = None,
     register_completion: bool = False,
+    trace_id: str | None = None,
+    parent_span_id: str | None = None,
 ) -> tuple[str, str]:  # (task_id, node_id)
     """Dispatch a role task for Conductor-driven orchestration.
 
@@ -136,8 +165,9 @@ async def dispatch_role(
 
     now = datetime.now()
     node_id = str(uuid4())
+    task_id_str = str(uuid4())
     task = CodexTask(
-        id=str(uuid4()),
+        id=task_id_str,
         session_id=issue.session_id,
         project_id=issue.project_id,
         issue_id=issue.id,
@@ -153,6 +183,9 @@ async def dispatch_role(
         git_branch=issue.git_branch,
         git_base_branch=issue.git_base_branch,
         git_worktree_path=workspace_path,
+        trace_id=trace_id,
+        span_id=task_id_str,
+        parent_span_id=parent_span_id,
         created_at=now,
         updated_at=now,
     )
@@ -277,7 +310,7 @@ async def dispatch_role(
     if task_dispatcher_fn is not None:
         try:
             result = task_dispatcher_fn(task)
-            if asyncio.iscoroutine(result):
+            if isawaitable(result):
                 await result
         except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("dispatch_role task runner failed: %s", exc)
@@ -292,7 +325,7 @@ async def dispatch_role(
                     task_id=task.id,
                     completed_at=datetime.now(),
                 )
-            except Exception as node_exc:  # noqa: BLE001
+            except Exception as node_exc:
                 logger.warning("dispatch_role failed to mark workflow node failed: %s", node_exc)
             if event_bus is not None:
                 try:
@@ -313,7 +346,7 @@ async def dispatch_role(
                             "batch_key": batch_key,
                         }
                     )
-                except Exception as emit_exc:  # noqa: BLE001
+                except Exception as emit_exc:
                     logger.warning("dispatch_role failed to emit runner-start failure: %s", emit_exc)
             if register_completion:
                 from app.application.task_completion_registry import TaskCompletionRegistry

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback } from "react";
 
 interface UsePasteImageOptions {
   onPaste: (file: File) => void;
@@ -26,7 +26,7 @@ export function usePasteImage({ onPaste, enabled = true }: UsePasteImageOptions)
         }
       }
     },
-    [onPaste, enabled]
+    [onPaste, enabled],
   );
 
   useEffect(() => {
@@ -37,9 +37,9 @@ export function usePasteImage({ onPaste, enabled = true }: UsePasteImageOptions)
 }
 
 export function dataUrlToBlob(dataUrl: string): Blob {
-  const arr = dataUrl.split(",");
-  const mime = arr[0].match(/:(.*?);/)?.[1] || "image/png";
-  const bstr = atob(arr[1]);
+  const [metadata = "", encodedData = ""] = dataUrl.split(",");
+  const mime = metadata.match(/:(.*?);/)?.[1] || "image/png";
+  const bstr = atob(encodedData);
   let n = bstr.length;
   const u8arr = new Uint8Array(n);
   while (n--) {

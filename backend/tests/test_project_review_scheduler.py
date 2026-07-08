@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
+from typing import cast
 
 import pytest
 
@@ -83,12 +84,13 @@ async def test_project_review_tick_isolates_project_failures_and_continues():
     )
 
     payload = summary.to_dict()
+    results = cast(list[dict[str, object]], payload["results"])
     assert payload["counts"] == {"failed": 1, "done": 1}
-    assert payload["results"][0]["project_id"] == "project-1"
-    assert payload["results"][0]["status"] == "failed"
-    assert payload["results"][0]["error"] == "project-1 unavailable"
-    assert payload["results"][1]["project_id"] == "project-2"
-    assert payload["results"][1]["status"] == "done"
+    assert results[0]["project_id"] == "project-1"
+    assert results[0]["status"] == "failed"
+    assert results[0]["error"] == "project-1 unavailable"
+    assert results[1]["project_id"] == "project-2"
+    assert results[1]["status"] == "done"
     assert [task.project_id for task in calls] == ["project-1", "project-2"]
 
 

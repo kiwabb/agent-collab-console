@@ -2,22 +2,32 @@
 
 from __future__ import annotations
 
+import builtins
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import TypedDict
 from uuid import uuid4
 
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
-from app.application.git_service import GitError, GitService
-from app.domain.models import Project
+from app.application.git_service import GitError, GitService, RemoteGitStatus
+from app.domain.models import GitBranch, Project
 
 
 class ProjectError(RuntimeError):
     pass
 
 
+class FastForwardPullResult(TypedDict, total=False):
+    success: bool
+    branch: str
+    reason: str
+    new_sha: str
+    behind_before: int
+
+
 class ProjectService:
-    def __init__(self, store: AsyncSQLiteStore, git: GitService):
+    def __init__(self, store: AsyncSQLiteStore, git: GitService) -> None:
         self.store = store
         self.git = git
 
@@ -113,11 +123,11 @@ class ProjectService:
     async def delete(self, project_id: str) -> None:
         await self.store.delete_project(project_id)
 
-    async def list_branches(self, project_id: str):
+    async def list_branches(self, project_id: str) -> builtins.list[GitBranch]:
         project = await self.get(project_id)
         return await self.git.list_branches(project.repo_path)
 
-    async def remote_status(self, project_id: str, *, do_fetch: bool = True) -> dict:
+    async def remote_status(self, project_id: str, *, do_fetch: bool = True) -> RemoteGitStatus:
         """How the project's default branch relates to its remote.
 
         Thin wrapper over GitService.remote_status that resolves the project's
@@ -131,7 +141,7 @@ class ProjectService:
             do_fetch=do_fetch,
         )
 
-    async def fast_forward_pull(self, project_id: str) -> dict:
+    async def fast_forward_pull(self, project_id: str) -> FastForwardPullResult:
         """Fast-forward the project's default branch to its remote.
 
         Re-checks the safety preconditions server-side (never trusts a prior

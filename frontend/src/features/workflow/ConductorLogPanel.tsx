@@ -2,7 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Circle, HelpCircle, Pause, PauseCircle, Play, SendHorizontal, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  Circle,
+  HelpCircle,
+  Pause,
+  PauseCircle,
+  Play,
+  SendHorizontal,
+  XCircle,
+} from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -29,10 +38,15 @@ import {
   type ConductorStatePayload,
   type ConductorTurn,
 } from "@/lib/api/conductors";
-import { cn } from "@/lib/utils";
+import { cn, isRecord, safeJsonRecord } from "@/lib/utils";
 import type { HistoryEntry } from "@/features/agents/dock/agentBus";
 import { PERSONAS } from "@/features/agents/dock/personas";
-import type { BusConductorStateViolationEvent, BusConductorStatusEvent, BusConductorTurnDeltaEvent, BusConductorTurnEvent } from "@/contexts/ExecutionProcessesContext";
+import type {
+  BusConductorStateViolationEvent,
+  BusConductorStatusEvent,
+  BusConductorTurnDeltaEvent,
+  BusConductorTurnEvent,
+} from "@/contexts/ExecutionProcessesContext";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
@@ -46,7 +60,10 @@ interface Props {
 }
 
 type TabId = "thread" | "log" | "turns";
-type StreamingBufferMap = Record<string, { turnIndex: number; contentBlockIndex: number; kind: "text" | "tool_input_json"; chunk: string }>;
+type StreamingBufferMap = Record<
+  string,
+  { turnIndex: number; contentBlockIndex: number; kind: "text" | "tool_input_json"; chunk: string }
+>;
 type TimelineNode = {
   key: string;
   phase: string;
@@ -59,39 +76,91 @@ type TimelineNode = {
   isPaused: boolean;
   isFailed: boolean;
 };
+type ThreadActionStyle = { label: string; cls: string };
 
-function getThreadActionStyles(t: (key: string) => string): Record<string, { label: string; cls: string }> {
+function getThreadActionStyles(
+  t: (key: string) => string,
+): Record<string, ThreadActionStyle> & { proceed: ThreadActionStyle } {
   return {
-    proceed: { label: t("conductor.action.proceed"), cls: "bg-surface-raised text-text-secondary border-border-subtle" },
+    proceed: {
+      label: t("conductor.action.proceed"),
+      cls: "bg-surface-raised text-text-secondary border-border-subtle",
+    },
     note: { label: t("conductor.action.note"), cls: "bg-info/10 text-info border-info/30" },
-    escalate: { label: t("conductor.action.escalate"), cls: "bg-error/10 text-error border-error/30" },
-    dispatch_next: { label: t("conductor.action.dispatchNext"), cls: "bg-brand/10 text-brand border-brand/30" },
-    inject_context: { label: t("conductor.action.injectContext"), cls: "bg-warning/10 text-warning border-warning/30" },
-    spawn_specialist: { label: t("conductor.action.spawnSpecialist"), cls: "bg-success/10 text-success border-success/30" },
-    spawn_custom: { label: t("conductor.action.spawnCustom"), cls: "bg-success/10 text-success border-success/30" },
+    escalate: {
+      label: t("conductor.action.escalate"),
+      cls: "bg-error/10 text-error border-error/30",
+    },
+    dispatch_next: {
+      label: t("conductor.action.dispatchNext"),
+      cls: "bg-brand/10 text-brand border-brand/30",
+    },
+    inject_context: {
+      label: t("conductor.action.injectContext"),
+      cls: "bg-warning/10 text-warning border-warning/30",
+    },
+    spawn_specialist: {
+      label: t("conductor.action.spawnSpecialist"),
+      cls: "bg-success/10 text-success border-success/30",
+    },
+    spawn_custom: {
+      label: t("conductor.action.spawnCustom"),
+      cls: "bg-success/10 text-success border-success/30",
+    },
   };
 }
 
-function getActionStyles(t: (key: string) => string): Record<ConductorDecision["action"], { label: string; cls: string }> {
+function getActionStyles(
+  t: (key: string) => string,
+): Record<ConductorDecision["action"], { label: string; cls: string }> {
   return {
-    proceed: { label: t("conductor.action.proceed"), cls: "bg-surface-raised text-text-secondary border-border-subtle" },
+    proceed: {
+      label: t("conductor.action.proceed"),
+      cls: "bg-surface-raised text-text-secondary border-border-subtle",
+    },
     note: { label: t("conductor.action.note"), cls: "bg-info/10 text-info border-info/30" },
-    escalate: { label: t("conductor.action.escalate"), cls: "bg-error/10 text-error border-error/30" },
-    reroute: { label: t("conductor.action.reroute"), cls: "bg-brand/10 text-brand border-brand/30" },
-    insert_node: { label: t("conductor.action.insertNode"), cls: "bg-success/10 text-success border-success/30" },
-    request_clarification: { label: t("conductor.action.clarify"), cls: "bg-warning/10 text-warning border-warning/30" },
+    escalate: {
+      label: t("conductor.action.escalate"),
+      cls: "bg-error/10 text-error border-error/30",
+    },
+    reroute: {
+      label: t("conductor.action.reroute"),
+      cls: "bg-brand/10 text-brand border-brand/30",
+    },
+    insert_node: {
+      label: t("conductor.action.insertNode"),
+      cls: "bg-success/10 text-success border-success/30",
+    },
+    request_clarification: {
+      label: t("conductor.action.clarify"),
+      cls: "bg-warning/10 text-warning border-warning/30",
+    },
   };
 }
 
-function getTurnStyles(t: (key: string) => string): Record<ConductorTurn["kind"], { label: string; cls: string }> {
+function getTurnStyles(
+  t: (key: string) => string,
+): Record<ConductorTurn["kind"], { label: string; cls: string }> {
   return {
     llm_request: { label: t("conductor.turn.llm"), cls: "bg-brand/10 text-brand border-brand/30" },
-    llm_response: { label: t("conductor.turn.response"), cls: "bg-brand/5 text-brand border-brand/20" },
-    tool_use: { label: t("conductor.turn.tool"), cls: "bg-warning/10 text-warning border-warning/30" },
-    tool_result: { label: t("conductor.turn.result"), cls: "bg-success/10 text-success border-success/30" },
+    llm_response: {
+      label: t("conductor.turn.response"),
+      cls: "bg-brand/5 text-brand border-brand/20",
+    },
+    tool_use: {
+      label: t("conductor.turn.tool"),
+      cls: "bg-warning/10 text-warning border-warning/30",
+    },
+    tool_result: {
+      label: t("conductor.turn.result"),
+      cls: "bg-success/10 text-success border-success/30",
+    },
     user_message: { label: t("conductor.turn.you"), cls: "bg-info/10 text-info border-info/30" },
     error: { label: t("conductor.turn.error"), cls: "bg-error/10 text-error border-error/30" },
-    finalize: { label: t("conductor.turn.done"), cls: "bg-surface-raised text-text-secondary border-border-subtle" },
+    finalize: {
+      label: t("conductor.turn.done"),
+      cls: "bg-surface-raised text-text-secondary border-border-subtle",
+    },
   };
 }
 
@@ -136,11 +205,14 @@ function buildTimelineNodes(
   const nodes: TimelineNode[] = [];
   for (let index = 0; index < ascending.length; index += 1) {
     const entry = ascending[index];
+    if (!entry) continue;
     const next = ascending[index + 1];
-    const isResumeEcho = index > 0
-      && ascending[index - 1]?.to_phase === "paused"
-      && entry.from_phase === "paused"
-      && entry.to_phase === ascending[index - 1]?.from_phase;
+    const previous = ascending[index - 1];
+    const isResumeEcho =
+      index > 0 &&
+      previous?.to_phase === "paused" &&
+      entry.from_phase === "paused" &&
+      entry.to_phase === previous.from_phase;
     if (isResumeEcho) continue;
     const startedAtMs = entry.transition_at ? new Date(entry.transition_at).getTime() : null;
     const endedAtMs = next?.transition_at ? new Date(next.transition_at).getTime() : null;
@@ -151,11 +223,12 @@ function buildTimelineNodes(
       detail: isCurrent ? currentDetail : (entry.to_detail ?? null),
       startedAt: entry.transition_at,
       endedAt: next?.transition_at ?? null,
-      durationMs: endedAtMs != null && startedAtMs != null
-        ? Math.max(1, endedAtMs - startedAtMs)
-        : isCurrent && startedAtMs != null
-          ? Math.max(0, nowMs - startedAtMs)
-          : entry.duration_ms,
+      durationMs:
+        endedAtMs != null && startedAtMs != null
+          ? Math.max(1, endedAtMs - startedAtMs)
+          : isCurrent && startedAtMs != null
+            ? Math.max(0, nowMs - startedAtMs)
+            : entry.duration_ms,
       isCurrent,
       isLegal: entry.is_legal,
       isPaused: entry.to_phase === "paused",
@@ -180,55 +253,55 @@ function buildTimelineNodes(
 }
 
 function isConductorTurnEvent(evt: unknown): evt is BusConductorTurnEvent {
-  if (!evt || typeof evt !== "object") return false;
-  const record = evt as Record<string, unknown>;
+  if (!isRecord(evt)) return false;
+  const record = evt;
   return (
-    record.type === "conductor_turn" &&
-    typeof record.id === "string" &&
-    typeof record.issue_id === "string" &&
-    typeof record.conductor_task_id === "string" &&
-    typeof record.turn_index === "number" &&
-    typeof record.sub_index === "number" &&
-    typeof record.kind === "string" &&
-    !!record.payload &&
-    typeof record.payload === "object"
+    record["type"] === "conductor_turn" &&
+    typeof record["id"] === "string" &&
+    typeof record["issue_id"] === "string" &&
+    typeof record["conductor_task_id"] === "string" &&
+    typeof record["turn_index"] === "number" &&
+    typeof record["sub_index"] === "number" &&
+    typeof record["kind"] === "string" &&
+    !!record["payload"] &&
+    typeof record["payload"] === "object"
   );
 }
 
 function isConductorStatusEvent(evt: unknown): evt is BusConductorStatusEvent {
-  if (!evt || typeof evt !== "object") return false;
-  const record = evt as Record<string, unknown>;
+  if (!isRecord(evt)) return false;
+  const record = evt;
   return (
-    record.type === "conductor_status" &&
-    typeof record.issue_id === "string" &&
-    typeof record.conductor_task_id === "string" &&
-    typeof record.status === "string"
+    record["type"] === "conductor_status" &&
+    typeof record["issue_id"] === "string" &&
+    typeof record["conductor_task_id"] === "string" &&
+    typeof record["status"] === "string"
   );
 }
 
 function isConductorTurnDeltaEvent(evt: unknown): evt is BusConductorTurnDeltaEvent {
-  if (!evt || typeof evt !== "object") return false;
-  const record = evt as Record<string, unknown>;
+  if (!isRecord(evt)) return false;
+  const record = evt;
   return (
-    record.type === "conductor_turn_delta" &&
-    typeof record.issue_id === "string" &&
-    typeof record.conductor_task_id === "string" &&
-    typeof record.turn_index === "number" &&
-    typeof record.sub_index === "number" &&
-    typeof record.kind === "string" &&
-    typeof record.chunk === "string" &&
-    typeof record.content_block_index === "number"
+    record["type"] === "conductor_turn_delta" &&
+    typeof record["issue_id"] === "string" &&
+    typeof record["conductor_task_id"] === "string" &&
+    typeof record["turn_index"] === "number" &&
+    typeof record["sub_index"] === "number" &&
+    typeof record["kind"] === "string" &&
+    typeof record["chunk"] === "string" &&
+    typeof record["content_block_index"] === "number"
   );
 }
 
 function isConductorStateViolationEvent(evt: unknown): evt is BusConductorStateViolationEvent {
-  if (!evt || typeof evt !== "object") return false;
-  const record = evt as Record<string, unknown>;
+  if (!isRecord(evt)) return false;
+  const record = evt;
   return (
-    record.type === "conductor_state_violation" &&
-    typeof record.issue_id === "string" &&
-    typeof record.conductor_task_id === "string" &&
-    typeof record.to_phase === "string"
+    record["type"] === "conductor_state_violation" &&
+    typeof record["issue_id"] === "string" &&
+    typeof record["conductor_task_id"] === "string" &&
+    typeof record["to_phase"] === "string"
   );
 }
 
@@ -259,11 +332,21 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
     if (!open) return;
     setLoading(true);
     Promise.all([
-      getConductorLog(issueId).then((d) => setDecisions([...d].reverse())).catch(() => setDecisions([])),
-      getConductorState(issueId).then(setConductorState).catch(() => setConductorState(null)),
-      getConductorTurns(issueId).then(setTurns).catch(() => setTurns([])),
-      getConductorStateLog(issueId, { limit: 200 }).then((entries) => setStateLog(entries)).catch(() => setStateLog([])),
-      getConductorPhaseEstimates(issueId).then(setPhaseEstimates).catch(() => setPhaseEstimates({})),
+      getConductorLog(issueId)
+        .then((d) => setDecisions([...d].reverse()))
+        .catch(() => setDecisions([])),
+      getConductorState(issueId)
+        .then(setConductorState)
+        .catch(() => setConductorState(null)),
+      getConductorTurns(issueId)
+        .then(setTurns)
+        .catch(() => setTurns([])),
+      getConductorStateLog(issueId, { limit: 200 })
+        .then((entries) => setStateLog(entries))
+        .catch(() => setStateLog([])),
+      getConductorPhaseEstimates(issueId)
+        .then(setPhaseEstimates)
+        .catch(() => setPhaseEstimates({})),
     ]).finally(() => setLoading(false));
   }, [issueId, open]);
 
@@ -402,7 +485,10 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
           to_detail: evt.detail ?? null,
           transition_at: updatedAt,
           duration_ms: existing?.transition_at
-            ? Math.max(1, new Date(updatedAt).getTime() - new Date(existing.transition_at).getTime())
+            ? Math.max(
+                1,
+                new Date(updatedAt).getTime() - new Date(existing.transition_at).getTime(),
+              )
             : null,
           is_legal: true,
         };
@@ -419,11 +505,11 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
     ),
     onEvent: (evt) => {
       if (!isConductorStateViolationEvent(evt)) return;
-      setStateLog((prev) => prev.map((entry, index) => (
-        index === 0 && entry.to_phase === evt.to_phase
-          ? { ...entry, is_legal: false }
-          : entry
-      )));
+      setStateLog((prev) =>
+        prev.map((entry, index) =>
+          index === 0 && entry.to_phase === evt.to_phase ? { ...entry, is_legal: false } : entry,
+        ),
+      );
     },
     enabled: open,
   });
@@ -432,32 +518,53 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
   const pending = conductorState?.pending_dispatches ?? [];
   const conductorStatus = conductorState?.conductor_status ?? "idle";
   const conductorPhase = conductorState?.phase ?? null;
-  const phaseStartedAt = conductorState?.updated_at ? new Date(conductorState.updated_at).getTime() : null;
+  const phaseStartedAt = conductorState?.updated_at
+    ? new Date(conductorState.updated_at).getTime()
+    : null;
   const phaseElapsedMs = phaseStartedAt ? Math.max(0, nowMs - phaseStartedAt) : 0;
   const phaseElapsedSeconds = Math.floor(phaseElapsedMs / 1000);
-  const conductorDetail = conductorPhase === "awaiting_subagent" && conductorState?.detail
-    ? `${conductorState.detail} (${phaseElapsedSeconds}s)`
-    : (conductorState?.detail ?? null);
-  const translatedStatus = t(`conductor.status.${conductorStatus}` as TranslationKey) ?? conductorStatus;
+  const conductorDetail =
+    conductorPhase === "awaiting_subagent" && conductorState?.detail
+      ? `${conductorState.detail} (${phaseElapsedSeconds}s)`
+      : (conductorState?.detail ?? null);
+  const translatedStatus =
+    t(`conductor.status.${conductorStatus}` as TranslationKey) ?? conductorStatus;
   const isPaused = conductorStatus === "paused";
-  const hasActiveLoop = Boolean(conductorState?.conductor_task_id) && !["done", "completed", "failed", "max_turns"].includes(conductorStatus);
-  const statusCls = STATUS_STYLES[conductorStatus] ?? "bg-surface-raised text-text-secondary border-border-subtle";
+  const hasActiveLoop =
+    Boolean(conductorState?.conductor_task_id) &&
+    !["done", "completed", "failed", "max_turns"].includes(conductorStatus);
+  const statusCls =
+    STATUS_STYLES[conductorStatus] ?? "bg-surface-raised text-text-secondary border-border-subtle";
   const streamingPreview = Object.values(streamingBuffers)
-    .sort((a, b) => a.turnIndex - b.turnIndex || a.contentBlockIndex - b.contentBlockIndex || a.kind.localeCompare(b.kind))
+    .sort(
+      (a, b) =>
+        a.turnIndex - b.turnIndex ||
+        a.contentBlockIndex - b.contentBlockIndex ||
+        a.kind.localeCompare(b.kind),
+    )
     .map((entry) => entry.chunk)
     .join("");
   const stuck = conductorPhase === "awaiting_subagent" && phaseElapsedSeconds > 30;
   const isConductorLogScheduling = hasActiveLoop && !isPaused && !stuck;
-  const conductorLogMotionPhase = conductorPhase ?? (conductorStatus === "running" ? "dispatching" : "idle");
-  const timelineNodes = buildTimelineNodes(stateLog, conductorPhase, conductorState?.detail ?? null, nowMs);
+  const conductorLogMotionPhase =
+    conductorPhase ?? (conductorStatus === "running" ? "dispatching" : "idle");
+  const timelineNodes = buildTimelineNodes(
+    stateLog,
+    conductorPhase,
+    conductorState?.detail ?? null,
+    nowMs,
+  );
   const currentEstimate = conductorPhase ? phaseEstimates[conductorPhase] : undefined;
-  const estimateLabel = currentEstimate?.p50_ms != null
-    ? `${currentEstimate.n_samples < 5 ? "~" : ""}${formatDuration(currentEstimate.p50_ms)}`
-    : "—";
-  const estimateTone = currentEstimate?.n_samples && currentEstimate.n_samples < 5
-    ? "text-text-muted"
-    : "text-text-secondary";
-  const isSlowerThanP95 = currentEstimate?.p95_ms != null && phaseElapsedMs > currentEstimate.p95_ms;
+  const estimateLabel =
+    currentEstimate?.p50_ms != null
+      ? `${currentEstimate.n_samples < 5 ? "~" : ""}${formatDuration(currentEstimate.p50_ms)}`
+      : "—";
+  const estimateTone =
+    currentEstimate?.n_samples && currentEstimate.n_samples < 5
+      ? "text-text-muted"
+      : "text-text-secondary";
+  const isSlowerThanP95 =
+    currentEstimate?.p95_ms != null && phaseElapsedMs > currentEstimate.p95_ms;
   const progressMax = currentEstimate?.p50_ms ?? 1;
 
   const handleSend = useCallback(async () => {
@@ -467,12 +574,16 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
     try {
       const result = await sendConductorMessage(issueId, message);
       setComposer("");
-      setConductorState((prev) => prev ? {
-        ...prev,
-        conductor_task_id: result.conductor_task_id,
-        conductor_status: result.status,
-        phase: prev.phase ?? "awaiting_llm",
-      } : prev);
+      setConductorState((prev) =>
+        prev
+          ? {
+              ...prev,
+              conductor_task_id: result.conductor_task_id,
+              conductor_status: result.status,
+              phase: prev.phase ?? "awaiting_llm",
+            }
+          : prev,
+      );
     } finally {
       setSending(false);
     }
@@ -484,12 +595,16 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
     setStatusBusy(nextMode);
     try {
       const result = isPaused ? await resumeConductor(issueId) : await pauseConductor(issueId);
-      setConductorState((prev) => prev ? {
-        ...prev,
-        conductor_task_id: result.conductor_task_id,
-        conductor_status: result.status,
-        phase: isPaused ? "awaiting_llm" : "paused",
-      } : prev);
+      setConductorState((prev) =>
+        prev
+          ? {
+              ...prev,
+              conductor_task_id: result.conductor_task_id,
+              conductor_status: result.status,
+              phase: isPaused ? "awaiting_llm" : "paused",
+            }
+          : prev,
+      );
     } finally {
       setStatusBusy(null);
     }
@@ -510,19 +625,26 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
               </span>
               {translatedName}
             </SheetTitle>
-            <span className={cn("ml-auto inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider", statusCls)}>
+            <span
+              className={cn(
+                "ml-auto inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider",
+                statusCls,
+              )}
+            >
               {translatedStatus}
             </span>
           </div>
-          <SheetDescription className="text-xs text-text-muted">
-            {translatedBlurb}
-          </SheetDescription>
+          <SheetDescription className="text-xs text-text-muted">{translatedBlurb}</SheetDescription>
           {(conductorPhase || conductorDetail || streamingPreview) && (
             <div
-              data-density={isConductorLogScheduling ? "conductor-log-active-phase" : "conductor-log-live-phase"}
+              data-density={
+                isConductorLogScheduling ? "conductor-log-active-phase" : "conductor-log-live-phase"
+              }
               className={cn(
                 "relative mt-3 overflow-hidden rounded-2xl border px-3 py-3 text-xs transition-colors",
-                stuck ? "border-warning/50 bg-warning/10 text-warning" : "border-border-subtle bg-surface-raised/80 text-text-secondary",
+                stuck
+                  ? "border-warning/50 bg-warning/10 text-warning"
+                  : "border-border-subtle bg-surface-raised/80 text-text-secondary",
                 isConductorLogScheduling && "motion-essential border-brand/35 bg-brand-muted/10",
               )}
             >
@@ -534,13 +656,13 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
               )}
               {conductorPhase && (
                 <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em]">
-                  {isConductorLogScheduling && <AgentThinkingIndicator phase={conductorLogMotionPhase} size={12} />}
+                  {isConductorLogScheduling && (
+                    <AgentThinkingIndicator phase={conductorLogMotionPhase} size={12} />
+                  )}
                   {conductorPhase}
                 </div>
               )}
-              {conductorDetail && (
-                <div className="mt-1 leading-relaxed">{conductorDetail}</div>
-              )}
+              {conductorDetail && <div className="mt-1 leading-relaxed">{conductorDetail}</div>}
               {streamingPreview && (
                 <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] text-text-primary">
                   {streamingPreview}
@@ -549,7 +671,10 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
             </div>
           )}
           {timelineNodes.length > 0 && (
-            <div data-density="conductor-phase-timeline" className="mt-3 rounded-2xl border border-border-subtle bg-background/60 px-3 py-3">
+            <div
+              data-density="conductor-phase-timeline"
+              className="mt-3 rounded-2xl border border-border-subtle bg-background/60 px-3 py-3"
+            >
               <div className="mb-2 flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-text-muted">
                 <span>{t("conductor.panel.timeline")}</span>
                 <span>{timelineNodes.length}</span>
@@ -577,11 +702,17 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                           className="relative flex items-start gap-3"
                         >
                           <div
-                            data-density={node.isCurrent ? "conductor-phase-current-node" : "conductor-phase-node"}
+                            data-density={
+                              node.isCurrent
+                                ? "conductor-phase-current-node"
+                                : "conductor-phase-node"
+                            }
                             className={cn(
                               "relative flex w-[154px] shrink-0 flex-col overflow-hidden rounded-2xl border px-3 py-2.5 transition-colors",
                               nodeTone,
-                              node.isCurrent && !node.isPaused && "motion-essential border-brand/45 bg-brand-muted/10",
+                              node.isCurrent &&
+                                !node.isPaused &&
+                                "motion-essential border-brand/45 bg-brand-muted/10",
                             )}
                           >
                             {node.isCurrent && !node.isPaused && (
@@ -596,7 +727,9 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                               ) : (
                                 <Icon className="h-3.5 w-3.5" />
                               )}
-                              <span className="font-mono text-[11px] uppercase tracking-wider">{node.phase}</span>
+                              <span className="font-mono text-[11px] uppercase tracking-wider">
+                                {node.phase}
+                              </span>
                             </div>
                             <div className="mt-1 text-[10px] leading-relaxed text-text-muted">
                               {node.detail || "—"}
@@ -634,7 +767,12 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                     {t("conductor.panel.estimate")}
                   </div>
                   <div className="mt-1 flex items-center gap-2 text-sm text-text-secondary">
-                    <span>{t("conductor.panel.elapsedEstimate", { elapsed: formatDuration(phaseElapsedMs), estimate: estimateLabel })}</span>
+                    <span>
+                      {t("conductor.panel.elapsedEstimate", {
+                        elapsed: formatDuration(phaseElapsedMs),
+                        estimate: estimateLabel,
+                      })}
+                    </span>
                     {currentEstimate?.n_samples != null && currentEstimate.n_samples < 5 && (
                       <Tooltip>
                         <TooltipTrigger>
@@ -658,7 +796,9 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                       "h-full rounded-full transition-all duration-300 ease-out",
                       isSlowerThanP95 ? "bg-warning" : "bg-brand",
                     )}
-                    style={{ width: `${Math.min(100, Math.max(0, (phaseElapsedMs / progressMax) * 100))}%` }}
+                    style={{
+                      width: `${Math.min(100, Math.max(0, (phaseElapsedMs / progressMax) * 100))}%`,
+                    }}
                   />
                 </div>
                 <span className="min-w-[3rem] text-right text-[10px] font-bold text-text-muted">
@@ -676,7 +816,9 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
             <Button
               size="sm"
               variant="outline"
-              data-density={statusBusy ? "conductor-pause-resume-thinking" : "conductor-pause-resume"}
+              data-density={
+                statusBusy ? "conductor-pause-resume-thinking" : "conductor-pause-resume"
+              }
               disabled={!hasActiveLoop || !!statusBusy}
               onClick={() => void handlePauseResume()}
               className={cn(statusBusy && "motion-essential")}
@@ -747,28 +889,38 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
           {!loading && activeTab === "thread" && (
             <>
               {pending.length > 0 && (
-                <div data-density="conductor-pending-dispatches" className="motion-essential relative mb-4 overflow-hidden rounded-2xl border border-brand/35 bg-brand-muted/10 p-3">
+                <div
+                  data-density="conductor-pending-dispatches"
+                  className="motion-essential relative mb-4 overflow-hidden rounded-2xl border border-brand/35 bg-brand-muted/10 p-3"
+                >
                   <span
                     aria-hidden
                     className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
                   />
                   <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-brand">
                     <AgentThinkingIndicator phase="dispatching" size={12} />
-                    {pending.length > 1 ? t("conductor.panel.pendingDispatch", { count: pending.length }) : t("conductor.panel.pendingDispatchSingular")}
+                    {pending.length > 1
+                      ? t("conductor.panel.pendingDispatch", { count: pending.length })
+                      : t("conductor.panel.pendingDispatchSingular")}
                   </div>
                   {pending.map((p, i) => {
                     const style = THREAD_ACTION_STYLES[p.action] ?? THREAD_ACTION_STYLES.proceed;
                     return (
                       <div key={i} className="flex items-start gap-2 text-xs mt-1">
-                        <span className={cn("rounded border px-1.5 py-0.5 text-[9px] font-black uppercase shrink-0", style.cls)}>
+                        <span
+                          className={cn(
+                            "rounded border px-1.5 py-0.5 text-[9px] font-black uppercase shrink-0",
+                            style.cls,
+                          )}
+                        >
                           {style.label}
                         </span>
                         {p.target_node_key && (
-                          <span className="font-mono text-text-secondary">→ {p.target_node_key}</span>
+                          <span className="font-mono text-text-secondary">
+                            → {p.target_node_key}
+                          </span>
                         )}
-                        {p.reason && (
-                          <span className="text-text-muted truncate">{p.reason}</span>
-                        )}
+                        {p.reason && <span className="text-text-muted truncate">{p.reason}</span>}
                       </div>
                     );
                   })}
@@ -793,7 +945,8 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
               ) : (
                 <ol className="relative border-l border-border-subtle ml-2 space-y-4">
                   {[...thread].reverse().map((entry, i) => {
-                    const style = THREAD_ACTION_STYLES[entry.action] ?? THREAD_ACTION_STYLES.proceed;
+                    const style =
+                      THREAD_ACTION_STYLES[entry.action] ?? THREAD_ACTION_STYLES.proceed;
                     return (
                       <li key={i} className="pl-4">
                         <span
@@ -801,7 +954,12 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                           style={{ background: persona.color }}
                         />
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className={cn("inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider", style.cls)}>
+                          <span
+                            className={cn(
+                              "inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider",
+                              style.cls,
+                            )}
+                          >
                             {style.label}
                           </span>
                           <span className="font-mono text-[10px] text-text-muted">
@@ -812,7 +970,9 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                           </span>
                         </div>
                         {entry.reason && (
-                          <p className="text-xs text-text-secondary mt-1 leading-snug">{entry.reason}</p>
+                          <p className="text-xs text-text-secondary mt-1 leading-snug">
+                            {entry.reason}
+                          </p>
                         )}
                       </li>
                     );
@@ -834,7 +994,7 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                     const style = ACTION_STYLES[d.action] ?? ACTION_STYLES.proceed;
                     let diffObj: Record<string, unknown> | null = null;
                     if (d.diff_json) {
-                      try { diffObj = JSON.parse(d.diff_json); } catch { diffObj = null; }
+                      diffObj = safeJsonRecord(d.diff_json);
                     }
                     return (
                       <li key={d.id} className="pl-4">
@@ -843,7 +1003,12 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                           style={{ background: persona.color }}
                         />
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className={cn("inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider", style.cls)}>
+                          <span
+                            className={cn(
+                              "inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider",
+                              style.cls,
+                            )}
+                          >
                             {style.label}
                           </span>
                           <span className="text-[10px] text-text-faint ml-auto shrink-0">
@@ -851,7 +1016,9 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                           </span>
                         </div>
                         {d.reason && (
-                          <p className="text-xs text-text-secondary mt-1 leading-snug">{d.reason}</p>
+                          <p className="text-xs text-text-secondary mt-1 leading-snug">
+                            {d.reason}
+                          </p>
                         )}
                         {diffObj && (
                           <details className="mt-1.5">
@@ -887,18 +1054,29 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
                   {turns.map((turn) => {
                     const style = TURN_STYLES[turn.kind];
                     return (
-                      <li key={turn.id} className={cn("pl-4", turn.kind === "user_message" && "ml-8")}>
+                      <li
+                        key={turn.id}
+                        className={cn("pl-4", turn.kind === "user_message" && "ml-8")}
+                      >
                         <span
                           className="absolute -left-1.5 w-3 h-3 rounded-full border-2 border-surface"
                           style={{ background: persona.color }}
                         />
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className={cn("inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider", style.cls)}>
+                          <span
+                            className={cn(
+                              "inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider",
+                              style.cls,
+                            )}
+                          >
                             {style.label}
                           </span>
                           {turn.kind !== "user_message" && (
                             <span className="font-mono text-[10px] text-text-secondary">
-                              {t("conductor.panel.turnLabel", { turn: turn.turn_index + 1, sub: turn.sub_index })}
+                              {t("conductor.panel.turnLabel", {
+                                turn: turn.turn_index + 1,
+                                sub: turn.sub_index,
+                              })}
                             </span>
                           )}
                           <span className="text-[10px] text-text-faint ml-auto shrink-0">
@@ -944,7 +1122,9 @@ export function ConductorLogPanel({ issueId, open, liveHistory, onClose }: Props
           />
           <div className="mt-3 flex items-center justify-between gap-3">
             <p className="text-[11px] text-text-muted">
-              {hasActiveLoop ? t("conductor.panel.queuedNoteHint") : t("conductor.panel.startLoopHint")}
+              {hasActiveLoop
+                ? t("conductor.panel.queuedNoteHint")
+                : t("conductor.panel.startLoopHint")}
             </p>
             <Button
               data-density={sending ? "conductor-message-send-thinking" : "conductor-message-send"}
@@ -972,16 +1152,21 @@ function formatTurnSummary(
 ): string {
   const payload = turn.payload;
   if (turn.kind === "llm_request") {
-    return t("conductor.turnSummary.llmRequest", { count: Number(payload.message_count ?? 0) });
+    return t("conductor.turnSummary.llmRequest", { count: Number(payload["message_count"] ?? 0) });
   }
   if (turn.kind === "llm_response") {
-    return t("conductor.turnSummary.llmResponse", { stopReason: String(payload.stop_reason ?? "end_turn") });
+    return t("conductor.turnSummary.llmResponse", {
+      stopReason: String(payload["stop_reason"] ?? "end_turn"),
+    });
   }
   if (turn.kind === "tool_use") {
-    return t("conductor.turnSummary.toolUse", { name: String(payload.name ?? "unknown") });
+    return t("conductor.turnSummary.toolUse", { name: String(payload["name"] ?? "unknown") });
   }
   if (turn.kind === "tool_result") {
-    return t("conductor.turnSummary.toolResult", { name: String(payload.name ?? "Tool"), isError: payload.is_error ? "true" : "false" });
+    return t("conductor.turnSummary.toolResult", {
+      name: String(payload["name"] ?? "Tool"),
+      isError: payload["is_error"] ? "true" : "false",
+    });
   }
   if (turn.kind === "user_message") {
     return t("conductor.turnSummary.userMessage");
@@ -989,5 +1174,5 @@ function formatTurnSummary(
   if (turn.kind === "error") {
     return t("conductor.turnSummary.error");
   }
-  return t("conductor.turnSummary.finalize", { status: String(payload.status ?? "done") });
+  return t("conductor.turnSummary.finalize", { status: String(payload["status"] ?? "done") });
 }

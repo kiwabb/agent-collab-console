@@ -1,7 +1,4 @@
-import type {
-  IssueOrchestrationPolicy,
-  OrchestrationRecommendation,
-} from "@/lib/types";
+import type { IssueOrchestrationPolicy, OrchestrationRecommendation } from "@/lib/types";
 import type { TranslationKey } from "@/lib/i18n";
 
 export type DecisionExplanationTone = "serial" | "parallel" | "clarify" | "review";

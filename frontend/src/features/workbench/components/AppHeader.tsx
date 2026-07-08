@@ -22,15 +22,15 @@ import { useI18n } from "@/providers/I18nProvider";
 
 export interface BreadcrumbItem {
   label: string;
-  href?: string;
+  href?: string | undefined;
 }
 
 interface Props {
-  breadcrumbs?: BreadcrumbItem[];
-  onMenuClick?: () => void;
-  right?: React.ReactNode;
+  breadcrumbs?: BreadcrumbItem[] | undefined;
+  onMenuClick?: (() => void) | undefined;
+  right?: React.ReactNode | undefined;
   /** Top-level workspace name shown right after the C logo. Falls back to the repo name. */
-  workspaceLabel?: string;
+  workspaceLabel?: string | undefined;
 }
 
 /**

@@ -301,6 +301,7 @@ async def test_mark_task_done_skips_refresh_for_chat_ep(tmp_path):
     await runtime._mark_task_done("task-1", entry)
 
     reloaded = await db.load_codex_task("task-1")
+    assert reloaded is not None
     # chat must preserve canonical task.result
     assert reloaded.result == "ORIGINAL_CANONICAL_RESULT"
     # refresh_task_result must NOT be invoked for chat
@@ -368,6 +369,7 @@ async def test_mark_task_done_runs_refresh_for_initial_ep(tmp_path):
     await runtime._mark_task_done("task-1", entry)
 
     reloaded = await db.load_codex_task("task-1")
+    assert reloaded is not None
     # initial run: task.result is updated and refresh fires
     assert reloaded.result == "AGENT_GENERATED_PRD"
     assert refresh_calls == ["task-1"]

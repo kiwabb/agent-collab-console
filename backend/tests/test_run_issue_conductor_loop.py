@@ -134,12 +134,28 @@ async def test_loop_calls_finalize():
         patch("app.application.conductor_main_loop.build_conductor_tools", return_value=registry),
         patch("app.application.conductor_main_loop.RuntimeCatalogService") as mock_cs,
         patch(
-            "app.application.conductor_main_loop.resolve_conductor_llm_context", return_value=None
+            "app.application.conductor_main_loop.resolve_conductor_llm_context",
+            return_value=object(),
         ),
+        patch(
+            "app.application.conductor_main_loop.call_conductor_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm,
         patch("app.application.conductor_main_loop.ProjectConductor", return_value=mock_conductor),
         patch("app.application.conductor_main_loop.record_project_memory", new_callable=AsyncMock),
     ):
         mock_cs.return_value.load_catalog = AsyncMock(return_value=None)
+        mock_llm.return_value = {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "done"},
+                }
+            ],
+        }
 
         result = await run_issue_conductor_loop(
             issue=issue,
@@ -344,6 +360,7 @@ async def test_loop_injects_project_conductor_memory_into_llm_prompt():
     registry.tools = {"finalize_task": finalize_tool}
     registry.definitions = []
 
+    assert issue.project_id is not None
     mock_conductor = MagicMock()
     mock_conductor.get_or_create_state = AsyncMock(
         return_value=ProjectConductorState(

@@ -53,10 +53,7 @@ import {
   transitionIssueToDevelopment,
   transitionIssueToTesting,
 } from "../src/lib/api/issues";
-import {
-  startProjectScriptTask,
-  suggestProjectScript,
-} from "../src/lib/api/projects";
+import { startProjectScriptTask, suggestProjectScript } from "../src/lib/api/projects";
 
 test("monolithic api entrypoint preserves split knowledge/stats compatibility exports", () => {
   assert.equal(typeof getEmbeddingStatus, "function");

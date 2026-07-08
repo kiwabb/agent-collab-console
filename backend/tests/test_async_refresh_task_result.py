@@ -1,12 +1,28 @@
-import json  # noqa: I001
+import json
 import subprocess
+from asyncio.subprocess import Process
 from datetime import datetime
+from typing import cast
 
 import pytest
 
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime
-from app.domain.models import CodexTask, CodexSession, ExecutionProcess
+from app.domain.models import (
+    AgentCallTrace,
+    CodexIssue,
+    CodexSession,
+    CodexTask,
+    CodexTaskMessage,
+    ExecutionProcess,
+    HelpRequest,
+    LogEvent,
+    RuntimeCatalog,
+)
+
+
+def _null_process() -> Process:
+    return cast(Process, None)
 
 
 class StoreStub:
@@ -15,20 +31,24 @@ class StoreStub:
         self.workspace = workspace
         self.processes: dict[str, ExecutionProcess] = {}
 
-    async def save_codex_task(self, task: CodexTask):
+    async def save_codex_task(self, task: CodexTask) -> None:
         self.task = task.model_copy(deep=True)
 
-    async def load_codex_task(self, task_id: str):
+    async def load_codex_task(self, task_id: str) -> CodexTask | None:
         if task_id == self.task.id:
             return self.task
         return None
 
-    async def save_execution_process(self, process: ExecutionProcess):
+    async def save_execution_process(self, process: ExecutionProcess) -> None:
         self.processes[process.id] = process
 
     async def update_execution_process_status(
-        self, process_id: str, status: str, exit_code=None, completed_at=None
-    ):
+        self,
+        process_id: str,
+        status: str,
+        exit_code: int | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
         process = self.processes[process_id]
         process.status = status
         process.exit_code = exit_code
@@ -36,22 +56,52 @@ class StoreStub:
         process.updated_at = completed_at or datetime.now()
         self.processes[process_id] = process
 
-    async def load_codex_workspace(self, workspace_id: str):
+    async def load_execution_process(self, process_id: str) -> ExecutionProcess | None:
+        return self.processes.get(process_id)
+
+    async def load_codex_workspace(self, workspace_id: str) -> CodexSession | None:
         if workspace_id == self.workspace.id:
             return self.workspace
         return None
 
-    async def save_codex_workspace(self, workspace: CodexSession):
+    async def save_codex_workspace(self, workspace: CodexSession) -> None:
         self.workspace = workspace.model_copy(deep=True)
 
-    async def save_codex_task_message(self, message):
+    async def save_codex_task_message(self, message: CodexTaskMessage) -> None:
         return None
 
-    async def load_runtime_catalog(self):
+    async def list_codex_task_messages(
+        self, task_id: str, execution_process_id: str | None = None
+    ) -> list[CodexTaskMessage]:
+        return []
+
+    async def append_log_event(self, event: LogEvent) -> None:
         return None
 
-    async def save_runtime_catalog(self, catalog):
-        pass
+    async def update_execution_process_usage(
+        self,
+        process_id: str,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        total_cost_usd: float | None = None,
+    ) -> None:
+        return None
+
+    async def load_help_request(self, help_request_id: str) -> HelpRequest | None:
+        return None
+
+    async def load_codex_issue(self, issue_id: str) -> CodexIssue | None:
+        return None
+
+    async def save_codex_issue(self, issue: CodexIssue) -> None:
+        return None
+
+    async def load_runtime_catalog(self) -> RuntimeCatalog | None:
+        return None
+
+    async def save_runtime_catalog(self, catalog: RuntimeCatalog) -> None:
+        return None
 
 
 class EventBusStub:
@@ -223,34 +273,93 @@ class RuntimeStoreStub:
     def __init__(self, task: CodexTask, workspace: CodexSession | None = None):
         self.task = task
         self.workspace = workspace
-        self.saved_messages = []
+        self.saved_messages: list[CodexTaskMessage] = []
+        self.saved_traces: list[AgentCallTrace] = []
+        self.log_events: list[LogEvent] = []
 
-    async def load_codex_task(self, task_id: str):
+    async def load_codex_task(self, task_id: str) -> CodexTask | None:
         if task_id == self.task.id:
             return self.task
         return None
 
-    async def save_codex_task(self, task: CodexTask):
+    async def save_codex_task(self, task: CodexTask) -> None:
         self.task = task.model_copy(deep=True)
 
-    async def load_codex_workspace(self, workspace_id: str):
+    async def load_codex_workspace(self, workspace_id: str) -> CodexSession | None:
         if self.workspace and workspace_id == self.workspace.id:
             return self.workspace
         return None
 
-    async def save_codex_workspace(self, workspace: CodexSession):
+    async def save_codex_workspace(self, workspace: CodexSession) -> None:
         self.workspace = workspace.model_copy(deep=True)
 
     async def update_execution_process_status(
-        self, process_id: str, status: str, exit_code=None, completed_at=None
-    ):
+        self,
+        process_id: str,
+        status: str,
+        exit_code: int | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
         return None
 
-    async def save_codex_task_message(self, message):
+    async def load_execution_process(self, process_id: str) -> ExecutionProcess | None:
+        return None
+
+    async def save_codex_task_message(self, message: CodexTaskMessage) -> None:
         self.saved_messages.append(message)
 
-    async def list_codex_task_messages(self, task_id: str, execution_process_id: str | None = None):
-        return []
+    async def list_codex_task_messages(
+        self, task_id: str, execution_process_id: str | None = None
+    ) -> list[CodexTaskMessage]:
+        return [
+            message
+            for message in self.saved_messages
+            if message.task_id == task_id
+            and (
+                execution_process_id is None
+                or message.execution_process_id == execution_process_id
+            )
+        ]
+
+    async def append_log_event(self, event: LogEvent) -> None:
+        self.log_events.append(event)
+
+    async def load_log_events(
+        self,
+        session_id: str,
+        task_id: str | None = None,
+        execution_process_id: str | None = None,
+        limit: int = 1000,
+        reverse: bool = False,
+    ) -> list[LogEvent]:
+        rows = [
+            event
+            for event in self.log_events
+            if event.session_id == session_id
+            and (task_id is None or event.task_id == task_id)
+            and (
+                execution_process_id is None
+                or event.execution_process_id == execution_process_id
+            )
+        ]
+        rows = list(reversed(rows)) if reverse else rows
+        return rows[:limit]
+
+    async def save_agent_call_trace(self, trace: AgentCallTrace) -> None:
+        self.saved_traces.append(trace)
+
+    async def update_execution_process_usage(
+        self,
+        process_id: str,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        total_cost_usd: float | None = None,
+    ) -> None:
+        return None
+
+    async def load_help_request(self, help_request_id: str) -> HelpRequest | None:
+        return None
 
 
 class RuntimeUnderTest(BaseProcessRuntime):
@@ -290,7 +399,7 @@ async def test_process_runtime_mark_task_done_awaits_async_refresh_callback():
         refresh_task_result=refresh_task_result,
     )
     entry = AsyncProcessEntry(
-        proc=None,
+        proc=_null_process(),
         output_task=None,
         alive=False,
         session_id=task.session_id,
@@ -304,6 +413,73 @@ async def test_process_runtime_mark_task_done_awaits_async_refresh_callback():
 
     assert refreshed["called"] is True
     assert store.task.result == "persisted-from-runtime"
+
+
+@pytest.mark.asyncio
+async def test_process_runtime_mark_task_done_persists_runtime_agent_trace():
+    now = datetime.now()
+    task = CodexTask(
+        id="task-trace",
+        session_id="workspace-trace",
+        issue_id="issue-trace",
+        title="Engineer task",
+        prompt="implement the feature",
+        role="engineer",
+        executor="codex",
+        provider="openai",
+        model="gpt-5",
+        status="running",
+        workspace_path="/tmp/workspace",
+        last_execution_process_id="process-trace",
+        trace_id="trace-root",
+        span_id="span-task",
+        parent_span_id="span-conductor",
+        created_at=now,
+        updated_at=now,
+    )
+    store = RuntimeStoreStub(task)
+    await store.append_log_event(
+        LogEvent(
+            id="log-trace",
+            session_id=task.session_id,
+            stream="tool_use",
+            content='{"tool":"Read"}',
+            task_id=task.id,
+            execution_process_id=task.last_execution_process_id,
+            trace_id=task.trace_id,
+            span_id=task.span_id,
+            created_at=now,
+        )
+    )
+    runtime = RuntimeUnderTest(codex_store=store, log_store=store, event_bus=EventBusStub())
+    entry = AsyncProcessEntry(
+        proc=_null_process(),
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        executor="codex",
+        cwd="/tmp/workspace",
+        resume_session_id=None,
+        result_text="implemented",
+    )
+
+    await runtime._mark_task_done(task.id, entry)
+
+    assert len(store.saved_traces) == 1
+    trace = store.saved_traces[0]
+    assert trace.id == "runtime-trace-process-trace"
+    assert trace.kind == "runtime_agent"
+    assert trace.trace_id == "trace-root"
+    assert trace.span_id == "span-task"
+    request = json.loads(trace.request_json or "{}")
+    response = json.loads(trace.response_json or "{}")
+    metadata = json.loads(trace.metadata_json)
+    assert request["prompt"] == "implement the feature"
+    assert request["role"] == "engineer"
+    assert response["result"] == "implemented"
+    assert response["messages"][0]["content"] == "implemented"
+    assert response["logs"][0]["stream"] == "tool_use"
+    assert metadata["source"] == "runtime_agent_snapshot"
 
 
 @pytest.mark.asyncio
@@ -336,7 +512,7 @@ async def test_process_runtime_mark_task_done_emits_single_failure_channel_for_r
         refresh_task_result=refresh_task_result,
     )
     entry = AsyncProcessEntry(
-        proc=None,
+        proc=_null_process(),
         output_task=None,
         alive=False,
         session_id=task.session_id,
@@ -389,7 +565,7 @@ async def test_process_runtime_mark_task_done_handles_empty_result_without_crash
         refresh_task_result=refresh_task_result,
     )
     entry = AsyncProcessEntry(
-        proc=None,
+        proc=_null_process(),
         output_task=None,
         alive=False,
         session_id=task.session_id,
@@ -437,7 +613,7 @@ async def test_persist_reader_metadata_does_not_overwrite_terminal_failure_reaso
         refresh_task_result=None,
     )
     entry = AsyncProcessEntry(
-        proc=None,
+        proc=_null_process(),
         output_task=None,
         alive=False,
         session_id=task.session_id,
@@ -523,7 +699,7 @@ async def test_finalize_task_on_reader_exit_salvages_idle_engineer_with_changed_
         refresh_task_result=refresh_task_result,
     )
     entry = AsyncProcessEntry(
-        proc=None,
+        proc=_null_process(),
         output_task=None,
         alive=False,
         session_id=task.session_id,
@@ -554,8 +730,8 @@ from app.application.process_runtime_common import is_workspace_console_task  # 
 def test_is_workspace_console_task_discriminator():
     now = datetime.now()
 
-    def mk(**kw):
-        base = dict(
+    def mk(**kw: object) -> CodexTask:
+        base: dict[str, object] = dict(
             id="t",
             session_id="ws",
             title="x",
@@ -564,7 +740,7 @@ def test_is_workspace_console_task_discriminator():
             updated_at=now,
         )
         base.update(kw)
-        return CodexTask(**base)
+        return CodexTask.model_validate(base)
 
     # Human workspace-console chat: no issue, normal kind, no parent → shares pointer.
     assert is_workspace_console_task(mk()) is True
@@ -606,7 +782,7 @@ async def test_persist_reader_metadata_role_task_does_not_touch_workspace_pointe
         codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None
     )
     entry = AsyncProcessEntry(
-        proc=None,
+        proc=_null_process(),
         output_task=None,
         alive=False,
         session_id=task.session_id,
@@ -650,7 +826,7 @@ async def test_persist_reader_metadata_console_task_updates_workspace_pointer():
         codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None
     )
     entry = AsyncProcessEntry(
-        proc=None,
+        proc=_null_process(),
         output_task=None,
         alive=False,
         session_id=task.session_id,
@@ -691,7 +867,7 @@ async def test_persist_reader_metadata_drops_resume_id_when_no_real_turn():
         codex_store=store, log_store=store, event_bus=EventBusStub(), refresh_task_result=None
     )
     entry = AsyncProcessEntry(
-        proc=None,
+        proc=_null_process(),
         output_task=None,
         alive=False,
         session_id=task.session_id,
@@ -741,12 +917,15 @@ async def test_issue_task_without_worktree_fails_before_spawn():
             called_with_cwd.append(cwd)
             return "done"
 
+    async def no_refresh(task: CodexTask) -> object:
+        return None
+
     runner = CodexTaskRunner(
         codex_store=store,
         event_bus=bus,
         process_manager_factory=lambda: SpyManager(),
         mock_manager_cls=SpyManager,
-        refresh_task_result=lambda t: None,
+        refresh_task_result=no_refresh,
     )
 
     with pytest.raises(ValueError, match="no worktree path"):

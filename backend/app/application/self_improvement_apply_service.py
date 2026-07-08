@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from typing import Literal, TypedDict
 
 from app.application.project_memory_service import MEMORY_DIR_NAME, MEMORY_FILE_NAME, project_memory
 from app.domain.models import SelfImprovementProposal
+from app.json_safety import parse_json_object_list
 
 
 class SelfImprovementApplyError(Exception):
@@ -48,17 +51,40 @@ class SelfImprovementRollbackResult:
         }
 
 
-def _parse_evidence(evidence_json: str | None) -> list[dict]:
-    try:
-        parsed = json.loads(evidence_json or "[]")
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
-    return [item for item in parsed if isinstance(item, dict)]
+EvidenceItem = dict[str, object]
 
 
-def _format_evidence_lines(evidence: list[dict]) -> list[str]:
+class AppendMarkdownCandidate(TypedDict):
+    kind: Literal["append_markdown"]
+    path: str
+    content: str
+
+
+class OpenPrTaskCandidate(TypedDict):
+    kind: Literal["open_pr_task"]
+    title: str
+    body: str
+
+
+CandidateChange = AppendMarkdownCandidate | OpenPrTaskCandidate
+
+
+class ApplyPlan(TypedDict):
+    mode: Literal["dry_run"]
+    target_kind: str
+    can_auto_apply: bool
+    summary: str
+    steps: list[str]
+    candidate_changes: list[CandidateChange]
+    risk: Literal["low", "medium"]
+    next_action: Literal["review_then_apply", "open_reviewed_pr"]
+
+
+def _parse_evidence(evidence_json: str | None) -> list[EvidenceItem]:
+    return parse_json_object_list(evidence_json or "[]")
+
+
+def _format_evidence_lines(evidence: Sequence[Mapping[str, object]]) -> list[str]:
     lines: list[str] = []
     for item in evidence:
         kind = str(item.get("kind") or "evidence")
@@ -69,7 +95,7 @@ def _format_evidence_lines(evidence: list[dict]) -> list[str]:
     return lines
 
 
-def _project_memory_candidate(proposal: SelfImprovementProposal) -> dict:
+def _project_memory_candidate(proposal: SelfImprovementProposal) -> AppendMarkdownCandidate:
     evidence_lines = _format_evidence_lines(_parse_evidence(proposal.evidence_json))
     content_lines = [
         f"<!-- self-improvement-proposal:{proposal.id} -->",
@@ -90,7 +116,7 @@ def _project_memory_candidate(proposal: SelfImprovementProposal) -> dict:
     }
 
 
-def _pr_task_candidate(proposal: SelfImprovementProposal) -> dict:
+def _pr_task_candidate(proposal: SelfImprovementProposal) -> OpenPrTaskCandidate:
     evidence_lines = _format_evidence_lines(_parse_evidence(proposal.evidence_json))
     body_lines = [
         f"Target kind: `{proposal.target_kind}`",
@@ -109,7 +135,7 @@ def _pr_task_candidate(proposal: SelfImprovementProposal) -> dict:
     }
 
 
-def build_self_improvement_apply_plan(proposal: SelfImprovementProposal) -> dict:
+def build_self_improvement_apply_plan(proposal: SelfImprovementProposal) -> ApplyPlan:
     """Build a dry-run application plan for an accepted self-improvement proposal."""
     if proposal.target_kind == "project_memory":
         return {
@@ -148,22 +174,21 @@ def hash_apply_candidate_content(content: str) -> str:
 
 def _project_memory_append_candidate(proposal: SelfImprovementProposal) -> tuple[str, str]:
     plan = build_self_improvement_apply_plan(proposal)
-    candidate_changes = plan.get("candidate_changes")
-    if not isinstance(candidate_changes, list) or len(candidate_changes) != 1:
+    candidate_changes = plan["candidate_changes"]
+    if len(candidate_changes) != 1:
         raise SelfImprovementApplyError(
             "Self-improvement apply plan must contain exactly one project-memory candidate",
             code="invalid_plan",
         )
     candidate = candidate_changes[0]
-    if not isinstance(candidate, dict) or candidate.get("kind") != "append_markdown":
+    if candidate["kind"] != "append_markdown":
         raise SelfImprovementApplyError(
             "Self-improvement apply plan does not contain a project-memory append candidate",
             code="invalid_plan",
         )
-    path = candidate.get("path")
-    content = candidate.get("content")
     expected_path = f"{MEMORY_DIR_NAME}/{MEMORY_FILE_NAME}"
-    if path != expected_path or not isinstance(content, str):
+    content = candidate["content"]
+    if candidate["path"] != expected_path:
         raise SelfImprovementApplyError(
             "Self-improvement apply plan project-memory candidate is invalid",
             code="invalid_plan",

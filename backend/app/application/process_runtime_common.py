@@ -1,28 +1,137 @@
 import asyncio
+import inspect
 import json
+import logging
 import os
 import signal
-import sys
-import subprocess
+import subprocess  # nosec B404
 import threading
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Protocol
 from uuid import uuid4
 
 from app.application import timeouts
 from app.application.help_orchestrator import is_help_request_terminal_status
-from app.domain.models import LogEvent
-from app.application.usage_utils import extract_usage, price_tokens
 from app.application.task_statuses import (
     is_task_active_status,
     is_task_success_status,
     is_task_terminal_status,
 )
+from app.application.usage_utils import (
+    extract_usage,
+    price_tokens,
+    read_usage_float,
+    read_usage_int,
+)
+from app.domain.models import (
+    AgentCallTrace,
+    CodexSession,
+    CodexTask,
+    CodexTaskMessage,
+    ExecutionProcess,
+    HelpRequest,
+    LogEvent,
+)
+from app.json_safety import object_dict, string_value
+
+# Shared local CLI process runtime cleanup boundary.
+logger = logging.getLogger(__name__)
+RUNTIME_TRACE_PAYLOAD_LIMIT = 50_000
+RUNTIME_TRACE_PREVIEW_LIMIT = 4_000
+
+
+JsonEvent = dict[str, object]
+RefreshTaskResult = Callable[[CodexTask], Awaitable[object]]
+
+
+class RuntimeCodexStore(Protocol):
+    async def load_codex_workspace(self, workspace_id: str) -> CodexSession | None: ...
+
+    async def save_codex_workspace(self, workspace: CodexSession) -> None: ...
+
+    async def load_codex_task(self, task_id: str) -> CodexTask | None: ...
+
+    async def save_codex_task(self, task: CodexTask) -> None: ...
+
+    async def update_execution_process_status(
+        self,
+        process_id: str,
+        status: str,
+        exit_code: int | None = None,
+        completed_at: datetime | None = None,
+    ) -> None: ...
+
+    async def load_execution_process(self, process_id: str) -> ExecutionProcess | None: ...
+
+    async def list_codex_task_messages(
+        self, task_id: str, execution_process_id: str | None = None
+    ) -> list[CodexTaskMessage]: ...
+
+    async def update_execution_process_usage(
+        self,
+        process_id: str,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        total_cost_usd: float | None = None,
+    ) -> None: ...
+
+    async def save_codex_task_message(self, message: CodexTaskMessage) -> None: ...
+
+    async def load_help_request(self, help_request_id: str) -> HelpRequest | None: ...
+
+
+class RuntimeLogStore(Protocol):
+    async def append_log_event(self, event: LogEvent) -> None: ...
+
+
+class RuntimeEventBus(Protocol):
+    async def append(self, event: JsonEvent) -> None: ...
+
+    async def queue_log_event(self, event: LogEvent) -> None: ...
+
+
+class RuntimeHelpOrchestrator(Protocol):
+    async def request_help_from_runtime(
+        self,
+        *,
+        task_id: str,
+        workspace_id: str,
+        target_executor: str,
+        title: str,
+        prompt: str,
+        source_executor: str,
+        context_summary: object | None = None,
+    ) -> None: ...
+
+    async def complete_help_request(
+        self,
+        help_request_id: str,
+        *,
+        child_status: str,
+        child_result: str | None,
+    ) -> None: ...
 
 
 def is_agent_message_item_type(item_type: str | None) -> bool:
     normalized = str(item_type or "").strip().lower().replace("-", "_")
     return normalized in {"agent_message", "agentmessage"}
+
+
+def _runtime_trace_json_and_preview(value: object) -> tuple[str, str, bool]:
+    raw = json.dumps(value, ensure_ascii=False, default=str)
+    preview = raw[:RUNTIME_TRACE_PREVIEW_LIMIT]
+    if len(raw) <= RUNTIME_TRACE_PAYLOAD_LIMIT:
+        return raw, preview, False
+    truncated = {
+        "__truncated__": True,
+        "preview": raw[:RUNTIME_TRACE_PAYLOAD_LIMIT],
+        "original_length": len(raw),
+    }
+    return json.dumps(truncated, ensure_ascii=False), preview, True
 
 
 def is_cli_control_payload(text: str | None) -> bool:
@@ -76,7 +185,18 @@ def is_unusable_result_text(text: str | None) -> bool:
     return is_cli_control_payload(text) or is_codex_protocol_frame(text)
 
 
-def is_workspace_console_task(task) -> bool:
+class WorkspaceConsoleTaskLike(Protocol):
+    @property
+    def issue_id(self) -> str | None: ...
+
+    @property
+    def task_kind(self) -> str | None: ...
+
+    @property
+    def parent_task_id(self) -> str | None: ...
+
+
+def is_workspace_console_task(task: WorkspaceConsoleTaskLike | None) -> bool:
     """True only for the human workspace-console chat task (send_workspace_input).
 
     That task legitimately shares the per-workspace CLI session pointer
@@ -91,14 +211,12 @@ def is_workspace_console_task(task) -> bool:
         return False
     if getattr(task, "task_kind", "normal") not in (None, "normal"):
         return False
-    if getattr(task, "parent_task_id", None) is not None:
-        return False
-    return True
+    return getattr(task, "parent_task_id", None) is None
 
 
 @dataclass
 class ProcessEntry:
-    proc: subprocess.Popen
+    proc: subprocess.Popen[bytes]
     output_thread: threading.Thread | None
     alive: bool
     session_id: str
@@ -106,7 +224,7 @@ class ProcessEntry:
     cwd: str
     resume_session_id: str | None
     resume_message_id: str | None = None
-    pending_waiters: list = field(default_factory=list)
+    pending_waiters: list[asyncio.Event] = field(default_factory=list)
     result_text: str | None = None
     had_error: bool = False
     help_requested: bool = False
@@ -120,7 +238,7 @@ class ProcessEntry:
 class AsyncProcessEntry:
     """Async-compatible process entry for asyncio-based subprocess management."""
     proc: asyncio.subprocess.Process
-    output_task: asyncio.Task | None
+    output_task: asyncio.Task[None] | None
     alive: bool
     session_id: str
     executor: str
@@ -128,7 +246,7 @@ class AsyncProcessEntry:
     resume_session_id: str | None
     task_id: str | None = None
     resume_message_id: str | None = None
-    pending_waiters: list = field(default_factory=list)
+    pending_waiters: list[asyncio.Event] = field(default_factory=list)
     result_text: str | None = None
     had_error: bool = False
     help_requested: bool = False
@@ -145,11 +263,11 @@ class AsyncProcessEntry:
     # Tool-event dedup: tool_use IDs already mirrored to the log store.
     # Claude stream-json can re-emit the same assistant message multiple times
     # while a turn is in-flight, so we guard the emission per tool_use_id.
-    emitted_tool_use_ids: set = field(default_factory=set)
-    emitted_tool_result_ids: set = field(default_factory=set)
+    emitted_tool_use_ids: set[str] = field(default_factory=set)
+    emitted_tool_result_ids: set[str] = field(default_factory=set)
     # Codex item tracking: maps item.id to a started_at timestamp so we can
     # compute durationMs on completion.
-    tool_item_started_at: dict = field(default_factory=dict)
+    tool_item_started_at: dict[str, datetime] = field(default_factory=dict)
     # Idle-timeout bookkeeping: monotonic timestamp of the most recent stdout
     # line / IPC event we received from the subprocess. The Codex runtime
     # watches this and aborts a task when nothing has streamed for too long
@@ -158,6 +276,8 @@ class AsyncProcessEntry:
     last_event_at: float = 0.0
     idle_timed_out: bool = False
     idle_timeout_seconds: int | None = None
+    turn_watchdog_task: asyncio.Task[None] | None = None
+    timeout_reason: str | None = None
     # Latest activity kind tracked by _capture_on_reader for heartbeat phase
     # reporting: "text" | "reasoning" | "tool" | "idle". Used by the AgentLive
     # WorkingIndicator on the frontend so users see "Reasoning…" / "Running
@@ -198,31 +318,56 @@ def _sanitize_chat_reply(text: str) -> str:
     except Exception:
         return text  # Probably starts with { but not actually JSON — keep as-is
     return (
-        "（模型未按对话格式回复，输出了结构化 JSON。已忽略原文以免覆盖产物。"
-        "可重试或切换为更擅长对话的模型。）"
+        "(模型未按对话格式回复, 输出了结构化 JSON。已忽略原文以免覆盖产物。"
+        "可重试或切换为更擅长对话的模型。)"
     )
 
 
 class BaseProcessRuntime:
-    def __init__(self, codex_store, log_store, data_dir=None, event_bus=None, processes=None, help_orchestrator=None, refresh_task_result=None):
+    codex_store: RuntimeCodexStore
+    log_store: RuntimeLogStore
+    _data_dir: str
+    _event_bus: RuntimeEventBus | None
+    _processes: dict[str, AsyncProcessEntry]
+    help_orchestrator: RuntimeHelpOrchestrator | None
+    refresh_task_result: RefreshTaskResult | None
+
+    def __init__(
+        self,
+        codex_store: RuntimeCodexStore,
+        log_store: RuntimeLogStore,
+        data_dir: str | None = None,
+        event_bus: RuntimeEventBus | None = None,
+        processes: dict[str, AsyncProcessEntry] | None = None,
+        help_orchestrator: RuntimeHelpOrchestrator | None = None,
+        refresh_task_result: RefreshTaskResult | None = None,
+    ) -> None:
         self.codex_store = codex_store
         self.log_store = log_store
-        self._data_dir = data_dir or "/tmp"
+        self._data_dir = data_dir or timeouts.DEFAULT_CODEX_DATA_DIR
         self._event_bus = event_bus
         self._processes = processes if processes is not None else {}
         self.help_orchestrator = help_orchestrator
         self.refresh_task_result = refresh_task_result
 
-    def _resolve_workspace_id(self, workspace_id: str | None = None, **legacy_kwargs) -> str:
+    def _resolve_workspace_id(
+        self,
+        workspace_id: str | None = None,
+        **legacy_kwargs: object,
+    ) -> str:
         resolved_workspace_id = workspace_id or legacy_kwargs.pop("session_id", None)
         if legacy_kwargs:
             unexpected = ", ".join(sorted(legacy_kwargs))
             raise TypeError(f"Unexpected keyword arguments: {unexpected}")
-        if not resolved_workspace_id:
+        if not isinstance(resolved_workspace_id, str) or not resolved_workspace_id:
             raise TypeError("workspace_id is required")
         return resolved_workspace_id
 
-    async def launch(self, workspace_id: str | None = None, **legacy_kwargs):
+    async def launch(
+        self,
+        workspace_id: str | None = None,
+        **legacy_kwargs: object,
+    ) -> CodexSession:
         workspace_id = self._resolve_workspace_id(workspace_id, **legacy_kwargs)
         workspace = await self.codex_store.load_codex_workspace(workspace_id)
         if workspace is None:
@@ -234,7 +379,11 @@ class BaseProcessRuntime:
         await self.codex_store.save_codex_workspace(workspace)
         return workspace
 
-    async def terminate(self, workspace_id: str | None = None, **legacy_kwargs):
+    async def terminate(
+        self,
+        workspace_id: str | None = None,
+        **legacy_kwargs: object,
+    ) -> CodexSession | None:
         workspace_id = self._resolve_workspace_id(workspace_id, **legacy_kwargs)
         killed_task_ids: list[str] = []
         for process_key, entry in list(self._processes.items()):
@@ -263,25 +412,21 @@ class BaseProcessRuntime:
             await self.codex_store.save_codex_task(task)
             execution_process_id = getattr(task, "last_execution_process_id", None)
             if execution_process_id:
-                try:
+                with suppress(Exception):
                     await self.codex_store.update_execution_process_status(
                         execution_process_id,
                         "Killed",
                         exit_code=None,
                         completed_at=datetime.now(),
                     )
-                except Exception:
-                    pass
             if self._event_bus is not None:
-                try:
+                with suppress(Exception):
                     await self._emit_task_status(
                         task,
                         "failed",
                         result=task.result,
                         execution_process_id=execution_process_id,
                     )
-                except Exception:
-                    pass
             else:
                 await self._emit_task_status(
                     task,
@@ -297,13 +442,13 @@ class BaseProcessRuntime:
             await self.codex_store.save_codex_workspace(workspace)
         return workspace
 
-    async def terminate_task(self, task_id: str):
+    async def terminate_task(self, task_id: str) -> None:
         """Kill a specific task process."""
         owned = False
         for process_key, entry in list(self._processes.items()):
             # Check if this entry belongs to the target task
             is_match = (process_key == task_id)
-            if hasattr(entry, 'task_id') and entry.task_id == task_id:
+            if hasattr(entry, "task_id") and entry.task_id == task_id:
                 is_match = True
 
             if is_match and self._owns_entry(entry):
@@ -323,15 +468,13 @@ class BaseProcessRuntime:
 
             execution_process_id = getattr(task, "last_execution_process_id", None)
             if execution_process_id:
-                try:
+                with suppress(Exception):
                     await self.codex_store.update_execution_process_status(
                         execution_process_id,
                         "Killed",
                         exit_code=None,
                         completed_at=datetime.now(),
                     )
-                except Exception:
-                    pass
 
             if self._event_bus:
                 await self._emit_task_status(
@@ -359,7 +502,7 @@ class BaseProcessRuntime:
 
     async def _emit_task_status(
         self,
-        task,
+        task: CodexTask,
         status: str,
         *,
         result: str | None = None,
@@ -397,9 +540,9 @@ class BaseProcessRuntime:
                 await message_stream_manager.publish_finished(execution_process_id)
                 await raw_log_stream_manager.publish_finished(execution_process_id)
         except Exception:
-            pass
+            logger.debug("task status stream update failed: task_id=%s", task.id, exc_info=True)
 
-    async def terminate_all(self):
+    async def terminate_all(self) -> list[str]:
         terminated = []
         for process_key, entry in list(self._processes.items()):
             if not self._owns_entry(entry):
@@ -414,16 +557,22 @@ class BaseProcessRuntime:
                     await self.codex_store.save_codex_workspace(workspace)
                 terminated.append(process_key)
             except Exception:
-                pass
+                logger.debug("process cleanup failed: process_key=%s", process_key, exc_info=True)
         return terminated
 
-    def _owns_entry(self, entry) -> bool:
+    def _owns_entry(self, entry: AsyncProcessEntry) -> bool:
         raise NotImplementedError
 
     def _get_log_path(self, workspace_id: str) -> str:
         return f"{self._data_dir}/codex_session_{workspace_id}.log"
 
-    async def _emit_message_delta(self, workspace_id: str, task_id: str | None, seq: int, delta_text: str):
+    async def _emit_message_delta(
+        self,
+        workspace_id: str,
+        task_id: str | None,
+        seq: int,
+        delta_text: str,
+    ) -> None:
         """Resolve the task's current execution_process_id and broadcast a message_delta event.
 
         Skips silently if no event_bus or no resolvable execution_process_id."""
@@ -445,12 +594,26 @@ class BaseProcessRuntime:
             "delta_text": delta_text,
         })
 
-    async def _append_log(self, workspace_id: str, stream: str, content: str, task_id: str | None):
+    async def _append_log(
+        self,
+        workspace_id: str,
+        stream: str,
+        content: str,
+        task_id: str | None,
+    ) -> None:
         execution_process_id = None
+        trace_id: str | None = None
+        span_id: str | None = None
+        parent_span_id: str | None = None
         if task_id:
             task = await self.codex_store.load_codex_task(task_id)
-            execution_process_id = task.last_execution_process_id if task else None
-        
+            if task:
+                execution_process_id = task.last_execution_process_id
+                trace_id = task.trace_id
+                span_id = task.span_id
+                parent_span_id = task.parent_span_id
+
+        created_at = datetime.now()
         event = LogEvent(
             id=f"log-{workspace_id}-{datetime.now().timestamp()}",
             session_id=workspace_id,
@@ -458,9 +621,12 @@ class BaseProcessRuntime:
             content=content,
             task_id=task_id,
             execution_process_id=execution_process_id,
-            created_at=datetime.now(),
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            created_at=created_at,
         )
-        
+
         if self._event_bus is not None:
             await self._event_bus.queue_log_event(event)
             await self._event_bus.append({
@@ -472,17 +638,35 @@ class BaseProcessRuntime:
                 "content": content,
                 "task_id": task_id,
                 "execution_process_id": execution_process_id,
-                "created_at": event.created_at.isoformat(),
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
+                "created_at": created_at.isoformat(),
             })
         else:
             await self.log_store.append_log_event(event)
 
-    async def _log_help_request_outcome(self, workspace_id: str, task_id: str | None, outcome: str, detail: str):
+    async def _log_help_request_outcome(
+        self,
+        workspace_id: str,
+        task_id: str | None,
+        outcome: str,
+        detail: str,
+    ) -> None:
         message = f"request_help {outcome}: {detail}"
-        print(f"[HELP] {message}", file=sys.stderr, flush=True)
+        logger.info(
+            "help request outcome: workspace_id=%s task_id=%s %s",
+            workspace_id,
+            task_id,
+            message,
+        )
         await self._append_log(workspace_id, "help_request", message, task_id)
 
-    async def _list_task_messages(self, task_id: str, execution_process_id: str | None = None):
+    async def _list_task_messages(
+        self,
+        task_id: str,
+        execution_process_id: str | None = None,
+    ) -> list[CodexTaskMessage]:
         if execution_process_id:
             try:
                 return await self.codex_store.list_codex_task_messages(
@@ -493,7 +677,138 @@ class BaseProcessRuntime:
                 pass
         return await self.codex_store.list_codex_task_messages(task_id)
 
-    async def _capture_on_reader(self, workspace_id: str, line: str, entry, task_id: str | None):
+    async def _list_runtime_log_events(
+        self,
+        task: CodexTask,
+        execution_process_id: str | None,
+    ) -> list[LogEvent]:
+        loader = getattr(self.log_store, "load_log_events", None) or getattr(
+            self.codex_store,
+            "load_log_events",
+            None,
+        )
+        if not callable(loader):
+            return []
+        try:
+            result = loader(
+                task.session_id,
+                task_id=task.id,
+                execution_process_id=execution_process_id,
+                limit=500,
+                reverse=False,
+            )
+            events = await result if inspect.isawaitable(result) else result
+            return list(events) if events else []
+        except Exception:
+            logger.debug("runtime trace log load failed: task_id=%s", task.id, exc_info=True)
+            return []
+
+    async def _persist_runtime_agent_trace(
+        self,
+        task: CodexTask,
+        execution_process_id: str | None,
+        entry: AsyncProcessEntry,
+        *,
+        process_status: str,
+        exit_code: int | None,
+    ) -> None:
+        save_trace = getattr(self.codex_store, "save_agent_call_trace", None)
+        if not callable(save_trace):
+            return
+        try:
+            messages = await self._list_task_messages(
+                task.id,
+                execution_process_id=execution_process_id,
+            )
+            logs = await self._list_runtime_log_events(task, execution_process_id)
+            request_payload = {
+                "task_id": task.id,
+                "title": task.title,
+                "role": task.role,
+                "task_kind": task.task_kind,
+                "prompt": task.prompt,
+                "executor": task.executor,
+                "provider": task.provider,
+                "model": task.model,
+                "workspace_id": task.session_id,
+                "workspace_path": task.workspace_path,
+            }
+            response_payload = {
+                "status": task.status,
+                "process_status": process_status,
+                "exit_code": exit_code,
+                "result": task.result or entry.result_text,
+                "messages": [
+                    {
+                        "id": message.id,
+                        "role": message.role,
+                        "content": message.content,
+                        "created_at": message.created_at.isoformat() if message.created_at else None,
+                    }
+                    for message in messages
+                ],
+                "logs": [
+                    {
+                        "id": event.id,
+                        "stream": event.stream,
+                        "content": event.content,
+                        "created_at": event.created_at.isoformat() if event.created_at else None,
+                    }
+                    for event in logs
+                ],
+            }
+            request_json, request_preview, request_truncated = _runtime_trace_json_and_preview(
+                request_payload
+            )
+            response_json, response_preview, response_truncated = _runtime_trace_json_and_preview(
+                response_payload
+            )
+            trace_key = execution_process_id or task.last_execution_process_id or task.id
+            result = save_trace(
+                AgentCallTrace(
+                    id=f"runtime-trace-{trace_key}",
+                    trace_id=task.trace_id,
+                    span_id=task.span_id,
+                    parent_span_id=task.parent_span_id,
+                    issue_id=task.issue_id,
+                    task_id=task.id,
+                    execution_process_id=execution_process_id,
+                    kind="runtime_agent",
+                    title=f"{task.role or 'Agent'} · {task.title}",
+                    request_json=request_json,
+                    response_json=response_json,
+                    request_preview=request_preview,
+                    response_preview=response_preview,
+                    metadata_json=json.dumps(
+                        {
+                            "source": "runtime_agent_snapshot",
+                            "executor": task.executor,
+                            "provider": task.provider,
+                            "model": task.model,
+                            "message_count": len(messages),
+                            "log_count": len(logs),
+                            "process_status": process_status,
+                            "exit_code": exit_code,
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                    is_truncated=request_truncated or response_truncated,
+                    created_at=datetime.now(),
+                )
+            )
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.debug("runtime agent trace recording failed: task_id=%s", task.id, exc_info=True)
+
+    async def _capture_on_reader(
+        self,
+        workspace_id: str,
+        line: str,
+        entry: AsyncProcessEntry,
+        task_id: str | None,
+    ) -> None:
         parsed = self._try_parse_json(line)
         if parsed is None:
             return
@@ -543,14 +858,16 @@ class BaseProcessRuntime:
 
         # Log every LLM token stream event in real-time
         if msg_type == "stream_event":
-            evt = parsed.get("event", {})
-            delta = evt.get("delta", {})
-            dt = delta.get("type", "")
+            evt = object_dict(parsed.get("event"))
+            delta = object_dict(evt.get("delta"))
+            dt = string_value(delta.get("type"))
+            delta_text = string_value(delta.get("text"))
+            delta_thinking = string_value(delta.get("thinking"))
+            delta_preview = delta_text or delta_thinking
             import logging as _lstream
             _lstream.getLogger(__name__).info(
                 "[LLM token] task=%s delta_type=%s chars=%d preview=%s",
-                task_id, dt, len(delta.get("text", "") or delta.get("thinking", "") or ""),
-                (delta.get("text", "") or delta.get("thinking", "") or "")[:100],
+                task_id, dt, len(delta_preview), delta_preview[:100],
             )
             # Feed the stall watchdog: any token (even empty-delta keep-alives)
             # counts as live progress and resets the silence timer.
@@ -558,7 +875,7 @@ class BaseProcessRuntime:
             task_activity.touch(task_id)
 
         session_id_val = parsed.get("session_id")
-        if session_id_val and entry.resume_session_id is None:
+        if isinstance(session_id_val, str) and session_id_val and entry.resume_session_id is None:
             entry.resume_session_id = session_id_val
             # The per-workspace thread pointer is only for the human console chat.
             # Role/help tasks keep their session on the task alone (per-task
@@ -578,70 +895,72 @@ class BaseProcessRuntime:
 
         if msg_type == "assistant":
             assistant_uuid = parsed.get("uuid")
-            if assistant_uuid:
+            if isinstance(assistant_uuid, str) and assistant_uuid:
                 entry.resume_message_id = assistant_uuid
-            msg = parsed.get("message") or {}
+            msg = object_dict(parsed.get("message"))
             content = msg.get("content", [])
             if isinstance(content, list):
-                text_parts = []
-                display_parts = []
-                for item in content:
-                    if isinstance(item, dict):
-                        item_type = item.get("type")
-                        if item_type == "text":
-                            text = item.get("text", "")
-                            if text:
-                                text_parts.append(text)
-                                display_parts.append(text)
-                                entry.last_activity_kind = "text"
-                        elif item_type == "thinking":
-                            thinking = item.get("thinking", "")
-                            if thinking:
-                                thinking_payload = json.dumps(
-                                    {"text": thinking},
-                                    ensure_ascii=False,
-                                    default=str,
-                                )
-                                await self._append_log(workspace_id, "thinking", thinking_payload, task_id)
-                                entry.last_activity_kind = "reasoning"
-                        elif item_type == "tool_use":
-                            tool_use_id = item.get("id") or item.get("tool_use_id") or ""
-                            if tool_use_id and tool_use_id in entry.emitted_tool_use_ids:
-                                continue
-                            if tool_use_id:
-                                entry.emitted_tool_use_ids.add(tool_use_id)
-                            tool_name_val = item.get("name") or item.get("tool_name") or ""
-                            payload = json.dumps(
-                                {
-                                    "kind": "tool_use",
-                                    "tool_use_id": tool_use_id,
-                                    "tool_name": tool_name_val,
-                                    "input": item.get("input") or {},
-                                },
+                text_parts: list[str] = []
+                display_parts: list[str] = []
+                for raw_item in content:
+                    item = object_dict(raw_item)
+                    item_type = item.get("type")
+                    if item_type == "text":
+                        text = string_value(item.get("text"))
+                        if text:
+                            text_parts.append(text)
+                            display_parts.append(text)
+                            entry.last_activity_kind = "text"
+                    elif item_type == "thinking":
+                        thinking = string_value(item.get("thinking"))
+                        if thinking:
+                            thinking_payload = json.dumps(
+                                {"text": thinking},
                                 ensure_ascii=False,
                                 default=str,
                             )
-                            await self._append_log(workspace_id, "tool_use", payload, task_id)
-                            entry.last_activity_kind = "tool"
-                            await self._maybe_emit_worktree_dirty(
-                                workspace_id, task_id, entry, tool_name_val,
-                            )
+                            await self._append_log(workspace_id, "thinking", thinking_payload, task_id)
+                            entry.last_activity_kind = "reasoning"
+                    elif item_type == "tool_use":
+                        tool_use_id = string_value(item.get("id") or item.get("tool_use_id"))
+                        if tool_use_id and tool_use_id in entry.emitted_tool_use_ids:
+                            continue
+                        if tool_use_id:
+                            entry.emitted_tool_use_ids.add(tool_use_id)
+                        tool_name_val = string_value(item.get("name") or item.get("tool_name"))
+                        payload = json.dumps(
+                            {
+                                "kind": "tool_use",
+                                "tool_use_id": tool_use_id,
+                                "tool_name": tool_name_val,
+                                "input": item.get("input") or {},
+                            },
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        await self._append_log(workspace_id, "tool_use", payload, task_id)
+                        entry.last_activity_kind = "tool"
+                        await self._maybe_emit_worktree_dirty(
+                            workspace_id, task_id, entry, tool_name_val,
+                        )
                 if display_parts:
                     new_display = "".join(display_parts).strip()
                     if new_display and new_display != entry.last_emitted_assistant_text:
                         last = entry.last_emitted_assistant_text
                         if new_display.startswith(last):
-                            delta = new_display[len(last):]
+                            message_delta = new_display[len(last):]
                         else:
-                            delta = new_display
-                        if delta:
+                            message_delta = new_display
+                        if message_delta:
                             entry.delta_seq += 1
                             entry.last_emitted_assistant_text = new_display
-                            await self._emit_message_delta(workspace_id, task_id, entry.delta_seq, delta)
+                            await self._emit_message_delta(
+                                workspace_id, task_id, entry.delta_seq, message_delta
+                            )
                             import logging as _ldelta
                             _ldelta.getLogger(__name__).info(
                                 "[LLM stream] task=%s seq=%d chars=%d\n%s",
-                                task_id, entry.delta_seq, len(delta), delta,
+                                task_id, entry.delta_seq, len(message_delta), message_delta,
                             )
                 if text_parts:
                     entry.result_text = "".join(text_parts).strip()
@@ -652,23 +971,25 @@ class BaseProcessRuntime:
             # Claude stream-json emits tool_result entries inside a "user" turn.
             # Surface them as structured tool_result logs so the UI can fold
             # them onto the matching tool_use card.
-            msg = parsed.get("message") or {}
+            msg = object_dict(parsed.get("message"))
             content = msg.get("content", [])
             if isinstance(content, list):
-                for item in content:
-                    if not isinstance(item, dict) or item.get("type") != "tool_result":
+                for raw_item in content:
+                    item = object_dict(raw_item)
+                    if item.get("type") != "tool_result":
                         continue
-                    tool_use_id = item.get("tool_use_id") or item.get("id") or ""
+                    tool_use_id = string_value(item.get("tool_use_id") or item.get("id"))
                     if tool_use_id and tool_use_id in entry.emitted_tool_result_ids:
                         continue
                     if tool_use_id:
                         entry.emitted_tool_result_ids.add(tool_use_id)
                     raw_content = item.get("content")
                     if isinstance(raw_content, list):
-                        text_chunks = []
+                        text_chunks: list[str] = []
                         for piece in raw_content:
-                            if isinstance(piece, dict) and isinstance(piece.get("text"), str):
-                                text_chunks.append(piece["text"])
+                            piece_text = object_dict(piece).get("text")
+                            if isinstance(piece_text, str):
+                                text_chunks.append(piece_text)
                             elif isinstance(piece, str):
                                 text_chunks.append(piece)
                         result_text = "\n".join(text_chunks)
@@ -690,8 +1011,8 @@ class BaseProcessRuntime:
             return
 
         if msg_type == "tool_use":
-            tool_name_val = parsed.get("tool_name") or parsed.get("name") or ""
-            tool_use_id_val = parsed.get("tool_use_id") or parsed.get("id") or ""
+            tool_name_val = string_value(parsed.get("tool_name") or parsed.get("name"))
+            tool_use_id_val = string_value(parsed.get("tool_use_id") or parsed.get("id"))
             tool_input = parsed.get("input") or {}
             input_preview = str(tool_input)[:80]
             logger.info("[tool_use] task=%s tool=%s id=%s input=%s", task_id, tool_name_val, tool_use_id_val[:8], input_preview)
@@ -713,7 +1034,7 @@ class BaseProcessRuntime:
             return
 
         if msg_type == "tool_result":
-            tool_result_id = parsed.get("tool_use_id") or parsed.get("id") or ""
+            tool_result_id = string_value(parsed.get("tool_use_id") or parsed.get("id"))
             is_error = bool(parsed.get("is_error"))
             logger.info("[tool_result] task=%s id=%s error=%s", task_id, tool_result_id[:8], is_error)
             payload = json.dumps(
@@ -743,52 +1064,43 @@ class BaseProcessRuntime:
                     entry.result_text = result_val.strip()
                     entry.produced_real_turn = True
             elif isinstance(result_val, dict):
-                text = result_val.get("text") or result_val.get("content") or ""
-                if text:
-                    text_str = text if isinstance(text, str) else str(text)
+                result_obj = object_dict(result_val)
+                result_text_value = result_obj.get("text") or result_obj.get("content") or ""
+                if result_text_value:
+                    text_str = (
+                        result_text_value
+                        if isinstance(result_text_value, str)
+                        else str(result_text_value)
+                    )
                     if not is_cli_control_payload(text_str):
                         entry.result_text = text_str
                         entry.produced_real_turn = True
             return
 
         if msg_type == "item.completed":
-            item = parsed.get("item") or {}
-            if is_agent_message_item_type(item.get("type")):
+            item = object_dict(parsed.get("item"))
+            if is_agent_message_item_type(string_value(item.get("type"))):
                 value = item.get("text")
                 if isinstance(value, str) and value.strip() and not is_cli_control_payload(value):
                     entry.result_text = value.strip()
                     entry.produced_real_turn = True
 
-    async def _maybe_persist_usage(self, task_id: str | None, parsed: dict) -> None:
+    async def _maybe_persist_usage(self, task_id: str | None, parsed: object) -> None:
         if not task_id or not hasattr(self.codex_store, "update_execution_process_usage"):
             return
         usage = extract_usage(parsed)
         if not usage:
             return
 
-        def _int_value(*names: str) -> int | None:
-            for name in names:
-                raw = usage.get(name)
-                if raw is None:
-                    continue
-                try:
-                    return int(raw)
-                except (TypeError, ValueError):
-                    continue
-            return None
-
-        input_tokens = _int_value("input_tokens", "prompt_tokens")
-        output_tokens = _int_value("output_tokens", "completion_tokens")
-        cache_read_tokens = _int_value(
+        input_tokens = read_usage_int(usage, "input_tokens", "prompt_tokens")
+        output_tokens = read_usage_int(usage, "output_tokens", "completion_tokens")
+        cache_read_tokens = read_usage_int(
+            usage,
             "cache_read_tokens",
             "cache_read_input_tokens",
             "cache_creation_input_tokens",
         )
-        raw_cost = usage.get("total_cost_usd")
-        try:
-            total_cost_usd = float(raw_cost) if raw_cost is not None else None
-        except (TypeError, ValueError):
-            total_cost_usd = None
+        total_cost_usd = read_usage_float(usage, "total_cost_usd")
         if total_cost_usd is None:
             total_cost_usd = price_tokens(
                 input_tokens=input_tokens,
@@ -807,9 +1119,9 @@ class BaseProcessRuntime:
                     total_cost_usd=total_cost_usd,
                 )
         except Exception:
-            pass
+            logger.debug("execution process usage update failed: task_id=%s", task_id, exc_info=True)
 
-    async def _mark_task_done(self, task_id: str, entry):
+    async def _mark_task_done(self, task_id: str, entry: AsyncProcessEntry) -> None:
         if entry.help_requested:
             return
         task = await self.codex_store.load_codex_task(task_id)
@@ -863,6 +1175,13 @@ class BaseProcessRuntime:
             if is_chat and assistant_text:
                 assistant_text = _sanitize_chat_reply(assistant_text)
             await self._persist_assistant_message(task_id, execution_process_id, assistant_text)
+            await self._persist_runtime_agent_trace(
+                task,
+                execution_process_id,
+                entry,
+                process_status="Completed",
+                exit_code=0,
+            )
 
             await self._emit_task_status(
                 task,
@@ -874,7 +1193,7 @@ class BaseProcessRuntime:
 
             await self._complete_help_child_if_needed(task, child_status="done", child_result=task.result)
 
-    async def _mark_task_failed(self, task_id: str, entry):
+    async def _mark_task_failed(self, task_id: str, entry: AsyncProcessEntry) -> None:
         if entry.help_requested:
             return
         task = await self.codex_store.load_codex_task(task_id)
@@ -897,6 +1216,14 @@ class BaseProcessRuntime:
                 completed_at=datetime.now(),
             )
 
+        await self._persist_runtime_agent_trace(
+            task,
+            execution_process_id,
+            entry,
+            process_status="Failed",
+            exit_code=getattr(entry.proc, "returncode", None),
+        )
+
         if self._event_bus is not None:
             await self._emit_task_status(
                 task,
@@ -913,12 +1240,16 @@ class BaseProcessRuntime:
             )
         await self._complete_help_child_if_needed(task, child_status="failed", child_result=task.result)
 
-    async def _persist_assistant_message(self, task_id: str, execution_process_id: str | None, content: str | None):
+    async def _persist_assistant_message(
+        self,
+        task_id: str,
+        execution_process_id: str | None,
+        content: str | None,
+    ) -> None:
         if not task_id or not execution_process_id or not content:
             return
 
         from app.domain.models import CodexTaskMessage
-        from uuid import uuid4
 
         text = content.strip()
         if not text:
@@ -952,7 +1283,12 @@ class BaseProcessRuntime:
                 }
             })
 
-    async def _persist_reader_metadata(self, workspace_id: str, task_id: str | None, entry):
+    async def _persist_reader_metadata(
+        self,
+        workspace_id: str,
+        task_id: str | None,
+        entry: AsyncProcessEntry,
+    ) -> None:
         task = await self.codex_store.load_codex_task(task_id) if task_id else None
         is_console = task is None or is_workspace_console_task(task)
 
@@ -992,7 +1328,11 @@ class BaseProcessRuntime:
             task.updated_at = datetime.now()
             await self.codex_store.save_codex_task(task)
 
-    async def _finalize_task_on_reader_exit(self, task_id: str | None, entry):
+    async def _finalize_task_on_reader_exit(
+        self,
+        task_id: str | None,
+        entry: AsyncProcessEntry,
+    ) -> None:
         if not task_id or entry.help_requested:
             return
 
@@ -1022,7 +1362,7 @@ class BaseProcessRuntime:
             if entry.result_text and not is_unusable_result_text(entry.result_text) and not is_chat:
                 task.result = entry.result_text
             task.updated_at = datetime.now()
-            
+
             # Call refresh_task_result to persist artifacts
             if not is_chat and callable(self.refresh_task_result):
                 try:
@@ -1048,6 +1388,14 @@ class BaseProcessRuntime:
             process_status = "Failed"
 
         task.updated_at = datetime.now()
+
+        # Reload from DB: refresh_task_result may have triggered a specialist
+        # request that changed task.status in the DB. Saving our stale local
+        # copy would overwrite that state.
+        fresh = await self.codex_store.load_codex_task(task.id)
+        if fresh is not None and fresh.status != task.status:
+            task = fresh
+
         await self.codex_store.save_codex_task(task)
 
         if execution_process_id:
@@ -1065,9 +1413,22 @@ class BaseProcessRuntime:
             result=task.result,
             execution_process_id=execution_process_id,
         )
+        await self._persist_runtime_agent_trace(
+            task,
+            execution_process_id,
+            entry,
+            process_status=process_status,
+            exit_code=final_exit_code if execution_process_id else exit_code,
+        )
         await self._complete_help_child_if_needed(task, child_status=task.status, child_result=task.result)
 
-    async def _complete_help_child_if_needed(self, task, *, child_status: str, child_result: str | None):
+    async def _complete_help_child_if_needed(
+        self,
+        task: CodexTask | None,
+        *,
+        child_status: str,
+        child_result: str | None,
+    ) -> None:
         if self.help_orchestrator is None or task is None:
             return
         if task.task_kind != "help_child" or not task.blocked_by_help_id:
@@ -1084,17 +1445,23 @@ class BaseProcessRuntime:
             child_result=child_result,
         )
 
-    def _try_parse_json(self, line: str) -> dict | None:
+    def _try_parse_json(self, line: str) -> dict[str, object] | None:
         stripped = line.strip()
         if not stripped.startswith("{"):
             return None
         try:
             parsed = json.loads(stripped)
-            return parsed if isinstance(parsed, dict) else None
+            if not isinstance(parsed, dict):
+                return None
+            return {str(key): value for key, value in parsed.items()}
         except (json.JSONDecodeError, TypeError):
             return None
 
-    async def _build_idle_timeout_fallback_result(self, task, entry) -> str | None:
+    async def _build_idle_timeout_fallback_result(
+        self,
+        task: CodexTask,
+        entry: AsyncProcessEntry,
+    ) -> str | None:
         """Recover engineer output when the runtime stalls after file changes."""
         if not entry.idle_timed_out or entry.had_error:
             return None
@@ -1146,7 +1513,12 @@ class BaseProcessRuntime:
 
     # --- Async Process Management ---
 
-    async def _terminate_process_tree(self, proc, *, grace_s: float = 2.0) -> None:
+    async def _terminate_process_tree(
+        self,
+        proc: asyncio.subprocess.Process | None,
+        *,
+        grace_s: float = 2.0,
+    ) -> None:
         if proc is None or getattr(proc, "returncode", None) is not None:
             return
         pid = getattr(proc, "pid", None)
@@ -1158,15 +1530,11 @@ class BaseProcessRuntime:
             except Exception:
                 sent_group_signal = False
         if not sent_group_signal:
-            try:
+            with suppress(Exception):
                 proc.terminate()
-            except Exception:
-                pass
-        try:
+        with suppress(Exception):
             await asyncio.wait_for(proc.wait(), timeout=grace_s)
             return
-        except Exception:
-            pass
         if pid and os.name != "nt":
             try:
                 os.killpg(os.getpgid(pid), signal.SIGKILL)
@@ -1174,16 +1542,18 @@ class BaseProcessRuntime:
             except Exception:
                 sent_group_signal = False
         if not sent_group_signal:
-            try:
+            with suppress(Exception):
                 proc.kill()
-            except Exception:
-                pass
-        try:
+        with suppress(Exception):
             await asyncio.wait_for(proc.wait(), timeout=grace_s)
-        except Exception:
-            pass
 
-    async def _watchdog(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None, timeout_sec: int):
+    async def _watchdog(
+        self,
+        workspace_id: str,
+        entry: AsyncProcessEntry,
+        task_id: str | None,
+        timeout_sec: int,
+    ) -> None:
         try:
             await asyncio.sleep(timeout_sec)
             if not entry.alive:
@@ -1200,15 +1570,13 @@ class BaseProcessRuntime:
                     await self.codex_store.save_codex_task(task)
                     execution_process_id = task.last_execution_process_id
                     if execution_process_id:
-                        try:
+                        with suppress(Exception):
                             await self.codex_store.update_execution_process_status(
                                 execution_process_id,
                                 "Failed",
                                 exit_code=None,
                                 completed_at=datetime.now(),
                             )
-                        except Exception:
-                            pass
                     await self._emit_task_status(
                         task,
                         "failed",
@@ -1218,7 +1586,7 @@ class BaseProcessRuntime:
         except asyncio.CancelledError:
             pass
         except Exception:
-            pass
+            logger.debug("reader loop task failure marking failed: task_id=%s", task_id, exc_info=True)
 
     # Tool names that mutate the worktree. Matched case-insensitively. Keep
     # tight — we don't want every `Bash` to retrigger diff fetches.
@@ -1254,7 +1622,7 @@ class BaseProcessRuntime:
                 entry.cached_issue_id = None
         if not entry.cached_issue_id:
             return
-        try:
+        with suppress(Exception):
             await self._event_bus.append({
                 "type": "worktree_dirty",
                 "issue_id": entry.cached_issue_id,
@@ -1263,10 +1631,13 @@ class BaseProcessRuntime:
                 "tool_name": tool_name,
                 "created_at": datetime.now().isoformat(),
             })
-        except Exception:
-            pass
 
-    async def _heartbeat_loop(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None):
+    async def _heartbeat_loop(
+        self,
+        workspace_id: str,
+        entry: AsyncProcessEntry,
+        task_id: str | None,
+    ) -> None:
         """Periodic heartbeat so AgentLiveTimeline can render a live phase + elapsed
         counter even when stdout is quiet. Emits via event_bus → raw_log_stream_manager."""
         import time as _time
@@ -1290,7 +1661,7 @@ class BaseProcessRuntime:
             now = _time.monotonic()
             last = entry.last_event_at or now
             elapsed_ms = max(0, int((now - last) * 1000))
-            try:
+            with suppress(Exception):
                 await self._event_bus.append({
                     "type": "heartbeat",
                     "execution_process_id": execution_process_id,
@@ -1301,10 +1672,13 @@ class BaseProcessRuntime:
                     "elapsed_since_last_ms": elapsed_ms,
                     "created_at": datetime.now().isoformat(),
                 })
-            except Exception:
-                pass
 
-    async def _reader_loop(self, workspace_id: str, entry: AsyncProcessEntry, task_id: str | None):
+    async def _reader_loop(
+        self,
+        workspace_id: str,
+        entry: AsyncProcessEntry,
+        task_id: str | None,
+    ) -> None:
         """Async reader loop using await stdout.readline()."""
         import time as _time
         idle_timeout = timeouts.process_idle_timeout_s()
@@ -1312,12 +1686,18 @@ class BaseProcessRuntime:
         entry.last_event_at = _time.monotonic()
         watchdog_task = asyncio.create_task(self._watchdog(workspace_id, entry, task_id, max_timeout))
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(workspace_id, entry, task_id))
+        stdout = entry.proc.stdout
 
         try:
+            if stdout is None:
+                entry.had_error = True
+                if not entry.result_text:
+                    entry.result_text = "Runtime process has no stdout pipe."
+                return
             while entry.alive:
                 try:
-                    line = await asyncio.wait_for(entry.proc.stdout.readline(), timeout=idle_timeout)
-                except asyncio.TimeoutError:
+                    line = await asyncio.wait_for(stdout.readline(), timeout=idle_timeout)
+                except TimeoutError:
                     entry.idle_timed_out = True
                     entry.idle_timeout_seconds = idle_timeout
                     break
@@ -1356,31 +1736,32 @@ class BaseProcessRuntime:
                         else:
                             await self._mark_task_done(task_id, entry)
         except Exception:
-            pass
+            logger.debug("reader loop finalization failed: task_id=%s", task_id, exc_info=True)
         finally:
             entry.alive = False
-            try:
+            with suppress(Exception):
                 if entry.proc and entry.proc.returncode is None:
                     await self._terminate_process_tree(entry.proc)
-            except Exception:
-                pass
             watchdog_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await asyncio.wait_for(asyncio.shield(watchdog_task), timeout=1)
-            except (asyncio.CancelledError, Exception):
-                pass
             heartbeat_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await asyncio.wait_for(asyncio.shield(heartbeat_task), timeout=1)
-            except (asyncio.CancelledError, Exception):
-                pass
 
             try:
-                stderr = await asyncio.wait_for(entry.proc.stderr.read(), timeout=1)
-                if stderr:
-                    await self._append_log(workspace_id, "stderr", stderr.decode("utf-8", errors="replace"), task_id)
+                stderr_reader = entry.proc.stderr
+                if stderr_reader is not None:
+                    stderr = await asyncio.wait_for(stderr_reader.read(), timeout=1)
+                    if stderr:
+                        await self._append_log(
+                            workspace_id,
+                            "stderr",
+                            stderr.decode("utf-8", errors="replace"),
+                            task_id,
+                        )
             except Exception:
-                pass
+                logger.debug("reader loop stderr drain failed: task_id=%s", task_id, exc_info=True)
 
             for waiter in entry.pending_waiters:
                 waiter.set()
@@ -1389,44 +1770,40 @@ class BaseProcessRuntime:
             await self._persist_reader_metadata(workspace_id, task_id, entry)
             await self._finalize_task_on_reader_exit(task_id, entry)
 
-    async def _cleanup_entry(self, workspace_id: str, entry):
+    async def _cleanup_entry(
+        self,
+        workspace_id: str,
+        entry: ProcessEntry | AsyncProcessEntry,
+    ) -> None:
         """Clean up a process entry (sync or async)."""
         try:
             entry.alive = False
-            if hasattr(entry, 'proc'):
+            if hasattr(entry, "proc"):
                 if isinstance(entry.proc, asyncio.subprocess.Process):
                     if entry.proc.stdin:
                         entry.proc.stdin.close()
-                        try:
+                        with suppress(Exception):
                             await entry.proc.stdin.wait_closed()
-                        except Exception:
-                            pass
                     await self._terminate_process_tree(entry.proc)
                 elif isinstance(entry.proc, subprocess.Popen):
                     try:
                         entry.proc.terminate()
                         entry.proc.wait(timeout=2)
                     except Exception:
-                        try:
+                        with suppress(Exception):
                             entry.proc.kill()
-                        except Exception:
-                            pass
         except Exception:
-            pass
-            
+            logger.debug("process tree cleanup failed: workspace_id=%s", workspace_id, exc_info=True)
+
         if hasattr(entry, 'output_task') and entry.output_task and not entry.output_task.done():
             entry.output_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await asyncio.wait_for(asyncio.shield(entry.output_task), timeout=1)
-            except (asyncio.CancelledError, Exception):
-                pass
         if (
             hasattr(entry, "turn_watchdog_task")
             and entry.turn_watchdog_task
             and not entry.turn_watchdog_task.done()
         ):
             entry.turn_watchdog_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await asyncio.wait_for(asyncio.shield(entry.turn_watchdog_task), timeout=1)
-            except (asyncio.CancelledError, Exception):
-                pass

@@ -2,17 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  autoStartIssueGraph,
-  getIssueGraph,
-} from "@/lib/api/conductors";
-import {
-  getIssueGraphStats,
-  type GraphStatsResponse,
-} from "@/lib/api/issues";
+import { autoStartIssueGraph, getIssueGraph } from "@/lib/api/conductors";
+import { getIssueGraphStats, type GraphStatsResponse } from "@/lib/api/issues";
 import { runCodexTask } from "@/lib/api/tasks";
 import type { WorkflowGraph } from "@/lib/types";
-import { WorkflowGraphView, type WorkflowNodeClickPayload } from "@/features/workflow/WorkflowGraphView";
+import {
+  WorkflowGraphView,
+  type WorkflowNodeClickPayload,
+} from "@/features/workflow/WorkflowGraphView";
 import { ConductorLogPanel } from "@/features/workflow/ConductorLogPanel";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -20,7 +17,10 @@ import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { agentBus } from "@/features/agents/dock/agentBus";
-import { AgentStatusProvider, useAgentStatusContext } from "@/features/agents/dock/AgentStatusProvider";
+import {
+  AgentStatusProvider,
+  useAgentStatusContext,
+} from "@/features/agents/dock/AgentStatusProvider";
 import { AgentDecisionDrawer } from "@/features/issues/components/AgentDecisionDrawer";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
@@ -86,8 +86,7 @@ export function DagTab({ issueId }: Props) {
       setConductorPanelOpen(true);
     };
     window.addEventListener("open-conductor-log", onOpenConductorLog);
-    return () =>
-      window.removeEventListener("open-conductor-log", onOpenConductorLog);
+    return () => window.removeEventListener("open-conductor-log", onOpenConductorLog);
   }, [issueId]);
 
   // Event-driven graph refresh. workflow_node_updated fires on every node
@@ -203,180 +202,166 @@ export function DagTab({ issueId }: Props) {
         open={conductorPanelOpen}
         onClose={() => setConductorPanelOpen(false)}
       />
-    <div className="flex flex-col gap-4 p-6 flex-1 min-h-0 h-full relative">
-      {error && (
-        <div className="rounded border border-error/40 bg-error/10 px-3 py-2 text-sm text-error">
-          {error}
-        </div>
-      )}
-
-      {view === "loading" && (
-        <div
-          data-density="dag-tab-graph-dispatch-loading"
-          className="motion-essential relative flex min-h-[220px] items-center justify-center gap-2 overflow-hidden rounded-lg border border-brand/25 bg-brand-muted/10 text-sm font-semibold text-text-muted"
-        >
-          <span
-            aria-hidden
-            className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
-          />
-          <AgentThinkingIndicator phase="dispatching" size={16} />
-          {t("issue.workflow.loading")}
-        </div>
-      )}
-
-
-      {view === "no-graph" && (
-        <div className="flex flex-col gap-4 items-center justify-center py-12">
-          <div className="rounded border border-dashed border-border-subtle p-6 text-center text-sm text-text-muted">
-            No workflow graph yet. Click <b>Start Conductor</b> to begin Conductor-driven orchestration.
+      <div className="flex flex-col gap-4 p-6 flex-1 min-h-0 h-full relative">
+        {error && (
+          <div className="rounded border border-error/40 bg-error/10 px-3 py-2 text-sm text-error">
+            {error}
           </div>
-          <Button
-            onClick={() => void handleStart()}
-            disabled={busy}
-            data-density={
-              busy
-                ? "dag-tab-start-conductor-dispatch-cta"
-                : "dag-tab-start-conductor-cta"
-            }
-            className={cn(
-              "bg-brand text-black hover:bg-brand-strong font-semibold shadow-sm",
-              busy && "motion-essential",
-            )}
-          >
-            {busy ? (
-              <>
-                <AgentThinkingIndicator phase="dispatching" size={12} />
-                Starting…
-              </>
-            ) : (
-              "Start Conductor"
-            )}
-          </Button>
-        </div>
-      )}
+        )}
 
-      {view === "saved" && graph && (
-        <div className="flex flex-col flex-1 min-h-[520px] relative bg-surface overflow-hidden">
-          {/* === dag-toolbar === */}
+        {view === "loading" && (
           <div
-            className="flex items-center justify-between gap-2.5 px-4 py-3 border-b border-border-subtle font-mono text-[12px] text-text-muted"
-            style={{
-              background:
-                "linear-gradient(180deg, color-mix(in srgb, var(--color-surface-raised) 40%, transparent), transparent)",
-            }}
+            data-density="dag-tab-graph-dispatch-loading"
+            className="motion-essential relative flex min-h-[220px] items-center justify-center gap-2 overflow-hidden rounded-lg border border-brand/25 bg-brand-muted/10 text-sm font-semibold text-text-muted"
           >
-            <div className="flex items-center gap-3.5 min-w-0">
-              <span className="truncate">
-                <b className="text-foreground font-medium">Graph</b>{" "}
-                <span className="text-text-secondary">{graph.id.slice(0, 8)}</span>
-              </span>
-              <span className="text-text-faint">·</span>
-              <span className="inline-flex items-center gap-1.5">
-                <span>status</span>
-                <span
+            <span
+              aria-hidden
+              className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+            />
+            <AgentThinkingIndicator phase="dispatching" size={16} />
+            {t("issue.workflow.loading")}
+          </div>
+        )}
+
+        {view === "no-graph" && (
+          <div className="flex flex-col gap-4 items-center justify-center py-12">
+            <div className="rounded border border-dashed border-border-subtle p-6 text-center text-sm text-text-muted">
+              No workflow graph yet. Click <b>Start Conductor</b> to begin Conductor-driven
+              orchestration.
+            </div>
+            <Button
+              onClick={() => void handleStart()}
+              disabled={busy}
+              data-density={
+                busy ? "dag-tab-start-conductor-dispatch-cta" : "dag-tab-start-conductor-cta"
+              }
+              className={cn(
+                "bg-brand text-black hover:bg-brand-strong font-semibold shadow-sm",
+                busy && "motion-essential",
+              )}
+            >
+              {busy ? (
+                <>
+                  <AgentThinkingIndicator phase="dispatching" size={12} />
+                  Starting…
+                </>
+              ) : (
+                "Start Conductor"
+              )}
+            </Button>
+          </div>
+        )}
+
+        {view === "saved" && graph && (
+          <div className="flex flex-col flex-1 min-h-[520px] relative bg-surface overflow-hidden">
+            {/* === dag-toolbar === */}
+            <div
+              className="flex items-center justify-between gap-2.5 px-4 py-3 border-b border-border-subtle font-mono text-[12px] text-text-muted"
+              style={{
+                background:
+                  "linear-gradient(180deg, color-mix(in srgb, var(--color-surface-raised) 40%, transparent), transparent)",
+              }}
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <span className="truncate">
+                  <b className="text-foreground font-medium">Graph</b>{" "}
+                  <span className="text-text-secondary">{graph.id.slice(0, 8)}</span>
+                </span>
+                <span className="text-text-faint">·</span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span>status</span>
+                  <span
+                    data-density={
+                      graph.status === "running" ? "dag-tab-running-status" : "dag-tab-status"
+                    }
+                    className={cn(
+                      "inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md border text-[11px] font-mono",
+                      graph.status === "done"
+                        ? "border-status-done/30 text-status-done"
+                        : graph.status === "running"
+                          ? "border-brand/40 text-brand"
+                          : graph.status === "failed"
+                            ? "border-status-failed/40 text-status-failed"
+                            : "border-border-muted text-text-secondary",
+                      graph.status === "running" && "motion-essential",
+                    )}
+                    style={
+                      graph.status === "done"
+                        ? { backgroundColor: "var(--color-done-bg)" }
+                        : graph.status === "running"
+                          ? { backgroundColor: "var(--color-brand-bg)" }
+                          : undefined
+                    }
+                  >
+                    {graph.status === "running" && (
+                      <AgentThinkingIndicator phase="dispatching" size={10} />
+                    )}
+                    <span className="capitalize">{graph.status}</span>
+                  </span>
+                </span>
+                <span className="text-text-faint">·</span>
+                <span>
+                  {graph.nodes.length} nodes · {graph.edges.length} edges
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <Button
+                  disabled={busy}
+                  onClick={() => void handleStart()}
+                  size="sm"
                   data-density={
-                    graph.status === "running"
-                      ? "dag-tab-running-status"
-                      : "dag-tab-status"
+                    busy ? "dag-tab-toolbar-start-dispatch-cta" : "dag-tab-toolbar-start-cta"
                   }
                   className={cn(
-                    "inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md border text-[11px] font-mono",
-                    graph.status === "done"
-                      ? "border-status-done/30 text-status-done"
-                      : graph.status === "running"
-                        ? "border-brand/40 text-brand"
-                        : graph.status === "failed"
-                          ? "border-status-failed/40 text-status-failed"
-                          : "border-border-muted text-text-secondary",
-                    graph.status === "running" && "motion-essential",
+                    "h-7 px-2.5 text-[12px] bg-brand hover:bg-brand-strong text-black font-semibold",
+                    busy && "motion-essential",
                   )}
-                  style={
-                    graph.status === "done"
-                      ? { backgroundColor: "var(--color-done-bg)" }
-                      : graph.status === "running"
-                        ? { backgroundColor: "var(--color-brand-bg)" }
-                        : undefined
-                  }
                 >
-                  {graph.status === "running" && (
-                    <AgentThinkingIndicator phase="dispatching" size={10} />
+                  {busy ? (
+                    <>
+                      <AgentThinkingIndicator phase="dispatching" size={11} />
+                      Starting…
+                    </>
+                  ) : graph.status === "running" ? (
+                    "Re-run"
+                  ) : graph.status === "failed" ? (
+                    "Retry"
+                  ) : (
+                    "Re-run"
                   )}
-                  <span className="capitalize">{graph.status}</span>
-                </span>
-              </span>
-              <span className="text-text-faint">·</span>
-              <span>
-                {graph.nodes.length} nodes · {graph.edges.length} edges
-              </span>
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <Button
-                disabled={busy}
-                onClick={() => void handleStart()}
-                size="sm"
-                data-density={
-                  busy
-                    ? "dag-tab-toolbar-start-dispatch-cta"
-                    : "dag-tab-toolbar-start-cta"
-                }
-                className={cn(
-                  "h-7 px-2.5 text-[12px] bg-brand hover:bg-brand-strong text-black font-semibold",
-                  busy && "motion-essential",
-                )}
-              >
-                {busy ? (
-                  <>
-                    <AgentThinkingIndicator phase="dispatching" size={11} />
-                    Starting…
-                  </>
-                ) : graph.status === "running" ? (
-                  "Re-run"
-                ) : graph.status === "failed" ? (
-                  "Retry"
-                ) : (
-                  "Re-run"
-                )}
-              </Button>
-            </div>
+
+            <WorkflowGraphView graph={graph} onNodeClick={handleNodeClick} stats={graphStats} />
           </div>
+        )}
 
-          <WorkflowGraphView
-            graph={graph}
-            onNodeClick={handleNodeClick}
-            stats={graphStats}
-          />
-        </div>
-      )}
+        <AgentDecisionDrawer
+          taskId={explainTaskId}
+          open={explainTaskId !== null}
+          onClose={() => setExplainTaskId(null)}
+        />
 
-      <AgentDecisionDrawer
-        taskId={explainTaskId}
-        open={explainTaskId !== null}
-        onClose={() => setExplainTaskId(null)}
-      />
-
-      <ConfirmDialog
-        open={retryTarget !== null}
-        onOpenChange={(o) => {
-          if (!o) {
-            setRetryTarget(null);
-            setRetryBusy(false);
-          }
-        }}
-        title={t("issue.retryNodeTitle")}
-        description={
-          retryTarget
-            ? t("issue.retryNodeBody", { node: retryTarget.node_key })
-            : ""
-        }
-        confirmText={t("issue.retry")}
-        variant="warning"
-        isLoading={retryBusy}
-        loadingMotionPhase="dispatching"
-        loadingDensity="dag-tab-retry-node-dispatch-confirm"
-        loadingIndicatorSize={12}
-        onConfirm={() => void handleRetryConfirm()}
-      />
-    </div>
+        <ConfirmDialog
+          open={retryTarget !== null}
+          onOpenChange={(o) => {
+            if (!o) {
+              setRetryTarget(null);
+              setRetryBusy(false);
+            }
+          }}
+          title={t("issue.retryNodeTitle")}
+          description={retryTarget ? t("issue.retryNodeBody", { node: retryTarget.node_key }) : ""}
+          confirmText={t("issue.retry")}
+          variant="warning"
+          isLoading={retryBusy}
+          loadingMotionPhase="dispatching"
+          loadingDensity="dag-tab-retry-node-dispatch-confirm"
+          loadingIndicatorSize={12}
+          onConfirm={() => void handleRetryConfirm()}
+        />
+      </div>
     </AgentStatusProvider>
   );
 }

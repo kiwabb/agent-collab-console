@@ -108,7 +108,9 @@ export function ArtifactsTab({ issueId, active, issue }: Props) {
       busEventMatchers.issueId(issueId),
       busEventMatchers.typeIn("task_status", "workflow_node_updated"),
     ),
-    onEvent: () => { void fetchArtifacts("poll"); },
+    onEvent: () => {
+      void fetchArtifacts("poll");
+    },
     throttleMs: 500,
     enabled: active,
   });
@@ -127,15 +129,12 @@ export function ArtifactsTab({ issueId, active, issue }: Props) {
       <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border-subtle font-mono text-[12px] text-text-muted flex-wrap">
         <div className="flex items-center gap-3.5 flex-wrap">
           <span>
-            <b className="text-foreground font-medium">{artifacts.length}</b>{" "}
-            artifacts
+            <b className="text-foreground font-medium">{artifacts.length}</b> artifacts
           </span>
           <span className="text-text-faint">·</span>
           <span>
             {t("issue.artifacts.totalLabel")}{" "}
-            <b className="text-foreground font-medium">
-              {fmtSize(totalBytes)}
-            </b>
+            <b className="text-foreground font-medium">{fmtSize(totalBytes)}</b>
           </span>
           <span className="text-text-faint">·</span>
           <span>
@@ -152,7 +151,11 @@ export function ArtifactsTab({ issueId, active, issue }: Props) {
             data-density={isRefreshing ? "artifacts-tab-refresh-tool" : "artifacts-tab-refresh"}
             className={cn("h-7 px-2.5 text-[12px]", isRefreshing && "motion-essential")}
           >
-            {isRefreshing ? <AgentThinkingIndicator phase="tool" size={11} /> : <RefreshCw size={11} />}
+            {isRefreshing ? (
+              <AgentThinkingIndicator phase="tool" size={11} />
+            ) : (
+              <RefreshCw size={11} />
+            )}
             Refresh
           </Button>
           <a

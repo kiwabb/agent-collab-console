@@ -1,18 +1,18 @@
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
-from pathlib import Path
 from dataclasses import asdict, is_dataclass
-from typing import Any
+from pathlib import Path
 
 from app.application.process_runtime_common import is_unusable_result_text
 from app.domain.models import CodexTask, SubAgentResult, WorkflowNode
+from app.json_safety import object_dict_or_none
 
 
 def build_subagent_result(
     *,
     task: CodexTask,
     node: WorkflowNode,
-    doc: Any | None = None,
+    doc: object | None = None,
 ) -> SubAgentResult:
     """Build the full structured result envelope for Conductor and mesh handoffs."""
     artifact_paths = _artifact_paths(doc)
@@ -38,19 +38,22 @@ def build_subagent_result(
     )
 
 
-def _artifact_paths(doc: Any | None) -> list[str]:
+def _artifact_paths(doc: object | None) -> list[str]:
     written_files = getattr(doc, "written_files", None) or []
     paths: list[str] = []
+    if not isinstance(written_files, list):
+        return paths
     for item in written_files:
-        if not isinstance(item, dict):
+        file_info = object_dict_or_none(item)
+        if file_info is None:
             continue
-        path = item.get("path")
+        path = file_info.get("path")
         if path:
             paths.append(str(path))
     return paths
 
 
-def _result_status(task: CodexTask, doc: Any | None) -> str:
+def _result_status(task: CodexTask, doc: object | None) -> str:
     payload = _artifact_json(doc)
     if isinstance(payload, dict):
         status = payload.get("status")
@@ -62,17 +65,19 @@ def _result_status(task: CodexTask, doc: Any | None) -> str:
     return task.status
 
 
-def _artifact_json(doc: Any | None) -> dict | None:
+def _artifact_json(doc: object | None) -> dict[str, object] | None:
     if doc is None:
         return None
-    if hasattr(doc, "model_dump"):
-        payload = doc.model_dump()
-        return payload if isinstance(payload, dict) else None
-    if hasattr(doc, "dict"):
-        payload = doc.dict()
-        return payload if isinstance(payload, dict) else None
-    if is_dataclass(doc):
-        return asdict(doc)
+    model_dump = getattr(doc, "model_dump", None)
+    if callable(model_dump):
+        payload = model_dump()
+        return object_dict_or_none(payload)
+    legacy_dict = getattr(doc, "dict", None)
+    if callable(legacy_dict):
+        payload = legacy_dict()
+        return object_dict_or_none(payload)
+    if is_dataclass(doc) and not isinstance(doc, type):
+        return object_dict_or_none(asdict(doc))
     return None
 
 
@@ -88,34 +93,43 @@ def _artifact_markdown(paths: list[str]) -> str | None:
     return None
 
 
-def _files_changed(doc: Any | None) -> list[str]:
+def _files_changed(doc: object | None) -> list[str]:
     changed = getattr(doc, "changed_files", None)
     if isinstance(changed, list):
         return [str(item) for item in changed]
     payload = _artifact_json(doc)
-    if isinstance(payload, dict) and isinstance(payload.get("changed_files"), list):
-        return [str(item) for item in payload["changed_files"]]
+    if payload is not None:
+        changed_files = payload.get("changed_files")
+        if isinstance(changed_files, list):
+            return [str(item) for item in changed_files]
     return []
 
 
-def _qa_commands(doc: Any | None) -> list[dict] | None:
+def _qa_commands(doc: object | None) -> list[dict[str, object]] | None:
     execution_results = getattr(doc, "execution_results", None)
     if isinstance(execution_results, list):
-        return [item for item in execution_results if isinstance(item, dict)]
+        commands: list[dict[str, object]] = []
+        for item in execution_results:
+            command = object_dict_or_none(item)
+            if command is not None:
+                commands.append(command)
+        return commands
     payload = _artifact_json(doc)
-    if isinstance(payload, dict) and isinstance(payload.get("commands_run"), list):
-        return [{"command": str(command)} for command in payload["commands_run"]]
+    if payload is not None:
+        commands_run = payload.get("commands_run")
+        if isinstance(commands_run, list):
+            return [{"command": str(command)} for command in commands_run]
     return None
 
 
-def _critique(doc: Any | None) -> dict | None:
+def _critique(doc: object | None) -> dict[str, object] | None:
     critique = _string_attr(doc, "architect_critique")
     if not critique:
         return None
     return {"architect_critique": critique}
 
 
-def _string_attr(doc: Any | None, name: str) -> str | None:
+def _string_attr(doc: object | None, name: str) -> str | None:
     value = getattr(doc, name, None)
     if value is None:
         return None

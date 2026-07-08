@@ -18,7 +18,12 @@ from app.domain.models import (
     RuntimeProviderConfig,
     RuntimeModelConfig,
 )
-from app.application.usage_utils import price_tokens, price_tokens_for_model
+from app.application.usage_utils import (
+    price_tokens,
+    price_tokens_for_model,
+    read_usage_float,
+    read_usage_int,
+)
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
 
 
@@ -163,6 +168,41 @@ def test_non_numeric_price_value_falls_back_to_env():
 def test_empty_dict_pricing_falls_back_to_env():
     cost = price_tokens(1_000, 2_000, 3_000, pricing={})
     assert cost == price_tokens(1_000, 2_000, 3_000)
+
+
+# --- external usage payload coercion ---
+
+
+def test_read_usage_int_accepts_first_integer_compatible_field():
+    usage: dict[str, object] = {
+        "input_tokens": "120",
+        "prompt_tokens": 240,
+    }
+
+    assert read_usage_int(usage, "missing", "input_tokens", "prompt_tokens") == 120
+
+
+def test_read_usage_int_uses_fallback_field_after_invalid_value():
+    usage: dict[str, object] = {
+        "input_tokens": "oops",
+        "prompt_tokens": 240,
+    }
+
+    assert read_usage_int(usage, "input_tokens", "prompt_tokens") == 240
+
+
+def test_read_usage_int_rejects_booleans():
+    usage: dict[str, object] = {
+        "input_tokens": True,
+        "prompt_tokens": False,
+    }
+
+    assert read_usage_int(usage, "input_tokens", "prompt_tokens") is None
+
+
+def test_read_usage_float_accepts_numeric_strings_and_rejects_booleans():
+    assert read_usage_float({"total_cost_usd": "1.25"}, "total_cost_usd") == pytest.approx(1.25)
+    assert read_usage_float({"total_cost_usd": True}, "total_cost_usd") is None
 
 
 # --- catalog serialization round-trip ---

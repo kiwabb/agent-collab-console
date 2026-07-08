@@ -1,0 +1,36 @@
+{
+  "assertions": {
+    "batch_modified_marker_visible": true,
+    "editable_brief_limited_to_1200": true,
+    "generate_enabled_after_select_all": true,
+    "row_modified_marker_visible": true,
+    "scan_found_19_candidates": true,
+    "selected_all_candidates": true
+  },
+  "batch_modified_marker": {
+    "aria_label": "已修改 1 个 brief",
+    "text": "已修改 1 个 brief",
+    "title": "已修改 1 个 brief"
+  },
+  "brief_counter": "生成 brief 161/1200 字符",
+  "brief_textareas": [
+    {
+      "aria_label": "编辑这个候选的生成 brief",
+      "max_length": 1200,
+      "value_length": 161,
+      "value_preview": "Browser validation edited brief: keep the agents page as an operations console, emphasize agent role cards, lifecycle status, and concise first-viewport actions."
+    }
+  ],
+  "generate_button_disabled": false,
+  "instruction_counter": "页面说明 0/1200 字符",
+  "row_modified_marker": {
+    "aria_label": "brief 已修改",
+    "text": "brief 已修改",
+    "title": "brief 已修改"
+  },
+  "scan_summary": "19 个候选 · 新建 0 · 变更 0 · 跳过 19",
+  "selected_summary": "已选择 19/19 个可生成候选",
+  "title": "Agent Collaboration Workbench",
+  "url": "http://localhost:4000/projects/d26a7a4a-9c4b-4da2-a84f-c029416a3351/prototypes",
+  "verified_at": "2026-07-04T23:27:58.844Z"
+}

@@ -66,6 +66,11 @@ terminal. The audit log (`app/audit/`) is a separate concern
 and IS structured — it persists JSON rows to the `audit_log`
 table.
 
+Do not use f-strings in `logger.debug/info/warning/error/exception`
+calls under `backend/app`. Keep interpolation lazy by passing
+`%s` / `%d` placeholders plus arguments; the source-hygiene test
+rejects logger calls whose first argument is an f-string.
+
 ### Required fields per log line
 
 - An **identifier** (issue id, task id, run id, agent name) is

@@ -1,0 +1,36 @@
+{
+  "all_done": {
+    "created": 0,
+    "regenerated": 2,
+    "skipped": 0,
+    "failed": 1,
+    "unsupported": 0
+  },
+  "prototype_done": [
+    {
+      "candidate_id": "next-app-router--issues-id",
+      "prototype_id": "af53dadd-4b42-4557-a069-a56a1bb9ddde",
+      "version_no": 2,
+      "disk_path": "/Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/.agent-collab/prototypes/af53dadd-4b42-4557-a069-a56a1bb9ddde/v2/index.html",
+      "html_complete": true,
+      "html_chars": 14590
+    },
+    {
+      "candidate_id": "next-app-router--settings",
+      "prototype_id": "5ca1bf8f-f58e-41f4-ae9f-cd2af6e605c3",
+      "version_no": 2,
+      "disk_path": "/Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/.agent-collab/prototypes/5ca1bf8f-f58e-41f4-ae9f-cd2af6e605c3/v2/index.html",
+      "html_complete": true,
+      "html_chars": 20824
+    }
+  ],
+  "prototype_error": [
+    {
+      "candidate_id": "next-app-router--help",
+      "prototype_id": "bf44c81d-e01c-439e-a971-df310f79bc0c",
+      "message": "LLM returned an incomplete HTML document; generation was not saved"
+    }
+  ],
+  "capture_done": [],
+  "capture_failed": []
+}

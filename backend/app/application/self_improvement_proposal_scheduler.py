@@ -57,6 +57,10 @@ class SelfImprovementProposalSleepFn(Protocol):
     async def __call__(self, interval: float) -> None: ...
 
 
+async def _sleep(interval: float) -> None:
+    await asyncio.sleep(interval)
+
+
 @dataclass
 class SelfImprovementProposalSchedulerStatus:
     configured: bool = True
@@ -256,7 +260,7 @@ async def run_self_improvement_proposal_scheduler_loop(
     interval_s: float | None = None,
     limit: int | None = None,
     tick_fn: SelfImprovementProposalTickFn = run_self_improvement_proposal_tick,
-    sleep_fn: SelfImprovementProposalSleepFn = asyncio.sleep,
+    sleep_fn: SelfImprovementProposalSleepFn = _sleep,
 ) -> None:
     _ = event_bus
     interval = (

@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { getProcessMessagesUrl } from "@/lib/api/tasks";
 import type { CodexTaskMessage } from "@/lib/types";
 
+import { parseMessageStreamFrame } from "./executionProcessStreamFrames";
+
 function sortMessages<T extends { created_at?: string | null }>(messages: T[]): T[] {
   return [...messages].sort((a, b) => {
     const aTime = a?.created_at ? new Date(a.created_at).getTime() : 0;
@@ -23,7 +25,9 @@ interface UseExecutionProcessMessageStreamResult {
   error: string | null;
 }
 
-export function useExecutionProcessMessageStream(processId: string | null): UseExecutionProcessMessageStreamResult {
+export function useExecutionProcessMessageStream(
+  processId: string | null,
+): UseExecutionProcessMessageStreamResult {
   const [messages, setMessages] = useState<CodexTaskMessage[]>([]);
   const [pendingAssistant, setPendingAssistant] = useState<PendingAssistant | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +42,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
   const scheduleReconnect = useCallback(() => {
     if (retryTimerRef.current || finishedRef.current) return;
     const attempt = retryAttemptsRef.current;
-    const delay = Math.min(1500, 250 * (2 ** attempt));
+    const delay = Math.min(1500, 250 * 2 ** attempt);
     retryTimerRef.current = setTimeout(() => {
       retryTimerRef.current = null;
       connectRef.current();
@@ -58,7 +62,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
   function applyDelta(seq: number, deltaText: string) {
     setPendingAssistant((prev) => {
       if (prev && seq <= prev.lastSeq) {
-        return prev;  // ignore duplicate / out-of-order
+        return prev; // ignore duplicate / out-of-order
       }
       return { text: (prev?.text ?? "") + deltaText, lastSeq: seq };
     });
@@ -78,23 +82,21 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
       };
 
       ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data as string) as
-            | { finished?: boolean }
-            | { type: "message_delta"; seq: number; delta_text: string }
-            | CodexTaskMessage;
-          if ((data as { finished?: boolean })?.finished) {
-            finishedRef.current = true;
-            ws.close(1000, "finished");
-            return;
-          }
-          if ((data as { type?: string }).type === "message_delta") {
-            const d = data as { type: "message_delta"; seq: number; delta_text: string };
-            applyDelta(d.seq, d.delta_text);
-            return;
-          }
-          addMessage(data as CodexTaskMessage);
-        } catch {
+        const frame = parseMessageStreamFrame(event.data);
+        if (frame.kind === "finished") {
+          finishedRef.current = true;
+          ws.close(1000, "finished");
+          return;
+        }
+        if (frame.kind === "message_delta") {
+          applyDelta(frame.seq, frame.deltaText);
+          return;
+        }
+        if (frame.kind === "message") {
+          addMessage(frame.message);
+          return;
+        }
+        if (frame.kind === "malformed") {
           setError("Failed to process message stream update");
         }
       };
@@ -105,10 +107,7 @@ export function useExecutionProcessMessageStream(processId: string | null): UseE
 
       ws.onclose = (evt) => {
         wsRef.current = null;
-        if (
-          finishedRef.current ||
-          (evt?.code === 1000 && evt?.wasClean)
-        ) {
+        if (finishedRef.current || (evt?.code === 1000 && evt?.wasClean)) {
           return;
         }
         retryAttemptsRef.current += 1;

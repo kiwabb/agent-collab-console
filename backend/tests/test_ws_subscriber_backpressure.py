@@ -24,25 +24,30 @@ from app.interfaces.codex_ws import (
 class FakeWebSocket:
     """Records send_json/send_text and can be told to block forever on send."""
 
-    def __init__(self, *, block: bool = False):
-        self.sent: list = []
-        self.text_sent: list = []
-        self.closed_with: tuple | None = None
+    def __init__(self, *, block: bool = False) -> None:
+        self.sent: list[object] = []
+        self.text_sent: list[str] = []
+        self.closed_with: tuple[int, str] | None = None
         self._block = block
         self._gate = asyncio.Event()  # never set when block=True → send hangs
 
-    async def send_json(self, payload):
+    async def send_json(self, payload: object) -> None:
         if self._block:
             await self._gate.wait()
         self.sent.append(payload)
 
-    async def send_text(self, text):
+    async def send_text(self, text: str) -> None:
         if self._block:
             await self._gate.wait()
         self.text_sent.append(text)
 
-    async def close(self, code: int = 1000, reason: str = ""):
+    async def close(self, code: int = 1000, reason: str = "") -> None:
         self.closed_with = (code, reason)
+
+
+def _json_frame(value: object) -> dict[str, object]:
+    assert isinstance(value, dict)
+    return {str(key): item for key, item in value.items()}
 
 
 @pytest.mark.asyncio
@@ -131,7 +136,7 @@ async def test_message_delta_carries_type_and_seq():
     mgr.subscribe("p1", sub)
 
     await mgr.publish_delta("p1", {"seq": 3, "delta_text": "hi"})
-    frame = sub.queue.get_nowait()
+    frame = _json_frame(sub.queue.get_nowait())
     assert frame["type"] == "message_delta"
     assert frame["seq"] == 3
     assert frame["delta_text"] == "hi"
@@ -157,11 +162,11 @@ async def test_running_sender_closes_on_overflow_even_when_queue_was_full():
     sender that later drains a frame still sees _closed and closes with 1011."""
 
     class GatedWebSocket(FakeWebSocket):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.release = asyncio.Event()
 
-        async def send_json(self, payload):
+        async def send_json(self, payload: object) -> None:
             await self.release.wait()  # hold until released, then drain fast
             self.sent.append(payload)
 
@@ -188,7 +193,7 @@ async def test_workspace_initial_snapshot_disconnect_is_benign():
     quietly before the subscriber is registered."""
 
     class DisconnectingWebSocket(FakeWebSocket):
-        async def send_json(self, payload):
+        async def send_json(self, payload: object) -> None:
             raise WebSocketDisconnect(code=1001)
 
     sent = await _send_workspace_initial_snapshot(

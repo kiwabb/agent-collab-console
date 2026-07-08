@@ -14,7 +14,10 @@ interface ExecutionProcessesProviderProps {
   children: ReactNode;
 }
 
-export function ExecutionProcessesProvider({ workspaceId, children }: ExecutionProcessesProviderProps) {
+export function ExecutionProcessesProvider({
+  workspaceId,
+  children,
+}: ExecutionProcessesProviderProps) {
   const {
     executionProcesses,
     executionProcessesById,
@@ -48,32 +51,35 @@ export function ExecutionProcessesProvider({ workspaceId, children }: ExecutionP
     }
   }, [lastEvent]);
 
-  const value = useMemo((): ExecutionProcessesContextValue => ({
-    executionProcessesAll: executionProcesses,
-    executionProcessesByIdAll: executionProcessesById,
-    isAttemptRunningAll: isAttemptRunning,
-    executionProcessesVisible: visible,
-    executionProcessesByIdVisible,
-    isAttemptRunningVisible,
-    isLoading: Boolean(workspaceId) && !isInitialized && !error,
-    isConnected,
-    error,
-    lastEvent,
-    resumeGapCount,
-  }), [
-    error,
-    executionProcesses,
-    executionProcessesById,
-    executionProcessesByIdVisible,
-    isAttemptRunning,
-    isAttemptRunningVisible,
-    isConnected,
-    isInitialized,
-    workspaceId,
-    visible,
-    lastEvent,
-    resumeGapCount,
-  ]);
+  const value = useMemo(
+    (): ExecutionProcessesContextValue => ({
+      executionProcessesAll: executionProcesses,
+      executionProcessesByIdAll: executionProcessesById,
+      isAttemptRunningAll: isAttemptRunning,
+      executionProcessesVisible: visible,
+      executionProcessesByIdVisible,
+      isAttemptRunningVisible,
+      isLoading: Boolean(workspaceId) && !isInitialized && !error,
+      isConnected,
+      error,
+      lastEvent,
+      resumeGapCount,
+    }),
+    [
+      error,
+      executionProcesses,
+      executionProcessesById,
+      executionProcessesByIdVisible,
+      isAttemptRunning,
+      isAttemptRunningVisible,
+      isConnected,
+      isInitialized,
+      workspaceId,
+      visible,
+      lastEvent,
+      resumeGapCount,
+    ],
+  );
 
   return (
     <ExecutionProcessesContext.Provider value={value}>

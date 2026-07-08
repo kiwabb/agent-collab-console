@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { getCodexTaskMessages } from "@/lib/api/tasks";
 import { buildTaskConversationDetail } from "@/lib/taskConversationDetailUtils";
+import type { TaskConversationLog } from "@/lib/taskConversationDetailUtils";
 import type { CodexTaskMessage, ExecutionProcess } from "@/lib/types";
 
 interface TaskConversationDetail {
   messages: CodexTaskMessage[];
-  logs: unknown[];
+  logs: TaskConversationLog[];
   loading: boolean;
   error: string | null;
 }
@@ -25,7 +26,6 @@ interface UseTaskConversationDetailOptions {
 export function useTaskConversationDetail({
   taskId,
   executionProcesses,
-  activeProcessId,
 }: UseTaskConversationDetailOptions): TaskConversationDetail {
   const [detail, setDetail] = useState<TaskConversationDetail>(createEmptyDetail);
   const [taskMessages, setTaskMessages] = useState<CodexTaskMessage[]>([]);

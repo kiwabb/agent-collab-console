@@ -5,19 +5,33 @@ import json
 import logging
 import os
 import shlex
-import subprocess
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 
+from app.adapters.local_process import run_trusted_local
 from app.application import timeouts
-from app.application.json_rpc_client import AppServerClient, AsyncJsonRpcPeer, JsonRpcCallbacks
+from app.application.json_rpc_client import (
+    AppServerClient,
+    AsyncJsonRpcPeer,
+    JsonObject,
+    JsonRpcCallbacks,
+    ServerRequest,
+)
 from app.application.process_runtime_common import (
     AsyncProcessEntry,
     BaseProcessRuntime,
+    RefreshTaskResult,
+    RuntimeCodexStore,
+    RuntimeEventBus,
+    RuntimeHelpOrchestrator,
+    RuntimeLogStore,
     is_agent_message_item_type,
     is_workspace_console_task,
 )
 from app.application.task_statuses import is_task_failure_status, is_task_terminal_status
+from app.domain.models import CodexSession
+from app.json_safety import object_dict, string_value
 
 
 logger = logging.getLogger(__name__)
@@ -35,14 +49,14 @@ CODEX_IDLE_TIMEOUT_S = timeouts.codex_idle_timeout_s()
 class CodexAppServerRuntime(BaseProcessRuntime):
     def __init__(
         self,
-        codex_store,
-        log_store,
-        data_dir=None,
-        event_bus=None,
-        processes=None,
-        help_orchestrator=None,
-        refresh_task_result=None,
-    ):
+        codex_store: RuntimeCodexStore,
+        log_store: RuntimeLogStore,
+        data_dir: str | None = None,
+        event_bus: RuntimeEventBus | None = None,
+        processes: dict[str, AsyncProcessEntry] | None = None,
+        help_orchestrator: RuntimeHelpOrchestrator | None = None,
+        refresh_task_result: RefreshTaskResult | None = None,
+    ) -> None:
         super().__init__(
             codex_store,
             log_store,
@@ -54,7 +68,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         )
         self._app_server_cmd = self._build_app_server_cmd()
         self._async_clients: dict[str, AppServerClient] = {}
-        self._pending_approvals: dict[str, dict] = {}
+        self._pending_approvals: dict[str, dict[str, object]] = {}
 
     def _build_app_server_cmd(self) -> list[str]:
         cmd = shlex.split(timeouts.codex_app_server_cmd())
@@ -137,7 +151,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
     def check_availability(self) -> bool:
         try:
             return (
-                subprocess.run(
+                run_trusted_local(
                     [self._app_server_cmd[0], "--version"],
                     capture_output=True,
                 ).returncode
@@ -162,7 +176,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         env_overrides: dict[str, str] | None = None,
         command_args: list[str] | None = None,
         force_new_session: bool = False,
-        **legacy_kwargs,
+        **legacy_kwargs: object,
     ) -> str:
         workspace_id = self._resolve_workspace_id(workspace_id, **legacy_kwargs)
         process_key = task_id or workspace_id
@@ -210,7 +224,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 await self._abort_for_timeout(task_id, entry, reason="turn_timeout")
                 return "timeout"
             if entry.had_error:
-                return "timeout" if getattr(entry, "_timeout_reason", None) else "failed"
+                return "timeout" if entry.timeout_reason else "failed"
             if not evt.is_set():
                 await self._abort_for_timeout(task_id, entry, reason="idle_timeout")
                 return "timeout"
@@ -280,7 +294,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         """Mark the task failed and kill the subprocess so downstream
         rework / replan logic fires immediately."""
         entry.had_error = True
-        entry._timeout_reason = reason
+        entry.timeout_reason = reason
         msg = (
             "Codex turn aborted by framework: "
             f"{reason} (idle threshold {CODEX_IDLE_TIMEOUT_S}s, total budget {CODEX_TURN_TIMEOUT_S}s). "
@@ -288,22 +302,29 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         )
         if not entry.result_text:
             entry.result_text = msg
-        try:  # noqa: SIM105
-            await self._mark_task_failed(task_id, entry)
-        except Exception:  # noqa: BLE001, RUF100
-            pass
+        if task_id:
+            try:
+                await self._mark_task_failed(task_id, entry)
+            except Exception:  # noqa: BLE001, RUF100
+                logger.debug("codex timeout task failure marking failed: task_id=%s", task_id, exc_info=True)
         # Drop the subprocess so the next dispatch can spawn a fresh one.
-        try:  # noqa: SIM105
+        try:
             await self.terminate_task(task_id) if task_id else None
         except Exception:  # noqa: BLE001, RUF100
-            pass
+            logger.debug("codex timeout process termination failed: task_id=%s", task_id, exc_info=True)
 
-    async def _initialize_or_fail_fast(self, client, proc, workspace_id, task_id) -> None:
+    async def _initialize_or_fail_fast(
+        self,
+        client: AppServerClient,
+        proc: asyncio.subprocess.Process,
+        workspace_id: str,
+        task_id: str | None,
+    ) -> None:
         """Run the JSON-RPC initialize handshake, but never hang on a dead
         app-server. Races initialize against process exit and a hard bound; on
         early exit / timeout, captures stderr and raises (GAP K)."""
 
-        async def _do_init():
+        async def _do_init() -> None:
             await client.initialize()
             await client.initialized()
 
@@ -338,7 +359,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             f"{(stderr_text or '').strip()[:300]}"
         )
 
-    async def _drain_stderr(self, proc) -> str:
+    async def _drain_stderr(self, proc: asyncio.subprocess.Process) -> str:
         """Best-effort read of whatever the dead app-server wrote to stderr."""
         if proc.stderr is None:
             return ""
@@ -349,7 +370,13 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             return ""
 
     async def _emit_executor_failed_to_start(
-        self, workspace_id, task_id, *, reason: str, returncode, stderr: str
+        self,
+        workspace_id: str,
+        task_id: str | None,
+        *,
+        reason: str,
+        returncode: int | None,
+        stderr: str,
     ) -> None:
         logger.error(
             "codex executor failed to start (task=%s reason=%s rc=%s): %s",
@@ -375,7 +402,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("executor_failed_to_start emit failed: %s", exc)
 
-    async def terminate_task(self, task_id: str):
+    async def terminate_task(self, task_id: str) -> None:
         # Clean up specific client map
         self._async_clients.pop(task_id, None)
         # Delegate to base for process cleanup
@@ -388,7 +415,8 @@ class CodexAppServerRuntime(BaseProcessRuntime):
 
         task_id = pending.get("task_id")
         workspace_id = pending.get("session_id")
-        client = self._async_clients.get(task_id or workspace_id)
+        client_key = task_id if isinstance(task_id, str) and task_id else workspace_id
+        client = self._async_clients.get(client_key) if isinstance(client_key, str) else None
         if client is None:
             return False
 
@@ -408,10 +436,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 )
         return success
 
-    def get_pending_approvals(self) -> dict[str, dict]:
+    def get_pending_approvals(self) -> dict[str, dict[str, object]]:
         return self._pending_approvals.copy()
 
-    def _owns_entry(self, entry) -> bool:
+    def _owns_entry(self, entry: AsyncProcessEntry) -> bool:
         return getattr(entry, "executor", None) == "codex"
 
     async def _spawn_process_async(
@@ -453,10 +481,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         allow_ws_fallback = _task is None or is_workspace_console_task(_task)
         # Issue tasks must run in their isolated worktree, never fall back to
         # workspace.cwd (= main project repo).
-        is_issue_task = _task is not None and getattr(_task, "issue_id", None)
-        if is_issue_task and not cwd:
+        task_issue_id = getattr(_task, "issue_id", None) if _task is not None else None
+        if task_issue_id and not cwd:
             raise ValueError(
-                f"Issue task {task_id} (issue={_task.issue_id}) has no worktree cwd. "
+                f"Issue task {task_id} (issue={task_issue_id}) has no worktree cwd. "
                 "Refusing to run in main project directory."
             )
         effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
@@ -535,7 +563,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             auto_approve=timeouts.codex_auto_approve(),
         )
 
-        async def on_approval_required(item_id: str, request):
+        async def on_approval_required(item_id: str, request: ServerRequest) -> None:
             task = await self.codex_store.load_codex_task(task_id) if task_id else None
             execution_process_id = task.last_execution_process_id if task else None
             self._pending_approvals[item_id] = {
@@ -575,6 +603,8 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             pending_waiters=[waiter] if waiter else [],
         )
 
+        if proc.stdin is None or proc.stdout is None:
+            raise RuntimeError("codex app-server subprocess did not expose stdin/stdout pipes")
         peer = AsyncJsonRpcPeer(
             stdin=proc.stdin,
             stdout=proc.stdout,
@@ -584,7 +614,7 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         )
         client.attach_peer(peer)
 
-        async def handshake():
+        async def handshake() -> None:
             try:
                 await peer.start()
                 await self._append_log(workspace_id, "runtime", "Handshaking...", task_id)
@@ -639,7 +669,13 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         self._async_clients[task_id or workspace_id] = client
         return entry
 
-    async def _on_raw_line(self, workspace_id: str, line: str, entry, task_id: str | None):
+    async def _on_raw_line(
+        self,
+        workspace_id: str,
+        line: str,
+        entry: AsyncProcessEntry,
+        task_id: str | None,
+    ) -> None:
         # Update idle-watchdog clock: every raw line counts as activity, so
         # a healthy stream of tool_use / delta / item events keeps the task
         # alive even on a long generation; only true stdout silence trips.
@@ -659,8 +695,15 @@ class CodexAppServerRuntime(BaseProcessRuntime):
         if entry.alive:
             await self._capture_on_reader(workspace_id, line, entry, task_id)
 
-    async def _apply_thread_result(self, workspace, entry, result: dict, task_id: str | None):
-        thread_id = result.get("thread_id") or (result.get("thread", {}).get("id"))
+    async def _apply_thread_result(
+        self,
+        workspace: CodexSession,
+        entry: AsyncProcessEntry,
+        result: JsonObject,
+        task_id: str | None,
+    ) -> None:
+        thread = object_dict(result.get("thread"))
+        thread_id = string_value(result.get("thread_id") or thread.get("id"))
         if thread_id:
             entry.resume_session_id = thread_id
             task = await self.codex_store.load_codex_task(task_id) if task_id else None
@@ -694,7 +737,12 @@ class CodexAppServerRuntime(BaseProcessRuntime):
     def _normalize_tool_item_type(item_type: str | None) -> str:
         return str(item_type or "").strip().lower().replace("-", "_").replace(" ", "_")
 
-    async def _emit_tool_event(self, workspace_id: str, task_id: str | None, payload: dict):
+    async def _emit_tool_event(
+        self,
+        workspace_id: str,
+        task_id: str | None,
+        payload: JsonObject,
+    ) -> None:
         await self._append_log(
             workspace_id,
             "tool_event",
@@ -702,18 +750,22 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             task_id,
         )
 
-    def _make_app_server_notification_callback(self, workspace_id: str, task_id: str | None):
-        async def callback(method: str, params: dict) -> bool:
+    def _make_app_server_notification_callback(
+        self, workspace_id: str, task_id: str | None
+    ) -> Callable[[str, JsonObject], Awaitable[bool]]:
+        async def callback(method: str, params: JsonObject) -> bool:
             task = await self.codex_store.load_codex_task(task_id) if task_id else None
             execution_process_id = task.last_execution_process_id if task else None
 
             if method == "error":
-                msg = params.get("error", {}).get("message") or str(params)
+                error = object_dict(params.get("error"))
+                msg = string_value(error.get("message")) or str(params)
                 entry = self._processes.get(task_id or workspace_id)
                 if entry:
                     entry.had_error = True
                     entry.result_text = msg
-                    await self._mark_task_failed(task_id, entry)
+                    if task_id:
+                        await self._mark_task_failed(task_id, entry)
                     for w in entry.pending_waiters:
                         w.set()
                     entry.pending_waiters.clear()
@@ -722,34 +774,32 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             if method in ("turn/completed", "turn.completed"):
                 entry = self._processes.get(task_id or workspace_id)
                 if entry:
-                    status = params.get("status") or params.get("turn", {}).get("status")
+                    turn = object_dict(params.get("turn"))
+                    status = params.get("status") or turn.get("status")
                     if is_task_failure_status(status):
-                        error_payload = (
-                            params.get("error") or params.get("turn", {}).get("error") or {}
-                        )
-                        error_message = None
-                        if isinstance(error_payload, dict):
-                            error_message = error_payload.get("message") or error_payload.get(
-                                "detail"
-                            )
+                        error_payload = object_dict(params.get("error") or turn.get("error"))
+                        error_message = error_payload.get("message") or error_payload.get("detail")
                         if not error_message:
                             error_message = params.get("message") or params.get("detail")
                         entry.had_error = True
                         if isinstance(error_message, str) and error_message.strip():
                             entry.result_text = error_message.strip()
-                        await self._mark_task_failed(task_id, entry)
+                        if task_id:
+                            await self._mark_task_failed(task_id, entry)
                     else:
-                        await self._mark_task_done(task_id, entry)
+                        if task_id:
+                            await self._mark_task_done(task_id, entry)
                     for w in entry.pending_waiters:
                         w.set()
                     entry.pending_waiters.clear()
                 return False
 
             if method in ("item/started", "item.started"):
-                item = params.get("item", {})
-                if self._is_tool_item(item.get("type")):
+                item = object_dict(params.get("item"))
+                item_type = string_value(item.get("type"))
+                if self._is_tool_item(item_type):
                     entry = self._processes.get(task_id or workspace_id)
-                    item_id = item.get("id") or ""
+                    item_id = string_value(item.get("id"))
                     if entry is not None and item_id:
                         entry.tool_item_started_at[item_id] = datetime.now()
                     await self._emit_tool_event(
@@ -758,8 +808,8 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                         {
                             "kind": "tool_started",
                             "tool_use_id": item_id,
-                            "item_type": self._normalize_tool_item_type(item.get("type")),
-                            "tool_name": item.get("name") or item.get("tool_name") or "",
+                            "item_type": self._normalize_tool_item_type(item_type),
+                            "tool_name": string_value(item.get("name") or item.get("tool_name")),
                             "command": item.get("command"),
                             "file_path": item.get("path") or item.get("file_path"),
                             "input": item.get("input") or item.get("arguments") or {},
@@ -768,14 +818,15 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                 return False
 
             if method in ("item/completed", "item.completed"):
-                item = params.get("item", {})
-                if is_agent_message_item_type(item.get("type")):
+                item = object_dict(params.get("item"))
+                item_type = string_value(item.get("type"))
+                if is_agent_message_item_type(item_type):
                     # codex 0.132.0 tags agent messages with phase "commentary"/
                     # "final_answer" (older builds only emitted "final_answer").
                     # Capture the latest agent message text as the result — the
                     # final one wins — so the engineer's answer is never lost just
                     # because the phase label changed across CLI versions.
-                    text = (item.get("text") or "").strip()
+                    text = string_value(item.get("text")).strip()
                     if text:
                         entry = self._processes.get(task_id or workspace_id)
                         if entry:
@@ -785,9 +836,9 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                                 task_id, execution_process_id, text
                             )
                     return False
-                if self._is_tool_item(item.get("type")):
+                if self._is_tool_item(item_type):
                     entry = self._processes.get(task_id or workspace_id)
-                    item_id = item.get("id") or ""
+                    item_id = string_value(item.get("id"))
                     duration_ms = None
                     if entry is not None and item_id:
                         started = entry.tool_item_started_at.pop(item_id, None)
@@ -813,8 +864,8 @@ class CodexAppServerRuntime(BaseProcessRuntime):
                         {
                             "kind": "tool_completed",
                             "tool_use_id": item_id,
-                            "item_type": self._normalize_tool_item_type(item.get("type")),
-                            "tool_name": item.get("name") or item.get("tool_name") or "",
+                            "item_type": self._normalize_tool_item_type(item_type),
+                            "tool_name": string_value(item.get("name") or item.get("tool_name")),
                             "command": item.get("command"),
                             "file_path": item.get("path") or item.get("file_path"),
                             "input": item.get("input") or item.get("arguments") or {},
@@ -834,10 +885,10 @@ class CodexAppServerRuntime(BaseProcessRuntime):
             # notifications while the agent is generating its final answer. Mirror the
             # Claude path: compute delta vs. last broadcast and emit message_delta.
             if method in ("item/delta", "item.delta", "item/updated", "item.updated"):
-                item = params.get("item", {})
-                if not is_agent_message_item_type(item.get("type")):
+                item = object_dict(params.get("item"))
+                if not is_agent_message_item_type(string_value(item.get("type"))):
                     return False
-                new_text = (item.get("text") or "").strip()
+                new_text = string_value(item.get("text")).strip()
                 if not new_text:
                     return False
                 entry = self._processes.get(task_id or workspace_id)

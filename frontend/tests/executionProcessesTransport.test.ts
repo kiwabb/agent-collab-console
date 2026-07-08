@@ -1,13 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
-const SRC_ROOT = join(process.cwd(), "src");
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
+import { readCompactSource as readSource } from "./sourceTestUtils";
 
 test("useExecutionProcesses uses global websocket resume instead of EventSource", () => {
   const source = readSource("hooks/useExecutionProcesses.ts");

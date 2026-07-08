@@ -30,18 +30,31 @@ class FakeHelpStore:
     async def load_help_request(self, help_request_id: str):
         return self.help_requests.get(help_request_id)
 
-    async def list_help_requests(self, parent_task_id: str):
+    async def list_help_requests(
+        self,
+        *,
+        parent_task_id: str | None = None,
+        child_task_id: str | None = None,
+    ) -> list[HelpRequest]:
         return [
             request
             for request in self.help_requests.values()
-            if request.parent_task_id == parent_task_id
+            if (parent_task_id is None or request.parent_task_id == parent_task_id)
+            and (child_task_id is None or request.child_task_id == child_task_id)
         ]
 
     async def save_codex_task_message(self, message: CodexTaskMessage):
         self.messages.append(message)
 
-    async def update_execution_process_status(self, proc_id: str, status: str, **kwargs):
-        self.execution_process_statuses.append((proc_id, status))
+    async def update_execution_process_status(
+        self,
+        process_id: str,
+        status: str,
+        exit_code: int | None = None,
+        completed_at: datetime | None = None,
+    ) -> object:
+        self.execution_process_statuses.append((process_id, status))
+        return None
 
 
 class FakeEventBus:
@@ -80,8 +93,15 @@ class ReturningRunner:
         return _ExecutionProcess(self.process_id)
 
 
-def _parent_task(**overrides) -> CodexTask:
-    base = dict(
+def _payload_section(payload: dict[str, object] | None, key: str) -> dict[str, object]:
+    assert payload is not None
+    value = payload.get(key)
+    assert isinstance(value, dict)
+    return {str(item_key): item for item_key, item in value.items()}
+
+
+def _parent_task(**overrides: object) -> CodexTask:
+    base: dict[str, object] = dict(
         id="parent-1",
         session_id="session-1",
         project_id="project-1",
@@ -99,7 +119,7 @@ def _parent_task(**overrides) -> CodexTask:
         updated_at=datetime.now(),
     )
     base.update(overrides)
-    return CodexTask(**base)
+    return CodexTask.model_validate(base)
 
 
 @pytest.mark.asyncio
@@ -130,7 +150,8 @@ async def test_request_help_start_failure_marks_child_help_and_parent_terminal()
     assert child.role == "help:claude"
     assert "runner unavailable" in (child.result or "")
     assert help_request.status == "failed"
-    assert help_request.continuation_payload["error"]["code"] == "help_child_start_failed"
+    error = _payload_section(help_request.continuation_payload, "error")
+    assert error["code"] == "help_child_start_failed"
     assert any(event.get("type") == "help_failed" for event in bus.events)
     parent_status = [event for event in bus.events if event.get("task_id") == parent.id]
     assert any(event.get("status") == "ready_to_resume" for event in parent_status)
@@ -321,7 +342,8 @@ async def test_complete_help_request_auto_resume_failure_falls_back_to_ready_to_
     assert updated_parent.status == "ready_to_resume"
     assert updated_parent.blocked_by_help_id is None
     assert updated_request.status == "resume_failed"
-    assert updated_request.continuation_payload["resume_error"]["code"] == "parent_auto_resume_failed"
+    resume_error = _payload_section(updated_request.continuation_payload, "resume_error")
+    assert resume_error["code"] == "parent_auto_resume_failed"
     assert store.messages
     assert "Useful findings" in store.messages[-1].content
     assert any(
@@ -616,4 +638,5 @@ async def test_complete_help_request_uses_persisted_child_result_when_status_is_
     )
 
     updated_request = await store.load_help_request(help_request.id)
-    assert updated_request.continuation_payload["result"]["summary"] == "persisted findings"
+    result = _payload_section(updated_request.continuation_payload, "result")
+    assert result["summary"] == "persisted findings"

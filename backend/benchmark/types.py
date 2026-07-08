@@ -15,7 +15,6 @@ producers.
 from __future__ import annotations  # noqa: I001
 
 from dataclasses import dataclass, field
-from typing import Any
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +42,7 @@ class Score:
 
     value: float
     passed: bool
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
     notes: str | None = None
 
 

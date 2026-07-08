@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+from app.adapters.base import AgentResult, WorkerTaskPayload
+
 
 class FakeClaudeAdapter:
     agent_id = "claude"
     role = "worker"
-    last_payload: dict | None = None
+    last_payload: WorkerTaskPayload | None = None
 
-    def execute(self, payload: dict) -> dict:
+    def execute(self, payload: WorkerTaskPayload) -> AgentResult:
         FakeClaudeAdapter.last_payload = payload
         task_title = payload["task_title"]
         plan = payload.get("plan")
-        plan_summary = plan.get("summary") if plan else None
+        plan_summary_raw = plan.get("summary") if plan else None
+        plan_summary = plan_summary_raw if isinstance(plan_summary_raw, str) else None
         if plan_summary:
             summary = f"Implemented {task_title} following plan: {plan_summary}"
         else:

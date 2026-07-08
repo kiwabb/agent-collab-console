@@ -1,13 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  CheckCircle2,
-  Circle,
-  Clock,
-  BarChart3,
-  type LucideIcon,
-} from "lucide-react";
+import { CheckCircle2, Circle, Clock, BarChart3, type LucideIcon } from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import {
@@ -23,7 +17,12 @@ import {
   getIssueOrchestrationPolicy,
   type CodexCostStats,
 } from "@/lib/api/stats";
-import type { CodexIssue, CodexTask, IssueBudgetStatus, IssueOrchestrationPolicy } from "@/lib/types";
+import type {
+  CodexIssue,
+  CodexTask,
+  IssueBudgetStatus,
+  IssueOrchestrationPolicy,
+} from "@/lib/types";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
 import { useI18n } from "@/providers/I18nProvider";
 import { SimilarIssuesCard } from "./SimilarIssuesCard";
@@ -67,10 +66,11 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
         (issue.status ?? "").toLowerCase(),
       )
     : false;
-  const { budget, loading: budgetLoading, refresh: refreshBudget } = useIssueBudget(
-    issueId,
-    isActive,
-  );
+  const {
+    budget,
+    loading: budgetLoading,
+    refresh: refreshBudget,
+  } = useIssueBudget(issueId, isActive);
 
   const refresh = useCallback(async () => {
     // Skip per-task list fetch — the side-stack only needs a stage-level
@@ -120,9 +120,7 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
       <TelemetryCard
         cost={cost}
         pipeline={pipeline}
-        taskCount={
-          pipeline?.stages.filter((s) => s.task_id != null).length ?? 0
-        }
+        taskCount={pipeline?.stages.filter((s) => s.task_id != null).length ?? 0}
         budget={budget}
         budgetLoading={budgetLoading}
         t={t}
@@ -132,7 +130,6 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
     </aside>
   );
 }
-
 
 type TFn = (key: string, params?: Record<string, string>) => string;
 
@@ -153,9 +150,7 @@ function Card({
     <div className="enterprise-panel border-border-subtle/60 bg-surface/90 rounded-lg overflow-hidden hover:border-border-strong/45 transition-colors">
       <div className="px-3 py-2.5 flex items-center gap-2 border-b border-border-subtle/60 bg-surface-input/30">
         <Icon size={15} className={cn("text-brand shrink-0", iconClass)} />
-        <span className="text-[13px] font-bold tracking-wide text-foreground">
-          {title}
-        </span>
+        <span className="text-[13px] font-bold tracking-wide text-foreground">{title}</span>
         {sub && (
           <span className="ml-auto font-mono text-[9px] text-text-muted uppercase tracking-wider font-black bg-surface-input px-2.5 py-0.5 rounded border border-border-subtle/40">
             {sub}
@@ -167,13 +162,7 @@ function Card({
   );
 }
 
-function AcceptanceCard({
-  checklist,
-  t,
-}: {
-  checklist: IssueChecklist | null;
-  t: TFn;
-}) {
+function AcceptanceCard({ checklist, t }: { checklist: IssueChecklist | null; t: TFn }) {
   const criteria = checklist?.criteria ?? [];
   const total = criteria.length;
   const covered = criteria.filter((c) => c.covered).length;
@@ -189,17 +178,14 @@ function AcceptanceCard({
       <div className="px-3 py-2.5 flex items-center gap-3 bg-surface-input/30 m-2.5 rounded-lg border border-border-subtle/50">
         <span className="font-mono text-[20px] font-black tracking-tight leading-none text-foreground tabular-nums">
           {covered}
-          <em className="not-italic text-text-muted font-normal text-sm">
-            /{total}
-          </em>
+          <em className="not-italic text-text-muted font-normal text-sm">/{total}</em>
         </span>
         <div className="flex-1 h-2 bg-surface-input rounded-full overflow-hidden relative">
           <span
             className="block h-full rounded-full"
             style={{
               width: `${pct}%`,
-              background:
-                "linear-gradient(90deg, #34d977, var(--color-status-done))",
+              background: "linear-gradient(90deg, #34d977, var(--color-status-done))",
               boxShadow:
                 "0 0 12px -2px color-mix(in srgb, var(--color-status-done) 60%, transparent)",
             }}
@@ -218,7 +204,7 @@ function AcceptanceCard({
           {criteria.map((c, i) => (
             <li
               key={i}
-              className="flex items-start gap-2.5 px-3 py-2.5 rounded-md hover:bg-surface-hover/50 cursor-pointer transition-colors"
+              className="flex items-start gap-2.5 px-3 py-2.5 rounded-md transition-colors"
             >
               <span
                 className={cn(
@@ -227,11 +213,7 @@ function AcceptanceCard({
                     ? "bg-status-done/12 text-status-done border border-status-done/20"
                     : "bg-surface-input text-text-muted border border-border-subtle/40",
                 )}
-                style={
-                  c.covered
-                    ? { backgroundColor: "var(--color-done-bg)" }
-                    : undefined
-                }
+                style={c.covered ? { backgroundColor: "var(--color-done-bg)" } : undefined}
               >
                 {c.covered ? (
                   <CheckCircle2 size={11} strokeWidth={3} />
@@ -270,10 +252,7 @@ function ActivityCard({
   // back to deriving events from tasks + pipeline so the card stays
   // populated even on issues that predate the activity endpoint.
   const events = useMemo(
-    () =>
-      activity.length > 0
-        ? activity.map(mapBackendEvent)
-        : buildEvents(tasks, pipeline, t),
+    () => (activity.length > 0 ? activity.map(mapBackendEvent) : buildEvents(tasks, pipeline, t)),
     [activity, tasks, pipeline, t],
   );
   return (
@@ -283,9 +262,7 @@ function ActivityCard({
       icon={Clock}
     >
       {events.length === 0 ? (
-        <div className="px-5 py-5 text-[12px] text-text-muted">
-          {t("issue.side.activityEmpty")}
-        </div>
+        <div className="px-5 py-5 text-[12px] text-text-muted">{t("issue.side.activityEmpty")}</div>
       ) : (
         <div className="relative px-5 pb-5 pt-1">
           <span
@@ -299,10 +276,13 @@ function ActivityCard({
           {events.map((evt, i) => (
             <div
               key={i}
-              data-density={evt.isScheduling ? "insight-activity-scheduling" : "insight-activity-event"}
+              data-density={
+                evt.isScheduling ? "insight-activity-scheduling" : "insight-activity-event"
+              }
               className={cn(
                 "relative grid grid-cols-[36px_1fr_auto] items-start gap-2.5 overflow-hidden py-1.5",
-                evt.isScheduling && "motion-essential rounded-md border border-brand/25 bg-brand-muted/10 px-1.5",
+                evt.isScheduling &&
+                  "motion-essential rounded-md border border-brand/25 bg-brand-muted/10 px-1.5",
               )}
             >
               {evt.isScheduling && (
@@ -331,13 +311,9 @@ function ActivityCard({
                 >
                   {evt.actor}
                 </div>
-                <div className="text-[12.5px] leading-snug text-foreground">
-                  {evt.text}
-                </div>
+                <div className="text-[12.5px] leading-snug text-foreground">{evt.text}</div>
                 {evt.aux && (
-                  <div className="font-mono text-[10.5px] text-text-faint mt-0.5">
-                    {evt.aux}
-                  </div>
+                  <div className="font-mono text-[10.5px] text-text-faint mt-0.5">{evt.aux}</div>
                 )}
               </div>
               <span className="font-mono text-[11px] text-text-faint whitespace-nowrap mt-0.5">
@@ -366,15 +342,10 @@ function TelemetryCard({
   budgetLoading: boolean;
   t: TFn;
 }) {
-  const totalTokens =
-    cost != null ? cost.input_tokens + cost.output_tokens : null;
+  const totalTokens = cost != null ? cost.input_tokens + cost.output_tokens : null;
   const totalDuration = pipeline?.total_duration_seconds ?? null;
   return (
-    <Card
-      title={t("issue.side.telemetry")}
-      sub={t("issue.side.telemetrySub")}
-      icon={BarChart3}
-    >
+    <Card title={t("issue.side.telemetry")} sub={t("issue.side.telemetrySub")} icon={BarChart3}>
       <div className="grid grid-cols-2 gap-2.5 p-2.5">
         <TeleCell label={t("issue.side.tokens")}>
           {totalTokens != null ? (
@@ -414,13 +385,7 @@ function TelemetryCard({
   );
 }
 
-function TeleCell({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function TeleCell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="p-2.5 rounded-lg bg-surface-input/35 border border-border-subtle/50 transition-colors hover:bg-surface-input/50">
       <div className="font-mono text-[9px] uppercase tracking-[0.18em] font-extrabold text-text-muted">
@@ -437,11 +402,11 @@ interface ActivityEvt {
   actor: string;
   actorColor: string;
   text: string;
-  aux?: string;
+  aux?: string | undefined;
   time: string;
   dot: string;
   ring: string;
-  isScheduling?: boolean;
+  isScheduling?: boolean | undefined;
 }
 
 function mapBackendEvent(e: ActivityEvent): ActivityEvt {
@@ -582,11 +547,7 @@ function buildEvents(
   return out;
 }
 
-function stageToEvt(
-  s: PipelineStage,
-  roleLabel: Record<string, string>,
-  t: TFn,
-): ActivityEvt {
+function stageToEvt(s: PipelineStage, roleLabel: Record<string, string>, t: TFn): ActivityEvt {
   const actor = roleLabel[s.role] ?? s.label;
   if (s.status === "done") {
     return {

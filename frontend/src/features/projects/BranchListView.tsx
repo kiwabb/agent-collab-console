@@ -22,7 +22,9 @@ export function BranchListView({ branches, defaultBranch }: Props) {
           className="flex items-center justify-between gap-2 px-2 py-1.5 rounded hover:bg-muted/60 text-sm"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <span className={b.name === defaultBranch ? "font-medium font-mono" : "font-mono"}>{b.name}</span>
+            <span className={b.name === defaultBranch ? "font-medium font-mono" : "font-mono"}>
+              {b.name}
+            </span>
             {b.is_current && <Badge variant="default">{t("projects.branchCurrent")}</Badge>}
             {b.is_remote && <Badge variant="secondary">{t("projects.branchRemote")}</Badge>}
           </div>

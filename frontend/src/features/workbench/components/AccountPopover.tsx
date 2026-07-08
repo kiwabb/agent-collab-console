@@ -2,17 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  ExternalLink,
-  GitBranch,
-  Moon,
-  Settings as SettingsIcon,
-  Sun,
-} from "lucide-react";
+import { ExternalLink, GitBranch, Moon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { checkBackendHealth } from "@/lib/api/health";
 import { getCodexCostStats } from "@/lib/api/stats";
 import { useTheme } from "@/providers/ThemeProvider";
-import { cn } from "@/lib/utils";
+import { cn, isRecord } from "@/lib/utils";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
 /**
@@ -44,8 +38,8 @@ export function AccountPopover() {
       getCodexCostStats().catch(() => null),
     ])
       .then(([health, cost]) => {
-        if (health && typeof health === "object" && "version" in health) {
-          setVersion(String((health as { version?: string }).version ?? "0.0"));
+        if (isRecord(health) && "version" in health) {
+          setVersion(String(health["version"] ?? "0.0"));
         }
         if (cost) {
           setTokens(cost.input_tokens + cost.output_tokens);
@@ -84,7 +78,10 @@ export function AccountPopover() {
             <div className="text-[13px] font-semibold">Agent Collab Console</div>
             <div className="text-[10px] text-text-muted mt-0.5 font-mono">
               {loading ? (
-                <span data-density="account-popover-version-tool" className="motion-essential inline-flex items-center gap-1">
+                <span
+                  data-density="account-popover-version-tool"
+                  className="motion-essential inline-flex items-center gap-1"
+                >
                   <AgentThinkingIndicator phase="tool" size={10} /> loading
                 </span>
               ) : version ? (

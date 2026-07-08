@@ -2,8 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronDown, ChevronRight, Sparkles, AlertCircle, WifiOff, XCircle, RotateCcw, Square } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  ChevronDown,
+  ChevronRight,
+  Sparkles,
+  AlertCircle,
+  WifiOff,
+  XCircle,
+  RotateCcw,
+  Square,
+} from "lucide-react";
+import { cn, safeJsonRecord } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { useExecutionProcessLogStream } from "@/hooks/useExecutionProcessLogStream";
 import { normalizeLogs } from "@/lib/codexLogNormalizer";
@@ -14,16 +23,16 @@ import type { NormalizedEntry } from "@/lib/types";
 
 interface AgentLiveTimelineProps {
   executionProcessId: string | null;
-  taskStartedAt?: string | null;
-  taskCompletedAt?: string | null;
-  taskStatus?: string | null;
-  reviewComment?: string | null;
-  taskResult?: string | null;
-  taskRole?: string | null;
-  onRerun?: () => Promise<void> | void;
-  onStop?: () => Promise<void> | void;
-  className?: string;
-  emptyHint?: string;
+  taskStartedAt?: string | null | undefined;
+  taskCompletedAt?: string | null | undefined;
+  taskStatus?: string | null | undefined;
+  reviewComment?: string | null | undefined;
+  taskResult?: string | null | undefined;
+  taskRole?: string | null | undefined;
+  onRerun?: (() => Promise<void> | void) | undefined;
+  onStop?: (() => Promise<void> | void) | undefined;
+  className?: string | undefined;
+  emptyHint?: string | undefined;
 }
 
 const SCROLL_STICKY_PX = 80;
@@ -44,7 +53,10 @@ function ThinkingBlock({ content }: { content: string }) {
         ) : (
           <ChevronRight size={14} className="text-amber-500 shrink-0" />
         )}
-        <Sparkles size={12} className="text-amber-500 shrink-0 motion-essential animate-neural-pulse" />
+        <Sparkles
+          size={12}
+          className="text-amber-500 shrink-0 motion-essential animate-neural-pulse"
+        />
         <span className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-500">
           {t("agentLive.thinking")}
         </span>
@@ -79,7 +91,10 @@ function StreamingAssistantBubble({ text }: { text: string }) {
         <span className="text-[9px] font-black uppercase tracking-[0.16em] text-brand">
           Assistant
         </span>
-        <span className="agent-live-cursor motion-essential inline-block h-3 w-px bg-brand" aria-hidden />
+        <span
+          className="agent-live-cursor motion-essential inline-block h-3 w-px bg-brand"
+          aria-hidden
+        />
       </div>
       <div className="agent-live-streaming">
         <MessageMarkdown content={text} />
@@ -107,14 +122,14 @@ function WorkingIndicator({
   onStop,
   stopBusy,
 }: {
-  taskStartedAt?: string | null;
-  taskCompletedAt?: string | null;
+  taskStartedAt?: string | null | undefined;
+  taskCompletedAt?: string | null | undefined;
   phase: string;
   elapsedSinceLastMs: number;
   isFinished: boolean;
   isFailed: boolean;
-  onStop?: () => Promise<void> | void;
-  stopBusy?: boolean;
+  onStop?: (() => Promise<void> | void) | undefined;
+  stopBusy?: boolean | undefined;
 }) {
   const { t } = useI18n();
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -159,10 +174,7 @@ function WorkingIndicator({
   else if (phase === "reasoning") subtitle = t("agentLive.workingReasoning");
   else if (phase === "text") subtitle = t("agentLive.workingText");
   else if (elapsedSinceLastMs > 30000) {
-    subtitle = t("agentLive.stillAlive").replace(
-      "{seconds}",
-      formatElapsed(elapsedSinceLastMs),
-    );
+    subtitle = t("agentLive.stillAlive").replace("{seconds}", formatElapsed(elapsedSinceLastMs));
   } else {
     subtitle = t("agentLive.working");
   }
@@ -299,22 +311,19 @@ export function AgentLiveTimeline({
     if (rc) return rc;
     const result = (taskResult || "").trim();
     if (result) {
-      // Try to parse JSON; if it's a structured QA report, show key fields. Else
-      // return the raw text (truncated).
-      try {
-        const parsed = JSON.parse(result);
-        if (parsed && typeof parsed === "object") {
-          const bugs = Array.isArray(parsed.bugs_found) ? parsed.bugs_found.join("\n• ") : "";
-          const final = typeof parsed.final_recommendation === "string" ? parsed.final_recommendation : "";
-          const status = typeof parsed.status === "string" ? parsed.status : "";
-          const parts: string[] = [];
-          if (status) parts.push(`status: ${status}`);
-          if (bugs) parts.push(`bugs:\n• ${bugs}`);
-          if (final) parts.push(`recommendation: ${final}`);
-          if (parts.length > 0) return parts.join("\n\n");
-        }
-      } catch {
-        // fall through
+      // If this is a structured QA report, show key fields. Otherwise return
+      // the raw text, truncated.
+      const parsed = safeJsonRecord(result);
+      if (parsed) {
+        const bugs = Array.isArray(parsed["bugs_found"]) ? parsed["bugs_found"].join("\n• ") : "";
+        const final =
+          typeof parsed["final_recommendation"] === "string" ? parsed["final_recommendation"] : "";
+        const status = typeof parsed["status"] === "string" ? parsed["status"] : "";
+        const parts: string[] = [];
+        if (status) parts.push(`status: ${status}`);
+        if (bugs) parts.push(`bugs:\n• ${bugs}`);
+        if (final) parts.push(`recommendation: ${final}`);
+        if (parts.length > 0) return parts.join("\n\n");
       }
       return result.length > 800 ? result.slice(0, 800) + "…" : result;
     }
@@ -331,7 +340,10 @@ export function AgentLiveTimeline({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-0.5">
               <div className="font-bold text-error flex-1 min-w-0">
-                {t("agentLive.taskFailedTitle").replace("{role}", (taskRole || t("agentLive.thisTask")).toUpperCase())}
+                {t("agentLive.taskFailedTitle").replace(
+                  "{role}",
+                  (taskRole || t("agentLive.thisTask")).toUpperCase(),
+                )}
               </div>
               {onRerun ? (
                 <button
@@ -390,7 +402,9 @@ export function AgentLiveTimeline({
       >
         {isEmpty ? (
           <div className="py-12 text-center text-[12px] text-text-muted">
-            {executionProcessId ? t("agentLive.waitingForOutput") : emptyHint || t("agentLive.noActiveAgent")}
+            {executionProcessId
+              ? t("agentLive.waitingForOutput")
+              : emptyHint || t("agentLive.noActiveAgent")}
           </div>
         ) : (
           <AnimatePresence initial={false}>
@@ -462,9 +476,7 @@ export function AgentLiveTimeline({
         ) : null}
       </div>
 
-      {error ? (
-        <div className="mt-2 text-[10px] text-error">{error}</div>
-      ) : null}
+      {error ? <div className="mt-2 text-[10px] text-error">{error}</div> : null}
     </div>
   );
 }

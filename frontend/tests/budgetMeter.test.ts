@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { deriveBudgetMeterState, type BudgetMeterDerived } from "../src/features/issues/components/BudgetMeter";
+import {
+  deriveBudgetMeterState,
+  type BudgetMeterDerived,
+} from "../src/features/issues/components/BudgetMeter";
 import type { IssueBudgetStatus } from "../src/lib/types";
 
 function makeStatus(overrides: Partial<IssueBudgetStatus> = {}): IssueBudgetStatus {

@@ -176,20 +176,24 @@ export function InboxDashboard() {
               </div>
               <div className="flex-1 min-w-0">
                 <h2 className="text-lg font-bold mb-1">{t("inbox.firstRunTitle")}</h2>
-                <p className="text-[12px] text-text-muted mb-3">
-                  {t("inbox.firstRunDesc")}
-                </p>
+                <p className="text-[12px] text-text-muted mb-3">{t("inbox.firstRunDesc")}</p>
                 <ol className="space-y-2 text-[13px] text-text-secondary">
                   <li className="flex items-start gap-2">
-                    <span className="size-5 rounded-full bg-brand/15 text-brand text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+                    <span className="size-5 rounded-full bg-brand/15 text-brand text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                      1
+                    </span>
                     <span>{t("inbox.firstRun.step1")}</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="size-5 rounded-full bg-brand/15 text-brand text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+                    <span className="size-5 rounded-full bg-brand/15 text-brand text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                      2
+                    </span>
                     <span>{t("inbox.firstRun.step2")}</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="size-5 rounded-full bg-brand/15 text-brand text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+                    <span className="size-5 rounded-full bg-brand/15 text-brand text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                      3
+                    </span>
                     <span>{t("inbox.firstRun.step3")}</span>
                   </li>
                 </ol>
@@ -318,7 +322,6 @@ function RecentKnowledgeCard({
           <Loader variant="inline" label={t("teamNotes.loading")} />
         </div>
       ) : items.length === 0 ? (
-
         <div className="px-4 py-4 text-[12px] text-text-muted">
           {t("inbox.recentKnowledgeEmpty")}
         </div>
@@ -421,7 +424,10 @@ function KpiCard({
     >
       <div
         aria-hidden
-        className={cn("absolute -top-8 -right-8 size-24 rounded-full blur-2xl bg-gradient-radial", t.ring)}
+        className={cn(
+          "absolute -top-8 -right-8 size-24 rounded-full blur-2xl bg-gradient-radial",
+          t.ring,
+        )}
         style={{
           background:
             tint === "brand"
@@ -438,28 +444,19 @@ function KpiCard({
         }}
       />
       <div className="relative flex items-center justify-between mb-2">
-        <span
-          className={cn(
-            "size-7 rounded-md inline-flex items-center justify-center",
-            t.iconBg,
-          )}
-        >
+        <span className={cn("size-7 rounded-md inline-flex items-center justify-center", t.iconBg)}>
           {icon}
         </span>
         {pulse && value > 0 && (
           <span className="relative inline-flex">
             <span className={cn("size-1.5 rounded-full", t.dot)} />
-            <span
-              className={cn("absolute inset-0 rounded-full animate-ping opacity-60", t.dot)}
-            />
+            <span className={cn("absolute inset-0 rounded-full animate-ping opacity-60", t.dot)} />
           </span>
         )}
       </div>
       <div className="relative">
         <div className="text-[10px] uppercase tracking-wider text-text-muted">{label}</div>
-        <div className="text-2xl font-bold tabular-nums mt-0.5">
-          {loading ? "—" : value}
-        </div>
+        <div className="text-2xl font-bold tabular-nums mt-0.5">{loading ? "—" : value}</div>
       </div>
     </div>
   );
@@ -489,7 +486,9 @@ const TINT_TO_HEX: Record<Tint, string> = {
 
 function DonutCard({ buckets, loading }: { buckets: Buckets; loading: boolean }) {
   const { t } = useI18n();
-  const slices = DONUT_ORDER.map((d) => ({ ...d, value: buckets[d.key] })).filter((s) => s.value > 0);
+  const slices = DONUT_ORDER.map((d) => ({ ...d, value: buckets[d.key] })).filter(
+    (s) => s.value > 0,
+  );
   const total = slices.reduce((acc, s) => acc + s.value, 0);
 
   const radius = 50;
@@ -506,7 +505,11 @@ function DonutCard({ buckets, loading }: { buckets: Buckets; loading: boolean })
   });
 
   return (
-    <Card title={t("inbox.statusDistribution")} subtitle={t("inbox.issueCount", { count: total })} className="lg:col-span-1">
+    <Card
+      title={t("inbox.statusDistribution")}
+      subtitle={t("inbox.issueCount", { count: total })}
+      className="lg:col-span-1"
+    >
       {loading ? (
         <Skeleton h={180} />
       ) : (
@@ -521,27 +524,39 @@ function DonutCard({ buckets, loading }: { buckets: Buckets; loading: boolean })
               stroke="var(--color-border-subtle)"
               strokeWidth={stroke}
             />
-            {total === 0 ? null : (
-              segments.map((seg) => (
-                <circle
-                  key={seg.key}
-                  cx="70"
-                  cy="70"
-                  r={radius}
-                  fill="none"
-                  stroke={TINT_TO_HEX[seg.tint]}
-                  strokeWidth={stroke}
-                  strokeDasharray={seg.dashArray}
-                  strokeDashoffset={seg.dashOffset}
-                  strokeLinecap="butt"
-                />
-              ))
-            )}
+            {total === 0
+              ? null
+              : segments.map((seg) => (
+                  <circle
+                    key={seg.key}
+                    cx="70"
+                    cy="70"
+                    r={radius}
+                    fill="none"
+                    stroke={TINT_TO_HEX[seg.tint]}
+                    strokeWidth={stroke}
+                    strokeDasharray={seg.dashArray}
+                    strokeDashoffset={seg.dashOffset}
+                    strokeLinecap="butt"
+                  />
+                ))}
             <g transform="translate(70 70) rotate(90)">
-              <text textAnchor="middle" dominantBaseline="middle" className="fill-foreground" fontSize="22" fontWeight="700">
+              <text
+                textAnchor="middle"
+                dominantBaseline="middle"
+                className="fill-foreground"
+                fontSize="22"
+                fontWeight="700"
+              >
                 {total}
               </text>
-              <text textAnchor="middle" dominantBaseline="middle" dy="18" className="fill-text-muted" fontSize="9">
+              <text
+                textAnchor="middle"
+                dominantBaseline="middle"
+                dy="18"
+                className="fill-text-muted"
+                fontSize="9"
+              >
                 {t("inbox.issueCountShort").toUpperCase()}
               </text>
             </g>
@@ -591,8 +606,13 @@ function ActivityCard({
       title={t("inbox.activityLast7Days")}
       subtitle={
         <span className="flex items-center gap-1">
-          <TrendingUp size={11} className={delta >= 0 ? "text-status-done" : "text-status-failed"} />
-          <span className="text-text-secondary">{t("inbox.activitySummary", { created: totalCreated, finished: totalFinished })}</span>
+          <TrendingUp
+            size={11}
+            className={delta >= 0 ? "text-status-done" : "text-status-failed"}
+          />
+          <span className="text-text-secondary">
+            {t("inbox.activitySummary", { created: totalCreated, finished: totalFinished })}
+          </span>
         </span>
       }
       className="lg:col-span-2"
@@ -666,7 +686,11 @@ function ProjectSummaryCard({
   const maxTotal = Math.max(1, ...top.map((s) => s.total));
 
   return (
-    <Card title={t("inbox.byProject")} subtitle={t("inbox.projectCount", { count: summaries.length })} className="lg:col-span-1">
+    <Card
+      title={t("inbox.byProject")}
+      subtitle={t("inbox.projectCount", { count: summaries.length })}
+      className="lg:col-span-1"
+    >
       {loading ? (
         <Skeleton h={160} />
       ) : top.length === 0 ? (
@@ -675,11 +699,7 @@ function ProjectSummaryCard({
         <ul className="space-y-2.5">
           {top.map((s) => (
             <li key={s.id}>
-              <button
-                type="button"
-                onClick={() => onPick(s.id)}
-                className="w-full group text-left"
-              >
+              <button type="button" onClick={() => onPick(s.id)} className="w-full group text-left">
                 <div className="flex items-center justify-between text-[12px] mb-1">
                   <span className="truncate text-foreground group-hover:text-brand transition-colors">
                     {s.name}
@@ -754,15 +774,17 @@ function RecentIssuesCard({
                   onClick={() => onOpen(issue.id)}
                   className="w-full text-left px-1 py-2.5 hover:bg-surface-hover rounded transition-colors group flex items-center gap-3"
                 >
-                  <span className={cn(
-                    "size-1.5 rounded-full shrink-0",
-                    kind === "running" && "bg-status-running",
-                    kind === "done" && "bg-status-done",
-                    kind === "failed" && "bg-status-failed",
-                    kind === "awaiting" && "bg-status-awaiting",
-                    kind === "queued" && "bg-text-muted/40",
-                    kind === "info" && "bg-status-info",
-                  )} />
+                  <span
+                    className={cn(
+                      "size-1.5 rounded-full shrink-0",
+                      kind === "running" && "bg-status-running",
+                      kind === "done" && "bg-status-done",
+                      kind === "failed" && "bg-status-failed",
+                      kind === "awaiting" && "bg-status-awaiting",
+                      kind === "queued" && "bg-text-muted/40",
+                      kind === "info" && "bg-status-info",
+                    )}
+                  />
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-medium truncate group-hover:text-brand transition-colors">
                       {issue.title}
@@ -852,14 +874,30 @@ interface ProjectSummary {
 function computeProjectSummaries(issues: CodexIssue[], projects: Project[]): ProjectSummary[] {
   const map = new Map<string, ProjectSummary>();
   for (const p of projects) {
-    map.set(p.id, { id: p.id, name: p.name, total: 0, running: 0, awaiting: 0, done: 0, failed: 0 });
+    map.set(p.id, {
+      id: p.id,
+      name: p.name,
+      total: 0,
+      running: 0,
+      awaiting: 0,
+      done: 0,
+      failed: 0,
+    });
   }
   for (const i of issues) {
     const pid = i.project_id;
     if (!pid) continue;
     let row = map.get(pid);
     if (!row) {
-      row = { id: pid, name: pid.slice(0, 8), total: 0, running: 0, awaiting: 0, done: 0, failed: 0 };
+      row = {
+        id: pid,
+        name: pid.slice(0, 8),
+        total: 0,
+        running: 0,
+        awaiting: 0,
+        done: 0,
+        failed: 0,
+      };
       map.set(pid, row);
     }
     row.total += 1;
@@ -898,14 +936,16 @@ function computeDailyActivity(
   };
   for (const issue of issues) {
     const ci = bucketIndex(issue.created_at);
-    if (ci !== null) out[ci].created += 1;
+    const createdBucket = ci !== null ? out[ci] : undefined;
+    if (createdBucket) createdBucket.created += 1;
     if (
       issue.status === "completed" ||
       issue.status === "done" ||
       issue.git_merge_status === "merged"
     ) {
       const fi = bucketIndex(issue.updated_at ?? issue.created_at);
-      if (fi !== null) out[fi].finished += 1;
+      const finishedBucket = fi !== null ? out[fi] : undefined;
+      if (finishedBucket) finishedBucket.finished += 1;
     }
   }
   return out.map(({ label, created, finished }) => ({ label, created, finished }));
@@ -949,16 +989,11 @@ function Card({
 }) {
   return (
     <section
-      className={cn(
-        "rounded-xl border border-border-subtle bg-surface-raised p-4",
-        className,
-      )}
+      className={cn("rounded-xl border border-border-subtle bg-surface-raised p-4", className)}
     >
       <header className="flex items-baseline justify-between mb-3">
         <h2 className="text-[13px] font-semibold tracking-tight">{title}</h2>
-        {subtitle && (
-          <span className="text-[11px] text-text-muted">{subtitle}</span>
-        )}
+        {subtitle && <span className="text-[11px] text-text-muted">{subtitle}</span>}
       </header>
       {children}
     </section>
@@ -975,7 +1010,5 @@ function Skeleton({ h }: { h: number }) {
 }
 
 function Empty({ label }: { label: string }) {
-  return (
-    <div className="py-8 text-center text-[12px] text-text-muted">{label}</div>
-  );
+  return <div className="py-8 text-center text-[12px] text-text-muted">{label}</div>;
 }

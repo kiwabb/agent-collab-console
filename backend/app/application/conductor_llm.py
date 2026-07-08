@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 from app.application import timeouts
 from app.application.llm_runner import (
@@ -24,6 +23,8 @@ from app.application.llm_runner import (
     call_openai_with_tools,
     call_openai_with_tools_streaming,
 )
+from app.domain.models import RuntimeCatalog
+from app.json_safety import JsonObject
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class ConductorLLMContext:
     protocol: str  # "anthropic" | "openai"
 
 
-def resolve_conductor_llm_context(catalog) -> ConductorLLMContext | None:
+def resolve_conductor_llm_context(catalog: RuntimeCatalog) -> ConductorLLMContext | None:
     """Resolve the Conductor's own LLM endpoint/model/protocol from the catalog.
 
     Selection precedence: CONDUCTOR_LLM_* env > catalog.conductor_llm > the same
@@ -58,17 +59,19 @@ def resolve_conductor_llm_context(catalog) -> ConductorLLMContext | None:
     executor = _pick_executor(catalog, preferred_executor_id)
     if executor is None:
         return None
-    model = _resolve_model(executor, preferred_model)
+    model = _resolve_model(executor.config, preferred_model)
     if not model:
         return None
     protocol = str(
-        timeouts.conductor_llm_protocol() or getattr(executor, "protocol", None) or "anthropic"
+        timeouts.conductor_llm_protocol()
+        or getattr(executor.config, "protocol", None)
+        or "anthropic"
     ).lower()
     if protocol not in ("anthropic", "openai"):
         protocol = "anthropic"
     ctx = StreamingPlanContext(
-        executor_id=executor.id,
-        executor_label=executor.label or executor.id,
+        executor_id=executor.config.id,
+        executor_label=executor.config.label or executor.config.id,
         model=model,
         endpoint=executor.api_endpoint.rstrip("/"),
         api_key=executor.api_key,
@@ -80,11 +83,11 @@ def resolve_conductor_llm_context(catalog) -> ConductorLLMContext | None:
 
 async def call_conductor_llm(
     *,
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
+    messages: list[JsonObject],
+    tools: list[JsonObject],
     cllm: ConductorLLMContext,
     on_delta: DeltaCallback | None = None,
-) -> dict[str, Any]:
+) -> JsonObject:
     """Call the Conductor's LLM via the right protocol; return an Anthropic-shaped message."""
     if cllm.protocol == "openai":
         if on_delta is not None:

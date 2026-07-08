@@ -7,7 +7,12 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import { chatCodexTask, refineCodexTask, rerunCodexTask, terminateCodexTask } from "@/lib/api/tasks";
+import {
+  chatCodexTask,
+  refineCodexTask,
+  rerunCodexTask,
+  terminateCodexTask,
+} from "@/lib/api/tasks";
 import { formatTok, formatCost, formatDuration } from "@/lib/format";
 import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
 import { SubAgentResultCard } from "./SubAgentResultCard";
@@ -19,12 +24,7 @@ interface Props {
   onClose: () => void;
 }
 
-const RUNNING_STATUSES = new Set([
-  "running",
-  "responding",
-  "pending",
-  "in_progress",
-]);
+const RUNNING_STATUSES = new Set(["running", "responding", "pending", "in_progress"]);
 
 const STATUS_COLOR: Record<string, string> = {
   running: "var(--color-brand)",
@@ -73,7 +73,11 @@ export function DispatchDrawer({ item, onClose }: Props) {
       if (action !== "rerun") setDraft("");
       addToast({ type: "success", title: t("issue.command.drawer.actionDispatched", { action }) });
     } catch (err) {
-      addToast({ type: "error", title: t("issue.command.drawer.actionFailed", { action }), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("issue.command.drawer.actionFailed", { action }),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setBusyAction(null);
     }
@@ -100,7 +104,9 @@ export function DispatchDrawer({ item, onClose }: Props) {
 
   const renderLiveStream = (heightClass: string) =>
     showLiveStream ? (
-      <section className={`flex ${heightClass} shrink-0 flex-col rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden`}>
+      <section
+        className={`flex ${heightClass} shrink-0 flex-col rounded-2xl border border-border-subtle bg-surface-raised/60 overflow-hidden`}
+      >
         <div className="px-4 py-3 flex items-center justify-between gap-3 border-b border-border-subtle bg-surface/60">
           <div className="flex items-center gap-2">
             <Terminal size={13} className="text-text-muted" />
@@ -216,9 +222,7 @@ export function DispatchDrawer({ item, onClose }: Props) {
               if (duration != null) parts.push(formatDuration(duration));
 
               return parts.length > 0 ? (
-                <p className="mt-1 text-[10px] text-text-muted font-mono">
-                  {parts.join(" · ")}
-                </p>
+                <p className="mt-1 text-[10px] text-text-muted font-mono">{parts.join(" · ")}</p>
               ) : null;
             })()}
             <h2 className="text-[16px] font-black text-foreground leading-snug tracking-tight line-clamp-2">

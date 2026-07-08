@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from app.domain.models import CodexTask
 
-def serialize_task_payload(task) -> dict:
+
+def serialize_task_payload(task: CodexTask) -> dict[str, object]:
     return {
         "id": task.id,
         "session_id": task.session_id,

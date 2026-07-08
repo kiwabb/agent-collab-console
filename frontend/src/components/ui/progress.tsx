@@ -43,12 +43,7 @@ interface LoadingOverlayProps {
   children: React.ReactNode;
 }
 
-export function LoadingOverlay({
-  isLoading,
-  progress,
-  message,
-  children,
-}: LoadingOverlayProps) {
+export function LoadingOverlay({ isLoading, progress, message, children }: LoadingOverlayProps) {
   return (
     <div className="relative">
       {children}
@@ -57,9 +52,7 @@ export function LoadingOverlay({
           {progress !== undefined ? (
             <>
               <ProgressBar value={progress} showLabel className="w-48" />
-              {message && (
-                <p className="text-xs font-medium text-text-secondary">{message}</p>
-              )}
+              {message && <p className="text-xs font-medium text-text-secondary">{message}</p>}
             </>
           ) : (
             <div className="flex items-center gap-3">
@@ -68,9 +61,7 @@ export function LoadingOverlay({
                 <div className="size-1.5 bg-brand rounded-full animate-bounce [animation-delay:-0.15s]" />
                 <div className="size-1.5 bg-brand rounded-full animate-bounce" />
               </div>
-              {message && (
-                <p className="text-xs font-medium text-text-secondary">{message}</p>
-              )}
+              {message && <p className="text-xs font-medium text-text-secondary">{message}</p>}
             </div>
           )}
         </div>

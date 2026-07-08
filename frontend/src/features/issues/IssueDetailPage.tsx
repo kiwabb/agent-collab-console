@@ -26,7 +26,13 @@ import {
 import { getCodexTasks } from "@/lib/api/tasks";
 import type { Artifact, CodexIssue, CodexTask } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
@@ -58,7 +64,9 @@ type IssueWorkbenchTab = "timeline" | "artifacts" | "diff" | "mesh";
 const ISSUE_WORKBENCH_TABS = new Set<IssueWorkbenchTab>(["timeline", "artifacts", "diff", "mesh"]);
 
 function readIssueWorkbenchTab(value: string | null): IssueWorkbenchTab {
-  return value && ISSUE_WORKBENCH_TABS.has(value as IssueWorkbenchTab) ? (value as IssueWorkbenchTab) : "timeline";
+  return value && ISSUE_WORKBENCH_TABS.has(value as IssueWorkbenchTab)
+    ? (value as IssueWorkbenchTab)
+    : "timeline";
 }
 
 export function IssueDetailPage({ issueId }: Props) {
@@ -86,7 +94,11 @@ export function IssueDetailPage({ issueId }: Props) {
   const activeTab = readIssueWorkbenchTab(searchParams.get("tab"));
 
   const phase = useConductorPhase(issueId);
-  const { items: timeline, refresh: refreshTimeline, liveThinking } = useDecisionTimeline(issueId, tasks, subAgentResults);
+  const {
+    items: timeline,
+    refresh: refreshTimeline,
+    liveThinking,
+  } = useDecisionTimeline(issueId, tasks, subAgentResults);
   const latestFailure = useLatestFailure(tasks, timeline);
   const { alerts: conductorAlerts, dismiss: dismissAlert } = useConductorAlerts(issueId);
   // Resolve the open drawer's item from the live timeline so it reflects the
@@ -106,14 +118,15 @@ export function IssueDetailPage({ issueId }: Props) {
   }, [timeline, drawerItemId]);
 
   const refreshCore = useCallback(async () => {
-    const [nextIssue, nextTasks, nextArtifacts, nextResults, nextMesh, nextChecklist] = await Promise.all([
-      getCodexIssue(issueId).catch(() => null),
-      getCodexTasks(null, issueId).catch(() => []),
-      getCodexIssueArtifacts(issueId).catch(() => []),
-      getSubAgentResults(issueId).catch(() => []),
-      getAgentMesh(issueId).catch(() => []),
-      getCodexIssueChecklist(issueId).catch(() => null),
-    ]);
+    const [nextIssue, nextTasks, nextArtifacts, nextResults, nextMesh, nextChecklist] =
+      await Promise.all([
+        getCodexIssue(issueId).catch(() => null),
+        getCodexTasks(null, issueId).catch(() => []),
+        getCodexIssueArtifacts(issueId).catch(() => []),
+        getSubAgentResults(issueId).catch(() => []),
+        getAgentMesh(issueId).catch(() => []),
+        getCodexIssueChecklist(issueId).catch(() => null),
+      ]);
     setIssue(nextIssue);
     setTasks(nextTasks);
     setArtifacts(nextArtifacts);
@@ -140,25 +153,36 @@ export function IssueDetailPage({ issueId }: Props) {
         "agent_message_posted",
       ),
     ),
-    onEvent: () => { void refreshCore(); },
+    onEvent: () => {
+      void refreshCore();
+    },
     throttleMs: 600,
   });
 
   const activeTask = useMemo(
-    () => tasks.find((task) => ["running", "responding", "pending", "awaiting_review"].includes(String(task.status).toLowerCase())) ?? null,
+    () =>
+      tasks.find((task) =>
+        ["running", "responding", "pending", "awaiting_review"].includes(
+          String(task.status).toLowerCase(),
+        ),
+      ) ?? null,
     [tasks],
   );
   const clarifyQuestion = useMemo(
-    () => timeline.find((item) => item.kind === "clarification" && item.status !== "done")?.summary ?? null,
+    () =>
+      timeline.find((item) => item.kind === "clarification" && item.status !== "done")?.summary ??
+      null,
     [timeline],
   );
-  const paused = phase.state?.conductor_status === "paused" || issue?.status === "awaiting_approval";
+  const paused =
+    phase.state?.conductor_status === "paused" || issue?.status === "awaiting_approval";
   const isWorkbenchSchedulingMotion =
     !paused &&
     phase.state?.conductor_status !== "success" &&
     phase.phase !== "done" &&
     (phase.state?.conductor_status === "running" || Boolean(phase.phase));
-  const workbenchMotionPhase = phase.phase === "awaiting_subagent" ? "dispatching" : phase.phase ?? "thinking";
+  const workbenchMotionPhase =
+    phase.phase === "awaiting_subagent" ? "dispatching" : (phase.phase ?? "thinking");
 
   const handlePause = async () => {
     try {
@@ -166,7 +190,11 @@ export function IssueDetailPage({ issueId }: Props) {
       await phase.refresh();
       addToast({ type: "success", title: t("issue.command.pauseToast") });
     } catch (err) {
-      addToast({ type: "error", title: t("issue.command.pauseFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("issue.command.pauseFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -176,7 +204,11 @@ export function IssueDetailPage({ issueId }: Props) {
       await phase.refresh();
       addToast({ type: "success", title: t("issue.command.resumeToast") });
     } catch (err) {
-      addToast({ type: "error", title: t("issue.command.resumeFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("issue.command.resumeFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -192,7 +224,11 @@ export function IssueDetailPage({ issueId }: Props) {
       await Promise.all([refreshCore(), phase.refresh()]);
       addToast({ type: "success", title: t("issue.command.restartToast") });
     } catch (err) {
-      addToast({ type: "error", title: t("issue.command.restartFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("issue.command.restartFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -207,7 +243,11 @@ export function IssueDetailPage({ issueId }: Props) {
       await refreshCore();
       addToast({ type: "success", title: t("issue.command.steerSent") });
     } catch (err) {
-      addToast({ type: "error", title: t("issue.command.steerFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("issue.command.steerFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setSteerSending(false);
     }
@@ -221,7 +261,11 @@ export function IssueDetailPage({ issueId }: Props) {
       await Promise.all([refreshCore(), phase.refresh()]);
       addToast({ type: "success", title: t("issue.command.resetToast") });
     } catch (err) {
-      addToast({ type: "error", title: t("issue.command.resetFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("issue.command.resetFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setResetting(false);
     }
@@ -261,19 +305,35 @@ export function IssueDetailPage({ issueId }: Props) {
 
               <LatestFailureAlert
                 failure={latestFailure}
-                onJump={() => document.querySelector("[data-decision-timeline]")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                onJump={() =>
+                  document
+                    .querySelector("[data-decision-timeline]")
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                }
                 onOpenDetail={() => {
-                  const item = timeline.find((candidate) => candidate.id === latestFailure?.id || candidate.taskId === latestFailure?.id) ?? null;
+                  const item =
+                    timeline.find(
+                      (candidate) =>
+                        candidate.id === latestFailure?.id ||
+                        candidate.taskId === latestFailure?.id,
+                    ) ?? null;
                   setDrawerItemId(item?.id ?? null);
                 }}
               />
 
-              <Tabs value={activeTab} onValueChange={handleTabChange} className="flex w-full flex-col gap-3">
+              <Tabs
+                value={activeTab}
+                onValueChange={handleTabChange}
+                className="flex w-full flex-col gap-3"
+              >
                 <div
-                  data-density={isWorkbenchSchedulingMotion ? "workbench-scheduling-tabs" : "workbench-tabs"}
+                  data-density={
+                    isWorkbenchSchedulingMotion ? "workbench-scheduling-tabs" : "workbench-tabs"
+                  }
                   className={cn(
                     "sticky top-0 z-20 border-b border-border-subtle/70 bg-background/95 pb-2 pt-1 backdrop-blur",
-                    isWorkbenchSchedulingMotion && "motion-essential relative overflow-hidden border-brand/30",
+                    isWorkbenchSchedulingMotion &&
+                      "motion-essential relative overflow-hidden border-brand/30",
                   )}
                 >
                   {isWorkbenchSchedulingMotion && (
@@ -292,23 +352,41 @@ export function IssueDetailPage({ issueId }: Props) {
                       )}
                     >
                       <Clock size={14} className="shrink-0" />
-                      <span aria-hidden className="inline-flex size-3.5 shrink-0 items-center justify-center">
-                        {isWorkbenchSchedulingMotion && <AgentThinkingIndicator phase={workbenchMotionPhase} size={12} />}
+                      <span
+                        aria-hidden
+                        className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                      >
+                        {isWorkbenchSchedulingMotion && (
+                          <AgentThinkingIndicator phase={workbenchMotionPhase} size={12} />
+                        )}
                       </span>
-                      <span className="truncate max-sm:sr-only">{t("issue.command.timelineTitle")}</span>
+                      <span className="truncate max-sm:sr-only">
+                        {t("issue.command.timelineTitle")}
+                      </span>
                     </TabsTrigger>
-                    <TabsTrigger value="artifacts" className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer">
+                    <TabsTrigger
+                      value="artifacts"
+                      className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer"
+                    >
                       <FolderArchive size={14} className="shrink-0" />
-                      <span className="truncate max-sm:sr-only">{t("issue.command.artifacts")}</span>
+                      <span className="truncate max-sm:sr-only">
+                        {t("issue.command.artifacts")}
+                      </span>
                       <span className="font-mono text-[10px] font-black text-brand">
                         {artifacts.length}
                       </span>
                     </TabsTrigger>
-                    <TabsTrigger value="diff" className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer">
+                    <TabsTrigger
+                      value="diff"
+                      className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer"
+                    >
                       <GitPullRequest size={14} className="shrink-0" />
                       <span className="truncate max-sm:sr-only">{t("issue.command.diff")}</span>
                     </TabsTrigger>
-                    <TabsTrigger value="mesh" className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer">
+                    <TabsTrigger
+                      value="mesh"
+                      className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer"
+                    >
                       <Network size={14} className="shrink-0" />
                       <span className="truncate max-sm:sr-only">{t("issue.command.mesh")}</span>
                       {agentMeshMessages.length > 0 && (
@@ -321,7 +399,11 @@ export function IssueDetailPage({ issueId }: Props) {
                 </div>
 
                 <TabsContent value="timeline" className="flex-none outline-none">
-                  <DecisionTimeline items={timeline} onOpenItem={(it) => setDrawerItemId(it.id)} liveThinking={liveThinking} />
+                  <DecisionTimeline
+                    items={timeline}
+                    onOpenItem={(it) => setDrawerItemId(it.id)}
+                    liveThinking={liveThinking}
+                  />
                 </TabsContent>
 
                 <TabsContent value="artifacts" className="flex-none outline-none">
@@ -353,7 +435,12 @@ export function IssueDetailPage({ issueId }: Props) {
       </main>
 
       <div className="shrink-0 pb-[env(safe-area-inset-bottom)] bg-background">
-        <CommandCenterChatBar issueId={issueId} disabled={paused} clarifyQuestion={clarifyQuestion} onSent={() => void refreshTimeline()} />
+        <CommandCenterChatBar
+          issueId={issueId}
+          disabled={paused}
+          clarifyQuestion={clarifyQuestion}
+          onSent={() => void refreshTimeline()}
+        />
       </div>
 
       <DispatchDrawer item={drawerItem} onClose={() => setDrawerItemId(null)} />
@@ -366,17 +453,30 @@ export function IssueDetailPage({ issueId }: Props) {
         onSubmit={() => void handleSendSteer()}
       />
 
-      <Dialog open={resetConfirmOpen} onOpenChange={(open) => { if (!open) setResetConfirmOpen(false); }}>
+      <Dialog
+        open={resetConfirmOpen}
+        onOpenChange={(open) => {
+          if (!open) setResetConfirmOpen(false);
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t("issue.command.reset")}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-text-secondary">{t("issue.command.resetConfirmBody")}</p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setResetConfirmOpen(false)} disabled={resetting}>
+            <Button
+              variant="outline"
+              onClick={() => setResetConfirmOpen(false)}
+              disabled={resetting}
+            >
               {t("issue.cancel")}
             </Button>
-            <Button variant="destructive" onClick={() => void handleResetConfirm()} disabled={resetting}>
+            <Button
+              variant="destructive"
+              onClick={() => void handleResetConfirm()}
+              disabled={resetting}
+            >
               {resetting ? t("issue.command.resetting") : t("issue.command.resetConfirm")}
             </Button>
           </DialogFooter>

@@ -34,30 +34,37 @@ export function AgentCoordinationPanel({
     return result;
   }, [tasks]);
 
-  const activeProcesses = useMemo(() => executionProcesses.filter(
-    (p) => p.status === "running" || p.status === "responding",
-  ), [executionProcesses]);
+  const activeProcesses = useMemo(
+    () => executionProcesses.filter((p) => p.status === "running" || p.status === "responding"),
+    [executionProcesses],
+  );
 
-  const recentProcesses = useMemo(() => [...executionProcesses].sort((a, b) => {
-    const aTime = Math.max(
-      Date.parse(a.created_at || "") || 0,
-      Date.parse(a.started_at || "") || 0,
-      Date.parse(a.updated_at || "") || 0,
-      Date.parse(a.completed_at || "") || 0,
-    );
-    const bTime = Math.max(
-      Date.parse(b.created_at || "") || 0,
-      Date.parse(b.started_at || "") || 0,
-      Date.parse(b.updated_at || "") || 0,
-      Date.parse(b.completed_at || "") || 0,
-    );
-    return bTime - aTime;
-  }), [executionProcesses]);
+  const recentProcesses = useMemo(
+    () =>
+      [...executionProcesses].sort((a, b) => {
+        const aTime = Math.max(
+          Date.parse(a.created_at || "") || 0,
+          Date.parse(a.started_at || "") || 0,
+          Date.parse(a.updated_at || "") || 0,
+          Date.parse(a.completed_at || "") || 0,
+        );
+        const bTime = Math.max(
+          Date.parse(b.created_at || "") || 0,
+          Date.parse(b.started_at || "") || 0,
+          Date.parse(b.updated_at || "") || 0,
+          Date.parse(b.completed_at || "") || 0,
+        );
+        return bTime - aTime;
+      }),
+    [executionProcesses],
+  );
 
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">
       <div className="p-5 border-b border-border-subtle bg-surface/50">
-        <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-text-muted">{t("agents.title")}</h2>
+        <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-text-muted">
+          {t("agents.title")}
+        </h2>
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-10 no-scrollbar pb-20">
@@ -88,10 +95,14 @@ export function AgentCoordinationPanel({
                     <div className="flex items-center gap-3">
                       <div className="flex items-center gap-1.5">
                         <AgentThinkingIndicator phase="dispatching" size={12} />
-                        <span className="text-[10px] font-black text-brand uppercase tracking-widest">{proc.status}</span>
+                        <span className="text-[10px] font-black text-brand uppercase tracking-widest">
+                          {proc.status}
+                        </span>
                       </div>
                       <div className="h-3 w-px bg-brand/20" />
-                      <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest">{task?.executor || "codex"}</span>
+                      <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest">
+                        {task?.executor || "codex"}
+                      </span>
                     </div>
                   </button>
                 );
@@ -111,7 +122,9 @@ export function AgentCoordinationPanel({
                 <div className="size-12 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-3">
                   <Clock size={18} strokeWidth={1} className="opacity-50" />
                 </div>
-                <p className="text-xs font-bold uppercase tracking-widest">{t("agents.noHistory")}</p>
+                <p className="text-xs font-bold uppercase tracking-widest">
+                  {t("agents.noHistory")}
+                </p>
               </div>
             ) : (
               recentProcesses.slice(0, 5).map((proc) => {
@@ -128,10 +141,16 @@ export function AgentCoordinationPanel({
                       {task?.title || proc.task_id}
                     </span>
                     <div className="flex items-center gap-2">
-                      <span className={cn(
-                        "text-[9px] font-black uppercase tracking-widest",
-                        isCompleted ? "text-success/80" : isFailed ? "text-error/80" : "text-text-muted/60"
-                      )}>
+                      <span
+                        className={cn(
+                          "text-[9px] font-black uppercase tracking-widest",
+                          isCompleted
+                            ? "text-success/80"
+                            : isFailed
+                              ? "text-error/80"
+                              : "text-text-muted/60",
+                        )}
+                      >
                         {proc.status}
                       </span>
                     </div>
@@ -153,20 +172,32 @@ export function AgentCoordinationPanel({
                 <div className="flex items-center justify-between mb-4 px-1">
                   <div className="flex items-center gap-2.5">
                     <div className="size-2 rounded-full bg-surface-input border border-border-strong" />
-                    <span className="text-[10px] font-black text-text-muted uppercase tracking-[0.15em]">{role.replace("_", " ")}</span>
+                    <span className="text-[10px] font-black text-text-muted uppercase tracking-[0.15em]">
+                      {role.replace("_", " ")}
+                    </span>
                   </div>
-                  <span className="text-[10px] font-bold text-text-muted bg-surface-raised px-2 py-0.5 rounded-md border border-border-subtle">{roleTasks.length}</span>
+                  <span className="text-[10px] font-bold text-text-muted bg-surface-raised px-2 py-0.5 rounded-md border border-border-subtle">
+                    {roleTasks.length}
+                  </span>
                 </div>
                 <div className="space-y-1.5">
                   {roleTasks.map((task) => {
-                    const latestProcess = pickLatestExecutionProcessForTask(executionProcesses, task.id);
+                    const latestProcess = pickLatestExecutionProcessForTask(
+                      executionProcesses,
+                      task.id,
+                    );
                     const displayStatus = getTaskRuntimeStatus(task, executionProcesses);
-                    const isTaskRunning = displayStatus === "running" || displayStatus === "responding";
-                    
+                    const isTaskRunning =
+                      displayStatus === "running" || displayStatus === "responding";
+
                     return (
                       <button
                         key={task.id}
-                        data-density={isTaskRunning ? "agent-coordination-running-task" : "agent-coordination-task"}
+                        data-density={
+                          isTaskRunning
+                            ? "agent-coordination-running-task"
+                            : "agent-coordination-task"
+                        }
                         onClick={() => {
                           if (latestProcess) {
                             onSelectProcess(latestProcess.id);
@@ -176,9 +207,9 @@ export function AgentCoordinationPanel({
                         }}
                         className={cn(
                           "relative w-full overflow-hidden text-left p-3 rounded-xl border transition-all",
-                          isTaskRunning 
+                          isTaskRunning
                             ? "motion-essential border-brand/40 bg-brand/5"
-                            : "border-border-subtle bg-surface/20 hover:border-border-strong hover:bg-surface/40"
+                            : "border-border-subtle bg-surface/20 hover:border-border-strong hover:bg-surface/40",
                         )}
                       >
                         {isTaskRunning ? (
@@ -187,17 +218,21 @@ export function AgentCoordinationPanel({
                             className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
                           />
                         ) : null}
-                        <span className="text-[12.5px] font-bold text-text-secondary truncate block mb-1.5 tracking-tight group-hover:text-foreground">{task.title}</span>
+                        <span className="text-[12.5px] font-bold text-text-secondary truncate block mb-1.5 tracking-tight group-hover:text-foreground">
+                          {task.title}
+                        </span>
                         <div className="flex items-center gap-2.5">
                           {isTaskRunning ? (
                             <AgentThinkingIndicator phase="dispatching" size={12} />
                           ) : (
                             <div className="size-1.5 rounded-full bg-surface-input border border-border-strong" />
                           )}
-                          <span className={cn(
-                            "text-[9px] font-black uppercase tracking-widest",
-                            isTaskRunning ? "text-brand" : "text-text-muted/60"
-                          )}>
+                          <span
+                            className={cn(
+                              "text-[9px] font-black uppercase tracking-widest",
+                              isTaskRunning ? "text-brand" : "text-text-muted/60",
+                            )}
+                          >
                             {displayStatus}
                           </span>
                         </div>
@@ -224,16 +259,24 @@ export function AgentCoordinationPanel({
                 >
                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-warning shadow-[0_0_8px_rgba(255,175,85,0.4)]" />
                   <div className="flex items-center justify-between gap-3 mb-3">
-                    <span className="text-[12.5px] font-bold text-foreground/90 tracking-tight truncate">{hr.title || t("agents.helpNeeded")}</span>
-                    <span className="px-2 py-0.5 rounded-md bg-warning/10 text-warning border border-warning/20 text-[9px] font-black uppercase tracking-widest">{hr.status}</span>
+                    <span className="text-[12.5px] font-bold text-foreground/90 tracking-tight truncate">
+                      {hr.title || t("agents.helpNeeded")}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-warning/10 text-warning border border-warning/20 text-[9px] font-black uppercase tracking-widest">
+                      {hr.status}
+                    </span>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-warning/5 border border-warning/10">
-                      <span className="text-[9px] font-black uppercase tracking-widest text-warning/70">{hr.source_executor}</span>
+                      <span className="text-[9px] font-black uppercase tracking-widest text-warning/70">
+                        {hr.source_executor}
+                      </span>
                     </div>
                     <ArrowRight size={12} className="text-warning/30" />
                     <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-success/5 border border-success/10">
-                      <span className="text-[9px] font-black uppercase tracking-widest text-success/70">{hr.target_executor}</span>
+                      <span className="text-[9px] font-black uppercase tracking-widest text-success/70">
+                        {hr.target_executor}
+                      </span>
                     </div>
                   </div>
                 </div>

@@ -1,6 +1,13 @@
 "use client";
 
-import type { Artifact, CodexTask, CodexTaskMessage, ExecutionProcess, HelpRequest, LogEvent } from "@/lib/types";
+import type {
+  Artifact,
+  CodexTask,
+  CodexTaskMessage,
+  ExecutionProcess,
+  HelpRequest,
+  LogEvent,
+} from "@/lib/types";
 import { AgentCoordinationPanel } from "@/features/agents/AgentCoordinationPanel";
 import { RunDetail } from "@/features/runs/RunDetail";
 import { RunRecoveryPanel } from "@/features/runs/components/RunRecoveryPanel";
@@ -18,13 +25,19 @@ import {
   terminateCodexTask,
   updateCodexTask,
 } from "@/lib/api/tasks";
-import { useWorkbenchStore, selectCurrentTask, selectCurrentIssue, selectSelectedProcess } from "@/store/workbenchStore";
+import {
+  useWorkbenchStore,
+  selectCurrentTask,
+  selectCurrentIssue,
+  selectSelectedProcess,
+} from "@/store/workbenchStore";
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { useMemo } from "react";
 import {
   deriveRunRecoveryActions,
   type RecoveryAction,
 } from "@/features/workbench/interaction/interactionState";
+import { readQaReportStatus } from "@/features/workbench/qaReportStatus";
 
 export function TaskExecutionSheet() {
   const { t } = useI18n();
@@ -62,27 +75,33 @@ export function TaskExecutionSheet() {
   }, [runtimeCatalog, currentTask?.executor]);
 
   // Derived state
-  const currentIssueTasks = useMemo(() =>
-    currentIssue ? tasks.filter((t: CodexTask) => t.issue_id === currentIssue.id) : [],
-    [currentIssue, tasks]
+  const currentIssueTasks = useMemo(
+    () => (currentIssue ? tasks.filter((t: CodexTask) => t.issue_id === currentIssue.id) : []),
+    [currentIssue, tasks],
   );
 
-  const hasActiveIssueTask = useMemo(() =>
-    currentIssueTasks.some((task: CodexTask) => {
-      const activeStatuses = ["running", "responding"];
-      return activeStatuses.includes(task.status?.toLowerCase());
-    }),
-    [currentIssueTasks]
+  const hasActiveIssueTask = useMemo(
+    () =>
+      currentIssueTasks.some((task: CodexTask) => {
+        const activeStatuses = ["running", "responding"];
+        return activeStatuses.includes(task.status?.toLowerCase());
+      }),
+    [currentIssueTasks],
   );
 
-  const isPmTaskDone = useMemo(() =>
-    currentIssueTasks.find((t: CodexTask) => t.role === "product_manager")?.status === "done",
-    [currentIssueTasks]
+  const isPmTaskDone = useMemo(
+    () => currentIssueTasks.find((t: CodexTask) => t.role === "product_manager")?.status === "done",
+    [currentIssueTasks],
   );
 
-  const hasArchitectureArtifacts = useMemo(() =>
-    artifacts.some((a: Artifact) => a.name === "architect/system_design.json" || a.name === "architect/implementation_plan.json"),
-    [artifacts]
+  const hasArchitectureArtifacts = useMemo(
+    () =>
+      artifacts.some(
+        (a: Artifact) =>
+          a.name === "architect/system_design.json" ||
+          a.name === "architect/implementation_plan.json",
+      ),
+    [artifacts],
   );
 
   const allEngineerTasksDone = useMemo(() => {
@@ -91,23 +110,12 @@ export function TaskExecutionSheet() {
   }, [currentIssueTasks]);
 
   const qaReportStatus = useMemo(() => {
-    const qaPlan = artifacts.find((a: Artifact) => a.name === "qa/qa_plan.json");
-    if (!qaPlan || typeof qaPlan.content !== "string") return null;
-    try {
-      const parsed = JSON.parse(qaPlan.content);
-      return parsed?.status || null;
-    } catch {
-      return null;
-    }
+    return readQaReportStatus(artifacts);
   }, [artifacts]);
 
-  const liveProcessLogs = useMemo(
-    () => selectedProcess?.logs ?? [],
-    [selectedProcess?.logs],
-  );
+  const liveProcessLogs = useMemo(() => selectedProcess?.logs ?? [], [selectedProcess?.logs]);
   const liveProcessMessages = useMemo(
-    () =>
-      selectedProcess?.messages ? Object.values(selectedProcess.messages) : [],
+    () => (selectedProcess?.messages ? Object.values(selectedProcess.messages) : []),
     [selectedProcess?.messages],
   );
 
@@ -208,13 +216,15 @@ export function TaskExecutionSheet() {
                 <h2 className="text-xl font-black tracking-tight text-foreground">
                   {currentTask.title}
                 </h2>
-                <p className="text-[10px] uppercase tracking-widest font-bold text-text-muted">{t("task.executionContext")}</p>
+                <p className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
+                  {t("task.executionContext")}
+                </p>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-4">
             <div className="px-3 py-1 rounded-lg bg-surface-raised border border-border-subtle text-[10px] font-black uppercase tracking-widest text-text-secondary">
-              {t("task.role")}: {currentTask.role.replace('_', ' ')}
+              {t("task.role")}: {currentTask.role.replace("_", " ")}
             </div>
             <div className="px-3 py-1 rounded-lg bg-surface-raised border border-border-subtle text-[10px] font-black uppercase tracking-widest text-text-secondary">
               {t("task.phase")}: {currentTask.phase}
@@ -227,12 +237,16 @@ export function TaskExecutionSheet() {
 
         <div className="flex-1 overflow-y-auto p-8">
           <div className="prose prose-invert max-w-none">
-            <h3 className="text-sm font-black uppercase tracking-widest text-brand mb-4">{t("task.issueObjective")}</h3>
+            <h3 className="text-sm font-black uppercase tracking-widest text-brand mb-4">
+              {t("task.issueObjective")}
+            </h3>
             <p className="text-sm text-text-secondary leading-relaxed mb-10">
               {currentIssue?.description || t("task.noDescription")}
             </p>
 
-            <h3 className="text-sm font-black uppercase tracking-widest text-brand mb-4">{t("task.contextualArtifacts")}</h3>
+            <h3 className="text-sm font-black uppercase tracking-widest text-brand mb-4">
+              {t("task.contextualArtifacts")}
+            </h3>
             <ArtifactPanel artifacts={artifacts} />
           </div>
         </div>
@@ -303,7 +317,11 @@ export function TaskExecutionSheet() {
                 onRunInitial={async (executor, provider, model) => {
                   try {
                     await updateCodexTask(currentTask.id, executor, provider, model);
-                    const newProcess = await runCodexTask(currentTask.id, { executor, provider, model });
+                    const newProcess = await runCodexTask(currentTask.id, {
+                      executor,
+                      provider,
+                      model,
+                    });
                     setSelectedProcessId(newProcess.id);
                     if (currentWorkspaceId) useWorkbenchStore.getState().setIsLoadingIssues(true);
                   } catch (err) {
@@ -317,9 +335,15 @@ export function TaskExecutionSheet() {
                 onRunAgain={async (executor, provider, model) => {
                   if (selectedProcess) {
                     try {
-                      const rerunResult = await rerunCodexTask(selectedProcess.task_id, { executor, provider, model });
+                      const rerunResult = await rerunCodexTask(selectedProcess.task_id, {
+                        executor,
+                        provider,
+                        model,
+                      });
                       if (rerunResult.execution_process?.id) {
-                        useWorkbenchStore.getState().setOptimisticProcess(rerunResult.execution_process as ExecutionProcess);
+                        useWorkbenchStore
+                          .getState()
+                          .setOptimisticProcess(rerunResult.execution_process as ExecutionProcess);
                         setSelectedProcessId(rerunResult.execution_process.id);
                       }
                     } catch (err) {
@@ -367,29 +391,40 @@ export function TaskExecutionSheet() {
                 }
                 isTransitioningToArchitecture={isTransitioningToArchitecture}
                 onTransitionToArchitecture={() => {
-                  if (currentIssue) useWorkbenchStore.getState().transitionToArchitecture(currentIssue.id);
+                  if (currentIssue)
+                    useWorkbenchStore.getState().transitionToArchitecture(currentIssue.id);
                 }}
-                showTransitionToDevelopment={currentIssue?.current_phase === "architecture" || currentIssue?.current_phase === "development"}
+                showTransitionToDevelopment={
+                  currentIssue?.current_phase === "architecture" ||
+                  currentIssue?.current_phase === "development"
+                }
                 canTransitionToDevelopment={
-                  (currentIssue?.current_phase === "architecture" || currentIssue?.current_phase === "development") &&
+                  (currentIssue?.current_phase === "architecture" ||
+                    currentIssue?.current_phase === "development") &&
                   !hasActiveIssueTask &&
                   hasArchitectureArtifacts &&
                   !isTransitioningToDevelopment
                 }
                 isTransitioningToDevelopment={isTransitioningToDevelopment}
                 onTransitionToDevelopment={() => {
-                  if (currentIssue) useWorkbenchStore.getState().transitionToDevelopment(currentIssue.id);
+                  if (currentIssue)
+                    useWorkbenchStore.getState().transitionToDevelopment(currentIssue.id);
                 }}
-                showTransitionToTesting={currentIssue?.current_phase === "development" || currentIssue?.current_phase === "testing"}
+                showTransitionToTesting={
+                  currentIssue?.current_phase === "development" ||
+                  currentIssue?.current_phase === "testing"
+                }
                 canTransitionToTesting={
-                  (currentIssue?.current_phase === "development" || currentIssue?.current_phase === "testing") &&
+                  (currentIssue?.current_phase === "development" ||
+                    currentIssue?.current_phase === "testing") &&
                   !hasActiveIssueTask &&
                   allEngineerTasksDone &&
                   !isTransitioningToTesting
                 }
                 isTransitioningToTesting={isTransitioningToTesting}
                 onTransitionToTesting={() => {
-                  if (currentIssue) useWorkbenchStore.getState().transitionToTesting(currentIssue.id);
+                  if (currentIssue)
+                    useWorkbenchStore.getState().transitionToTesting(currentIssue.id);
                 }}
                 qaReportStatus={qaReportStatus}
                 lastResolvedMode={null}
@@ -410,8 +445,12 @@ export function TaskExecutionSheet() {
             <TabsContent value="coordination" className="h-full m-0 flex flex-col">
               <AgentCoordinationPanel
                 tasks={tasks.filter((t: CodexTask) => t.id === currentTaskId)}
-                helpRequests={helpRequests.filter((h: HelpRequest) => h.parent_task_id === currentTaskId)}
-                executionProcesses={Object.values(executionProcessesAll).filter((p: ExecutionProcess) => p.task_id === currentTaskId)}
+                helpRequests={helpRequests.filter(
+                  (h: HelpRequest) => h.parent_task_id === currentTaskId,
+                )}
+                executionProcesses={Object.values(executionProcessesAll).filter(
+                  (p: ExecutionProcess) => p.task_id === currentTaskId,
+                )}
                 onSelectTask={(id) => setCurrentTaskId(id)}
                 onSelectProcess={setSelectedProcessId}
               />

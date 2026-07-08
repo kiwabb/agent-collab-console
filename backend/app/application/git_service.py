@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal, TypedDict
 
 from app.domain.models import GitBranch
 
@@ -65,6 +66,24 @@ class _CommandResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+class RemoteGitStatus(TypedDict):
+    branch: str
+    current_branch: str
+    has_origin: bool
+    dirty: bool
+    behind: int
+    ahead: int
+    can_fast_forward: bool
+    fetched: bool
+    error: str | None
+
+
+class DiffShortstat(TypedDict):
+    files: int
+    insertions: int
+    deletions: int
 
 
 class GitService:
@@ -308,7 +327,7 @@ class GitService:
         branch: str | None = None,
         remote: str = "origin",
         do_fetch: bool = True,
-    ) -> dict:
+    ) -> RemoteGitStatus:
         """Compute how the local default branch relates to its remote.
 
         Returns a dict shaped for the API/UI:
@@ -752,7 +771,7 @@ class GitService:
         except ValueError:
             return 0
 
-    async def diff_shortstat(self, worktree_path: str | Path, base_branch: str) -> dict:
+    async def diff_shortstat(self, worktree_path: str | Path, base_branch: str) -> DiffShortstat:
         """Return a compact summary `{files, insertions, deletions}` vs base.
 
         Uses `git diff --shortstat <base>...HEAD` then parses the standard line:
@@ -766,17 +785,21 @@ class GitService:
             cwd=worktree_path,
             check=False,
         )
-        out = {"files": 0, "insertions": 0, "deletions": 0}
+        out: DiffShortstat = {"files": 0, "insertions": 0, "deletions": 0}
         text = result.stdout.strip()
         if not text:
             return out
         import re as _re
 
-        for clause, key in (
+        patterns: tuple[
+            tuple[str, Literal["files", "insertions", "deletions"]],
+            ...,
+        ] = (
             (r"(\d+) files? changed", "files"),
             (r"(\d+) insertions?", "insertions"),
             (r"(\d+) deletions?", "deletions"),
-        ):
+        )
+        for clause, key in patterns:
             m = _re.search(clause, text)
             if m:
                 out[key] = int(m.group(1))

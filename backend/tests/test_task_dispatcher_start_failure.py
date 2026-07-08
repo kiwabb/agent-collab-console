@@ -100,6 +100,7 @@ async def test_dispatch_role_runner_start_failure_signals_completion_and_marks_f
     task = store.saved_tasks[task_id]
     result = await TaskCompletionRegistry.get().wait_for(task_id, timeout=0.1)
 
+    assert isinstance(result, dict)
     assert node_id in store.nodes
     assert task.status == "failed"
     assert "runner unavailable" in (task.result or "")

@@ -1,6 +1,6 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, handleResponse } from "./fetch";
+import { API_BASE, apiJsonRequest, apiRequest, apiRequestOr, handleResponse } from "./fetch";
 import type {
   CreateProjectRequest,
   GitBranch,
@@ -23,95 +23,74 @@ import type {
 } from "../types";
 
 export async function listProjects(): Promise<Project[]> {
-  const response = await fetch(`${API_BASE}/projects`);
-  return handleResponse<Project[]>(response);
+  return apiRequest<Project[]>(`${API_BASE}/projects`);
 }
 export async function getProject(projectId: string): Promise<Project> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}`);
-  return handleResponse<Project>(response);
+  return apiRequest<Project>(`${API_BASE}/projects/${projectId}`);
 }
-export async function createProject(
-  body: CreateProjectRequest,
-): Promise<Project> {
-  const response = await fetch(`${API_BASE}/projects`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<Project>(response);
+export async function createProject(body: CreateProjectRequest): Promise<Project> {
+  return apiJsonRequest<Project>(`${API_BASE}/projects`, "POST", body);
 }
 export async function updateProject(
   projectId: string,
   updates: UpdateProjectRequest,
 ): Promise<Project> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(updates),
-  });
-  return handleResponse<Project>(response);
+  return apiJsonRequest<Project>(`${API_BASE}/projects/${projectId}`, "PATCH", updates);
 }
 export async function suggestProjectScript(
   projectId: string,
   body: ProjectScriptSuggestionRequest,
 ): Promise<ProjectScriptSuggestionResponse> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}/script-suggestion`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<ProjectScriptSuggestionResponse>(response);
+  return apiJsonRequest<ProjectScriptSuggestionResponse>(
+    `${API_BASE}/projects/${projectId}/script-suggestion`,
+    "POST",
+    body,
+  );
 }
 export async function startProjectScriptTask(
   projectId: string,
   body: ProjectScriptTaskRequest,
 ): Promise<ProjectScriptTaskResponse> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}/script-task`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<ProjectScriptTaskResponse>(response);
+  return apiJsonRequest<ProjectScriptTaskResponse>(
+    `${API_BASE}/projects/${projectId}/script-task`,
+    "POST",
+    body,
+  );
 }
 export async function deleteProject(projectId: string, force = false): Promise<unknown> {
   const url = force
     ? `${API_BASE}/projects/${projectId}?force=true`
     : `${API_BASE}/projects/${projectId}`;
-  const response = await fetch(url, { method: "DELETE" });
-  return handleResponse(response);
+  return apiRequest<unknown>(url, { method: "DELETE" });
 }
 export async function selectDirectory(): Promise<string | null> {
-  const response = await fetch(`${API_BASE}/utils/select-directory`);
-  const data = await handleResponse<{ path: string | null }>(response);
+  const data = await apiRequest<{ path: string | null }>(`${API_BASE}/utils/select-directory`);
   return data.path;
 }
 export async function getProjectBranches(projectId: string): Promise<GitBranch[]> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}/branches`);
-  return handleResponse<GitBranch[]>(response);
+  return apiRequest<GitBranch[]>(`${API_BASE}/projects/${projectId}/branches`);
 }
 export async function repairProject(
   projectId: string,
 ): Promise<{ pruned: boolean; issues_reset: number }> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}/repair`, { method: "POST" });
-  return handleResponse(response);
+  return apiRequest<{ pruned: boolean; issues_reset: number }>(
+    `${API_BASE}/projects/${projectId}/repair`,
+    { method: "POST" },
+  );
 }
 export async function getProjectStats(projectId: string): Promise<ProjectStats> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}/stats`);
-  return handleResponse<ProjectStats>(response);
+  return apiRequest<ProjectStats>(`${API_BASE}/projects/${projectId}/stats`);
 }
 export async function getProjectRemoteStatus(
   projectId: string,
   options: { fetch?: boolean } = {},
 ): Promise<ProjectRemoteStatus> {
   const doFetch = options.fetch ?? true;
-  const response = await fetch(
+  return apiRequest<ProjectRemoteStatus>(
     `${API_BASE}/projects/${projectId}/remote-status?fetch=${doFetch ? "true" : "false"}`,
   );
-  return handleResponse<ProjectRemoteStatus>(response);
 }
-export async function pullProject(
-  projectId: string,
-): Promise<ProjectPullResult> {
+export async function pullProject(projectId: string): Promise<ProjectPullResult> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/pull`, { method: "POST" });
   // 200 → the ProjectPullResult directly. 409 → FastAPI wraps our refusal
   // payload as {detail: ProjectPullResult}. Both carry the structured reason we
@@ -133,11 +112,10 @@ export async function pullProject(
  * branch on the reason without catching a thrown error.
  */
 export type StartProjectRunResult =
-  | ProjectRunStatus
-  | { error: ProjectRunStartReason; pattern?: string };
+  ProjectRunStatus | { error: ProjectRunStartReason; pattern?: string | undefined };
 export function isProjectRunStartError(
   result: StartProjectRunResult,
-): result is { error: ProjectRunStartReason; pattern?: string } {
+): result is { error: ProjectRunStartReason; pattern?: string | undefined } {
   return "error" in result;
 }
 export async function startProjectRun(projectId: string): Promise<StartProjectRunResult> {
@@ -155,28 +133,26 @@ export async function startProjectRun(projectId: string): Promise<StartProjectRu
   // 404 / 500 etc. are genuine errors — surface them.
   return handleResponse<ProjectRunStatus>(response);
 }
-export async function stopProjectRun(
-  projectId: string,
-): Promise<ProjectRunStatus> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}/run/stop`, { method: "POST" });
-  return handleResponse<ProjectRunStatus>(response);
+export async function stopProjectRun(projectId: string): Promise<ProjectRunStatus> {
+  return apiRequest<ProjectRunStatus>(`${API_BASE}/projects/${projectId}/run/stop`, {
+    method: "POST",
+  });
 }
-export async function getProjectRunStatus(
-  projectId: string,
-): Promise<ProjectRunStatus> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}/run/status`);
-  return handleResponse<ProjectRunStatus>(response);
+export async function getProjectRunStatus(projectId: string): Promise<ProjectRunStatus> {
+  return apiRequest<ProjectRunStatus>(`${API_BASE}/projects/${projectId}/run/status`);
 }
 export async function getProjectRunLogs(
   projectId: string,
   after = 0,
 ): Promise<ProjectRunLogsResponse> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}/run/logs?after=${after}`);
-  return handleResponse<ProjectRunLogsResponse>(response);
+  return apiRequest<ProjectRunLogsResponse>(
+    `${API_BASE}/projects/${projectId}/run/logs?after=${after}`,
+  );
 }
 export async function getProjectConductorState(projectId: string): Promise<ProjectConductorState> {
-  const response = await fetch(`${API_BASE}/codex/projects/${projectId}/conductor-state`);
-  return handleResponse<ProjectConductorState>(response);
+  return apiRequest<ProjectConductorState>(
+    `${API_BASE}/codex/projects/${projectId}/conductor-state`,
+  );
 }
 export interface ConductorSession {
   conductor_task_id: string;
@@ -197,51 +173,45 @@ export async function getConductors(projectId?: string | null): Promise<Conducto
   const url = projectId
     ? `${API_BASE}/codex/conductors?project_id=${encodeURIComponent(projectId)}`
     : `${API_BASE}/codex/conductors`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    console.error(`getConductors failed: HTTP ${response.status}`);
-    return [];
-  }
-  const data = (await response.json()) as { conductors: ConductorSession[] };
+  const data = await apiRequestOr<{ conductors?: ConductorSession[] }>(
+    url,
+    { conductors: [] },
+    {
+      errorMessage: (status) => `getConductors failed: HTTP ${status}`,
+    },
+  );
   return data.conductors ?? [];
 }
 export async function askProjectConductor(
   projectId: string,
   question: string,
 ): Promise<ProjectConductorAskResult> {
-  const response = await fetch(`${API_BASE}/codex/projects/${projectId}/conductor/ask`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
-  });
-  return handleResponse<ProjectConductorAskResult>(response);
+  return apiJsonRequest<ProjectConductorAskResult>(
+    `${API_BASE}/codex/projects/${projectId}/conductor/ask`,
+    "POST",
+    { question },
+  );
 }
 export async function scheduleProjectConductorReview(
   projectId: string,
 ): Promise<ProjectConductorAskResult> {
-  const response = await fetch(
+  return apiRequest<ProjectConductorAskResult>(
     `${API_BASE}/codex/projects/${projectId}/conductor/schedule-review`,
     {
       method: "POST",
     },
   );
-  return handleResponse<ProjectConductorAskResult>(response);
 }
 export async function startProjectConductorLoop(
   projectId: string,
   prompt?: string,
 ): Promise<ProjectConductorLoopResult> {
-  const response = await fetch(`${API_BASE}/codex/projects/${projectId}/conductor/start-loop`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt }),
-  });
-  return handleResponse<ProjectConductorLoopResult>(response);
+  return apiJsonRequest<ProjectConductorLoopResult>(
+    `${API_BASE}/codex/projects/${projectId}/conductor/start-loop`,
+    "POST",
+    { prompt },
+  );
 }
-export async function getProjectAudit(
-  projectId: string,
-  limit = 10,
-): Promise<ProjectAuditEntry[]> {
-  const response = await fetch(`${API_BASE}/projects/${projectId}/audit?limit=${limit}`);
-  return handleResponse<ProjectAuditEntry[]>(response);
+export async function getProjectAudit(projectId: string, limit = 10): Promise<ProjectAuditEntry[]> {
+  return apiRequest<ProjectAuditEntry[]>(`${API_BASE}/projects/${projectId}/audit?limit=${limit}`);
 }

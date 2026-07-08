@@ -4,11 +4,12 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import uuid4
 
 from app.application import timeouts
-from app.application.project_conductor import ProjectConductor
+from app.application.github_pr_followup import EventBusLike
+from app.application.project_conductor import ProjectConductor, ProjectConductorStore
 from app.domain.models import ConductorTask, Project
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,10 @@ class ProjectReviewTickFn(Protocol):
 
 class ProjectReviewSleepFn(Protocol):
     async def __call__(self, interval: float) -> None: ...
+
+
+async def _sleep(interval: float) -> None:
+    await asyncio.sleep(interval)
 
 
 @dataclass
@@ -152,7 +157,11 @@ def _default_conductor_factory(
     store: ProjectReviewSchedulerStore,
     event_bus: object | None,
 ) -> ProjectReviewConductor:
-    return ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
+    return ProjectConductor(
+        project_id=project_id,
+        store=cast(ProjectConductorStore, store),
+        event_bus=cast(EventBusLike | None, event_bus),
+    )
 
 
 async def run_project_review_tick(
@@ -217,7 +226,7 @@ async def run_project_review_scheduler_loop(
     interval_s: float | None = None,
     limit: int | None = None,
     tick_fn: ProjectReviewTickFn = run_project_review_tick,
-    sleep_fn: ProjectReviewSleepFn = asyncio.sleep,
+    sleep_fn: ProjectReviewSleepFn = _sleep,
 ) -> None:
     interval = interval_s if interval_s is not None else timeouts.project_review_interval_s()
     review_limit = limit if limit is not None else timeouts.project_review_limit()

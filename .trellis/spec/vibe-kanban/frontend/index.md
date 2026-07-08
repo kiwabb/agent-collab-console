@@ -2,7 +2,7 @@
 
 > vibe-kanban frontend package — alias spec. The frontend code
 > this would cover is **the same** as `.trellis/spec/ccgui/frontend/`
-> (Next.js 14 + Tailwind v4 + @base-ui/react). This directory is
+> (Next.js 15 + Tailwind v4 + @base-ui/react). This directory is
 > preserved for compatibility with tasks that used
 > `"package": "vibe-kanban"` historically; new frontend tasks
 > should use `"package": "ccgui"`.

@@ -1,13 +1,15 @@
 """Recover Conductor tasks whose in-memory runner disappeared."""
 
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
 import asyncio
-import os
+import inspect
 import json
 import logging
+import os
+from collections.abc import Awaitable
 from datetime import datetime
-from typing import Any
+from typing import Protocol, cast
 
 from app.application.conductor_lease import (
     conductor_recovery_enabled,
@@ -20,11 +22,18 @@ from app.application.conductor_main_loop import (
     _seal_graph_and_issue_status,
     transition_conductor_phase,
 )
+from app.application.github_pr_followup import EventBusLike
 from app.application.phase_duration_estimator import get_phase_duration_estimator
+from app.application.task_dispatcher import TaskDispatcherFn
 from app.application.task_statuses import normalize_task_status
-from app.domain.models import ConductorTask
+from app.domain.models import ConductorTask, WorkflowGraph
+from app.json_safety import JsonObject
 
 logger = logging.getLogger(__name__)
+
+
+class _ConductorTaskSaver(Protocol):
+    def save_conductor_task(self, task: ConductorTask) -> Awaitable[None] | None: ...
 
 TERMINAL_ISSUE_STATUSES_FOR_RELAUNCH = frozenset(
     {
@@ -38,8 +47,8 @@ TERMINAL_ISSUE_STATUSES_FOR_RELAUNCH = frozenset(
 ACTIVE_CONDUCTOR_STATUSES_FOR_RELAUNCH = frozenset({"running", "paused"})
 
 
-async def _maybe_await(value):
-    if hasattr(value, "__await__"):
+async def _maybe_await[T](value: Awaitable[T] | T) -> T:
+    if inspect.isawaitable(value):
         return await value
     return value
 
@@ -75,7 +84,7 @@ def _max_relaunches() -> int:
     return timeouts.conductor_max_relaunches()
 
 
-async def _count_orphan_stalls(store, issue_id: str) -> int:
+async def _count_orphan_stalls(store: object, issue_id: str) -> int:
     """Count how many times this issue's conductor has been orphaned + stalled.
 
     Each orphan relaunch leaves behind a ``stalled`` conductor task with reason
@@ -145,14 +154,14 @@ def _is_stale(
 
 
 async def recover_orphaned_conductors(
-    store,
+    store: object,
     *,
-    event_bus=None,
+    event_bus: EventBusLike | None = None,
     current_owner: str | None = None,
     stale_after_s: int = 180,
     recover_foreign_owner: bool = False,
     auto_restart: bool = False,
-    task_dispatcher_fn=None,
+    task_dispatcher_fn: TaskDispatcherFn | None = None,
 ) -> int:
     """Mark orphaned running conductor tasks as stalled, then optionally relaunch them.
 
@@ -198,11 +207,11 @@ async def recover_orphaned_conductors(
 
 
 async def _try_relaunch(
-    store,
+    store: object,
     *,
-    event_bus=None,
+    event_bus: EventBusLike | None = None,
     conductor_task: ConductorTask,
-    task_dispatcher_fn=None,
+    task_dispatcher_fn: TaskDispatcherFn | None = None,
 ) -> None:
     """Relaunch the conductor loop for a stalled task's issue."""
     import asyncio  # noqa: F401, I001
@@ -284,7 +293,7 @@ async def _try_relaunch(
             "max_relaunches": max_relaunches,
         }
         conductor_task.updated_at = datetime.now()
-        await _maybe_await(store.save_conductor_task(conductor_task))
+        await _maybe_await(cast(_ConductorTaskSaver, store).save_conductor_task(conductor_task))
         try:
             await _seal_graph_and_issue_status(
                 store=store,
@@ -373,7 +382,7 @@ async def _try_relaunch(
 
     logger.info("conductor relaunch: starting new loop for issue %s", issue_id)
 
-    def _done_callback(fut: asyncio.Future) -> None:
+    def _done_callback(fut: asyncio.Future[object]) -> None:
         exc = fut.exception() if not fut.cancelled() else None
         if exc:
             logger.error(
@@ -404,10 +413,10 @@ async def _try_relaunch(
 
 
 async def _build_relaunch_recovery_context(
-    store,
+    store: object,
     *,
     stalled_task: ConductorTask,
-    graph,
+    graph: WorkflowGraph,
     relaunches_done: int,
     max_relaunches: int,
 ) -> str:
@@ -463,9 +472,9 @@ async def _build_relaunch_recovery_context(
 
 
 async def _mark_stalled(
-    store,
+    store: object,
     *,
-    event_bus,
+    event_bus: EventBusLike | None,
     task: ConductorTask,
     now: datetime,
     current_owner: str,
@@ -473,7 +482,7 @@ async def _mark_stalled(
     previous_phase = _phase(task)
     previous_detail = _detail(task)
     payload = task.payload if isinstance(task.payload, dict) else {}
-    stalled_payload: dict[str, Any] = {
+    stalled_payload: JsonObject = {
         "status": "stalled",
         "reason": "orphaned_conductor_runner",
         "stalled_at": now.isoformat(),
@@ -505,10 +514,109 @@ async def _mark_stalled(
     )
     task.result_json = json.dumps(stalled_payload, ensure_ascii=False, default=str)
     task.updated_at = now
-    await _maybe_await(store.save_conductor_task(task))
+    await _maybe_await(cast(_ConductorTaskSaver, store).save_conductor_task(task))
 
 
-async def run_watchdog(store, *, event_bus=None, task_dispatcher_fn=None) -> None:
+async def recover_stuck_specialist_parents(
+    store: object,
+    *,
+    event_bus: EventBusLike | None = None,
+) -> int:
+    """Boot-recovery: find parents stuck in waiting_for_specialist whose child is terminal/missing.
+
+    Called once at startup. For each orphaned parent, resets status to pending so
+    the conductor can re-dispatch or resume it on next loop iteration.
+    """
+    from app.application.task_statuses import (
+        is_task_terminal_status,
+        is_task_waiting_for_specialist_status,
+    )
+
+    list_tasks = getattr(store, "list_codex_tasks", None)
+    load_task = getattr(store, "load_codex_task", None)
+    save_task = getattr(store, "save_codex_task", None)
+    if not callable(list_tasks) or not callable(load_task) or not callable(save_task):
+        return 0
+
+    try:
+        stuck_tasks = await _maybe_await(
+            list_tasks(status="waiting_for_specialist")
+        )
+    except TypeError:
+        # Store doesn't support status filter yet
+        return 0
+
+    if not stuck_tasks:
+        return 0
+
+    recovered = 0
+    now = datetime.now()
+    for row in stuck_tasks:
+        task_id = row.get("id") if isinstance(row, dict) else getattr(row, "id", None)
+        if not task_id:
+            continue
+        parent = await _maybe_await(load_task(task_id))
+        if parent is None or not is_task_waiting_for_specialist_status(parent.status):
+            continue
+
+        # Extract child task id from blocked_by_help_id (format: "specialist:<child_id>")
+        blocker = getattr(parent, "blocked_by_help_id", None)
+        if not blocker or not blocker.startswith("specialist:"):
+            # No blocker info — reset unconditionally
+            parent.status = "pending"
+            parent.blocked_by_help_id = None
+            parent.updated_at = now
+            await _maybe_await(save_task(parent))
+            recovered += 1
+            continue
+
+        child_id = blocker.removeprefix("specialist:")
+        child = await _maybe_await(load_task(child_id))
+
+        if child is None or is_task_terminal_status(child.status):
+            # Child is gone or already finished — parent is stuck
+            parent.status = "pending"
+            parent.blocked_by_help_id = None
+            if child and child.result:
+                specialist_note = (
+                    f"[SPECIALIST RESULT from {child.role} (recovered at boot)]\n\n"
+                    f"{child.result}\n\n"
+                    "Review the above specialist findings and incorporate them."
+                )
+                parent.review_comment = (
+                    (parent.review_comment + "\n\n" + specialist_note)
+                    if parent.review_comment
+                    else specialist_note
+                )
+            parent.updated_at = now
+            await _maybe_await(save_task(parent))
+            recovered += 1
+            logger.info(
+                "Recovered specialist-stuck parent task %s (child %s status=%s)",
+                task_id,
+                child_id,
+                child.status if child else "missing",
+            )
+
+    if recovered and event_bus:
+        append = getattr(event_bus, "append", None)
+        if callable(append):
+            await append(
+                {
+                    "type": "specialist_parents_recovered",
+                    "count": recovered,
+                }
+            )
+
+    return recovered
+
+
+async def run_watchdog(
+    store: object,
+    *,
+    event_bus: EventBusLike | None = None,
+    task_dispatcher_fn: TaskDispatcherFn | None = None,
+) -> None:
     """Periodic recovery loop for expired Conductor leases."""
     if not conductor_recovery_enabled():
         logger.info("conductor recovery watchdog disabled via CONDUCTOR_RECOVERY_ENABLED=false")

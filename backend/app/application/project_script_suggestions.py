@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.application import timeouts
 from app.application.command_safety import refuse_reason
 from app.domain.models import Project
+from app.json_safety import object_dict, parse_json_object
 
 ScriptSuggestionRunner = Callable[[str], Awaitable[str | None]]
 VerificationStatus = Literal["verified", "started", "failed", "skipped"]
@@ -82,17 +83,17 @@ def collect_project_script_context(repo_path: str) -> str:
             continue
         entry: dict[str, object] = {"path": relative}
         if relative.endswith("package.json"):
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError:
+            data = parse_json_object(text)
+            if data is None:
                 entry["excerpt"] = text
             else:
+                scripts = object_dict(data.get("scripts"))
+                dependencies = object_dict(data.get("dependencies"))
+                dev_dependencies = object_dict(data.get("devDependencies"))
                 entry["packageManager"] = data.get("packageManager")
-                entry["scripts"] = (
-                    data.get("scripts") if isinstance(data.get("scripts"), dict) else {}
-                )
-                entry["dependencies"] = sorted((data.get("dependencies") or {}).keys())[:40]
-                entry["devDependencies"] = sorted((data.get("devDependencies") or {}).keys())[:40]
+                entry["scripts"] = scripts
+                entry["dependencies"] = sorted(dependencies.keys())[:40]
+                entry["devDependencies"] = sorted(dev_dependencies.keys())[:40]
         else:
             entry["excerpt"] = text[:2000]
         files.append(entry)
@@ -179,11 +180,8 @@ def parse_project_script_suggestion(raw_text: str) -> ProjectScriptSuggestion | 
     json_text = _extract_json_object(raw_text)
     if not json_text:
         return None
-    try:
-        parsed = json.loads(json_text)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
+    parsed = parse_json_object(json_text)
+    if parsed is None:
         return None
     return ProjectScriptSuggestion(
         setup_script=_read_string(parsed, ("setup_script", "setupScript", "setup")),
@@ -208,11 +206,13 @@ def _package_manager_for(root: Path) -> str:
 
 def _read_package_scripts(package_json: Path) -> dict[str, object]:
     try:
-        parsed = json.loads(package_json.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, json.JSONDecodeError):
+        text = package_json.read_text(encoding="utf-8", errors="replace")
+    except OSError:
         return {}
-    scripts = parsed.get("scripts") if isinstance(parsed, dict) else None
-    return scripts if isinstance(scripts, dict) else {}
+    parsed = parse_json_object(text)
+    if parsed is None:
+        return {}
+    return object_dict(parsed.get("scripts"))
 
 
 _PORT_RE = re.compile(r"(?:(?:localhost|127\.0\.0\.1|0\.0\.0\.0):|PORT=|--port\s+|-p\s+)(\d{2,5})")
@@ -356,7 +356,8 @@ _LOCAL_URL_RE = re.compile(
 
 
 def _normalize_local_url(url: str) -> str:
-    return url.replace("0.0.0.0", "127.0.0.1").replace("[::1]", "127.0.0.1").rstrip(".,;")
+    # This normalizes command output text; it does not bind a server socket.
+    return url.replace("0.0.0.0", "127.0.0.1").replace("[::1]", "127.0.0.1").rstrip(".,;")  # nosec B104
 
 
 def _candidate_access_urls(
@@ -381,7 +382,9 @@ def _candidate_access_urls(
     return unique[:5]
 
 
-async def _read_process_lines(stream, tag: str, logs: list[str], limit: int = 80) -> None:
+async def _read_process_lines(
+    stream: asyncio.StreamReader | None, tag: str, logs: list[str], limit: int = 80
+) -> None:
     if stream is None:
         return
     try:

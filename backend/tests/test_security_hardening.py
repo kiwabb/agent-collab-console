@@ -4,6 +4,7 @@ import io
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -66,8 +67,11 @@ async def test_artifact_scan_skips_symlinks_outside_issue_root(monkeypatch, tmp_
 
     store = _ArtifactStoreStub(issue, tmp_path)
     monkeypatch.setattr(api_module, "codex_store", store)
+    typed_store = cast(api_module.CodexApiStore, store)
 
-    artifacts = await api_module._scan_and_backfill_artifacts(issue.id, issue.session_id, store)
+    artifacts = await api_module._scan_and_backfill_artifacts(
+        issue.id, issue.session_id, typed_store
+    )
 
     assert artifacts == []
     assert store.saved_artifacts == []

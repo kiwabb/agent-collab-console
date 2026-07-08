@@ -19,13 +19,7 @@ export interface StreamMeta {
   reason?: string;
 }
 
-export type ConductorPhase =
-  | "idle"
-  | "connecting"
-  | "planning"
-  | "streaming"
-  | "done"
-  | "error";
+export type ConductorPhase = "idle" | "connecting" | "planning" | "streaming" | "done" | "error";
 
 export interface HistoryEntry {
   ts: number;
@@ -33,9 +27,9 @@ export interface HistoryEntry {
   /** Short single-line status text shown in the bubble. */
   text: string;
   /** Optional second-line detail (e.g., "Reading pm/prd.json"). */
-  detail?: string;
+  detail?: string | undefined;
   /** Optional kind for filtering — "tool", "status", "artifact", "error". */
-  kind?: "tool" | "status" | "artifact" | "error" | "done";
+  kind?: "tool" | "status" | "artifact" | "error" | "done" | undefined;
 }
 
 export interface IssueAgentState {
@@ -84,10 +78,7 @@ function getState(issueId: string): IssueAgentState {
   return stores.get(issueId) ?? EMPTY_STATE;
 }
 
-function setState(
-  issueId: string,
-  update: (prev: IssueAgentState) => IssueAgentState,
-): void {
+function setState(issueId: string, update: (prev: IssueAgentState) => IssueAgentState): void {
   const prev = stores.get(issueId) ?? EMPTY_STATE;
   const next = update(prev);
   if (next === prev) return;
@@ -109,10 +100,7 @@ function subscribe(issueId: string, cb: () => void): () => void {
   };
 }
 
-function appendHistory(
-  issueId: string,
-  entry: Omit<HistoryEntry, "ts"> & { ts?: number },
-): void {
+function appendHistory(issueId: string, entry: Omit<HistoryEntry, "ts"> & { ts?: number }): void {
   setState(issueId, (prev) => {
     const arr = prev.history[entry.role];
     const stamped: HistoryEntry = {

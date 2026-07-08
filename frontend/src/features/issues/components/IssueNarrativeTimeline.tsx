@@ -7,6 +7,7 @@ import { getCodexTasks } from "@/lib/api/tasks";
 import type { CodexTask } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
+import { deriveAgentResultSummary } from "../issueResultParsing";
 
 interface Props {
   issueId: string;
@@ -65,7 +66,9 @@ export function IssueNarrativeTimeline({ issueId, reloadKey }: Props) {
       busEventMatchers.issueId(issueId),
       busEventMatchers.typeIn("task_status", "task_created", "workflow_node_updated"),
     ),
-    onEvent: () => { void refresh(); },
+    onEvent: () => {
+      void refresh();
+    },
     throttleMs: 500,
   });
 
@@ -81,7 +84,7 @@ export function IssueNarrativeTimeline({ issueId, reloadKey }: Props) {
         label: ROLE_LABEL[r] ?? r,
         status: t.status ?? "pending",
         timestamp: t.updated_at ?? t.created_at ?? null,
-        summary: deriveSummary(r, t.result || "", t.status ?? ""),
+        summary: deriveAgentResultSummary(r, t.result || "", t.status ?? ""),
       };
     });
   }, [tasks]);
@@ -104,7 +107,7 @@ export function IssueNarrativeTimeline({ issueId, reloadKey }: Props) {
                     ? "border-error/30 bg-error/5 shadow-sm"
                     : isActiveRole
                       ? "motion-essential border-brand/40 bg-brand/5 shadow-sm shadow-brand/10"
-                      : "border-border-subtle bg-surface hover:bg-surface-hover"
+                      : "border-border-subtle bg-surface hover:bg-surface-hover",
               )}
             >
               {isActiveRole ? (
@@ -115,12 +118,24 @@ export function IssueNarrativeTimeline({ issueId, reloadKey }: Props) {
               ) : null}
               <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider">
                 <StatusIcon status={e.status} />
-                <span className={cn(
-                  "font-bold",
-                  e.status === "done" ? "text-success/90" : e.status === "failed" ? "text-error/90" : isActiveRole ? "text-brand" : "text-text-muted"
-                )}>{e.label}</span>
+                <span
+                  className={cn(
+                    "font-bold",
+                    e.status === "done"
+                      ? "text-success/90"
+                      : e.status === "failed"
+                        ? "text-error/90"
+                        : isActiveRole
+                          ? "text-brand"
+                          : "text-text-muted",
+                  )}
+                >
+                  {e.label}
+                </span>
                 {e.timestamp && (
-                  <span className="ml-auto tabular-nums text-text-muted/60 font-mono text-[10px]">{shortTime(e.timestamp)}</span>
+                  <span className="ml-auto tabular-nums text-text-muted/60 font-mono text-[10px]">
+                    {shortTime(e.timestamp)}
+                  </span>
                 )}
               </div>
               <div
@@ -132,7 +147,11 @@ export function IssueNarrativeTimeline({ issueId, reloadKey }: Props) {
             </div>
             {i < entries.length - 1 && (
               <div className="mx-2 flex items-center justify-center">
-                <ChevronRight size={16} strokeWidth={2.5} className={e.status === "done" ? "text-success/40" : "text-border-subtle"} />
+                <ChevronRight
+                  size={16}
+                  strokeWidth={2.5}
+                  className={e.status === "done" ? "text-success/40" : "text-border-subtle"}
+                />
               </div>
             )}
           </div>
@@ -147,8 +166,7 @@ function StatusIcon({ status }: { status: string }) {
   if (status === "failed") return <XCircle size={12} className="text-error" />;
   if (status === "running" || status === "responding")
     return <AgentThinkingIndicator phase="dispatching" size={12} />;
-  if (status === "awaiting_review")
-    return <Pause size={12} className="text-warning" />;
+  if (status === "awaiting_review") return <Pause size={12} className="text-warning" />;
   return <Clock size={12} className="text-text-muted" />;
 }
 
@@ -158,101 +176,5 @@ function shortTime(iso: string): string {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   } catch {
     return "";
-  }
-}
-
-/** Pull the most informative 1-2 line summary out of each role's
- * structured JSON result. Falls back to a status-based hint if the
- * result isn't JSON or the role hasn't reached terminal state. */
-function deriveSummary(role: string, result: string, status: string): string {
-  if (!result) {
-    return statusHint(status);
-  }
-  let payload: Record<string, unknown> | null = null;
-  // task.result may be a "summary string" (post-persist) or raw JSON
-  // (pre-persist). Try JSON first, fall back to the string.
-  try {
-    payload = JSON.parse(result);
-  } catch {
-    payload = null;
-  }
-
-  switch (role) {
-    case "product_manager":
-      if (payload) {
-        const criteria = arrayLen(payload, "acceptance_criteria");
-        const goals = arrayLen(payload, "product_goals");
-        const reqs = arrayLen(payload, "requirement_pool");
-        const parts = [];
-        if (criteria) parts.push(`${criteria} acceptance ${criteria === 1 ? "criterion" : "criteria"}`);
-        if (goals) parts.push(`${goals} goal${goals === 1 ? "" : "s"}`);
-        if (reqs) parts.push(`${reqs} req${reqs === 1 ? "" : "s"}`);
-        if (parts.length) return parts.join(" · ");
-      }
-      return shortenResult(result);
-    case "architect":
-      if (payload) {
-        const components = arrayLen(payload, "components");
-        const data_models = arrayLen(payload, "data_models");
-        const risks = arrayLen(payload, "risks");
-        const parts = [];
-        if (components) parts.push(`${components} component${components === 1 ? "" : "s"}`);
-        if (data_models) parts.push(`${data_models} model${data_models === 1 ? "" : "s"}`);
-        if (risks) parts.push(`${risks} risk${risks === 1 ? "" : "s"}`);
-        if (parts.length) return parts.join(" · ");
-      }
-      return shortenResult(result);
-    case "engineer":
-      if (payload) {
-        const files = arrayLen(payload, "changed_files");
-        const st = String(payload.status ?? "");
-        if (files || st) {
-          const parts = [];
-          if (st) parts.push(st);
-          if (files) parts.push(`${files} file${files === 1 ? "" : "s"} changed`);
-          return parts.join(" · ");
-        }
-      }
-      return shortenResult(result);
-    case "qa":
-      if (payload) {
-        const cmds = arrayLen(payload, "commands_run");
-        const bugs = arrayLen(payload, "bugs_found");
-        const st = String(payload.status ?? "");
-        if (st || cmds || bugs) {
-          const parts = [];
-          if (st) parts.push(st);
-          if (cmds) parts.push(`${cmds} cmd${cmds === 1 ? "" : "s"}`);
-          if (bugs) parts.push(`${bugs} bug${bugs === 1 ? "" : "s"}`);
-          return parts.join(" · ");
-        }
-      }
-      return shortenResult(result);
-  }
-  return shortenResult(result);
-}
-
-function arrayLen(payload: Record<string, unknown>, key: string): number {
-  const v = payload[key];
-  return Array.isArray(v) ? v.length : 0;
-}
-
-function shortenResult(s: string): string {
-  return s.length <= 80 ? s : s.slice(0, 77) + "…";
-}
-
-function statusHint(status: string): string {
-  switch (status) {
-    case "pending":
-      return "Queued";
-    case "running":
-    case "responding":
-      return "Working…";
-    case "awaiting_review":
-      return "Awaiting clarification";
-    case "failed":
-      return "Failed";
-    default:
-      return status || "—";
   }
 }

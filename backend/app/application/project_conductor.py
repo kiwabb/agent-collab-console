@@ -11,18 +11,25 @@ import asyncio
 import json
 import logging
 import re
-import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
-from app.application.github_pr_followup import sweep_project_github_prs
+from app.adapters.local_process import CompletedProcess, run_trusted_local
+from app.application.github_pr_followup import (
+    EventBusLike,
+    GitHubPRFollowupStore,
+    sweep_project_github_prs,
+)
 from app.domain.models import (
     ConductorTask,
+    Project,
     ProjectConductorState,
     ProjectMemoryEmbedding,
     SubAgentResult,
 )
+from app.json_safety import parse_json_list
 
 logger = logging.getLogger(__name__)
 
@@ -34,23 +41,15 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _safe_json_list(raw: str | None) -> list:
-    try:
-        parsed = json.loads(raw or "[]")
-    except json.JSONDecodeError:
-        return []
-    return parsed if isinstance(parsed, list) else []
-
-
 def _tokenize(text: str) -> set[str]:
     return {token for token in re.findall(r"[\w\u4e00-\u9fff]+", text.lower()) if len(token) >= 3}
 
 
 async def _run_subprocess(
     args: list[str], *, cwd: str, timeout_s: int = 30
-) -> subprocess.CompletedProcess[str]:
-    def _run() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+) -> CompletedProcess[str]:
+    def _run() -> CompletedProcess[str]:
+        return run_trusted_local(
             args,
             cwd=cwd,
             capture_output=True,
@@ -59,6 +58,20 @@ async def _run_subprocess(
         )
 
     return await asyncio.get_running_loop().run_in_executor(None, _run)
+
+
+class ProjectConductorStore(GitHubPRFollowupStore, Protocol):
+    async def save_conductor_task(self, task: ConductorTask) -> None: ...
+
+    async def load_project_conductor_state(self, project_id: str) -> ProjectConductorState | None: ...
+
+    async def save_project_conductor_state(self, state: ProjectConductorState) -> None: ...
+
+    async def list_project_memory_embeddings(self, project_id: str) -> list[ProjectMemoryEmbedding]: ...
+
+    async def load_project(self, project_id: str) -> Project | None: ...
+
+    async def save_project_memory_embedding(self, memory: ProjectMemoryEmbedding) -> None: ...
 
 
 class ProjectConductor:
@@ -72,8 +85,8 @@ class ProjectConductor:
         self,
         *,
         project_id: str,
-        store,
-        event_bus=None,
+        store: ProjectConductorStore,
+        event_bus: EventBusLike | None = None,
         hot_token_limit: int = 60_000,
         warm_token_limit: int = 30_000,
     ) -> None:
@@ -83,7 +96,7 @@ class ProjectConductor:
         self.hot_token_limit = hot_token_limit
         self.warm_token_limit = warm_token_limit
 
-    async def handle_task(self, task: ConductorTask) -> dict:
+    async def handle_task(self, task: ConductorTask) -> dict[str, object]:
         task.status = "running"
         task.updated_at = datetime.now()
         if task.created_at is None:
@@ -100,7 +113,7 @@ class ProjectConductor:
             state,
             {"role": "user", "kind": task.task_kind, "content": question, "task_id": task.id},
         )
-        answer_event = {
+        answer_event: dict[str, object] = {
             "role": "project_conductor",
             "kind": "answer",
             "content": answer,
@@ -116,7 +129,7 @@ class ProjectConductor:
         await self._ensure_token_budget(state)
         await self.store.save_project_conductor_state(state)
 
-        result = {"status": "done", "answer": answer, "task_id": task.id}
+        result: dict[str, object] = {"status": "done", "answer": answer, "task_id": task.id}
         if github_pr_followup is not None:
             result["github_pr_followup"] = github_pr_followup
         task.status = "done"
@@ -143,7 +156,8 @@ class ProjectConductor:
                 task.id,
             )
             return {"status": "failed", "error": str(exc)}
-        return summary.to_dict()
+        summary_dict = summary.to_dict()
+        return summary_dict if isinstance(summary_dict, dict) else {}
 
     async def notify_subagent_complete(
         self,
@@ -172,10 +186,10 @@ class ProjectConductor:
         role: str,
         content: str,
         issue_id: str | None = None,
-        extra: dict | None = None,
+        extra: dict[str, object] | None = None,
     ) -> ProjectConductorState:
         state = await self.get_or_create_state()
-        event = {
+        event: dict[str, object] = {
             "role": role,
             "content": content,
             "issue_id": issue_id,
@@ -192,7 +206,7 @@ class ProjectConductor:
         self, question: str, *, state: ProjectConductorState | None = None
     ) -> str:
         state = state or await self.get_or_create_state()
-        warm = _safe_json_list(state.warm_summaries_json)
+        warm = parse_json_list(state.warm_summaries_json)
         warm_text = "\n".join(
             f"- {item.get('summary', item)}" if isinstance(item, dict) else f"- {item}"
             for item in warm[-5:]
@@ -256,9 +270,9 @@ class ProjectConductor:
             return ""
 
     async def _append_hot_without_compaction(
-        self, state: ProjectConductorState, event: dict
+        self, state: ProjectConductorState, event: dict[str, object]
     ) -> None:
-        hot = _safe_json_list(state.hot_thread_json)
+        hot = parse_json_list(state.hot_thread_json)
         hot.append(event)
         state.hot_thread_json = json.dumps(hot, ensure_ascii=False, default=str)
         state.hot_tokens = estimate_tokens(state.hot_thread_json)
@@ -271,11 +285,11 @@ class ProjectConductor:
             await self._compact_warm_to_cold(state)
 
     async def _compact_hot_to_warm(self, state: ProjectConductorState) -> None:
-        hot = _safe_json_list(state.hot_thread_json)
+        hot = parse_json_list(state.hot_thread_json)
         if not hot:
             return
         summary = self._summarize_events(hot)
-        warm = _safe_json_list(state.warm_summaries_json)
+        warm = parse_json_list(state.warm_summaries_json)
         warm.append(
             {
                 "id": str(uuid4()),
@@ -292,10 +306,10 @@ class ProjectConductor:
         state.updated_at = state.last_compaction_at
 
     async def _compact_warm_to_cold(self, state: ProjectConductorState) -> None:
-        warm = _safe_json_list(state.warm_summaries_json)
+        warm = parse_json_list(state.warm_summaries_json)
         if not warm:
             return
-        remaining: list = []
+        remaining: list[object] = []
         for item in warm:
             summary = item.get("summary") if isinstance(item, dict) else str(item)
             source_id = item.get("id") if isinstance(item, dict) else str(uuid4())
@@ -315,7 +329,7 @@ class ProjectConductor:
         state.updated_at = state.last_compaction_at
 
     @staticmethod
-    def _summarize_events(events: list) -> str:
+    def _summarize_events(events: list[object]) -> str:
         fragments: list[str] = []
         for event in events:
             if isinstance(event, dict):

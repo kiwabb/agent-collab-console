@@ -21,10 +21,7 @@
 
 import { useEffect } from "react";
 
-export type DataEventName =
-  | "workspaces:changed"
-  | "issues:changed"
-  | "projects:changed";
+export type DataEventName = "workspaces:changed" | "issues:changed" | "projects:changed";
 
 type Handler = () => void;
 

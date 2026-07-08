@@ -44,7 +44,9 @@ export function IssueDetailPanel({
 
   const planArtifacts = artifacts.filter((a) => a.kind === "plan");
   const execArtifacts = artifacts.filter((a) => a.kind === "execution_result");
-  const reqArtifacts = artifacts.filter((a) => a.name === "requirement.md" || a.name === "prd.json" || a.name === "prd.md");
+  const reqArtifacts = artifacts.filter(
+    (a) => a.name === "requirement.md" || a.name === "prd.json" || a.name === "prd.md",
+  );
   const shownArtifactNames = new Set([
     ...reqArtifacts.map((a) => a.name || a.id),
     ...planArtifacts.map((a) => a.name || a.id),
@@ -58,9 +60,13 @@ export function IssueDetailPanel({
       <div className="p-6 border-b border-border-subtle bg-surface/70 backdrop-blur-md">
         <div className="flex items-start justify-between gap-4 mb-4">
           <div className="flex-1 min-w-0">
-            <h2 className="text-lg font-bold tracking-tight text-foreground leading-snug">{issue.title}</h2>
+            <h2 className="text-lg font-bold tracking-tight text-foreground leading-snug">
+              {issue.title}
+            </h2>
             {issue.description && (
-              <p className="mt-2 text-[12.5px] leading-relaxed text-text-secondary opacity-80">{issue.description}</p>
+              <p className="mt-2 text-[12.5px] leading-relaxed text-text-secondary opacity-80">
+                {issue.description}
+              </p>
             )}
           </div>
         </div>
@@ -91,7 +97,7 @@ export function IssueDetailPanel({
                   "px-2 py-2 text-[10px] font-bold uppercase tracking-[0.1em] rounded-lg transition-all duration-300",
                   isActive
                     ? "bg-brand text-background shadow-lg shadow-brand/10"
-                    : "text-text-muted hover:text-foreground hover:bg-surface-hover"
+                    : "text-text-muted hover:text-foreground hover:bg-surface-hover",
                 )}
               >
                 {t(c.labelKey)}
@@ -107,8 +113,8 @@ export function IssueDetailPanel({
           <button
             onClick={() => setActiveTab("tasks")}
             className={cn(
-                "relative py-4 text-[10.5px] font-bold uppercase tracking-[0.15em] transition-all",
-              activeTab === "tasks" ? "text-brand" : "text-text-muted hover:text-foreground"
+              "relative py-4 text-[10.5px] font-bold uppercase tracking-[0.15em] transition-all",
+              activeTab === "tasks" ? "text-brand" : "text-text-muted hover:text-foreground",
             )}
           >
             {t("issue.tab.tasks")}
@@ -120,7 +126,7 @@ export function IssueDetailPanel({
             onClick={() => setActiveTab("artifacts")}
             className={cn(
               "relative py-4 text-[10.5px] font-bold uppercase tracking-[0.15em] transition-all",
-              activeTab === "artifacts" ? "text-brand" : "text-text-muted hover:text-foreground"
+              activeTab === "artifacts" ? "text-brand" : "text-text-muted hover:text-foreground",
             )}
           >
             {t("issue.tab.artifacts")}
@@ -137,7 +143,9 @@ export function IssueDetailPanel({
           <div className="space-y-3">
             {issueTasks.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 opacity-20 border border-dashed border-border-strong rounded-2xl">
-                <p className="text-[10px] uppercase tracking-widest font-black mb-6">{t("issue.noTasks")}</p>
+                <p className="text-[10px] uppercase tracking-widest font-black mb-6">
+                  {t("issue.noTasks")}
+                </p>
                 <button
                   onClick={() => onRunPhaseRole(phase, config.role)}
                   disabled={isRunning}
@@ -153,13 +161,19 @@ export function IssueDetailPanel({
                   className="p-5 rounded-2xl border border-border-subtle bg-surface-raised/55 hover:border-border-strong hover:bg-surface-raised/80 transition-all group animate-in fade-in duration-500 shadow-[0_10px_24px_-22px_rgba(0,0,0,0.65)]"
                 >
                   <div className="flex items-center justify-between gap-4 mb-3">
-                    <span className="text-[13.5px] font-bold tracking-tight text-foreground/90 truncate flex-1">{task.title}</span>
+                    <span className="text-[13.5px] font-bold tracking-tight text-foreground/90 truncate flex-1">
+                      {task.title}
+                    </span>
                     <StatusBadge status={task.status} />
                   </div>
                   <div className="flex items-center gap-2.5">
-                    <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">{task.role}</span>
+                    <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">
+                      {task.role}
+                    </span>
                     <div className="size-1 rounded-full bg-border-strong" />
-                    <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">{task.executor}</span>
+                    <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider">
+                      {task.executor}
+                    </span>
                   </div>
                 </div>
               ))
@@ -168,10 +182,18 @@ export function IssueDetailPanel({
         ) : (
           <div className="space-y-8 pb-10">
             {reqArtifacts.length > 0 && (
-              <ArtifactSection title={t("issue.artifacts.requirements")} artifacts={reqArtifacts} icon={<FileText size={12} />} />
+              <ArtifactSection
+                title={t("issue.artifacts.requirements")}
+                artifacts={reqArtifacts}
+                icon={<FileText size={12} />}
+              />
             )}
             {planArtifacts.length > 0 && (
-              <ArtifactSection title={t("issue.artifacts.strategy")} artifacts={planArtifacts} icon={<ListTodo size={12} />} />
+              <ArtifactSection
+                title={t("issue.artifacts.strategy")}
+                artifacts={planArtifacts}
+                icon={<ListTodo size={12} />}
+              />
             )}
             {execArtifacts.length > 0 && (
               <ArtifactSection title={t("issue.artifacts.execution")} artifacts={execArtifacts} />
@@ -181,7 +203,9 @@ export function IssueDetailPanel({
             )}
             {artifacts.length === 0 && (
               <div className="flex flex-col items-center justify-center py-20 opacity-20">
-                <p className="text-[10px] uppercase tracking-widest font-black">{t("issue.artifacts.empty")}</p>
+                <p className="text-[10px] uppercase tracking-widest font-black">
+                  {t("issue.artifacts.empty")}
+                </p>
               </div>
             )}
           </div>
@@ -217,7 +241,7 @@ export function IssueDetailPanel({
 function StatusBadge({ status }: { status: string }) {
   const s = status.toLowerCase();
   const isLive = s === "running" || s === "responding";
-  
+
   const colors: Record<string, string> = {
     running: "bg-brand/10 text-brand border-brand/30",
     responding: "bg-brand/10 text-brand border-brand/30",
@@ -227,16 +251,16 @@ function StatusBadge({ status }: { status: string }) {
     blocked: "bg-error/10 text-error border-error/30",
     pending: "bg-surface-input text-text-muted border-border-subtle",
   };
-  
+
   const cls = colors[s] ?? "bg-surface-input text-text-muted border-border-subtle";
-  
+
   return (
     <div
       data-density={isLive ? "issue-detail-status-live" : "issue-detail-status"}
       className={cn(
         "relative flex items-center gap-1.5 overflow-hidden px-2 py-0.5 rounded-md border text-[9px] font-black uppercase tracking-wider",
         isLive && "motion-essential",
-        cls
+        cls,
       )}
     >
       {isLive ? (
@@ -253,7 +277,15 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function ArtifactSection({ title, artifacts, icon }: { title: string; artifacts: Artifact[]; icon?: React.ReactNode }) {
+function ArtifactSection({
+  title,
+  artifacts,
+  icon,
+}: {
+  title: string;
+  artifacts: Artifact[];
+  icon?: React.ReactNode;
+}) {
   return (
     <div className="animate-in fade-in duration-500">
       <h4 className="flex items-center gap-2 text-[10px] font-black text-text-muted uppercase tracking-[0.2em] mb-4">
@@ -262,10 +294,16 @@ function ArtifactSection({ title, artifacts, icon }: { title: string; artifacts:
       </h4>
       <div className="space-y-3">
         {artifacts.map((a) => (
-          <div key={a.id} className="p-4 rounded-xl border border-border-subtle bg-surface/40 hover:bg-surface-hover hover:border-border-strong transition-all group cursor-pointer">
+          <div
+            key={a.id}
+            className="p-4 rounded-xl border border-border-subtle bg-surface/40 hover:bg-surface-hover hover:border-border-strong transition-all group cursor-pointer"
+          >
             <p className="text-[12px] font-bold text-foreground/80 mb-1.5 flex items-center justify-between">
               {a.name || a.kind}
-              <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0 text-brand" />
+              <ChevronRight
+                size={14}
+                className="opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0 text-brand"
+              />
             </p>
             <p className="text-[11px] leading-relaxed text-text-secondary opacity-60 line-clamp-2 font-medium">
               {typeof a.content === "string" ? a.content : JSON.stringify(a.content)}

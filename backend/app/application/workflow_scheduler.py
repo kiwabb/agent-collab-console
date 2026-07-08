@@ -18,8 +18,12 @@ owns the graph lifecycle and sets `graph.status` itself when the Conductor
 loop exits.
 """
 import asyncio  # noqa: E402
+import json  # noqa: E402
 import logging  # noqa: E402
+from collections.abc import Awaitable, Callable  # noqa: E402
 from datetime import datetime  # noqa: E402
+from inspect import isawaitable  # noqa: E402
+from typing import Protocol, cast  # noqa: E402
 from uuid import uuid4  # noqa: E402
 
 from app.application.task_status_events import build_task_status_event  # noqa: E402
@@ -28,10 +32,13 @@ from app.application.task_statuses import (  # noqa: E402
     is_task_success_status,
 )
 from app.domain.models import (  # noqa: E402
-    Agent,  # noqa: F401
+    Agent,
     AgentMessage,
     CodexIssue,
     CodexTask,
+    EdgeType,
+    NodeStatus,
+    WorkflowEdge,
     WorkflowGraph,
     WorkflowNode,
 )
@@ -47,6 +54,169 @@ class WorkflowSchedulerError(RuntimeError):
     pass
 
 
+class WorkflowStore(Protocol):
+    async def save_workflow_graph(
+        self,
+        graph: WorkflowGraph,
+        nodes: list[WorkflowNode] | None = None,
+        edges: list[WorkflowEdge] | None = None,
+    ) -> None: ...
+
+    async def load_workflow_graph(self, graph_id: str) -> WorkflowGraph | None: ...
+
+    async def load_workflow_graph_for_issue(self, issue_id: str) -> WorkflowGraph | None: ...
+
+    async def update_workflow_node(
+        self,
+        node_id: str,
+        *,
+        status: str | None = None,
+        task_id: str | None = None,
+        artifact_dir: str | None = None,
+        prompt_override: str | None = None,
+        retries: int | None = None,
+        started_at: datetime | None = None,
+        completed_at: object = None,
+    ) -> None: ...
+
+    async def find_node_by_task_id(self, task_id: str) -> WorkflowNode | None: ...
+
+    async def load_codex_issue(self, issue_id: str) -> CodexIssue | None: ...
+
+    async def save_codex_issue(self, issue: CodexIssue) -> None: ...
+
+    async def save_codex_task(self, task: CodexTask) -> None: ...
+
+    async def load_codex_task(self, task_id: str) -> CodexTask | None: ...
+
+    async def list_agents(self, workspace_id: str | None = None, role_key: str | None = None) -> list[Agent]: ...
+
+    async def save_agent_message(self, message: AgentMessage) -> None: ...
+
+    async def add_workflow_node(self, node: WorkflowNode) -> None: ...
+
+    async def add_workflow_edge(self, edge: WorkflowEdge) -> None: ...
+
+    async def update_execution_process_status(
+        self,
+        process_id: str,
+        status: str,
+        exit_code: int | None = None,
+        completed_at: datetime | None = None,
+    ) -> None: ...
+
+
+class WorkflowEventBus(Protocol):
+    async def append(self, event: dict[str, object]) -> None: ...
+
+
+TaskDispatcher = Callable[[CodexTask], object | Awaitable[object]]
+
+
+class _NoopWorkflowEventBus:
+    async def append(self, event: dict[str, object]) -> None:
+        return None
+
+
+class _TaskDispatcherRunner:
+    def __init__(self, dispatch: TaskDispatcher | None) -> None:
+        self._dispatch = dispatch
+
+    async def start_task_run(self, task: CodexTask) -> object:
+        if self._dispatch is None:
+            raise WorkflowSchedulerError("task dispatcher is not configured")
+        result = self._dispatch(task)
+        if isawaitable(result):
+            return await result
+        return result
+
+
+def _dag_items(dag: dict[str, object], key: str) -> list[dict[str, object]]:
+    value = dag.get(key, [])
+    if not isinstance(value, list):
+        raise WorkflowSchedulerError(f"dag.{key} must be a list")
+    items: list[dict[str, object]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise WorkflowSchedulerError(f"dag.{key}[{index}] must be an object")
+        items.append({str(item_key): item_value for item_key, item_value in item.items()})
+    return items
+
+
+def _dag_str(item: dict[str, object], key: str, *, default: str | None = None) -> str:
+    value = item.get(key, default)
+    if not isinstance(value, str) or not value:
+        raise WorkflowSchedulerError(f"dag item field '{key}' is required")
+    return value
+
+
+def _dag_optional_str(item: dict[str, object], key: str) -> str | None:
+    value = item.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _dag_edge_type(item: dict[str, object]) -> EdgeType:
+    value = item.get("edge_type", "sequence")
+    if isinstance(value, str) and value in {
+        "sequence",
+        "parallel-fanout",
+        "refine-loop",
+        "retry-on-fail",
+        "conditional",
+        "critique-loop",
+    }:
+        return cast(EdgeType, value)
+    raise WorkflowSchedulerError("dag item field 'edge_type' is invalid")
+
+
+async def materialize_graph_from_dag(
+    store: WorkflowStore,
+    issue_id: str,
+    dag: dict[str, object],
+    *,
+    created_by: str = "user",
+) -> WorkflowGraph:
+    now = datetime.now()
+    graph = WorkflowGraph(
+        id=str(uuid4()),
+        issue_id=issue_id,
+        status="draft",
+        dag_json=json.dumps(dag, ensure_ascii=False),
+        created_by=created_by,
+        created_at=now,
+        updated_at=now,
+    )
+    nodes = [
+        WorkflowNode(
+            id=str(uuid4()),
+            graph_id=graph.id,
+            node_key=_dag_str(raw, "node_key"),
+            agent_id=_dag_str(raw, "agent_id"),
+            title=_dag_optional_str(raw, "title"),
+            prompt_override=_dag_optional_str(raw, "prompt_override"),
+            created_at=now,
+            updated_at=now,
+        )
+        for raw in _dag_items(dag, "nodes")
+    ]
+    edges = [
+        WorkflowEdge(
+            id=str(uuid4()),
+            graph_id=graph.id,
+            from_node_key=_dag_str(raw, "from_node_key"),
+            to_node_key=_dag_str(raw, "to_node_key"),
+            edge_type=_dag_edge_type(raw),
+            condition_expr=_dag_optional_str(raw, "condition_expr"),
+            created_at=now,
+        )
+        for raw in _dag_items(dag, "edges")
+    ]
+    graph.nodes = nodes
+    graph.edges = edges
+    await store.save_workflow_graph(graph, nodes=nodes, edges=edges)
+    return graph
+
+
 class WorkflowScheduler:
     """Task-completion hook owner.
 
@@ -54,10 +224,25 @@ class WorkflowScheduler:
     anything. It is constructed cheaply and only `on_task_completed` runs.
     """
 
-    def __init__(self, store, task_dispatcher=None, event_bus=None) -> None:
+    def __init__(
+        self,
+        store: WorkflowStore,
+        task_dispatcher: TaskDispatcher | None = None,
+        event_bus: WorkflowEventBus | None = None,
+    ) -> None:
         self.store = store
         self._task_dispatcher = task_dispatcher  # callable(task) -> awaitable, optional
         self._event_bus = event_bus
+
+    async def start_graph(self, graph_id: str) -> WorkflowGraph:
+        graph = await self.store.load_workflow_graph(graph_id)
+        if graph is None:
+            raise WorkflowSchedulerError(f"Workflow graph {graph_id} not found")
+        graph.status = "running"
+        graph.locked_at = graph.locked_at or datetime.now()
+        graph.updated_at = datetime.now()
+        await self.store.save_workflow_graph(graph)
+        return await self.store.load_workflow_graph(graph_id) or graph
 
     async def _emit_node_event(self, node: WorkflowNode, issue: CodexIssue | None) -> None:
         if self._event_bus is None or issue is None:
@@ -82,7 +267,7 @@ class WorkflowScheduler:
         task: CodexTask,
         node: WorkflowNode,
         issue: CodexIssue | None,
-        validation_error: dict,
+        validation_error: dict[str, object],
     ) -> None:
         """GAP E/J: structured signal that a subagent's artifact failed schema
         validation, so the UI can flag it and the Conductor's re-dispatch is
@@ -132,6 +317,11 @@ class WorkflowScheduler:
 
     async def on_task_completed(self, task: CodexTask) -> None:
         """Hook called by the task runner once a task ends."""
+        # Specialist children bypass the workflow_node_id guard — they are
+        # intentionally not graph nodes but still need completion handling.
+        if task.task_kind == "specialist_child":
+            await self._handle_specialist_child_completed(task)
+            return
         if not task.workflow_node_id:
             return
         node = await self.store.find_node_by_task_id(task.id)
@@ -203,7 +393,7 @@ class WorkflowScheduler:
                 # re-dispatch with a corrective prompt instead of proceeding on a
                 # silent empty handoff. Surface a structured event for observability.
                 validation_error = getattr(task, "_validation_error", None)
-                signal_payload = {
+                signal_payload: dict[str, object] = {
                     "task_id": task.id,
                     "role": task.role,
                     "status": "artifact_invalid" if validation_error else task.status,
@@ -229,26 +419,6 @@ class WorkflowScheduler:
                         "summary": task.result or "",
                     },
                 )
-
-        # Phase 4: specialist_child → resume or unblock parent with findings.
-        # Keep the state-machine boundary in SpecialistOrchestrator so stale
-        # children and failed children use the same parent-lock checks.
-        if task.task_kind == "specialist_child":
-            try:
-                from app.application.specialist_orchestrator import SpecialistOrchestrator
-
-                orchestrator = SpecialistOrchestrator(
-                    self.store,
-                    self._event_bus,
-                    self._task_dispatcher,
-                )
-                await orchestrator.complete_specialist_request(
-                    task.id,
-                    task.result or "",
-                )
-            except Exception as exc:  # noqa: BLE001, RUF100
-                logger.warning("Specialist child completion handling failed: %s", exc)
-            return
 
         # Keep the issue's `current_phase` label in step with completed roles.
         await self._maybe_advance_phase(graph)
@@ -352,8 +522,14 @@ class WorkflowScheduler:
                 },
             )
             node.task_id = task.id
+            await self.store.update_workflow_node(
+                node.id,
+                status="failed",
+                task_id=task.id,
+                completed_at=datetime.now(),
+            )
             await self._emit_retry_failed_event(node, issue, retry_task, exc)
-            return False
+            return True
         return True
 
     @staticmethod
@@ -439,12 +615,56 @@ class WorkflowScheduler:
         except Exception as emit_exc:  # noqa: BLE001, RUF100
             logger.debug("workflow_node_retry_failed emit failed: %s", emit_exc)
 
+    async def _handle_specialist_child_completed(self, task: CodexTask) -> None:
+        """Handle specialist child completion: fold findings into parent and re-dispatch."""
+        from app.application.specialist_orchestrator import (
+            SpecialistOrchestrator,
+            SpecialistOrchestratorError,
+            SpecialistStore,
+        )
+
+        orchestrator = SpecialistOrchestrator(
+            cast(SpecialistStore, self.store),
+            self._event_bus or _NoopWorkflowEventBus(),
+            _TaskDispatcherRunner(self._task_dispatcher),
+        )
+        try:
+            parent = await orchestrator.complete_specialist_request(
+                task.id,
+                task.result or "",
+            )
+        except SpecialistOrchestratorError as exc:
+            logger.warning("Specialist child completion handling failed: %s", exc)
+            return
+
+        # Re-dispatch the parent so it actually resumes (fixes 1.4: the
+        # orchestrator only resets status to pending but never re-dispatches).
+        if parent.issue_id and self._task_dispatcher is not None:
+            try:
+                issue = await self.store.load_codex_issue(parent.issue_id)
+                if issue is not None:
+                    from app.application.task_dispatcher import DispatchRoleStore, dispatch_role
+
+                    await dispatch_role(
+                        issue=issue,
+                        role=parent.role,
+                        store=cast(DispatchRoleStore, self.store),
+                        task_dispatcher_fn=self._task_dispatcher,
+                        event_bus=self._event_bus,
+                        prev_node_key=task.role,
+                    )
+            except Exception as exc:  # noqa: BLE001, RUF100
+                logger.warning("Failed to re-dispatch parent after specialist: %s", exc)
+
     async def _maybe_resume_from_specialist(
         self, specialist_child_task: CodexTask, graph: WorkflowGraph
     ) -> bool:
         """Phase 4: inject specialist findings into the parent task's
         review_comment and create a fresh parent task to re-run with them.
         Returns True if the parent was resumed."""
+        if specialist_child_task.parent_task_id is None:
+            logger.warning("Specialist child %s has no parent task", specialist_child_task.id)
+            return False
         parent = await self.store.load_codex_task(specialist_child_task.parent_task_id)
         if parent is None:
             logger.warning("Specialist child %s has no parent task", specialist_child_task.id)
@@ -468,17 +688,18 @@ class WorkflowScheduler:
         await self.store.save_codex_task(parent)
 
         try:
-            msg = AgentMessage(
-                id=str(uuid4()),
-                issue_id=parent.issue_id,
-                graph_id=graph.id if graph else "",
-                from_node_key=specialist_child_task.role,
-                to_node_key=parent.role,
-                message_type="specialist_result",
-                body=specialist_summary[:500],
-                created_at=now,
-            )
-            await self.store.save_agent_message(msg)
+            if parent.issue_id is not None:
+                msg = AgentMessage(
+                    id=str(uuid4()),
+                    issue_id=parent.issue_id,
+                    graph_id=graph.id if graph else "",
+                    from_node_key=specialist_child_task.role,
+                    to_node_key=parent.role,
+                    message_type="specialist_result",
+                    body=specialist_summary[:500],
+                    created_at=now,
+                )
+                await self.store.save_agent_message(msg)
         except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("Failed to record specialist result message: %s", exc)
 
@@ -496,20 +717,26 @@ class WorkflowScheduler:
 
                 await self._event_bus.append(build_task_status_event(parent, parent.status))
             except Exception:  # noqa: BLE001, RUF100
-                pass
+                logger.debug(
+                    "specialist parent resume event emit failed: parent_task_id=%s",
+                    parent.id,
+                    exc_info=True,
+                )
 
         # Re-dispatch the parent's role on a fresh task so the runner picks
         # up the updated review_comment via the REWORK branch.
         try:
+            if parent.issue_id is None:
+                return True
             parent_issue = await self.store.load_codex_issue(parent.issue_id)
             if parent_issue is None:
                 return True
-            from app.application.task_dispatcher import dispatch_role
+            from app.application.task_dispatcher import DispatchRoleStore, dispatch_role
 
             await dispatch_role(
                 issue=parent_issue,
                 role=parent.role,
-                store=self.store,
+                store=cast(DispatchRoleStore, self.store),
                 task_dispatcher_fn=self._task_dispatcher,
                 event_bus=self._event_bus,
                 prev_node_key=specialist_child_task.role,
@@ -520,7 +747,7 @@ class WorkflowScheduler:
         return True
 
     @staticmethod
-    def _task_status_to_node_status(task_status: str) -> str | None:
+    def _task_status_to_node_status(task_status: str) -> NodeStatus | None:
         if is_task_success_status(task_status):
             return "done"
         if is_task_failure_status(task_status):
@@ -570,7 +797,7 @@ class WorkflowScheduler:
         issue.updated_at = datetime.now()
         await self.store.save_codex_issue(issue)
         if self._event_bus is not None:
-            try:  # noqa: SIM105
+            try:
                 await self._event_bus.append(
                     {
                         "type": "issue_updated",
@@ -580,4 +807,8 @@ class WorkflowScheduler:
                     }
                 )
             except Exception:  # noqa: BLE001, RUF100
-                pass
+                logger.debug(
+                    "workflow issue update event emit failed: issue_id=%s",
+                    issue.id,
+                    exc_info=True,
+                )

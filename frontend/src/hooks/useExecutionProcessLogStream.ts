@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { getProcessLogsUrl } from "@/lib/api/tasks";
 import type { LogEvent } from "@/lib/types";
 
+import { parseLogStreamFrame } from "./executionProcessStreamFrames";
+
 function sortLogs<T extends { created_at?: string | null }>(logs: T[]): T[] {
   return [...logs].sort((a, b) => {
     const aTime = a?.created_at ? new Date(a.created_at).getTime() : 0;
@@ -34,7 +36,9 @@ interface UseExecutionProcessLogStreamResult {
   disconnected: boolean;
 }
 
-export function useExecutionProcessLogStream(processId: string | null): UseExecutionProcessLogStreamResult {
+export function useExecutionProcessLogStream(
+  processId: string | null,
+): UseExecutionProcessLogStreamResult {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [streamingAssistant, setStreamingAssistant] = useState<StreamingAssistant | null>(null);
@@ -54,7 +58,7 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
   const scheduleReconnect = useCallback(() => {
     if (retryTimerRef.current || finishedRef.current) return;
     const attempt = retryAttemptsRef.current;
-    const delay = Math.min(1500, 250 * (2 ** attempt));
+    const delay = Math.min(1500, 250 * 2 ** attempt);
     retryTimerRef.current = setTimeout(() => {
       retryTimerRef.current = null;
       connectRef.current();
@@ -87,31 +91,10 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
       };
 
       ws.onmessage = (event) => {
-        const raw = event.data;
-        // The server replies "pong" (plain text) to client pings. Anything that
-        // isn't a JSON envelope is a control frame we don't need to surface.
-        if (typeof raw !== "string" || raw === "pong" || raw.length === 0 || raw[0] !== "{") {
-          return;
-        }
-        let data:
-          | ({ finished?: boolean; kind?: string } & Partial<LogEvent> & {
-              seq?: number;
-              delta_text?: string;
-              phase?: string;
-              last_event_at?: number | null;
-              elapsed_since_last_ms?: number;
-            })
-          | null = null;
+        const frame = parseLogStreamFrame(event.data);
+        if (frame.kind === "control" || frame.kind === "unknown") return;
         try {
-          data = JSON.parse(raw);
-        } catch {
-          // Non-JSON server frame — ignore instead of surfacing a user-visible
-          // error. Real schema problems show up in `addLog` / handler code.
-          return;
-        }
-        try {
-
-          if (data?.finished) {
+          if (frame.kind === "finished") {
             finishedRef.current = true;
             setFinished(true);
             // Clear the in-flight streaming bubble — final assistant text will
@@ -123,16 +106,15 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
             return;
           }
 
-          if (data?.kind === "assistant_delta") {
-            const incomingSeq = typeof data.seq === "number" ? data.seq : streamingSeqRef.current + 1;
-            const delta = typeof data.delta_text === "string" ? data.delta_text : "";
+          if (frame.kind === "assistant_delta") {
+            const incomingSeq = frame.seq ?? streamingSeqRef.current + 1;
             // The backend folds deltas itself (entry.last_emitted_assistant_text);
             // seq is monotonic per-turn. If we see a lower seq, that's a new turn
             // — reset the buffer.
             if (incomingSeq <= streamingSeqRef.current) {
-              streamingTextRef.current = delta;
+              streamingTextRef.current = frame.deltaText;
             } else {
-              streamingTextRef.current += delta;
+              streamingTextRef.current += frame.deltaText;
             }
             streamingSeqRef.current = incomingSeq;
             setStreamingAssistant({
@@ -143,11 +125,11 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
             return;
           }
 
-          if (data?.kind === "heartbeat") {
+          if (frame.kind === "heartbeat") {
             setHeartbeat({
-              phase: data.phase || "idle",
-              elapsedSinceLastMs: data.elapsed_since_last_ms ?? 0,
-              lastEventAt: data.last_event_at ?? null,
+              phase: frame.phase,
+              elapsedSinceLastMs: frame.elapsedSinceLastMs,
+              lastEventAt: frame.lastEventAt,
               receivedAt: Date.now(),
             });
             return;
@@ -156,15 +138,15 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
           // Plain LogEvent row (has an id and stream). When a final assistant
           // message arrives, drop the streaming buffer so the bubble doesn't
           // duplicate.
-          if ((data as LogEvent).id && (data as LogEvent).stream) {
-            if ((data as LogEvent).stream === "stdout" && streamingTextRef.current) {
+          if (frame.kind === "log") {
+            if (frame.log.stream === "stdout" && streamingTextRef.current) {
               // The full assistant text will be rendered from the LogEvent itself
               // once normalized — kill the in-flight ghost.
               streamingTextRef.current = "";
               streamingSeqRef.current = 0;
               setStreamingAssistant(null);
             }
-            addLog(data as LogEvent);
+            addLog(frame.log);
             return;
           }
         } catch {
@@ -178,10 +160,7 @@ export function useExecutionProcessLogStream(processId: string | null): UseExecu
 
       ws.onclose = (evt) => {
         wsRef.current = null;
-        if (
-          finishedRef.current ||
-          (evt?.code === 1000 && evt?.wasClean)
-        ) {
+        if (finishedRef.current || (evt?.code === 1000 && evt?.wasClean)) {
           return;
         }
         retryAttemptsRef.current += 1;

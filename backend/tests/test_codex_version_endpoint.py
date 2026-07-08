@@ -1,6 +1,5 @@
 """FastAPI integration test for the /api/codex/version endpoint."""
-import pytest
-from datetime import datetime, timezone
+from datetime import datetime
 
 
 def test_codex_version_returns_ok(client):

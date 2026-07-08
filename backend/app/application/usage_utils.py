@@ -1,41 +1,89 @@
-from __future__ import annotations
-
 """Shared utilities for extracting and pricing token usage."""
 
-from typing import Any, cast
+from __future__ import annotations
 
 from app.application import timeouts
+from app.json_safety import object_dict_or_none
 
 
-def extract_usage(obj: Any) -> dict[str, Any] | None:
+def extract_usage(obj: object) -> dict[str, object] | None:
     """Pull the usage dict out of a Codex / Claude stream event payload.
 
     Codex app server emits shapes like:
       {"type":"assistant","message":{...,"usage":{...}}}
       {"type":"stream_event","event":{"type":"message_delta","usage":{...}}}
     """
-    if not isinstance(obj, dict):
+    payload = object_dict_or_none(obj)
+    if payload is None:
         return None
-    if isinstance(obj.get("usage"), dict):
-        return cast(dict[str, Any], obj["usage"])
-    msg = obj.get("message")
-    if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
-        return cast(dict[str, Any], msg["usage"])
-    event = obj.get("event")
-    if isinstance(event, dict) and isinstance(event.get("usage"), dict):
-        return cast(dict[str, Any], event["usage"])
+    usage = object_dict_or_none(payload.get("usage"))
+    if usage is not None:
+        return usage
+    msg = object_dict_or_none(payload.get("message"))
+    if msg is not None:
+        usage = object_dict_or_none(msg.get("usage"))
+        if usage is not None:
+            return usage
+    event = object_dict_or_none(payload.get("event"))
+    if event is not None:
+        usage = object_dict_or_none(event.get("usage"))
+        if usage is not None:
+            return usage
     return None
 
 
-def extract_message_id(obj) -> str | None:
+def extract_message_id(obj: object) -> str | None:
     """Extract message ID from a parsed event object."""
-    if not isinstance(obj, dict):
+    payload = object_dict_or_none(obj)
+    if payload is None:
         return None
-    msg = obj.get("message")
-    if isinstance(msg, dict):
+    msg = object_dict_or_none(payload.get("message"))
+    if msg is not None:
         mid = msg.get("id")
         if isinstance(mid, str):
             return mid
+    return None
+
+
+def read_usage_int(usage: dict[str, object], *names: str) -> int | None:
+    """Read the first integer-compatible usage value from a usage payload."""
+    for name in names:
+        value = _coerce_int(usage.get(name))
+        if value is not None:
+            return value
+    return None
+
+
+def read_usage_float(usage: dict[str, object], *names: str) -> float | None:
+    """Read the first float-compatible usage value from a usage payload."""
+    for name in names:
+        value = _coerce_float(usage.get(name))
+        if value is not None:
+            return value
+    return None
+
+
+def _coerce_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float | str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int | float | str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
     return None
 
 
@@ -52,7 +100,7 @@ def price_tokens(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cache_read_tokens: int | None = None,
-    pricing=None,
+    pricing: object | None = None,
 ) -> float:
     """Compute the USD cost of token usage.
 
@@ -89,14 +137,11 @@ def price_tokens(
     return cost
 
 
-def _read_price(pricing, attr: str) -> float | None:
+def _read_price(pricing: object | None, attr: str) -> float | None:
     """Read a per-million price field from a model config object or dict."""
     if pricing is None:
         return None
-    if isinstance(pricing, dict):  # noqa: SIM108
-        value = pricing.get(attr)
-    else:
-        value = getattr(pricing, attr, None)
+    value = pricing.get(attr) if isinstance(pricing, dict) else getattr(pricing, attr, None)
     if value is None:
         return None
     try:
@@ -106,7 +151,7 @@ def _read_price(pricing, attr: str) -> float | None:
 
 
 def price_tokens_for_model(
-    model,
+    model: object | None,
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cache_read_tokens: int | None = None,

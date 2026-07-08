@@ -13,11 +13,22 @@ import { PageFrame } from "@/features/workbench/components/PageFrame";
 import { useI18n } from "@/providers/I18nProvider";
 import { formatDuration } from "@/features/issues/components/StatusStrip";
 
-const HEALTH_STYLE: Record<ConductorSession["health"], { dot: string; label: string; icon: typeof CheckCircle2 }> = {
+const HEALTH_STYLE: Record<
+  ConductorSession["health"],
+  { dot: string; label: string; icon: typeof CheckCircle2 }
+> = {
   ok: { dot: "text-status-done", label: "issue.command.status.running", icon: CheckCircle2 },
   warn: { dot: "text-status-awaiting", label: "conductorMonitor.health.warn", icon: AlertTriangle },
-  danger: { dot: "text-status-failed", label: "conductorMonitor.health.danger", icon: AlertTriangle },
-  stalled: { dot: "text-status-failed", label: "conductorMonitor.health.stalled", icon: AlertCircle },
+  danger: {
+    dot: "text-status-failed",
+    label: "conductorMonitor.health.danger",
+    icon: AlertTriangle,
+  },
+  stalled: {
+    dot: "text-status-failed",
+    label: "conductorMonitor.health.stalled",
+    icon: AlertCircle,
+  },
   failed: { dot: "text-status-failed", label: "conductorMonitor.health.failed", icon: AlertCircle },
   paused: { dot: "text-text-muted", label: "conductorMonitor.health.paused", icon: Pause },
 };
@@ -47,11 +58,15 @@ export function ConductorMonitorPage() {
 
   useBusEventEffect({
     match: busEventMatchers.typeIn("conductor_status", "conductor_failed", "conductor_turn"),
-    onEvent: () => { void load(); },
+    onEvent: () => {
+      void load();
+    },
     throttleMs: 1000,
   });
 
-  const problems = sessions.filter((s) => ["failed", "stalled", "danger", "warn"].includes(s.health)).length;
+  const problems = sessions.filter((s) =>
+    ["failed", "stalled", "danger", "warn"].includes(s.health),
+  ).length;
 
   return (
     <PageFrame
@@ -108,7 +123,8 @@ export function ConductorMonitorPage() {
                   onClick={() => router.push(`/issues/${s.issue_id}`)}
                   className={cn(
                     "relative grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 overflow-hidden rounded-2xl border bg-surface-raised/70 p-4 text-left transition-colors hover:border-brand/50",
-                    (s.health === "failed" || s.health === "stalled" || s.health === "danger") && "border-status-failed/30 bg-status-failed/5",
+                    (s.health === "failed" || s.health === "stalled" || s.health === "danger") &&
+                      "border-status-failed/30 bg-status-failed/5",
                     s.health === "warn" && "border-status-awaiting/30 bg-status-awaiting/5",
                     s.health === "ok" && "border-border-subtle",
                     s.health === "paused" && "border-border-subtle",
@@ -121,7 +137,12 @@ export function ConductorMonitorPage() {
                       className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
                     />
                   )}
-                  <span className={cn("inline-flex size-9 items-center justify-center rounded-xl border border-border-subtle bg-surface", style.dot)}>
+                  <span
+                    className={cn(
+                      "inline-flex size-9 items-center justify-center rounded-xl border border-border-subtle bg-surface",
+                      style.dot,
+                    )}
+                  >
                     {isConductorDispatching ? (
                       <AgentThinkingIndicator phase={s.phase ?? "dispatching"} size={16} />
                     ) : (
@@ -133,10 +154,15 @@ export function ConductorMonitorPage() {
                       <h3 className="truncate text-sm font-bold text-foreground">
                         {s.issue_title || t("conductorMonitor.untitled")}
                       </h3>
-                      <span className={cn("rounded-full border border-border-subtle px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider", style.dot)}>
+                      <span
+                        className={cn(
+                          "rounded-full border border-border-subtle px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+                          style.dot,
+                        )}
+                      >
                         {t(style.label)}
                       </span>
-                      {!s.alive && (s.status === "running") && (
+                      {!s.alive && s.status === "running" && (
                         <span className="rounded-full border border-status-failed/30 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-failed">
                           {t("conductorMonitor.notAlive")}
                         </span>

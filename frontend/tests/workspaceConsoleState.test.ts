@@ -73,8 +73,28 @@ function makeTask(overrides: Partial<CodexTask> = {}): CodexTask {
 test("deriveWorkspaceConsoleDefaultRuntime prefers the first enabled executor", () => {
   const catalog: RuntimeCatalog = {
     executors: [
-      { id: "claude", label: "Claude", enabled: true, executor_type: "claude", default_model: "claude-sonnet", api_endpoint: null, api_key: null, providers: [], default_provider_id: null },
-      { id: "codex", label: "Codex", enabled: true, executor_type: "codex", default_model: "gpt-5", api_endpoint: null, api_key: null, providers: [], default_provider_id: null },
+      {
+        id: "claude",
+        label: "Claude",
+        enabled: true,
+        executor_type: "claude",
+        default_model: "claude-sonnet",
+        api_endpoint: null,
+        api_key: null,
+        providers: [],
+        default_provider_id: null,
+      },
+      {
+        id: "codex",
+        label: "Codex",
+        enabled: true,
+        executor_type: "codex",
+        default_model: "gpt-5",
+        api_endpoint: null,
+        api_key: null,
+        providers: [],
+        default_provider_id: null,
+      },
     ],
   };
 
@@ -108,9 +128,27 @@ test("getWorkspaceConsoleRoleLabel maps built-in workflow roles", () => {
 test("pickActiveIssueTask prefers the in-flight task matching the issue phase", () => {
   const issue = makeIssue({ current_phase: "development" });
   const tasks = [
-    makeTask({ id: "pm-1", role: "product_manager", phase: "requirements", status: "done", updated_at: "2026-05-17T10:00:00Z" }),
-    makeTask({ id: "eng-1", role: "engineer", phase: "development", status: "running", updated_at: "2026-05-17T10:05:00Z" }),
-    makeTask({ id: "qa-1", role: "qa", phase: "testing", status: "pending", updated_at: "2026-05-17T10:06:00Z" }),
+    makeTask({
+      id: "pm-1",
+      role: "product_manager",
+      phase: "requirements",
+      status: "done",
+      updated_at: "2026-05-17T10:00:00Z",
+    }),
+    makeTask({
+      id: "eng-1",
+      role: "engineer",
+      phase: "development",
+      status: "running",
+      updated_at: "2026-05-17T10:05:00Z",
+    }),
+    makeTask({
+      id: "qa-1",
+      role: "qa",
+      phase: "testing",
+      status: "pending",
+      updated_at: "2026-05-17T10:06:00Z",
+    }),
   ];
 
   assert.equal(pickActiveIssueTask(issue, tasks)?.id, "eng-1");
@@ -119,8 +157,20 @@ test("pickActiveIssueTask prefers the in-flight task matching the issue phase", 
 test("pickActiveIssueTask falls back to the most recently updated task", () => {
   const issue = makeIssue({ current_phase: "development" });
   const tasks = [
-    makeTask({ id: "pm-1", role: "product_manager", phase: "requirements", status: "done", updated_at: "2026-05-17T10:00:00Z" }),
-    makeTask({ id: "qa-1", role: "qa", phase: "testing", status: "done", updated_at: "2026-05-17T10:06:00Z" }),
+    makeTask({
+      id: "pm-1",
+      role: "product_manager",
+      phase: "requirements",
+      status: "done",
+      updated_at: "2026-05-17T10:00:00Z",
+    }),
+    makeTask({
+      id: "qa-1",
+      role: "qa",
+      phase: "testing",
+      status: "done",
+      updated_at: "2026-05-17T10:06:00Z",
+    }),
   ];
 
   assert.equal(pickActiveIssueTask(issue, tasks)?.id, "qa-1");

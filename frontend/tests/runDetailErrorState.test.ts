@@ -5,11 +5,7 @@ import { shouldShowTopErrorCard } from "../src/lib/runDetailErrorState";
 
 test("shows top error card when task is not failed", () => {
   assert.equal(
-    shouldShowTopErrorCard(
-      { content: "Failed to persist artifacts: boom" },
-      "running",
-      null,
-    ),
+    shouldShowTopErrorCard({ content: "Failed to persist artifacts: boom" }, "running", null),
     true,
   );
 });
@@ -17,14 +13,7 @@ test("shows top error card when task is not failed", () => {
 test("hides top error card when failed task result duplicates the error content", () => {
   const duplicated = "ProductManager 返回了无效的 PRD 格式\n\n错误类型: JSONDecodeError";
 
-  assert.equal(
-    shouldShowTopErrorCard(
-      { content: duplicated },
-      "failed",
-      duplicated,
-    ),
-    false,
-  );
+  assert.equal(shouldShowTopErrorCard({ content: duplicated }, "failed", duplicated), false);
 });
 
 test("hides top error card when one failed error message contains the other", () => {

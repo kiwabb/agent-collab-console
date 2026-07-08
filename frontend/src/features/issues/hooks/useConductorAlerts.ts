@@ -40,23 +40,38 @@ export function alertSeverityFor(type: string): ConductorAlertSeverity {
   return SEVERITY[type] ?? "info";
 }
 
-export function describeAlert(e: Record<string, unknown>): { titleKey: string; params: Record<string, string | number> } {
-  switch (e.type) {
+export function describeAlert(e: Record<string, unknown>): {
+  titleKey: string;
+  params: Record<string, string | number>;
+} {
+  switch (e["type"]) {
     case "conductor_relaunch_exhausted":
-      return { titleKey: "issue.command.alert.relaunchExhausted", params: { attempts: num(e.relaunch_attempts) } };
+      return {
+        titleKey: "issue.command.alert.relaunchExhausted",
+        params: { attempts: num(e["relaunch_attempts"]) },
+      };
     case "executor_failed_to_start":
       return {
         titleKey: "issue.command.alert.executorFailedToStart",
-        params: { executor: str(e.executor, "executor"), reason: str(e.reason, "unknown") },
+        params: { executor: str(e["executor"], "executor"), reason: str(e["reason"], "unknown") },
       };
     case "artifact_validation_failed":
-      return { titleKey: "issue.command.alert.artifactInvalid", params: { role: str(e.role, "subagent") } };
+      return {
+        titleKey: "issue.command.alert.artifactInvalid",
+        params: { role: str(e["role"], "subagent") },
+      };
     case "conductor_heartbeat_degraded":
       return { titleKey: "issue.command.alert.heartbeatDegraded", params: {} };
     case "stall_detected":
-      return { titleKey: "issue.command.alert.stallDetected", params: { role: str(e.role, "subagent"), silence: Math.round(num(e.silence_s)) } };
+      return {
+        titleKey: "issue.command.alert.stallDetected",
+        params: { role: str(e["role"], "subagent"), silence: Math.round(num(e["silence_s"])) },
+      };
     case "stall_nudge_failed":
-      return { titleKey: "issue.command.alert.stallNudgeFailed", params: { role: str(e.role, "subagent") } };
+      return {
+        titleKey: "issue.command.alert.stallNudgeFailed",
+        params: { role: str(e["role"], "subagent") },
+      };
     default:
       return { titleKey: "issue.command.alert.generic", params: {} };
   }
@@ -82,13 +97,22 @@ export function useConductorAlerts(issueId: string) {
       busEventMatchers.typeIn(...ALERT_TYPES),
     ),
     onEvent: (event) => {
-      const e = event as Record<string, unknown> & { type: string };
+      const e = event as {
+        type: string;
+        role?: unknown;
+        task_id?: unknown;
+        message?: unknown;
+        detail?: unknown;
+        severity?: unknown;
+      };
       const role = str(e.role);
 
       // A recovered stall resolves its detected-stall alert instead of stacking.
       if (e.type === "stall_recovered") {
         setAlerts((prev) =>
-          prev.filter((a) => !(a.type === "stall_detected" && (!role || a.params.role === role))),
+          prev.filter(
+            (a) => !(a.type === "stall_detected" && (!role || a.params["role"] === role)),
+          ),
         );
         return;
       }

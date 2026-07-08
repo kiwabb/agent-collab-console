@@ -1,14 +1,13 @@
 from __future__ import annotations  # noqa: I001, RUF100
 
 from datetime import datetime
-from types import SimpleNamespace
 
 from app.application.conductor_main_loop import build_issue_conductor_prompt
 from app.application.conductor_policy import (
     classify_issue_orchestration,
     decide_conductor_policy,
 )
-from app.domain.models import CodexIssue, ConductorTask, ConductorTurn
+from app.domain.models import CodexIssue, ConductorTask, ConductorTurn, ConductorTurnKind
 
 
 def test_trivial_single_file_prefers_single_engineer():
@@ -58,7 +57,9 @@ def test_cross_layer_issue_recommends_architect_first():
 
 def test_prompt_includes_orchestration_policy_block():
     prompt = build_issue_conductor_prompt(
-        issue=SimpleNamespace(
+        issue=CodexIssue(
+            id="issue-policy-1",
+            session_id="session-policy",
             title="Fix typo",
             description="Change one string in README.md.",
         ),
@@ -75,7 +76,9 @@ def test_prompt_includes_orchestration_policy_block():
 
 def test_prompt_allows_batch_when_user_explicitly_requests_parallel_independent_work():
     prompt = build_issue_conductor_prompt(
-        issue=SimpleNamespace(
+        issue=CodexIssue(
+            id="issue-policy-2",
+            session_id="session-policy",
             title="REAL run: three tiny independent modules in parallel",
             description=(
                 "Create alpha.py, beta.py, and gamma.py independently. "
@@ -120,7 +123,7 @@ def _task() -> ConductorTask:
     )
 
 
-def _turn(kind: str, payload_json: str, index: int = 0) -> ConductorTurn:
+def _turn(kind: ConductorTurnKind, payload_json: str, index: int = 0) -> ConductorTurn:
     return ConductorTurn(
         id=f"turn-{index}",
         conductor_task_id="ct-1",
@@ -199,6 +202,34 @@ def test_dispatch_batch_conflict_calls_llm_with_prompt_hint():
     assert decision.action == "call_llm"
     assert decision.reason_code == "dispatch_batch_conflict"
     assert "conflict" in decision.prompt_hint.lower()
+
+
+def test_malformed_tool_result_payload_falls_back_to_default_decision():
+    decision = decide_conductor_policy(
+        _issue(),
+        _task(),
+        recent_turns=[
+            _turn("tool_result", "{not-json"),
+        ],
+        graph=None,
+    )
+
+    assert decision.action == "call_llm"
+    assert decision.reason_code == "default_call_llm"
+
+
+def test_non_object_turn_payload_falls_back_to_default_decision():
+    decision = decide_conductor_policy(
+        _issue(),
+        _task(),
+        recent_turns=[
+            _turn("tool_result", '["not", "an", "object"]'),
+        ],
+        graph=None,
+    )
+
+    assert decision.action == "call_llm"
+    assert decision.reason_code == "default_call_llm"
 
 
 def test_repeated_low_signal_finalize_skips_llm():

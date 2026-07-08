@@ -21,12 +21,17 @@ LLM to weigh.
 Nothing here mutates state, performs merges, or touches the primary repo.
 It only *reads* the worktree diff.
 """
-import json  # noqa: E402
+import logging  # noqa: E402
 import re  # noqa: E402
+from collections.abc import Iterable  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 
+logger = logging.getLogger(__name__)
+
+from app.adapters.local_process import TimeoutExpired, run_trusted_local  # noqa: E402
 from app.application.engineer_workflow import git_changed_files  # noqa: E402
 from app.application.issue_artifact_documents import IssueArtifactDocuments  # noqa: E402
+from app.json_safety import parse_json_object_list  # noqa: E402
 
 # Cap the diff text injected into the review prompt so a large change set does
 # not blow the prompt budget. The review LLM only needs a representative
@@ -44,7 +49,7 @@ def _normalize_path(path: str) -> str:
     return p.strip("/")
 
 
-def _normalize_set(paths) -> set[str]:
+def _normalize_set(paths: Iterable[object] | None) -> set[str]:
     out: set[str] = set()
     for p in paths or []:
         norm = _normalize_path(str(p))
@@ -77,7 +82,7 @@ class GuardResult:
     def is_hard_mismatch(self) -> bool:
         return self.verdict == "hard_mismatch"
 
-    def to_artifact(self) -> dict:
+    def to_artifact(self) -> dict[str, object]:
         """Compact, JSON-serializable form for embedding in the review artifact."""
         return {
             "verdict": self.verdict,
@@ -144,18 +149,17 @@ def _read_expected_files(workspace_path: str, issue_id: str) -> list[str]:
     if not plan_path.exists():
         return []
     try:
-        raw = plan_path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except Exception:  # noqa: BLE001, RUF100
+        tasks = parse_json_object_list(plan_path.read_text(encoding="utf-8"))
+    except OSError:
         return []
     union: list[str] = []
-    if isinstance(data, list):
-        for task in data:
-            if not isinstance(task, dict):
-                continue
-            for f in task.get("expected_files", []) or []:
-                if isinstance(f, str):
-                    union.append(f)
+    for task in tasks:
+        expected_files = task.get("expected_files")
+        if not isinstance(expected_files, list):
+            continue
+        for f in expected_files:
+            if isinstance(f, str):
+                union.append(f)
     return union
 
 
@@ -168,24 +172,23 @@ def git_diff_summary(workspace_path: str | None) -> str:
     """
     if not workspace_path:
         return ""
-    import subprocess
 
     for base in ("origin/main", "main", "HEAD~1"):
         try:
-            result = subprocess.run(
+            result = run_trusted_local(
                 ["git", "diff", f"{base}..HEAD"],
                 cwd=workspace_path,
                 capture_output=True,
                 text=True,
                 timeout=15,
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, TimeoutExpired):
             return ""
         if result.returncode == 0:
             diff_text = result.stdout
             # Append uncommitted working-tree diff so an uncommitted impl is visible.
             try:
-                wt = subprocess.run(
+                wt = run_trusted_local(
                     ["git", "diff"],
                     cwd=workspace_path,
                     capture_output=True,
@@ -194,7 +197,7 @@ def git_diff_summary(workspace_path: str | None) -> str:
                 )
                 if wt.returncode == 0 and wt.stdout.strip():
                     diff_text = f"{diff_text}\n{wt.stdout}" if diff_text else wt.stdout
-            except (FileNotFoundError, subprocess.TimeoutExpired):
+            except (FileNotFoundError, TimeoutExpired):
                 pass
             if not diff_text:
                 continue
@@ -223,6 +226,7 @@ def _read_engineer_report(workspace_path: str, issue_id: str) -> tuple[str | Non
         try:
             text = path.read_text(encoding="utf-8")
         except Exception:  # noqa: BLE001, RUF100
+            logger.debug("engineer report read failed: path=%s", path, exc_info=True)
             continue
         s, files, completed = _parse_engineer_report_md(text)
         # Prefer a status that claims implementation if any report does.

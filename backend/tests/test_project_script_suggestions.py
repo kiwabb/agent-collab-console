@@ -41,6 +41,19 @@ def test_collect_project_script_context_summarizes_package_scripts(tmp_path):
     assert '"vite"' in context
 
 
+def test_collect_project_script_context_ignores_non_object_package_fields(tmp_path):
+    (tmp_path / "package.json").write_text(
+        '{"packageManager":"npm@10","scripts":["dev"],"dependencies":["vite"],"devDependencies":null}'
+    )
+
+    context = collect_project_script_context(str(tmp_path))
+
+    assert '"packageManager": "npm@10"' in context
+    assert '"scripts": {}' in context
+    assert '"dependencies": []' in context
+    assert '"devDependencies": []' in context
+
+
 def test_build_prompt_keeps_setup_and_run_fields_separate(tmp_path):
     project = _project(str(tmp_path))
 

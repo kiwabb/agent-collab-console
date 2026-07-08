@@ -3,17 +3,21 @@ from __future__ import annotations  # noqa: I001
 import json
 import logging
 import os
-import subprocess
 import time
+from typing import NotRequired, TypedDict
 
 from pydantic import BaseModel, Field, ValidationError
 
+from app.adapters.local_process import TimeoutExpired, run_trusted_local
 from app.application.command_safety import REFUSED_COMMAND_PATTERNS as _REFUSED_COMMAND_PATTERNS  # noqa: F401
 from app.application.command_safety import parse_allowed_command as _parse_allowed_command
 from app.application.command_safety import refuse_reason as _shared_refuse_reason
 from app.application.issue_artifact_documents import IssueArtifactDocuments
 from app.application.qa_failure_summary import format_qa_failure_narrative
+from app.application.specialist_requests import SpecialistCallRequest
 from app.application import timeouts
+from app.domain.models import CodexTask
+from app.json_safety import object_dict
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,15 @@ QA_EXECUTE_COMMANDS = timeouts.qa_execute_commands()
 # above as `_REFUSED_COMMAND_PATTERNS` to keep this module's existing references.
 
 
+class QACommandResult(TypedDict):
+    command: str
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_s: float
+    refused: NotRequired[str]
+
+
 class QAReportDocument(BaseModel):
     language: str = "en"
     project_name: str
@@ -59,7 +72,7 @@ class QAReportDocument(BaseModel):
     # Phase 4: Request specialist assistance (e.g., security review) without waiting for Conductor.
     # Set this field to call a specialist agent directly. The specialist will complete,
     # and the QA will resume with the specialist's findings in review_comment.
-    call_specialist: dict | None = (
+    call_specialist: SpecialistCallRequest | None = (
         None  # {"role_key": "security_reviewer", "prompt": "...", "why": "..."}
     )
 
@@ -100,13 +113,14 @@ class QAWorkflow:
     def __init__(self) -> None:
         self._docs = IssueArtifactDocuments()
 
-    def build_prompt(self, task, workspace_title: str | None = None) -> str:
+    def build_prompt(self, task: CodexTask, workspace_title: str | None = None) -> str:
         project_name = workspace_title or "workspace-project"
         issue_id = task.issue_id or task.id
+        workspace_path = task.workspace_path or ""
 
-        pm_artifacts = self._read_pm_artifacts(task.workspace_path, issue_id)
-        architect_artifacts = self._read_architect_artifacts(task.workspace_path, issue_id)
-        engineer_artifacts = self._read_engineer_artifacts(task.workspace_path, issue_id)
+        pm_artifacts = self._read_pm_artifacts(workspace_path, issue_id)
+        architect_artifacts = self._read_architect_artifacts(workspace_path, issue_id)
+        engineer_artifacts = self._read_engineer_artifacts(workspace_path, issue_id)
 
         requirement_text = pm_artifacts.get("requirement", "")
         prd_text = pm_artifacts.get("prd", "")
@@ -158,7 +172,7 @@ class QAWorkflow:
             f"user_requirement:\n{task.prompt}"
         )
 
-    def persist_result(self, task, workspace_title: str | None = None) -> QAReportDocument:
+    def persist_result(self, task: CodexTask, workspace_title: str | None = None) -> QAReportDocument:
         if not task.workspace_path:
             raise QAWorkflowError("Task workspace_path is required for QA artifacts")
         if not task.result or not task.result.strip():
@@ -169,7 +183,7 @@ class QAWorkflow:
         try:
             from app.application.tolerant_json import tolerant_json_loads
 
-            payload = tolerant_json_loads(task.result)
+            payload = object_dict(tolerant_json_loads(task.result))
         except json.JSONDecodeError as exc:
             raise QAWorkflowError(f"QA output is not valid JSON: {exc}") from exc
 
@@ -266,7 +280,7 @@ class QAWorkflow:
 
     @staticmethod
     def _audit_command_execs(
-        execution_results: list[dict] | None,
+        execution_results: list[QACommandResult] | None,
         issue_id: str | None,
         task_id: str | None,
     ) -> None:
@@ -282,7 +296,7 @@ class QAWorkflow:
 
     def _execute_verification_commands(
         self, commands: list[str], workspace_path: str
-    ) -> list[dict] | None:
+    ) -> list[QACommandResult] | None:
         """Run each verification command in the worktree and capture results.
 
         Returns:
@@ -300,7 +314,7 @@ class QAWorkflow:
         if not commands:
             return []
 
-        results: list[dict] = []
+        results: list[QACommandResult] = []
         start = time.monotonic()
         for cmd in commands:
             cmd = (cmd or "").strip()
@@ -335,9 +349,8 @@ class QAWorkflow:
                 continue
             t0 = time.monotonic()
             try:
-                proc = subprocess.run(
+                proc = run_trusted_local(
                     argv or [],
-                    shell=False,
                     cwd=workspace_path,
                     capture_output=True,
                     text=True,
@@ -353,7 +366,7 @@ class QAWorkflow:
                         "duration_s": round(time.monotonic() - t0, 2),
                     }
                 )
-            except subprocess.TimeoutExpired as exc:
+            except TimeoutExpired as exc:
                 results.append(
                     {
                         "command": cmd,
@@ -384,7 +397,7 @@ class QAWorkflow:
 
     @staticmethod
     def _reconcile_status_with_execution(
-        claimed_status: str, results: list[dict]
+        claimed_status: str, results: list[QACommandResult]
     ) -> tuple[str, list[str]]:
         """Override the LLM's claimed status with what actually happened.
 
@@ -575,8 +588,8 @@ class QAWorkflow:
 
         return "\n".join(parts)
 
-    def _normalize_payload_keys(self, payload: dict) -> dict:
-        normalized = {}
+    def _normalize_payload_keys(self, payload: dict[str, object]) -> dict[str, object]:
+        normalized: dict[str, object] = {}
         for key, value in payload.items():
             compact_key = "".join(ch for ch in str(key).lower() if ch.isalnum() or ch == "_")
             target_key = self.KEY_ALIASES.get(compact_key, self.KEY_ALIASES.get(str(key), key))
@@ -584,7 +597,7 @@ class QAWorkflow:
         return normalized
 
     def _render_qa_report_markdown(
-        self, report: QAReportDocument, execution_results: list[dict] | None = None
+        self, report: QAReportDocument, execution_results: list[QACommandResult] | None = None
     ) -> str:
         lines = [
             f"# QA Report: {report.issue_title}",

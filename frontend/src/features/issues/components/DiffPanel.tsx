@@ -23,7 +23,10 @@ function isGenerated(path: string): boolean {
   return GENERATED_PATTERNS.some((re) => re.test(path));
 }
 
-function formatFileCount(count: number, t: (key: string, params?: Record<string, string | number>) => string): string {
+function formatFileCount(
+  count: number,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
   const key = count === 1 ? "task.diff.fileCountOne" : "task.diff.fileCount";
   return t(key).replace("{count}", String(count));
 }
@@ -45,17 +48,17 @@ function shortDateTime(iso: string): string {
 
 interface Props {
   diff: string;
-  baseBranch?: string | null;
-  branch?: string | null;
-  stat?: DiffStat | null;
+  baseBranch?: string | null | undefined;
+  branch?: string | null | undefined;
+  stat?: DiffStat | null | undefined;
   /** C3: when supplied, render an attribution banner above the file list
    * showing which agent + run produced these changes. Engineer is the
    * only role that touches code in this system, so a single banner is
    * accurate; per-file attribution would be misleading complexity. */
   attribution?: {
     agentName: string;
-    runId?: string | null;
-    timestamp?: string | null;
+    runId?: string | null | undefined;
+    timestamp?: string | null | undefined;
   } | null;
 }
 
@@ -68,7 +71,7 @@ export function DiffPanel({ diff, baseBranch, branch, stat, attribution }: Props
 
   const allFiles = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const files = useMemo(
-    () => showGenerated ? allFiles : allFiles.filter((f) => !isGenerated(displayPath(f))),
+    () => (showGenerated ? allFiles : allFiles.filter((f) => !isGenerated(displayPath(f)))),
     [allFiles, showGenerated],
   );
   const hiddenCount = allFiles.length - files.length;
@@ -87,9 +90,17 @@ export function DiffPanel({ diff, baseBranch, branch, stat, attribution }: Props
         {/* Branch context */}
         {(baseBranch || branch) && (
           <div className="px-3 py-1.5 text-xs text-muted-foreground font-mono border-b border-border bg-muted/20">
-            {baseBranch && <span><span className="text-foreground/50">{t("task.base")}:</span> {baseBranch}</span>}
+            {baseBranch && (
+              <span>
+                <span className="text-foreground/50">{t("task.base")}:</span> {baseBranch}
+              </span>
+            )}
             {baseBranch && branch && <span className="mx-2 text-muted-foreground/40">→</span>}
-            {branch && <span><span className="text-foreground/50">{t("task.branch")}:</span> {branch}</span>}
+            {branch && (
+              <span>
+                <span className="text-foreground/50">{t("task.branch")}:</span> {branch}
+              </span>
+            )}
           </div>
         )}
 
@@ -106,7 +117,9 @@ export function DiffPanel({ diff, baseBranch, branch, stat, attribution }: Props
                 className="ml-2 text-muted-foreground/60 underline hover:text-foreground"
                 onClick={() => setShowGenerated((v) => !v)}
               >
-                {showGenerated ? t("task.diff.hideGenerated").replace("{count}", String(hiddenCount)) : t("task.diff.showGenerated").replace("{count}", String(hiddenCount))}
+                {showGenerated
+                  ? t("task.diff.hideGenerated").replace("{count}", String(hiddenCount))
+                  : t("task.diff.showGenerated").replace("{count}", String(hiddenCount))}
               </button>
             )}
           </span>
@@ -125,12 +138,20 @@ export function DiffPanel({ diff, baseBranch, branch, stat, attribution }: Props
               {t("task.diff.viewSplit")}
             </button>
           </div>
-          <Button size="sm" variant="ghost" className="h-6 px-2"
-            onClick={() => setForcedExpanded(true)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2"
+            onClick={() => setForcedExpanded(true)}
+          >
             {t("task.diff.expandAll")}
           </Button>
-          <Button size="sm" variant="ghost" className="h-6 px-2"
-            onClick={() => setForcedExpanded(false)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2"
+            onClick={() => setForcedExpanded(false)}
+          >
             {t("task.diff.collapseAll")}
           </Button>
         </div>
@@ -145,7 +166,9 @@ export function DiffPanel({ diff, baseBranch, branch, stat, attribution }: Props
           {attribution.runId && (
             <>
               <span className="text-foreground/40">·</span>
-              <span className="font-mono">{t("task.diffMerge.runLabel", { run: attribution.runId.slice(0, 8) })}</span>
+              <span className="font-mono">
+                {t("task.diffMerge.runLabel", { run: attribution.runId.slice(0, 8) })}
+              </span>
             </>
           )}
           {attribution.timestamp && (

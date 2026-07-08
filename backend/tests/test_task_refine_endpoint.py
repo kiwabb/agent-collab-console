@@ -3,10 +3,12 @@
 import json  # noqa: I001
 from datetime import datetime
 from pathlib import Path  # noqa: F401
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.application.codex_task_runner import TaskRunnerStore
 from app.application.issue_artifact_documents import IssueArtifactDocuments
 from app.domain.models import CodexSession, CodexTask, ExecutionProcess
 import app.interfaces.api as api_module
@@ -256,7 +258,7 @@ async def test_build_prompt_text_refine_includes_existing_pm_artifact(tmp_path):
         "S", (), {"is_managed_role": staticmethod(lambda r: True)}
     )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
-    runner.codex_store = None
+    runner.codex_store = cast(TaskRunnerStore, None)
 
     task = _make_task(role="product_manager", tmp_path=tmp_path)
     out = await runner._build_prompt_text(
@@ -282,7 +284,7 @@ async def test_build_prompt_text_refine_includes_existing_architect_artifact(tmp
         "S", (), {"is_managed_role": staticmethod(lambda r: True)}
     )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
-    runner.codex_store = None
+    runner.codex_store = cast(TaskRunnerStore, None)
 
     task = _make_task(role="architect", tmp_path=tmp_path)
     out = await runner._build_prompt_text(
@@ -307,7 +309,7 @@ async def test_build_prompt_text_refine_includes_existing_engineer_artifact(tmp_
         "S", (), {"is_managed_role": staticmethod(lambda r: True)}
     )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
-    runner.codex_store = None
+    runner.codex_store = cast(TaskRunnerStore, None)
 
     task = _make_task(role="engineer", tmp_path=tmp_path)
     out = await runner._build_prompt_text(
@@ -332,7 +334,7 @@ async def test_build_prompt_text_refine_includes_existing_qa_artifact(tmp_path):
         "S", (), {"is_managed_role": staticmethod(lambda r: True)}
     )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
-    runner.codex_store = None
+    runner.codex_store = cast(TaskRunnerStore, None)
 
     task = _make_task(role="qa", tmp_path=tmp_path)
     out = await runner._build_prompt_text(
@@ -358,7 +360,7 @@ async def test_build_prompt_text_refine_raises_when_no_artifact(tmp_path):
         "S", (), {"is_managed_role": staticmethod(lambda r: True)}
     )()
     runner._CODEX_COLLABORATION_HINT = "(hint)"
-    runner.codex_store = None
+    runner.codex_store = cast(TaskRunnerStore, None)
 
     task = _make_task(role="product_manager", tmp_path=tmp_path)
     with pytest.raises(Exception):  # noqa: B017

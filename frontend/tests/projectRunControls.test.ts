@@ -1,15 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readCompactSource as readSource } from "./sourceTestUtils";
 
 import { getDictionaryValue } from "../src/lib/i18n";
-
-const SRC_ROOT = join(process.cwd(), "src");
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
 
 // i18n keys introduced for the one-click project run (dev server) feature.
 const RUN_KEYS = [
@@ -123,7 +116,10 @@ test("ProjectsPage wires operations engineer startup-script task flow", () => {
   assert.match(page, /setSelectedProjectId\(p\.id\);\s*setActiveId\(p\.id\);/);
   assert.match(page, /useContext\(ExecutionProcessesContext\)/);
   assert.match(page, /useDataEvent\("projects:changed", refreshFromProjectEvent\)/);
-  assert.match(page, /const refreshFromProjectEvent = useCallback\(\(\) => \{\s*void refresh\(\);\s*\}, \[refresh\]\);/);
+  assert.match(
+    page,
+    /const refreshFromProjectEvent = useCallback\(\(\) => \{\s*void refresh\(\);\s*\}, \[refresh\]\);/,
+  );
   assert.doesNotMatch(page, /setTimeout\(\(\) => \{\s*setSuggestingProjectId/);
   assert.doesNotMatch(page, /setTimeout\(\(\) => \{\s*setSuggestingTaskId/);
   assert.doesNotMatch(page, /useExecutionProcessesContext/);
@@ -149,7 +145,10 @@ test("ProjectsPage handles script task terminal events by task id first", () => 
 
   assert.ok(taskIdGuard > -1, "script task terminal handling should wait for a task id");
   assert.ok(taskIdMatch > taskIdGuard, "terminal events should match the tracked task id");
-  assert.ok(projectIdCheck > taskIdMatch, "project id should only narrow after exact task-id matching");
+  assert.ok(
+    projectIdCheck > taskIdMatch,
+    "project id should only narrow after exact task-id matching",
+  );
 });
 
 test("ProjectScriptTaskResponse keeps reused as a required boolean", () => {

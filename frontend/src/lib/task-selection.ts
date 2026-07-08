@@ -3,12 +3,15 @@ import type { CodexIssue, CodexTask, ExecutionProcess, HelpRequest } from "./typ
 export const PHASES = ["requirements", "architecture", "development", "testing"] as const;
 export type Phase = (typeof PHASES)[number];
 
-export const PHASE_CONFIG: Record<Phase, {
-  labelKey: string;
-  descriptionKey: string;
-  buttonLabelKey: string;
-  role: string;
-}> = {
+export const PHASE_CONFIG: Record<
+  Phase,
+  {
+    labelKey: string;
+    descriptionKey: string;
+    buttonLabelKey: string;
+    role: string;
+  }
+> = {
   requirements: {
     labelKey: "phase.requirements",
     descriptionKey: "phase.requirements",
@@ -65,7 +68,7 @@ export function deriveIssueCounts(
   issueId: string,
   tasks: CodexTask[],
   executionProcesses: ExecutionProcess[],
-  helpRequests: HelpRequest[]
+  helpRequests: HelpRequest[],
 ): IssueCounts {
   const issueTasks = tasks.filter((t) => t.issue_id === issueId);
   const taskIds = new Set(issueTasks.map((t) => t.id));

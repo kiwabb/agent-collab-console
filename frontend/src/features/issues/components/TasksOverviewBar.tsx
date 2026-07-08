@@ -66,11 +66,7 @@ export function TasksOverviewBar({ issueId }: Props) {
   useBusEventEffect({
     match: busEventMatchers.all(
       busEventMatchers.issueId(issueId),
-      busEventMatchers.typeIn(
-        "task_status",
-        "task_created",
-        "workflow_node_updated",
-      ),
+      busEventMatchers.typeIn("task_status", "task_created", "workflow_node_updated"),
     ),
     onEvent: () => {
       void refresh();
@@ -81,10 +77,8 @@ export function TasksOverviewBar({ issueId }: Props) {
   const { startMs, durationMs } = useMemo(() => {
     const starts: number[] = [];
     const ends: number[] = [];
-    if (pipeline?.started_at)
-      starts.push(new Date(pipeline.started_at).getTime());
-    if (pipeline?.completed_at)
-      ends.push(new Date(pipeline.completed_at).getTime());
+    if (pipeline?.started_at) starts.push(new Date(pipeline.started_at).getTime());
+    if (pipeline?.completed_at) ends.push(new Date(pipeline.completed_at).getTime());
     for (const s of pipeline?.stages ?? []) {
       if (s.started_at) starts.push(new Date(s.started_at).getTime());
       if (s.completed_at) ends.push(new Date(s.completed_at).getTime());
@@ -132,9 +126,7 @@ export function TasksOverviewBar({ issueId }: Props) {
           <span className="text-text-faint">·</span>
           <span>
             <b className="text-foreground font-medium">
-              {formatNum(
-                cost ? cost.input_tokens + cost.output_tokens : 0,
-              )}
+              {formatNum(cost ? cost.input_tokens + cost.output_tokens : 0)}
             </b>{" "}
             {t("issue.tasksOverview.tokensLabel")}
           </span>
@@ -173,12 +165,7 @@ export function TasksOverviewBar({ issueId }: Props) {
           </div>
         ) : (
           stages.map((s) => (
-            <GanttRow
-              key={s.role}
-              stage={s}
-              startMs={startMs}
-              durationMs={durationMs}
-            />
+            <GanttRow key={s.role} stage={s} startMs={startMs} durationMs={durationMs} />
           ))
         )}
       </div>
@@ -255,24 +242,15 @@ function RunsListRow({
   const Icon = ROLE_ICON[role] ?? BarChart3;
   const descKey = ROLE_DESC_KEY[role];
   const desc = descKey ? t(descKey) : role;
-  const dur =
-    (stat?.duration_seconds ?? durationSeconds);
+  const dur = stat?.duration_seconds ?? durationSeconds;
 
   return (
-    <div
-      className="grid grid-cols-[24px_140px_minmax(0,1fr)_90px_100px_80px_24px] items-center gap-3 px-4 py-2.5 border-b border-border-subtle last:border-b-0 hover:bg-surface-hover/60 transition-colors"
-    >
+    <div className="grid grid-cols-[24px_140px_minmax(0,1fr)_90px_100px_80px_24px] items-center gap-3 px-4 py-2.5 border-b border-border-subtle last:border-b-0 hover:bg-surface-hover/60 transition-colors">
       <span
         className="size-[18px] rounded-full flex items-center justify-center justify-self-center"
         style={{
-          background:
-            kind === "start"
-              ? "var(--color-brand-bg)"
-              : "var(--color-done-bg)",
-          color:
-            kind === "start"
-              ? "var(--color-brand)"
-              : "var(--color-status-done)",
+          background: kind === "start" ? "var(--color-brand-bg)" : "var(--color-done-bg)",
+          color: kind === "start" ? "var(--color-brand)" : "var(--color-status-done)",
         }}
       >
         <svg
@@ -292,14 +270,8 @@ function RunsListRow({
         <span
           className="size-6 shrink-0 rounded-md flex items-center justify-center"
           style={{
-            background:
-              kind === "start"
-                ? "var(--color-brand-bg)"
-                : "var(--color-done-bg)",
-            color:
-              kind === "start"
-                ? "var(--color-brand)"
-                : "var(--color-status-done)",
+            background: kind === "start" ? "var(--color-brand-bg)" : "var(--color-done-bg)",
+            color: kind === "start" ? "var(--color-brand)" : "var(--color-status-done)",
           }}
         >
           <Icon size={13} />
@@ -308,19 +280,13 @@ function RunsListRow({
           <div className="font-mono text-[11px] uppercase tracking-[0.08em] font-semibold text-foreground leading-tight">
             {label}
           </div>
-          <div className="text-[11px] text-text-muted leading-tight mt-0.5">
-            {desc}
-          </div>
+          <div className="text-[11px] text-text-muted leading-tight mt-0.5">{desc}</div>
         </div>
       </div>
-      <div className="font-mono text-[12px] text-text-secondary truncate">
-        {summary}
-      </div>
+      <div className="font-mono text-[12px] text-text-secondary truncate">{summary}</div>
       <div className="font-mono text-[11.5px] text-text-secondary text-right">
         {dur != null ? fmtDuration(dur) : "—"}
-        <small className="block text-[10px] text-text-faint mt-0.5">
-          {fmtTimeOnly(startedAt)}
-        </small>
+        <small className="block text-[10px] text-text-faint mt-0.5">{fmtTimeOnly(startedAt)}</small>
       </div>
       <div className="font-mono text-[11.5px] text-text-secondary text-right">
         {stat?.tokens ? fmtTok(stat.tokens.total) : "—"}
@@ -331,9 +297,7 @@ function RunsListRow({
         </small>
       </div>
       <div className="font-mono text-[11.5px] text-text-secondary text-right">
-        {stat?.est_cost_usd != null
-          ? `$${stat.est_cost_usd.toFixed(3)}`
-          : "—"}
+        {stat?.est_cost_usd != null ? `$${stat.est_cost_usd.toFixed(3)}` : "—"}
       </div>
       <span className="text-text-faint justify-self-end">
         <ChevronRight size={12} />
@@ -358,13 +322,7 @@ function fmtTok(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-function Axis({
-  startMs,
-  durationMs,
-}: {
-  startMs: number | null;
-  durationMs: number;
-}) {
+function Axis({ startMs, durationMs }: { startMs: number | null; durationMs: number }) {
   if (!startMs || durationMs <= 0) {
     return (
       <div className="relative h-[18px] mb-2 font-mono text-[10px] text-text-faint">
@@ -426,7 +384,9 @@ function GanttRow({
       <div className="relative h-[18px] bg-white/[0.02] rounded">
         {width > 0 && (
           <div
-            data-density={isRunningStage ? "tasks-overview-running-gantt-bar" : "tasks-overview-gantt-bar"}
+            data-density={
+              isRunningStage ? "tasks-overview-running-gantt-bar" : "tasks-overview-gantt-bar"
+            }
             className={cn(
               "absolute top-[2px] bottom-[2px] rounded-[3px] flex items-center gap-1 px-1.5 overflow-hidden font-mono text-[10px] font-semibold",
               isRunningStage && "motion-essential",
@@ -444,7 +404,9 @@ function GanttRow({
                 className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-white/80 to-transparent"
               />
             )}
-            {isRunningStage && <AgentThinkingIndicator phase="dispatching" size={10} className="shrink-0" />}
+            {isRunningStage && (
+              <AgentThinkingIndicator phase="dispatching" size={10} className="shrink-0" />
+            )}
             <span className="truncate">{label}</span>
           </div>
         )}
@@ -467,9 +429,7 @@ function barGeometry(
   if (!startMs || durationMs <= 0) {
     return { left: 0, width: 0, tone, label: "" };
   }
-  const sStart = stage.started_at
-    ? new Date(stage.started_at).getTime()
-    : null;
+  const sStart = stage.started_at ? new Date(stage.started_at).getTime() : null;
   const sEnd = stage.completed_at
     ? new Date(stage.completed_at).getTime()
     : stage.status === "running"
@@ -519,9 +479,7 @@ function shortSummary(stage: PipelineStage): string {
   // Use the part after the first " · " for compactness; falls back to the
   // full summary when there's no separator.
   const idx = stage.summary.indexOf(" · ");
-  return idx >= 0
-    ? stage.summary.slice(idx + 3)
-    : stage.summary || stage.label;
+  return idx >= 0 ? stage.summary.slice(idx + 3) : stage.summary || stage.label;
 }
 
 function fmtTime(ts: number): string {

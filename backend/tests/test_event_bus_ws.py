@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
 from app.application.event_bus import EventBus, event_bus
 
@@ -20,7 +21,8 @@ def test_event_bus_wraps_events_and_evicts_old_entries():
     assert entries[0]["event_id"] == "evt-00000002"
     assert entries[1]["event_id"] == "evt-00000003"
     assert entries[0]["type"] == "issue_updated"
-    assert entries[1]["payload"]["issue_id"] == "c"
+    payload = cast(dict[str, object], entries[1]["payload"])
+    assert payload["issue_id"] == "c"
 
 
 def test_event_bus_replay_from_and_gap_detection():

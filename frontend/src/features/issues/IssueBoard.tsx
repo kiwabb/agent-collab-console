@@ -3,14 +3,37 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import type { CodexIssue, CodexTask } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { IssueCard } from "./IssueCard";
 import { SortableIssueCard } from "./SortableIssueCard";
 import { PHASES, type Phase, groupIssuesByPhase } from "./phaseUtils";
-import { Plus, Layout, ChevronDown, ChevronRight, ChevronsUpDown, Download, Upload, CheckSquare, Square, Columns } from "lucide-react";
+import {
+  Plus,
+  Layout,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Upload,
+  CheckSquare,
+  Square,
+  Columns,
+} from "lucide-react";
 import { useI18n } from "@/providers/I18nProvider";
 import type { TranslationKey } from "@/lib/i18n";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import {
   DndContext,
@@ -46,22 +69,6 @@ interface IssueBoardProps {
   isLoading?: boolean;
 }
 
-function formatRelativeTime(dateStr: string | null): string {
-  if (!dateStr) return "";
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHour = Math.floor(diffMin / 60);
-  const diffDay = Math.floor(diffHour / 24);
-  if (diffSec < 60) return `${diffSec}s ago`;
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffHour < 24) return `${diffHour}h ago`;
-  if (diffDay < 7) return `${diffDay}d ago`;
-  return date.toLocaleDateString();
-}
-
 export function IssueBoard({
   issues,
   tasks,
@@ -87,7 +94,9 @@ export function IssueBoard({
   const [titleError, setTitleError] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [expandedPhases, setExpandedPhases] = useState<Set<Phase>>(new Set(["requirements", "architecture", "development", "testing"]));
+  const [expandedPhases, setExpandedPhases] = useState<Set<Phase>>(
+    new Set(["requirements", "architecture", "development", "testing"]),
+  );
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
   const [bulkEditMode, setBulkEditMode] = useState(false);
   const [selectedIssueIds, setSelectedIssueIds] = useState<Set<string>>(new Set());
@@ -103,7 +112,7 @@ export function IssueBoard({
     }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
-    })
+    }),
   );
 
   // Group issues by phase
@@ -117,21 +126,24 @@ export function IssueBoard({
     return all;
   }, [byPhase]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (!flatIssues.length) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setFocusedIndex(i => Math.min(i + 1, flatIssues.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setFocusedIndex(i => Math.max(i - 1, 0));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (focusedIndex >= 0 && flatIssues[focusedIndex]) {
-        onSelectIssue(flatIssues[focusedIndex].id);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!flatIssues.length) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setFocusedIndex((i) => Math.min(i + 1, flatIssues.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setFocusedIndex((i) => Math.max(i - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (focusedIndex >= 0 && flatIssues[focusedIndex]) {
+          onSelectIssue(flatIssues[focusedIndex].id);
+        }
       }
-    }
-  }, [flatIssues, focusedIndex, onSelectIssue]);
+    },
+    [flatIssues, focusedIndex, onSelectIssue],
+  );
 
   useEffect(() => {
     setFocusedIndex(-1);
@@ -140,14 +152,14 @@ export function IssueBoard({
   // Get unique assignees from tasks
   const assignees = useMemo(() => {
     const set = new Set<string>();
-    tasks.forEach(t => {
+    tasks.forEach((t) => {
       if (t.role) set.add(t.role);
     });
     return Array.from(set).sort();
   }, [tasks]);
 
   const togglePhase = (phase: Phase) => {
-    setExpandedPhases(prev => {
+    setExpandedPhases((prev) => {
       const next = new Set(prev);
       if (next.has(phase)) next.delete(phase);
       else next.add(phase);
@@ -155,21 +167,26 @@ export function IssueBoard({
     });
   };
 
-  const expandAll = () => setExpandedPhases(new Set(["requirements", "architecture", "development", "testing"]));
+  const expandAll = () =>
+    setExpandedPhases(new Set(["requirements", "architecture", "development", "testing"]));
   const collapseAll = () => setExpandedPhases(new Set());
 
-  const getTaskCounts = useMemo(() => (issueId: string) => {
-    let issueTasks = tasks.filter((t) => t.issue_id === issueId);
-    if (assigneeFilter !== "all") {
-      issueTasks = issueTasks.filter(t => t.role === assigneeFilter);
-    }
-    return {
-      total: issueTasks.length,
-      running: issueTasks.filter((t) => t.status === "running" || t.status === "responding").length,
-      failed: issueTasks.filter((t) => t.status === "failed").length,
-      waiting: issueTasks.filter((t) => t.status === "waiting" || t.status === "blocked").length,
-    };
-  }, [tasks, assigneeFilter]);
+  const getTaskCounts = useMemo(
+    () => (issueId: string) => {
+      let issueTasks = tasks.filter((t) => t.issue_id === issueId);
+      if (assigneeFilter !== "all") {
+        issueTasks = issueTasks.filter((t) => t.role === assigneeFilter);
+      }
+      return {
+        total: issueTasks.length,
+        running: issueTasks.filter((t) => t.status === "running" || t.status === "responding")
+          .length,
+        failed: issueTasks.filter((t) => t.status === "failed").length,
+        waiting: issueTasks.filter((t) => t.status === "waiting" || t.status === "blocked").length,
+      };
+    },
+    [tasks, assigneeFilter],
+  );
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -203,26 +220,38 @@ export function IssueBoard({
     }
   }
 
-  const visiblePhases = (columnConfig ?? ["requirements", "architecture", "development", "testing"]) as Phase[];
+  const visiblePhases = (columnConfig ?? [
+    "requirements",
+    "architecture",
+    "development",
+    "testing",
+  ]) as Phase[];
   const boardPhases: { id: Phase; labelKey: string; color: string }[] = [
     { id: "requirements", labelKey: "phase.requirements", color: "bg-text-muted" },
     { id: "architecture", labelKey: "phase.architecture", color: "bg-warning" },
     { id: "development", labelKey: "phase.development", color: "bg-brand" },
     { id: "testing", labelKey: "phase.testing", color: "bg-success" },
   ];
-  const visibleBoardPhases = boardPhases.filter(p => visiblePhases.includes(p.id));
+  const visibleBoardPhases = boardPhases.filter((p) => visiblePhases.includes(p.id));
 
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">
       {/* Board Header */}
-      <div className="flex items-center justify-between p-6 border-b border-border-subtle bg-surface/50" data-tour="workspace">
+      <div
+        className="flex items-center justify-between p-6 border-b border-border-subtle bg-surface/50"
+        data-tour="workspace"
+      >
         <div className="flex items-center gap-4">
           <div className="size-8 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center">
             <Layout size={18} className="text-brand" />
           </div>
           <div>
-            <h2 className="text-lg font-black tracking-tighter text-foreground">{t("issue.boardTitle")}</h2>
-            <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-text-muted">{t("issue.boardSubtitle")}</p>
+            <h2 className="text-lg font-black tracking-tighter text-foreground">
+              {t("issue.boardTitle")}
+            </h2>
+            <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-text-muted">
+              {t("issue.boardSubtitle")}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -259,7 +288,12 @@ export function IssueBoard({
                 setBulkEditMode(!bulkEditMode);
                 if (bulkEditMode) setSelectedIssueIds(new Set());
               }}
-              className={cn("p-2 rounded-lg transition-all", bulkEditMode ? "bg-brand/10 text-brand" : "hover:bg-surface-hover text-text-muted hover:text-brand")}
+              className={cn(
+                "p-2 rounded-lg transition-all",
+                bulkEditMode
+                  ? "bg-brand/10 text-brand"
+                  : "hover:bg-surface-hover text-text-muted hover:text-brand",
+              )}
               title={t("issue.bulkEdit")}
             >
               <CheckSquare size={16} />
@@ -275,16 +309,19 @@ export function IssueBoard({
             </button>
           )}
           {assignees.length > 0 && (
-            <select
-              value={assigneeFilter}
-              onChange={(e) => setAssigneeFilter(e.target.value)}
-              className="px-3 py-1.5 text-xs font-bold rounded-lg bg-surface-raised border border-border-subtle text-text-secondary hover:bg-surface-hover transition-all cursor-pointer outline-none"
-            >
-              <option value="all">{t("issue.assignee.all")}</option>
-              {assignees.map(a => (
-                <option key={a} value={a}>{a.split('_').pop()?.toUpperCase()}</option>
-              ))}
-            </select>
+            <Select value={assigneeFilter} onValueChange={(v) => setAssigneeFilter(v || "all")}>
+              <SelectTrigger size="sm" className="text-xs font-bold min-w-[100px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t("issue.assignee.all")}</SelectItem>
+                {assignees.map((a) => (
+                  <SelectItem key={a} value={a}>
+                    {a.split("_").pop()?.toUpperCase()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-raised border border-border-subtle">
             <button
@@ -305,24 +342,33 @@ export function IssueBoard({
           </div>
           {bulkEditMode && selectedIssueIds.size > 0 && onBulkUpdate && (
             <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-brand">{t("issue.bulk.selected", { count: selectedIssueIds.size })}</span>
-              <select
-                onChange={(e) => {
-                  if (e.target.value) {
-                    onBulkUpdate(Array.from(selectedIssueIds), { current_phase: e.target.value });
-                    addToast({ type: "success", title: t("issue.bulk.moved", { count: selectedIssueIds.size }) });
+              <span className="text-xs font-bold text-brand">
+                {t("issue.bulk.selected", { count: selectedIssueIds.size })}
+              </span>
+              <Select
+                value=""
+                onValueChange={(v) => {
+                  if (v) {
+                    onBulkUpdate(Array.from(selectedIssueIds), { current_phase: v });
+                    addToast({
+                      type: "success",
+                      title: t("issue.bulk.moved", { count: selectedIssueIds.size }),
+                    });
                     setSelectedIssueIds(new Set());
                     setBulkEditMode(false);
                   }
                 }}
-                className="px-3 py-1.5 text-xs font-bold rounded-lg bg-brand text-background border-0 cursor-pointer"
               >
-                <option value="">{t("issue.bulk.moveTo")}</option>
-                <option value="requirements">{t("phase.requirements")}</option>
-                <option value="architecture">{t("phase.architecture")}</option>
-                <option value="development">{t("phase.development")}</option>
-                <option value="testing">{t("phase.testing")}</option>
-              </select>
+                <SelectTrigger size="sm" className="text-xs font-bold min-w-[100px]">
+                  <SelectValue placeholder={t("issue.bulk.moveTo")} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="requirements">{t("phase.requirements")}</SelectItem>
+                  <SelectItem value="architecture">{t("phase.architecture")}</SelectItem>
+                  <SelectItem value="development">{t("phase.development")}</SelectItem>
+                  <SelectItem value="testing">{t("phase.testing")}</SelectItem>
+                </SelectContent>
+              </Select>
               {onBulkDelete && (
                 <button
                   onClick={() => setBulkDeleteConfirmOpen(true)}
@@ -346,30 +392,42 @@ export function IssueBoard({
 
       {showColumnConfig && onColumnConfigChange && (
         <div className="p-4 border-b border-border-subtle bg-surface-raised/30 flex items-center gap-4">
-          <span className="text-xs font-black uppercase tracking-widest text-text-muted">{t("issue.visibleColumns")}</span>
-          {(["requirements", "architecture", "development", "testing"] as Phase[]).map(phase => (
+          <span className="text-xs font-black uppercase tracking-widest text-text-muted">
+            {t("issue.visibleColumns")}
+          </span>
+          {(["requirements", "architecture", "development", "testing"] as Phase[]).map((phase) => (
             <label key={phase} className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
                 checked={columnConfig?.includes(phase) ?? true}
                 onChange={(e) => {
-                  const current = columnConfig ?? ["requirements", "architecture", "development", "testing"];
+                  const current = columnConfig ?? [
+                    "requirements",
+                    "architecture",
+                    "development",
+                    "testing",
+                  ];
                   if (e.target.checked) {
                     onColumnConfigChange([...current, phase]);
                   } else {
-                    onColumnConfigChange(current.filter(p => p !== phase));
+                    onColumnConfigChange(current.filter((p) => p !== phase));
                   }
                 }}
                 className="accent-brand"
               />
-              <span className="text-xs font-bold text-text-secondary">{t(`phase.${phase}` as TranslationKey)}</span>
+              <span className="text-xs font-bold text-text-secondary">
+                {t(`phase.${phase}` as TranslationKey)}
+              </span>
             </label>
           ))}
         </div>
       )}
 
       {showForm && (
-        <form onSubmit={handleSubmit} className="p-8 border-b border-border-subtle bg-surface-raised/30 animate-in slide-in-from-top-4 duration-500">
+        <form
+          onSubmit={handleSubmit}
+          className="p-8 border-b border-border-subtle bg-surface-raised/30 animate-in slide-in-from-top-4 duration-500"
+        >
           <div className="max-w-2xl">
             <div className="mb-4">
               <input
@@ -383,12 +441,10 @@ export function IssueBoard({
                 autoFocus
                 className={cn(
                   "w-full px-5 py-3 text-sm rounded-xl cc-input outline-none font-bold shadow-inner",
-                  titleError && "border-error mb-1"
+                  titleError && "border-error mb-1",
                 )}
               />
-              {titleError && (
-                <p className="text-xs text-error font-medium">{titleError}</p>
-              )}
+              {titleError && <p className="text-xs text-error font-medium">{titleError}</p>}
             </div>
             <textarea
               value={newDesc}
@@ -431,25 +487,33 @@ export function IssueBoard({
       )}
 
       {/* Swimlanes */}
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
-      >
-        <div className="flex-1 overflow-x-auto no-scrollbar bg-surface/5" onKeyDown={handleKeyDown} tabIndex={0}>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <div
+          className="flex-1 overflow-x-auto no-scrollbar bg-surface/5"
+          onKeyDown={handleKeyDown}
+          tabIndex={0}
+        >
           <div className="flex h-full min-w-max p-6 gap-6">
             {visibleBoardPhases.map((phase) => {
               const phaseIssues = byPhase[phase.id];
               const isExpanded = expandedPhases.has(phase.id);
               return (
-                <div key={phase.id} className="flex flex-col w-[350px] shrink-0 group/column" data-tour="phases">
+                <div
+                  key={phase.id}
+                  className="flex flex-col w-[350px] shrink-0 group/column"
+                  data-tour="phases"
+                >
                   <div className="flex items-center justify-between mb-6 px-1">
                     <div className="flex items-center gap-3">
                       <button
                         onClick={() => togglePhase(phase.id)}
                         className="p-0.5 rounded hover:bg-surface-hover transition-all"
                       >
-                        {isExpanded ? <ChevronDown size={14} className="text-text-muted" /> : <ChevronRight size={14} className="text-text-muted" />}
+                        {isExpanded ? (
+                          <ChevronDown size={14} className="text-text-muted" />
+                        ) : (
+                          <ChevronRight size={14} className="text-text-muted" />
+                        )}
                       </button>
                       <div className={`size-2.5 rounded-full ${phase.color} shadow-sm`} />
                       <h3 className="text-[11px] font-black uppercase tracking-[0.25em] text-text-secondary group-hover/column:text-foreground transition-colors">
@@ -466,75 +530,84 @@ export function IssueBoard({
                         setShowForm(true);
                       }}
                       className="p-1.5 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover/column:opacity-100"
+                      aria-label={t("issue.create")}
                     >
                       <Plus size={14} />
                     </button>
                   </div>
 
                   {isExpanded && (
-                  <SortableContext
-                    items={phaseIssues.map(i => i.id)}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20">
-                      {isLoading ? (
-                        <>
-                          {[1, 2, 3].map((i) => (
-                            <div key={i} className="p-5 rounded-2xl bg-surface/40 border border-border-subtle">
-                              <Skeleton variant="text" className="w-3/4 mb-2" />
-                              <Skeleton variant="text" className="w-1/2 mb-4" />
-                              <div className="flex items-center gap-3">
-                                <Skeleton variant="default" className="w-16 h-5" />
-                                <Skeleton variant="default" className="w-8 h-5" />
+                    <SortableContext
+                      items={phaseIssues.map((i) => i.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20">
+                        {isLoading ? (
+                          <>
+                            {[1, 2, 3].map((i) => (
+                              <div
+                                key={i}
+                                className="p-5 rounded-2xl bg-surface/40 border border-border-subtle"
+                              >
+                                <Skeleton variant="text" className="w-3/4 mb-2" />
+                                <Skeleton variant="text" className="w-1/2 mb-4" />
+                                <div className="flex items-center gap-3">
+                                  <Skeleton variant="default" className="w-16 h-5" />
+                                  <Skeleton variant="default" className="w-8 h-5" />
+                                </div>
                               </div>
-                            </div>
-                          ))}
-                        </>
-                      ) : phaseIssues.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-20 opacity-[0.03] border-2 border-dashed border-foreground rounded-3xl">
-                          <p className="text-[10px] uppercase tracking-widest font-black">{t("issue.ready")}</p>
-                        </div>
-                      ) : (
-                        phaseIssues.map((issue) => {
-                          const counts = getTaskCounts(issue.id);
-                          return (
-                            <div key={issue.id} className="animate-in fade-in slide-in-from-bottom-2 duration-500 relative">
-                              {bulkEditMode && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const newSet = new Set(selectedIssueIds);
-                                    if (newSet.has(issue.id)) newSet.delete(issue.id);
-                                    else newSet.add(issue.id);
-                                    setSelectedIssueIds(newSet);
-                                  }}
-                                  className="absolute top-3 left-3 z-10 p-1 rounded hover:bg-surface-hover"
-                                >
-                                  {selectedIssueIds.has(issue.id) ? (
-                                    <CheckSquare size={16} className="text-brand" />
-                                  ) : (
-                                    <Square size={16} className="text-text-muted" />
-                                  )}
-                                </button>
-                              )}
-                              <SortableIssueCard
-                                issue={issue}
-                                isSelected={issue.id === currentIssueId}
-                                taskCount={counts.total}
-                                runningCount={counts.running}
-                                failedCount={counts.failed}
-                                waitingCount={counts.waiting}
-                                onClick={() => !bulkEditMode && onSelectIssue(issue.id)}
-                                onUpdateIssue={onUpdateIssue}
-                                onPinIssue={onPinIssue}
-                                onDuplicateIssue={onDuplicateIssue}
-                              />
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </SortableContext>
+                            ))}
+                          </>
+                        ) : phaseIssues.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center py-20 opacity-40 border-2 border-dashed border-border-subtle rounded-3xl">
+                            <p className="text-[10px] uppercase tracking-widest font-black text-text-muted">
+                              {t("issue.ready")}
+                            </p>
+                          </div>
+                        ) : (
+                          phaseIssues.map((issue) => {
+                            const counts = getTaskCounts(issue.id);
+                            return (
+                              <div
+                                key={issue.id}
+                                className="animate-in fade-in slide-in-from-bottom-2 duration-500 relative"
+                              >
+                                {bulkEditMode && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const newSet = new Set(selectedIssueIds);
+                                      if (newSet.has(issue.id)) newSet.delete(issue.id);
+                                      else newSet.add(issue.id);
+                                      setSelectedIssueIds(newSet);
+                                    }}
+                                    className="absolute top-3 left-3 z-10 p-1 rounded hover:bg-surface-hover"
+                                  >
+                                    {selectedIssueIds.has(issue.id) ? (
+                                      <CheckSquare size={16} className="text-brand" />
+                                    ) : (
+                                      <Square size={16} className="text-text-muted" />
+                                    )}
+                                  </button>
+                                )}
+                                <SortableIssueCard
+                                  issue={issue}
+                                  isSelected={issue.id === currentIssueId}
+                                  taskCount={counts.total}
+                                  runningCount={counts.running}
+                                  failedCount={counts.failed}
+                                  waitingCount={counts.waiting}
+                                  onClick={() => !bulkEditMode && onSelectIssue(issue.id)}
+                                  onUpdateIssue={onUpdateIssue}
+                                  onPinIssue={onPinIssue}
+                                  onDuplicateIssue={onDuplicateIssue}
+                                />
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </SortableContext>
                   )}
                 </div>
               );
@@ -543,15 +616,25 @@ export function IssueBoard({
         </div>
       </DndContext>
 
-      {showImportDialog && onImport && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-8">
-          <div className="bg-surface rounded-2xl border border-border-subtle shadow-2xl max-w-lg w-full p-8">
-            <h3 className="text-lg font-black tracking-tighter mb-6">{t("issue.import.title")}</h3>
-            <div className="mb-6">
-              <label className="block text-xs font-black uppercase tracking-widest text-text-muted mb-2">{t("issue.import.format")}</label>
+      <Dialog open={showImportDialog && !!onImport} onOpenChange={(open) => !open && setShowImportDialog(false)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("issue.import.title")}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-6">
+            <div>
+              <label className="block text-xs font-black uppercase tracking-widest text-text-muted mb-2">
+                {t("issue.import.format")}
+              </label>
               <div className="flex gap-4">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="importFormat" value="json" defaultChecked className="accent-brand" />
+                  <input
+                    type="radio"
+                    name="importFormat"
+                    value="json"
+                    defaultChecked
+                    className="accent-brand"
+                  />
                   <span className="text-sm font-bold">JSON</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -564,32 +647,35 @@ export function IssueBoard({
               id="importData"
               placeholder={t("issue.import.placeholder")}
               rows={10}
-              className="w-full px-4 py-3 text-sm rounded-xl cc-input outline-none mb-6 resize-none font-mono text-xs"
+              className="w-full px-4 py-3 text-sm rounded-xl cc-input outline-none resize-none font-mono text-xs"
             />
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowImportDialog(false)}
-                className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg border border-border-subtle hover:bg-surface-hover transition-all"
-              >
-                {t("issue.cancel")}
-              </button>
-              <button
-                onClick={() => {
-                  const format = (document.querySelector('input[name="importFormat"]:checked') as HTMLInputElement)?.value as "csv" | "json";
-                  const data = (document.getElementById("importData") as HTMLTextAreaElement)?.value;
-                  if (data && format) {
-                    onImport(data, format);
-                    setShowImportDialog(false);
-                  }
-                }}
-                className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all"
-              >
-                {t("issue.import.confirm")}
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+          <DialogFooter>
+            <button
+              onClick={() => setShowImportDialog(false)}
+              className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg border border-border-subtle hover:bg-surface-hover transition-all"
+            >
+              {t("issue.cancel")}
+            </button>
+            <button
+              onClick={() => {
+                const format = (
+                  document.querySelector('input[name="importFormat"]:checked') as HTMLInputElement
+                )?.value as "csv" | "json";
+                const data = (document.getElementById("importData") as HTMLTextAreaElement)
+                  ?.value;
+                if (data && format && onImport) {
+                  onImport(data, format);
+                  setShowImportDialog(false);
+                }
+              }}
+              className="px-6 py-2.5 text-xs font-black uppercase tracking-widest rounded-lg bg-brand text-background hover:bg-brand/90 transition-all"
+            >
+              {t("issue.import.confirm")}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <ConfirmDialog
         open={bulkDeleteConfirmOpen}
         onOpenChange={setBulkDeleteConfirmOpen}
@@ -599,7 +685,10 @@ export function IssueBoard({
         onConfirm={() => {
           if (!onBulkDelete) return;
           onBulkDelete(Array.from(selectedIssueIds));
-          addToast({ type: "success", title: t("issue.bulkDelete.success", { count: selectedIssueIds.size }) });
+          addToast({
+            type: "success",
+            title: t("issue.bulkDelete.success", { count: selectedIssueIds.size }),
+          });
           setSelectedIssueIds(new Set());
           setBulkEditMode(false);
           setBulkDeleteConfirmOpen(false);

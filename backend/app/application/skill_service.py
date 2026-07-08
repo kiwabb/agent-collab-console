@@ -10,7 +10,7 @@ from __future__ import annotations
 import io
 import re
 from datetime import datetime
-from typing import Any
+from typing import TypedDict
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
@@ -20,6 +20,24 @@ from app.domain.models import Skill
 
 class SkillError(RuntimeError):
     pass
+
+
+class SkillImportSkipped(TypedDict, total=False):
+    file: str
+    row: str
+    reason: str
+
+
+class SkillImportResult(TypedDict):
+    created: list[Skill]
+    skipped: list[SkillImportSkipped]
+
+
+SkillList = list[Skill]
+StringList = list[str]
+SkillImportFiles = list[tuple[str, bytes]]
+SkippedSkillImports = list[SkillImportSkipped]
+Frontmatter = dict[str, object]
 
 
 _URL_EXT_RE = re.compile(r"\.(md|markdown|txt|html?|json|ya?ml)$", re.IGNORECASE)
@@ -44,7 +62,7 @@ def _derive_name_from_url(url: str) -> str:
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
-def _parse_frontmatter(text: str) -> dict[str, Any]:
+def _parse_frontmatter(text: str) -> Frontmatter:
     """Tolerant YAML-subset parser for skill frontmatter.
 
     Supports `key: value`, `key: [a, b]`, and block scalars on `key:` followed by
@@ -54,13 +72,11 @@ def _parse_frontmatter(text: str) -> dict[str, Any]:
     if not m:
         return {}
     block = m.group(1)
-    data: dict[str, Any] = {}
-    pending_key: str | None = None
-    pending_list: list[str] | None = None
+    data: Frontmatter = {}
+    pending_list: StringList | None = None
     for raw in block.splitlines():
         line = raw.rstrip()
         if not line.strip():
-            pending_key = None
             pending_list = None
             continue
         if pending_list is not None and line.startswith(("  -", "\t-", "- ")):
@@ -77,7 +93,6 @@ def _parse_frontmatter(text: str) -> dict[str, Any]:
         if not value:
             pending_list = []
             data[key] = pending_list
-            pending_key = key  # noqa: F841
             continue
         if value.startswith("[") and value.endswith("]"):
             inner = value[1:-1].strip()
@@ -88,7 +103,7 @@ def _parse_frontmatter(text: str) -> dict[str, Any]:
     return data
 
 
-def _to_str_list(v: Any) -> list[str]:
+def _to_str_list(v: object) -> StringList:
     if isinstance(v, list):
         return [str(x).strip() for x in v if str(x).strip()]
     if isinstance(v, str):
@@ -100,10 +115,10 @@ class SkillService:
     def __init__(self, store: AsyncSQLiteStore):
         self.store = store
 
-    async def list(self, *, search: str | None = None, category: str | None = None) -> list[Skill]:
+    async def list(self, *, search: str | None = None, category: str | None = None) -> SkillList:
         return await self.store.list_skills(search=search, category=category)
 
-    async def list_categories(self) -> list[str]:
+    async def list_categories(self) -> StringList:
         return await self.store.list_skill_categories()
 
     async def add_category(self, name: str) -> str:
@@ -138,7 +153,7 @@ class SkillService:
         link: str,
         description: str | None = None,
         category: str | None = None,
-        tags: list[str] | None = None,
+        tags: StringList | None = None,
     ) -> Skill:
         name = (name or "").strip()
         link = (link or "").strip()
@@ -168,7 +183,7 @@ class SkillService:
         link: str | None = None,
         description: str | None = None,
         category: str | None = None,
-        tags: list[str] | None = None,
+        tags: StringList | None = None,
     ) -> Skill:
         existing = await self.store.load_skill(skill_id)
         if existing is None:
@@ -193,12 +208,12 @@ class SkillService:
     async def delete(self, skill_id: str) -> None:
         await self.store.delete_skill(skill_id)
 
-    async def import_markdown(self, files: list[tuple[str, bytes]]) -> dict[str, Any]:
+    async def import_markdown(self, files: SkillImportFiles) -> SkillImportResult:
         """Each file = one skill. Reads YAML frontmatter; expects `name` and
         `link` at minimum. Filename stem is used as a fallback name.
         """
-        created: list[Skill] = []
-        skipped: list[dict[str, str]] = []
+        created: SkillList = []
+        skipped: SkippedSkillImports = []
         for filename, raw in files:
             try:
                 text = raw.decode("utf-8", errors="replace")
@@ -226,7 +241,7 @@ class SkillService:
             created.append(skill)
         return {"created": created, "skipped": skipped}
 
-    async def import_excel(self, content: bytes) -> dict[str, Any]:
+    async def import_excel(self, content: bytes) -> SkillImportResult:
         """Reads .xlsx with header row mapping columns to fields. Recognised
         headers (case-insensitive): name, link/url, description, category, tags.
         Tags cell may be comma-separated.
@@ -239,6 +254,8 @@ class SkillService:
             ) from exc
         wb = load_workbook(filename=io.BytesIO(content), read_only=True, data_only=True)
         ws = wb.active
+        if ws is None:
+            return {"created": [], "skipped": []}
         rows = ws.iter_rows(values_only=True)
         try:
             header = next(rows)
@@ -252,19 +269,19 @@ class SkillService:
             if key in ("url",):
                 key = "link"
             col_map[key] = idx
-        created: list[Skill] = []
-        skipped: list[dict[str, str]] = []
+        created: SkillList = []
+        skipped: SkippedSkillImports = []
         for row_idx, row in enumerate(rows, start=2):
 
-            def cell(field: str) -> str:
+            def cell_value(field: str) -> str:
                 idx = col_map.get(field)
                 if idx is None or idx >= len(row):  # noqa: B023
                     return ""
                 v = row[idx]  # noqa: B023
                 return "" if v is None else str(v).strip()
 
-            name = cell("name")
-            link = cell("link")
+            name = cell_value("name")
+            link = cell_value("link")
             if not name and not link:
                 continue
             if not link:
@@ -277,12 +294,12 @@ class SkillService:
                     {"row": str(row_idx), "reason": "missing name and link could not be parsed"}
                 )
                 continue
-            tags = _to_str_list(cell("tags"))
+            tags = _to_str_list(cell_value("tags"))
             skill = await self.create(
                 name=name,
                 link=link,
-                description=cell("description") or None,
-                category=cell("category") or None,
+                description=cell_value("description") or None,
+                category=cell_value("category") or None,
                 tags=tags,
             )
             created.append(skill)

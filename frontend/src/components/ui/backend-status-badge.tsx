@@ -33,7 +33,7 @@ export function BackendStatusBadge() {
       className={cn(
         "flex items-center gap-1.5 px-2.5 py-1 rounded-full",
         "bg-error/10 border border-error/30 text-error",
-        "hover:bg-error/20 transition-colors"
+        "hover:bg-error/20 transition-colors",
       )}
     >
       <div className="size-2 rounded-full bg-error" />

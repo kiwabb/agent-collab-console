@@ -1,7 +1,7 @@
 # Frontend Development Guidelines
 
 > ccgui frontend package — best practices, conventions, and "why we
-> do it this way" notes for the Next.js 14 + Tailwind v4 + @base-ui
+> do it this way" notes for the Next.js 15 + Tailwind v4 + @base-ui
 > app under `frontend/`.
 
 ---
@@ -32,14 +32,18 @@ should be closed.
 | [State Management](./state-management.md) | Local state, context, server state, polling | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Forbidden / required patterns, tests, review checklist | Filled |
 | [Type Safety](./type-safety.md) | Domain types, API typing, no-any, validation | Filled |
+| [Observability UI](./observability-ui.md) | Audit Log vs Agent Timeline UI and API contracts | Filled |
 
 ---
 
 ## Stack
 
-- **Next.js 14** App Router
+- **Next.js 15** App Router
 - **TypeScript** strict mode (`noUncheckedIndexedAccess`,
-  `noImplicitOverride`)
+  `exactOptionalPropertyTypes`, `noImplicitReturns`,
+  `noUnusedLocals`, `noUnusedParameters`, `noUncheckedSideEffectImports`,
+  `noPropertyAccessFromIndexSignature`, `allowUnusedLabels: false`,
+  `allowUnreachableCode: false`, `noImplicitOverride`)
 - **Tailwind v4** (theme tokens via `@theme` in `globals.css`)
 - **@base-ui/react** for Select / Dialog / Tabs (NOT shadcn, NOT
   radix directly)

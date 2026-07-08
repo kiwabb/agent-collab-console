@@ -1,15 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readCompactSource as readSource } from "./sourceTestUtils";
 
 import { getDictionaryValue } from "../src/lib/i18n";
-
-const SRC_ROOT = join(process.cwd(), "src");
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
 
 test("project conductor views use i18n keys instead of hard-coded copy", () => {
   const page = readSource("features/projects/ProjectConductorPage.tsx");
@@ -69,7 +62,10 @@ test("project conductor views use i18n keys instead of hard-coded copy", () => {
 test("project conductor translation keys are available in English", () => {
   assert.equal(getDictionaryValue("en-US", "projectConductor.title"), "Project Conductor");
   assert.equal(getDictionaryValue("en-US", "projectConductor.scheduleReview"), "Schedule review");
-  assert.equal(getDictionaryValue("en-US", "projectConductor.metric.tasksHandled"), "Tasks handled");
+  assert.equal(
+    getDictionaryValue("en-US", "projectConductor.metric.tasksHandled"),
+    "Tasks handled",
+  );
   assert.equal(getDictionaryValue("en-US", "projectConductor.askAction"), "Ask");
   assert.equal(getDictionaryValue("en-US", "projectConductor.threadDock.startLoop"), "Start loop");
   assert.equal(getDictionaryValue("en-US", "projectConductor.threadDock.toolState.error"), "error");
@@ -92,8 +88,14 @@ test("project conductor page marks active ask or review requests with thinking m
   const page = readSource("features/projects/ProjectConductorPage.tsx");
 
   assert.match(page, /isProjectConductorThinking/);
-  assert.match(page, /data-density=\{isProjectConductorThinking \? "project-conductor-thinking-shell" : "project-conductor-shell"\}/);
-  assert.match(page, /data-density=\{isProjectConductorThinking \? "project-conductor-thinking-actions" : "project-conductor-actions"\}/);
+  assert.match(
+    page,
+    /data-density=\{isProjectConductorThinking \? "project-conductor-thinking-shell" : "project-conductor-shell"\}/,
+  );
+  assert.match(
+    page,
+    /data-density=\{isProjectConductorThinking \? "project-conductor-thinking-actions" : "project-conductor-actions"\}/,
+  );
   assert.match(page, /<AgentThinkingIndicator/);
   assert.match(page, /animate-shimmer-sweep/);
   assert.match(page, /phase="thinking"/);
@@ -104,7 +106,10 @@ test("project conductor page marks active ask or review requests with thinking m
 test("project conductor refresh cta uses thinking motion while loading", () => {
   const page = readSource("features/projects/ProjectConductorPage.tsx");
 
-  assert.match(page, /data-density=\{loading \? "project-conductor-refresh-thinking" : "project-conductor-refresh"\}/);
+  assert.match(
+    page,
+    /data-density=\{loading \? "project-conductor-refresh-thinking" : "project-conductor-refresh"\}/,
+  );
   assert.match(page, /loading && "motion-essential/);
   assert.match(page, /<AgentThinkingIndicator phase="thinking" size=\{14\}/);
   assert.match(page, /<RefreshCcw size=\{14\}/);
@@ -115,7 +120,10 @@ test("project conductor refresh cta uses thinking motion while loading", () => {
 test("project conductor start loop cta uses dispatch motion while running", () => {
   const dock = readSource("features/projects/components/ProjectConductorThreadDock.tsx");
 
-  assert.match(dock, /data-density=\{running \? "project-conductor-loop-dispatch-cta" : "project-conductor-loop-cta"\}/);
+  assert.match(
+    dock,
+    /data-density=\{running \? "project-conductor-loop-dispatch-cta" : "project-conductor-loop-cta"\}/,
+  );
   assert.match(dock, /running && "motion-essential/);
   assert.match(dock, /<AgentThinkingIndicator phase="dispatching" size=\{14\}/);
   assert.match(dock, /<Play size=\{14\}/);
@@ -126,8 +134,14 @@ test("project conductor start loop cta uses dispatch motion while running", () =
 test("project conductor latest tool card uses tool motion while streaming", () => {
   const dock = readSource("features/projects/components/ProjectConductorThreadDock.tsx");
 
-  assert.match(dock, /const isProjectConductorToolActive = isProjectConductorStreaming && index === 0 && !tool\.is_error/);
-  assert.match(dock, /data-density=\{isProjectConductorToolActive \? "project-conductor-active-tool-card" : "project-conductor-tool-card"\}/);
+  assert.match(
+    dock,
+    /const isProjectConductorToolActive = isProjectConductorStreaming && index === 0 && !tool\.is_error/,
+  );
+  assert.match(
+    dock,
+    /data-density=\{isProjectConductorToolActive \? "project-conductor-active-tool-card" : "project-conductor-tool-card"\}/,
+  );
   assert.match(dock, /isProjectConductorToolActive && "motion-essential/);
   assert.match(dock, /<AgentThinkingIndicator phase="tool" size=\{12\}/);
   assert.match(dock, /isProjectConductorToolActive && \(/);

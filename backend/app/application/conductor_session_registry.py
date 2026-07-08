@@ -10,15 +10,15 @@ never relaunches a conductor that is still running in this process.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field  # noqa: F401
 from datetime import datetime
-from typing import Awaitable, Callable  # noqa: UP035
 
 
 @dataclass
 class ConductorSessionHandle:
     issue_id: str
-    task: asyncio.Task
+    task: asyncio.Task[object]
     started_at: datetime
     conductor_task_id: str | None = None
 
@@ -41,7 +41,7 @@ class ConductorSessionRegistry:
     async def try_start(
         self,
         issue_id: str,
-        coro_factory: Callable[[], Awaitable],
+        coro_factory: Callable[[], Coroutine[object, object, object]],
         *,
         name: str | None = None,
     ) -> ConductorSessionHandle | None:
@@ -55,13 +55,20 @@ class ConductorSessionRegistry:
             existing = self._sessions.get(issue_id)
             if existing is not None and not existing.task.done():
                 return None
-            task = asyncio.create_task(coro_factory(), name=name or f"conductor-{issue_id[:8]}")
+            task: asyncio.Task[object] = asyncio.create_task(
+                coro_factory(),
+                name=name or f"conductor-{issue_id[:8]}",
+            )
             handle = ConductorSessionHandle(issue_id=issue_id, task=task, started_at=datetime.now())
             self._sessions[issue_id] = handle
-            task.add_done_callback(lambda t, iid=issue_id: self._on_done(iid, t))
+
+            def cleanup_done_task(_done_task: asyncio.Future[object]) -> None:
+                self._on_done(issue_id, task)
+
+            task.add_done_callback(cleanup_done_task)
             return handle
 
-    def _on_done(self, issue_id: str, task: asyncio.Task) -> None:
+    def _on_done(self, issue_id: str, task: asyncio.Task[object]) -> None:
         # Deregister only if the finished task is still the registered one;
         # a fast restart may have already replaced it.
         handle = self._sessions.get(issue_id)

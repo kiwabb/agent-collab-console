@@ -32,12 +32,13 @@ that should be closed.
 | [Project Resume API Contract](./project-resume-api.md) | Project-level resume markdown storage and PDF import API contract | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Forbidden / required patterns, tests, run kinds, QA workflow | Filled |
 | [Logging Guidelines](./logging-guidelines.md) | stdlib logging, level conventions, what not to log | Filled |
+| [Observability Guidelines](./observability-guidelines.md) | Audit log, Agent Timeline, and trace/span contracts | Filled |
 
 ---
 
 ## Stack
 
-- **Python 3.13+** with `from __future__ import annotations` at
+- **Python 3.12+** with `from __future__ import annotations` at
   the top of every module.
 - **FastAPI** for HTTP, native **asyncio** for the conductor +
   WS event bus.

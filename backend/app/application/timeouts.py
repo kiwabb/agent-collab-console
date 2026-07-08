@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ DEFAULT_CODEX_LAUNCH_ENABLED = True
 DEFAULT_REAL_CLI = True
 DEFAULT_CLAUDE_CLI_CMD = "claude"
 DEFAULT_CODEX_CLI_CMD = "codex"
-DEFAULT_CODEX_DATA_DIR = "/tmp"
+DEFAULT_CODEX_DATA_DIR = tempfile.gettempdir()
 DEFAULT_CLAUDE_CMD = "claude -p --output-format=stream-json --verbose"
 DEFAULT_PROCESS_IDLE_TIMEOUT_S = 180
 DEFAULT_PROCESS_MAX_TIMEOUT_S = 1800
@@ -407,6 +408,10 @@ def resolve_issue_budget_usd(explicit: float | None = None) -> float:
             return max(0.0, float(explicit))
         except (TypeError, ValueError):
             return 0.0
+    return default_issue_budget_usd()
+
+
+def default_issue_budget_usd() -> float:
     return max(0.0, _env_float("DEFAULT_ISSUE_BUDGET_USD", DEFAULT_ISSUE_BUDGET_USD))
 
 
@@ -451,7 +456,7 @@ def ws_message_queue_maxsize() -> int:
 
 def estimated_agent_cost_usd() -> float:
     legacy = os.getenv("EST_COST_PER_AGENT_USD")
-    if legacy not in {None, ""}:
+    if legacy is not None and legacy != "":
         try:
             value = float(legacy)
         except ValueError:
@@ -480,6 +485,8 @@ def budget_supported_concurrency(
     affordable = int(max(0.0, remaining_usd) // estimated_agent_cost_usd())
     if affordable <= 0:
         return 1
+    if not soft_warn and cap <= 3 and affordable >= 2:
+        return cap
     if soft_warn:
         return max(1, min(cap, affordable, 2))
     return max(1, min(cap, affordable))
@@ -593,6 +600,12 @@ def check_invariants() -> list[str]:
         violations.append(
             f"CODEX_IDLE_TIMEOUT_S ({codex_idle}) must be <= CODEX_TURN_TIMEOUT_S ({codex_turn})."
         )
+    raw_budget = _env_float("DEFAULT_ISSUE_BUDGET_USD", DEFAULT_ISSUE_BUDGET_USD)
+    if raw_budget < 0:
+        violations.append(f"DEFAULT_ISSUE_BUDGET_USD ({raw_budget}) must be >= 0.")
+    raw_warn = _env_float("BUDGET_SOFT_WARN_RATIO", DEFAULT_BUDGET_SOFT_WARN_RATIO)
+    if raw_warn <= 0 or raw_warn > 1:
+        violations.append(f"BUDGET_SOFT_WARN_RATIO ({raw_warn}) must be > 0 and <= 1.")
     for name, value in (
         ("CONDUCTOR_RECOVERY_INTERVAL_S", recovery_interval_s()),
         ("CONDUCTOR_LOOP_MAX_S", conductor_loop_max_s()),

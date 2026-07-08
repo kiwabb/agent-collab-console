@@ -8,6 +8,7 @@ GAP G: the Conductor must not re-dispatch the same role past its budget.
 from __future__ import annotations  # noqa: I001
 
 from datetime import datetime
+from typing import Protocol, cast
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -15,10 +16,15 @@ from unittest.mock import AsyncMock, MagicMock
 from app.application.task_completion_registry import TaskCompletionRegistry
 from app.application.workflow_scheduler import WorkflowScheduler
 from app.domain.models import CodexTask, WorkflowGraph, WorkflowNode
+from app.json_safety import object_dict
+
+
+class _ValidationMarkedTask(Protocol):
+    _validation_error: dict[str, object]
 
 
 def _task(**kw) -> CodexTask:
-    base = dict(
+    base: dict[str, object] = dict(
         id="task-e",
         session_id="sess-1",
         issue_id="issue-1",
@@ -31,8 +37,7 @@ def _task(**kw) -> CodexTask:
         updated_at=datetime.now(),
     )
     base.update(kw)
-    t = CodexTask(**base)
-    return t
+    return CodexTask.model_validate(base)
 
 
 def _node() -> WorkflowNode:
@@ -70,7 +75,8 @@ async def test_validation_failure_signals_artifact_invalid_and_emits_event():
 
     task = _task(workflow_node_id="node-1")
     # Simulate api._refresh_task_result attaching the marker on schema failure.
-    task._validation_error = {
+    task_with_marker = cast(_ValidationMarkedTask, task)
+    task_with_marker._validation_error = {
         "type": "ValidationError",
         "message": "missing changed_files",
         "role": "engineer",
@@ -89,8 +95,11 @@ async def test_validation_failure_signals_artifact_invalid_and_emits_event():
 
     # Conductor is signaled with artifact_invalid + the validation_error detail.
     signaled = reg._results[task.id]
+    assert isinstance(signaled, dict)
     assert signaled["status"] == "artifact_invalid"
-    assert signaled["validation_error"]["type"] == "ValidationError"
+    validation_error = signaled["validation_error"]
+    assert isinstance(validation_error, dict)
+    assert validation_error["type"] == "ValidationError"
     # Structured observability event emitted.
     assert any(
         e.get("type") == "artifact_validation_failed" and e.get("role") == "engineer"
@@ -115,7 +124,9 @@ async def test_valid_artifact_signals_done():
     sched = WorkflowScheduler(store, event_bus=event_bus)
     await sched.on_task_completed(task)
 
-    assert reg._results[task.id]["status"] == "done"
+    signaled = reg._results[task.id]
+    assert isinstance(signaled, dict)
+    assert signaled["status"] == "done"
 
 
 # --- GAP G: per-role dispatch cap ---------------------------------------
@@ -150,7 +161,7 @@ async def test_dispatch_subagent_returns_retries_exhausted_at_cap(monkeypatch):
         task_dispatcher_fn=fake_dispatcher,
         issue_id="issue-1",
     )
-    result = await registry.tools["dispatch_subagent"]({"role": "engineer"})
+    result = object_dict(await registry.tools["dispatch_subagent"]({"role": "engineer"}))
 
     assert result["status"] == "retries_exhausted"
     assert result["dispatches"] == 3
@@ -196,5 +207,5 @@ async def test_dispatch_subagent_proceeds_under_cap(monkeypatch):
 
     monkeypatch.setattr(reg, "register", _register_and_signal)
 
-    result = await registry.tools["dispatch_subagent"]({"role": "engineer"})
+    result = object_dict(await registry.tools["dispatch_subagent"]({"role": "engineer"}))
     assert result.get("status") != "retries_exhausted"

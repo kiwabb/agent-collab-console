@@ -124,10 +124,10 @@ class ResumeService:
 
         if getattr(reader, "is_encrypted", False):
             try:
-                decrypted = reader.decrypt("")
+                decrypted_ok = bool(reader.decrypt(""))
             except Exception:
-                decrypted = 0
-            if not decrypted:
+                decrypted_ok = False
+            if not decrypted_ok:
                 raise ResumeValidationError("encrypted PDFs are not supported")
 
         page_count = len(reader.pages)

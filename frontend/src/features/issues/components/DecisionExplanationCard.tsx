@@ -26,7 +26,10 @@ export function DecisionExplanationCard({ policy, loading }: Props) {
   const { t } = useI18n();
 
   return (
-    <section data-decision-explanation-panel className="enterprise-panel border-border-subtle/60 bg-surface/90 rounded-lg overflow-hidden hover:border-border-strong/45 transition-colors">
+    <section
+      data-decision-explanation-panel
+      className="enterprise-panel border-border-subtle/60 bg-surface/90 rounded-lg overflow-hidden hover:border-border-strong/45 transition-colors"
+    >
       <header className="px-3 py-2.5 flex items-center gap-2 border-b border-border-subtle/60 bg-surface-input/30">
         <Network size={15} className="text-brand shrink-0" />
         <span className="text-[13px] font-bold tracking-wide text-foreground">
@@ -73,7 +76,8 @@ function PolicyBody({ policy }: { policy: IssueOrchestrationPolicy }) {
           data-density="decision-routing-intelligence"
           className={cn(
             "rounded-lg border border-border-subtle/50 bg-surface-input/35 p-2.5",
-            isParallelRouting && "motion-essential relative overflow-hidden border-status-tool/30 bg-status-tool/10",
+            isParallelRouting &&
+              "motion-essential relative overflow-hidden border-status-tool/30 bg-status-tool/10",
           )}
         >
           {isParallelRouting && (
@@ -101,7 +105,12 @@ function PolicyBody({ policy }: { policy: IssueOrchestrationPolicy }) {
           <div className="font-mono text-[9px] uppercase tracking-[0.18em] font-extrabold text-text-muted">
             {t("issue.decision.batch.label")}
           </div>
-          <div className={cn("mt-2 inline-flex min-h-7 max-w-full items-center rounded-md border px-2 py-1 text-[12px] font-black leading-snug", policy.batch_allowed ? TONE_CLASS.parallel : TONE_CLASS.serial)}>
+          <div
+            className={cn(
+              "mt-2 inline-flex min-h-7 max-w-full items-center rounded-md border px-2 py-1 text-[12px] font-black leading-snug",
+              policy.batch_allowed ? TONE_CLASS.parallel : TONE_CLASS.serial,
+            )}
+          >
             {t(view.batchKey)}
           </div>
         </div>
@@ -131,7 +140,10 @@ function PolicyBody({ policy }: { policy: IssueOrchestrationPolicy }) {
 
       <ul className="space-y-1.5 px-1 pb-1">
         {view.guidanceKeys.map((key) => (
-          <li key={key} className="grid grid-cols-[14px_1fr] gap-2 text-[12px] leading-snug text-text-secondary">
+          <li
+            key={key}
+            className="grid grid-cols-[14px_1fr] gap-2 text-[12px] leading-snug text-text-secondary"
+          >
             <span className="mt-1 size-1.5 rounded-full bg-brand" aria-hidden />
             <span>{t(key)}</span>
           </li>

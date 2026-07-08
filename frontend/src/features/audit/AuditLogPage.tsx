@@ -1,24 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertCircle,
-  ChevronDown,
-  ChevronRight,
-  RefreshCw,
-  Search,
-  X,
-} from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, RefreshCw, Search, X } from "lucide-react";
 
-import { getAuditLog, type AuditLog, type AuditLogCategory } from "@/lib/api/audit";
+import {
+  getAgentTimeline,
+  getAuditLog,
+  type AuditLog,
+  type AuditLogCategory,
+  type AgentTimelineOperation,
+} from "@/lib/api/audit";
+import { listProjects } from "@/lib/api/projects";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import { cn } from "@/lib/utils";
+import { cn, isRecord, safeJsonParse } from "@/lib/utils";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
 import { useI18n } from "@/providers/I18nProvider";
 import { normalizeSince, normalizeUntil } from "./timeBoundary";
+import { AuditRoleChainView } from "./AuditRoleChainView";
+
+type ViewMode = "flat" | "timeline";
 
 const CATEGORIES: AuditLogCategory[] = [
   "llm_call",
@@ -33,6 +36,9 @@ const CATEGORIES: AuditLogCategory[] = [
 ];
 
 const PAGE_LIMIT = 50;
+
+type AuditTranslate = (key: string, params?: Record<string, string | number>) => string;
+type ProjectNameMap = ReadonlyMap<string, string>;
 
 /** Map category -> badge variant + accent color class. */
 const CATEGORY_STYLE: Record<string, string> = {
@@ -60,16 +66,283 @@ function formatTimestamp(iso: string | null): string {
 
 /** Build a short one-line summary of a row from its parsed payload. */
 function summarize(parsed: unknown, entry: AuditLog): string {
+  if (entry.call_summary) return entry.call_summary;
+  if (entry.call_name && entry.call_name !== entry.actor) return entry.call_name;
   if (entry.error) return entry.error;
-  if (parsed && typeof parsed === "object") {
-    const p = parsed as Record<string, unknown>;
+  if (isRecord(parsed)) {
+    const p = parsed;
+    if (Array.isArray(p["argv"])) return p["argv"].map((part) => String(part)).join(" ");
     const candidate =
-      p.name ?? p.tool ?? p.command ?? p.model ?? p.cmd ?? p.message ?? p.type ?? p.summary;
+      p["name"] ??
+      p["tool"] ??
+      p["command"] ??
+      p["model"] ??
+      p["cmd"] ??
+      p["message"] ??
+      p["type"] ??
+      p["summary"];
     if (typeof candidate === "string" && candidate) return candidate;
-    if (Array.isArray(p.cmd)) return (p.cmd as unknown[]).join(" ");
+    if (Array.isArray(p["cmd"])) return p["cmd"].map((part) => String(part)).join(" ");
   }
   if (typeof parsed === "string") return parsed;
   return "";
+}
+
+function auditPayloadRecord(parsed: unknown): Record<string, unknown> | null {
+  return isRecord(parsed) ? parsed : null;
+}
+
+function auditString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function auditCommandFromValue(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const parts = value.map((part) => String(part)).filter(Boolean);
+    return parts.length > 0 ? parts.join(" ") : null;
+  }
+  return auditString(value);
+}
+
+function auditNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function auditShortId(value: string): string {
+  return value.length > 12 ? value.slice(0, 8) : value;
+}
+
+function auditPreviewString(preview: string | null, key: string): string | null {
+  if (!preview) return null;
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = preview.match(new RegExp(`['"]?${escaped}['"]?\\s*:\\s*['"]([^'"]+)['"]`));
+  return match?.[1] ?? null;
+}
+
+function auditPreviewNumber(preview: string | null, key: string): number | null {
+  if (!preview) return null;
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = preview.match(new RegExp(`['"]?${escaped}['"]?\\s*:\\s*(\\d+)`));
+  return match?.[1] ? Number(match[1]) : null;
+}
+
+function auditPayloadPreview(payload: Record<string, unknown> | null): string | null {
+  return auditString(payload?.["payload_preview"]);
+}
+
+function auditPayloadOrPreviewNumber(
+  payload: Record<string, unknown> | null,
+  key: string,
+): number | null {
+  return auditNumber(payload?.[key]) ?? auditPreviewNumber(auditPayloadPreview(payload), key);
+}
+
+function auditPayloadOrPreviewString(
+  payload: Record<string, unknown> | null,
+  key: string,
+): string | null {
+  return auditString(payload?.[key]) ?? auditPreviewString(auditPayloadPreview(payload), key);
+}
+
+function auditInputRecord(entry: AuditLog): Record<string, unknown> | null {
+  return isRecord(entry.call_input) ? entry.call_input : null;
+}
+
+function auditPrimaryText(parsed: unknown, entry: AuditLog): string {
+  const payload = auditPayloadRecord(parsed);
+  const input = auditInputRecord(entry);
+  const command =
+    auditCommandFromValue(input?.["argv"]) ??
+    auditCommandFromValue(input?.["command"]) ??
+    auditCommandFromValue(payload?.["argv"]) ??
+    auditCommandFromValue(payload?.["command"]) ??
+    auditCommandFromValue(payload?.["cmd"]);
+  if (command) return command;
+  const summary = summarize(parsed, entry);
+  if (summary) return summary;
+  return entry.actor ?? entry.call_name ?? entry.category;
+}
+
+function auditOutputSnippet(value: unknown): string | null {
+  const text = auditString(value);
+  if (!text) return null;
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact) return null;
+  return compact.length > 96 ? `${compact.slice(0, 96)}...` : compact;
+}
+
+function auditSecondaryText(
+  parsed: unknown,
+  entry: AuditLog,
+  primary: string,
+  t: AuditTranslate,
+): string {
+  const payload = auditPayloadRecord(parsed);
+  const input = auditInputRecord(entry);
+  const parts: string[] = [];
+  const cwd = auditString(input?.["cwd"]) ?? auditString(payload?.["cwd"]);
+  if (cwd) parts.push(cwd);
+  const exitCode = auditNumber(input?.["exit_code"]) ?? auditNumber(payload?.["exit_code"]);
+  if (exitCode != null) parts.push(t("auditLog.detail.exitCode", { code: exitCode }));
+  const stderr = auditOutputSnippet(input?.["stderr"] ?? payload?.["stderr"]);
+  const stdout = auditOutputSnippet(input?.["stdout"] ?? payload?.["stdout"]);
+  if (stderr) parts.push(t("auditLog.detail.stderr", { text: stderr }));
+  else if (stdout) parts.push(t("auditLog.detail.stdout", { text: stdout }));
+  if (entry.role_label && entry.role_label !== "System") parts.push(entry.role_label);
+  if (entry.actor && entry.actor !== primary && entry.actor !== entry.call_name) {
+    parts.push(entry.actor);
+  }
+  const preview = auditString(payload?.["payload_preview"]);
+  if (preview) parts.push(preview);
+  if (entry.issue_id) parts.push(`issue ${entry.issue_id}`);
+  if (entry.task_id) parts.push(`task ${entry.task_id}`);
+  return parts.join(" · ");
+}
+
+function auditEventType(payload: Record<string, unknown> | null, entry: AuditLog): string | null {
+  return auditString(payload?.["type"]) ?? (entry.category === "event" ? entry.actor : null);
+}
+
+function auditCountsTotal(payload: Record<string, unknown> | null): number | null {
+  const counts = payload?.["counts"];
+  if (isRecord(counts)) {
+    const total = Object.values(counts).reduce<number>(
+      (sum, value) => sum + (auditNumber(value) ?? 0),
+      0,
+    );
+    return total > 0 ? total : 0;
+  }
+  const preview = auditPayloadPreview(payload);
+  const countsMatch = preview?.match(/['"]?counts['"]?\s*:\s*\{([^}]*)\}/);
+  if (!countsMatch?.[1]) return null;
+  const values = [...countsMatch[1].matchAll(/:\s*(\d+)/g)].map((match) => Number(match[1]));
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0);
+}
+
+function auditProjectPrSweepText(
+  payload: Record<string, unknown> | null,
+  entry: AuditLog,
+  t: AuditTranslate,
+  projectNames: ProjectNameMap,
+): { primary: string; secondary: string } {
+  const issuesSeen = auditPayloadOrPreviewNumber(payload, "issues_seen");
+  const issuesWithPr = auditPayloadOrPreviewNumber(payload, "issues_with_pr");
+  const skippedNoPr = auditPayloadOrPreviewNumber(payload, "skipped_no_pr");
+  const skippedMerged = auditPayloadOrPreviewNumber(payload, "skipped_merged");
+  const checkedPrs = auditPayloadOrPreviewNumber(payload, "checked_prs");
+  const preview = auditPayloadPreview(payload);
+  const counts = payload?.["counts"];
+  const countsEmpty =
+    (isRecord(counts) && Object.keys(counts).length === 0) ||
+    Boolean(preview?.match(/['"]?counts['"]?\s*:\s*\{\s*\}/));
+  const checkedCount = checkedPrs ?? auditCountsTotal(payload) ?? 0;
+  const primary =
+    checkedCount === 0 || countsEmpty
+      ? t("auditLog.event.prSweep.empty")
+      : t("auditLog.event.prSweep.checked", { count: checkedCount });
+
+  const parts: string[] = [];
+  if (issuesSeen != null) parts.push(t("auditLog.event.prSweep.issuesSeen", { count: issuesSeen }));
+  if (issuesWithPr != null) {
+    parts.push(t("auditLog.event.prSweep.issuesWithPr", { count: issuesWithPr }));
+  }
+  if (skippedNoPr != null) parts.push(t("auditLog.event.prSweep.skippedNoPr", { count: skippedNoPr }));
+  if (skippedMerged != null) {
+    parts.push(t("auditLog.event.prSweep.skippedMerged", { count: skippedMerged }));
+  }
+  if (checkedPrs != null) parts.push(t("auditLog.event.prSweep.checkedPrs", { count: checkedPrs }));
+  const projectId = auditPayloadOrPreviewString(payload, "project_id") ?? entry.correlation_id;
+  if (projectId) {
+    const projectLabel = projectNames.get(projectId) ?? auditShortId(projectId);
+    parts.push(t("auditLog.detail.project", { id: projectLabel }));
+  }
+  return { primary, secondary: parts.join(" · ") };
+}
+
+function auditTaskStatusRoleLabel(
+  role: string | null,
+  entry: AuditLog,
+  t: AuditTranslate,
+): string {
+  if (role === "operations_engineer") return t("auditLog.event.taskStatus.role.operationsEngineer");
+  if (entry.role_label) return entry.role_label;
+  if (role) return role;
+  return t("auditLog.event.taskStatus.role.agent");
+}
+
+function auditTaskStatusKindLabel(kind: string | null, t: AuditTranslate): string {
+  if (kind === "project_script_suggestion") {
+    return t("auditLog.event.taskStatus.kind.projectScriptSuggestion");
+  }
+  if (kind) return kind;
+  return t("auditLog.event.taskStatus.kind.task");
+}
+
+function auditTaskStatusText(
+  payload: Record<string, unknown> | null,
+  entry: AuditLog,
+  t: AuditTranslate,
+  projectNames: ProjectNameMap,
+): { primary: string; secondary: string } {
+  const role = auditPayloadOrPreviewString(payload, "role") ?? entry.role ?? entry.actor;
+  const status = auditPayloadOrPreviewString(payload, "status") ?? entry.status;
+  const taskKind = auditPayloadOrPreviewString(payload, "task_kind");
+  const taskId = auditPayloadOrPreviewString(payload, "task_id") ?? entry.task_id;
+  const executionProcessId =
+    auditPayloadOrPreviewString(payload, "execution_process_id") ?? entry.execution_process_id;
+  const projectId = auditPayloadOrPreviewString(payload, "project_id") ?? entry.correlation_id;
+  const issueId = auditPayloadOrPreviewString(payload, "issue_id") ?? entry.issue_id;
+  const roleLabel = auditTaskStatusRoleLabel(role, entry, t);
+  const taskLabel = auditTaskStatusKindLabel(taskKind, t);
+  const normalizedStatus = (status ?? "").toLowerCase();
+  const primary =
+    normalizedStatus === "running" || normalizedStatus === "responding"
+      ? t("auditLog.event.taskStatus.running", { role: roleLabel, task: taskLabel })
+      : normalizedStatus === "done" || normalizedStatus === "completed"
+        ? t("auditLog.event.taskStatus.done", { role: roleLabel, task: taskLabel })
+        : normalizedStatus === "failed" || normalizedStatus === "error"
+          ? t("auditLog.event.taskStatus.failed", { role: roleLabel, task: taskLabel })
+          : t("auditLog.event.taskStatus.changed", {
+              role: roleLabel,
+              task: taskLabel,
+              status: status ?? "unknown",
+            });
+
+  const parts: string[] = [];
+  if (projectId) {
+    const projectLabel = projectNames.get(projectId) ?? auditShortId(projectId);
+    parts.push(t("auditLog.detail.project", { id: projectLabel }));
+  }
+  if (issueId && issueId !== "None") parts.push(`issue ${auditShortId(issueId)}`);
+  if (taskId) parts.push(t("auditLog.detail.task", { id: auditShortId(taskId) }));
+  if (executionProcessId) {
+    parts.push(t("auditLog.detail.execution", { id: auditShortId(executionProcessId) }));
+  }
+  return { primary, secondary: parts.join(" · ") };
+}
+
+function auditDisplayText(
+  parsed: unknown,
+  entry: AuditLog,
+  t: AuditTranslate,
+  projectNames: ProjectNameMap,
+): { primary: string; secondary: string } {
+  const payload = auditPayloadRecord(parsed);
+  const eventType = auditEventType(payload, entry);
+  if (eventType === "project_pr_followup_sweep") {
+    return auditProjectPrSweepText(payload, entry, t, projectNames);
+  }
+  if (eventType === "task_status") {
+    return auditTaskStatusText(payload, entry, t, projectNames);
+  }
+  const primary = auditPrimaryText(parsed, entry);
+  return { primary, secondary: auditSecondaryText(parsed, entry, primary, t) };
 }
 
 interface ParsedPayload {
@@ -80,11 +353,8 @@ interface ParsedPayload {
 
 function parsePayload(raw: string | null): ParsedPayload {
   if (raw == null) return { ok: true, value: null, raw };
-  try {
-    return { ok: true, value: JSON.parse(raw), raw };
-  } catch {
-    return { ok: false, value: null, raw };
-  }
+  const parsed = safeJsonParse(raw);
+  return parsed === null ? { ok: false, value: null, raw } : { ok: true, value: parsed, raw };
 }
 
 export function AuditLogPage() {
@@ -100,11 +370,15 @@ export function AuditLogPage() {
 
   // Data state.
   const [items, setItems] = useState<AuditLog[]>([]);
+  const [timelineOperations, setTimelineOperations] = useState<AgentTimelineOperation[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [timelineNextCursor, setTimelineNextCursor] = useState<string | null>(null);
+  const [projectNames, setProjectNames] = useState<Map<string, string>>(() => new Map());
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<ViewMode>("flat");
 
   // Token guards against out-of-order responses from rapid filter changes.
   const requestToken = useRef(0);
@@ -126,43 +400,78 @@ export function AuditLogPage() {
     setLoading(true);
     setError(null);
     try {
-      const page = await getAuditLog({ ...filters, limit: PAGE_LIMIT });
-      if (token !== requestToken.current) return;
-      setItems(page.items);
-      setNextCursor(page.next_cursor);
+      if (viewMode === "timeline") {
+        const page = await getAgentTimeline({ ...filters, limit: PAGE_LIMIT });
+        if (token !== requestToken.current) return;
+        setTimelineOperations(page.items);
+        setTimelineNextCursor(page.next_cursor);
+      } else {
+        const page = await getAuditLog({ ...filters, limit: PAGE_LIMIT });
+        if (token !== requestToken.current) return;
+        setItems(page.items);
+        setNextCursor(page.next_cursor);
+      }
       setExpanded(new Set());
     } catch (e) {
       if (token !== requestToken.current) return;
       setError(e instanceof Error ? e.message : String(e));
-      setItems([]);
-      setNextCursor(null);
+      if (viewMode === "timeline") {
+        setTimelineOperations([]);
+        setTimelineNextCursor(null);
+      } else {
+        setItems([]);
+        setNextCursor(null);
+      }
     } finally {
       if (token === requestToken.current) setLoading(false);
     }
-  }, [filters]);
+  }, [filters, viewMode]);
+
+  const loadProjectNames = useCallback(async () => {
+    try {
+      const projects = await listProjects();
+      setProjectNames(
+        new Map(projects.map((project) => [project.id, project.name || auditShortId(project.id)])),
+      );
+    } catch {
+      setProjectNames(new Map());
+    }
+  }, []);
 
   const loadMore = useCallback(async () => {
-    if (!nextCursor || loadingMore) return;
+    const cursor = viewMode === "timeline" ? timelineNextCursor : nextCursor;
+    if (!cursor || loadingMore) return;
     const token = requestToken.current;
     setLoadingMore(true);
     try {
-      const page = await getAuditLog({ ...filters, cursor: nextCursor, limit: PAGE_LIMIT });
-      if (token !== requestToken.current) return;
-      setItems((prev) => [...prev, ...page.items]);
-      setNextCursor(page.next_cursor);
+      if (viewMode === "timeline") {
+        const page = await getAgentTimeline({ ...filters, cursor, limit: PAGE_LIMIT });
+        if (token !== requestToken.current) return;
+        setTimelineOperations((prev) => [...prev, ...page.items]);
+        setTimelineNextCursor(page.next_cursor);
+      } else {
+        const page = await getAuditLog({ ...filters, cursor, limit: PAGE_LIMIT });
+        if (token !== requestToken.current) return;
+        setItems((prev) => [...prev, ...page.items]);
+        setNextCursor(page.next_cursor);
+      }
     } catch (e) {
       if (token !== requestToken.current) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       if (token === requestToken.current) setLoadingMore(false);
     }
-  }, [filters, nextCursor, loadingMore]);
+  }, [timelineNextCursor, filters, loadingMore, nextCursor, viewMode]);
 
   // Debounced reload on filter change.
   useEffect(() => {
     const id = window.setTimeout(() => void load(), 250);
     return () => window.clearTimeout(id);
   }, [load]);
+
+  useEffect(() => {
+    void loadProjectNames();
+  }, [loadProjectNames]);
 
   const toggleCategory = useCallback((category: string) => {
     setSelectedCategories((prev) => {
@@ -198,6 +507,8 @@ export function AuditLogPage() {
     !!since.trim() ||
     !!until.trim() ||
     !!query.trim();
+  const activeItemsLength = viewMode === "timeline" ? timelineOperations.length : items.length;
+  const activeNextCursor = viewMode === "timeline" ? timelineNextCursor : nextCursor;
 
   return (
     <PageFrame
@@ -205,10 +516,38 @@ export function AuditLogPage() {
       title={t("auditLog.title")}
       description={t("auditLog.description")}
       actions={
-        <Button size="sm" variant="outline" onClick={() => void load()} className="gap-2">
-          <RefreshCw size={14} />
-          {t("auditLog.refresh")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-md border border-border-subtle overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setViewMode("flat")}
+              className={cn(
+                "px-2.5 py-1 text-xs transition-colors",
+                viewMode === "flat"
+                  ? "bg-brand/15 text-brand font-semibold"
+                  : "text-text-muted hover:text-foreground hover:bg-surface-hover",
+              )}
+            >
+              {t("auditLog.view.flat")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("timeline")}
+              className={cn(
+                "px-2.5 py-1 text-xs border-l border-border-subtle transition-colors",
+                viewMode === "timeline"
+                  ? "bg-brand/15 text-brand font-semibold"
+                  : "text-text-muted hover:text-foreground hover:bg-surface-hover",
+              )}
+            >
+              {t("auditLog.view.chain")}
+            </button>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => void load()} className="gap-2">
+            <RefreshCw size={14} />
+            {t("auditLog.refresh")}
+          </Button>
+        </div>
       }
       contentClassName="space-y-4"
     >
@@ -262,33 +601,33 @@ export function AuditLogPage() {
             <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
               {t("auditLog.filter.issueId")}
             </span>
-            <Input value={issueId} onChange={(e) => setIssueId(e.target.value)} placeholder="issue id" />
+            <Input
+              value={issueId}
+              onChange={(e) => setIssueId(e.target.value)}
+              placeholder="issue id"
+            />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
               {t("auditLog.filter.taskId")}
             </span>
-            <Input value={taskId} onChange={(e) => setTaskId(e.target.value)} placeholder="task id" />
+            <Input
+              value={taskId}
+              onChange={(e) => setTaskId(e.target.value)}
+              placeholder="task id"
+            />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
               {t("auditLog.filter.since")}
             </span>
-            <Input
-              type="datetime-local"
-              value={since}
-              onChange={(e) => setSince(e.target.value)}
-            />
+            <Input type="datetime-local" value={since} onChange={(e) => setSince(e.target.value)} />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
               {t("auditLog.filter.until")}
             </span>
-            <Input
-              type="datetime-local"
-              value={until}
-              onChange={(e) => setUntil(e.target.value)}
-            />
+            <Input type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} />
           </label>
           <div className="flex items-end">
             {hasFilters && (
@@ -322,24 +661,29 @@ export function AuditLogPage() {
           <AgentThinkingIndicator phase="tool" size={15} />
           {t("auditLog.loading")}
         </div>
-      ) : items.length === 0 ? (
+      ) : activeItemsLength === 0 ? (
         <div className="rounded-2xl border border-dashed border-border-subtle bg-surface-input/40 px-6 py-12 text-center text-sm text-text-muted">
           {t("auditLog.empty")}
         </div>
       ) : (
         <>
-          <ul className="space-y-1.5">
-            {items.map((entry) => (
-              <AuditRow
-                key={entry.id}
-                entry={entry}
-                expanded={expanded.has(entry.id)}
-                onToggle={() => toggleExpanded(entry.id)}
-              />
-            ))}
-          </ul>
+          {viewMode === "timeline" ? (
+            <AuditRoleChainView operations={timelineOperations} />
+          ) : (
+            <ul className="space-y-1.5">
+              {items.map((entry) => (
+                <AuditRow
+                  key={entry.id}
+                  entry={entry}
+                  expanded={expanded.has(entry.id)}
+                  projectNames={projectNames}
+                  onToggle={() => toggleExpanded(entry.id)}
+                />
+              ))}
+            </ul>
+          )}
 
-          {nextCursor && (
+          {activeNextCursor && (
             <div className="flex justify-center pt-2">
               <Button
                 size="sm"
@@ -363,13 +707,17 @@ export function AuditLogPage() {
 interface AuditRowProps {
   entry: AuditLog;
   expanded: boolean;
+  projectNames: ProjectNameMap;
   onToggle: () => void;
 }
 
-function AuditRow({ entry, expanded, onToggle }: AuditRowProps) {
+function AuditRow({ entry, expanded, projectNames, onToggle }: AuditRowProps) {
   const { t } = useI18n();
   const parsed = useMemo(() => parsePayload(entry.payload_json), [entry.payload_json]);
-  const summary = useMemo(() => summarize(parsed.value, entry), [parsed.value, entry]);
+  const display = useMemo(
+    () => auditDisplayText(parsed.value, entry, t, projectNames),
+    [parsed.value, entry, projectNames, t],
+  );
   const pretty = useMemo(() => {
     if (!expanded) return null;
     if (parsed.ok && parsed.value != null) {
@@ -389,41 +737,50 @@ function AuditRow({ entry, expanded, onToggle }: AuditRowProps) {
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-surface-input/40"
+        className="grid w-full grid-cols-[auto_9.5rem_auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-surface-input/40"
       >
         <span className="shrink-0 text-text-muted">
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </span>
-        <span className="w-40 shrink-0 font-mono text-xs text-text-muted">
+        <span className="shrink-0 font-mono text-xs text-text-muted">
           {formatTimestamp(entry.created_at)}
         </span>
         <Badge
           variant="outline"
-          className={cn("shrink-0 font-mono text-[10px] uppercase", categoryClass(entry.category))}
+            className={cn("shrink-0 font-mono text-[10px] uppercase", categoryClass(entry.category))}
         >
           {t(`auditLog.category.${entry.category}` as never) || entry.category}
         </Badge>
-        {entry.actor && (
-          <span className="shrink-0 truncate font-mono text-xs text-text-secondary max-w-[140px]">
-            {entry.actor}
+        <span className="min-w-0">
+          <span className="block truncate font-mono text-xs text-text-primary" title={display.primary}>
+            {display.primary}
           </span>
-        )}
-        {entry.status && (
-          <span
-            className={cn(
-              "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider",
-              isError
-                ? "border-status-failed/30 text-status-failed"
-                : "border-status-done/30 text-status-done",
-            )}
-          >
-            {entry.status}
-          </span>
-        )}
-        <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{summary}</span>
-        {entry.duration_ms != null && (
-          <span className="shrink-0 font-mono text-xs text-text-muted">{entry.duration_ms}ms</span>
-        )}
+          {display.secondary && (
+            <span
+              className="mt-0.5 block truncate text-[11px] text-text-muted"
+              title={display.secondary}
+            >
+              {display.secondary}
+            </span>
+          )}
+        </span>
+        <span className="flex shrink-0 items-center justify-end gap-2">
+          {entry.status && (
+            <span
+              className={cn(
+                "rounded-full border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+                isError
+                  ? "border-status-failed/30 text-status-failed"
+                  : "border-status-done/30 text-status-done",
+              )}
+            >
+              {entry.status}
+            </span>
+          )}
+          {entry.duration_ms != null && (
+            <span className="font-mono text-xs text-text-muted">{entry.duration_ms}ms</span>
+          )}
+        </span>
       </button>
 
       {expanded && (

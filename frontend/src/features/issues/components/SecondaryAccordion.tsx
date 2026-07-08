@@ -33,9 +33,7 @@ export function SecondaryAccordion({
         </span>
         {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
       </button>
-      <div className={cn("border-t border-border-subtle", !open && "hidden")}>
-        {children}
-      </div>
+      <div className={cn("border-t border-border-subtle", !open && "hidden")}>{children}</div>
     </section>
   );
 }

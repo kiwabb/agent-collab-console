@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { getIssueGraph } from "@/lib/api/conductors";
 import { getCodexTasks, getExecutionProcesses } from "@/lib/api/tasks";
 import type { CodexTask, ExecutionProcess, WorkflowGraph } from "@/lib/types";
+import { isRecord, safeJsonParse } from "@/lib/utils";
 import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
 import { agentBus, type HistoryEntry } from "./agentBus";
 import { PERSONAS, ROLE_ORDER, type RoleId } from "./personas";
@@ -13,7 +14,7 @@ export interface RoleStatus {
   /** One-line short status text. Empty string = idle. */
   text: string;
   /** Optional second-line detail (filename, tool args). */
-  detail?: string;
+  detail?: string | undefined;
   /** Visual mode for the tile. */
   mode: "idle" | "active" | "done" | "failed" | "waiting";
   /** Tone for the bubble border / text color. */
@@ -257,15 +258,10 @@ export function useAgentStatus(issueId: string): AgentStatusSnapshot {
 
     // ----- Decide active speaker -----
     let activeRole: RoleId | null = null;
-    if (
-      busState.conductorPhase !== "idle" &&
-      busState.conductorPhase !== "done"
-    ) {
+    if (busState.conductorPhase !== "idle" && busState.conductorPhase !== "done") {
       activeRole = "conductor";
     } else {
-      const runningRole = ROLE_ORDER.find(
-        (r) => r !== "conductor" && byRole[r].mode === "active",
-      );
+      const runningRole = ROLE_ORDER.find((r) => r !== "conductor" && byRole[r].mode === "active");
       if (runningRole) activeRole = runningRole;
       else if (byRole.conductor.text) activeRole = "conductor";
     }
@@ -291,15 +287,14 @@ function deriveSubStatusFromMessages(
   if (!messages || messages.length === 0) return undefined;
   for (let i = messages.length - 1; i >= 0 && i >= messages.length - 10; i--) {
     const m = messages[i];
+    if (!m) continue;
     if (m.role !== "assistant") continue;
     const content = m.content || "";
     if (!content.startsWith("{") && !content.startsWith("[")) continue;
-    try {
-      const obj = JSON.parse(content);
-      const found = scanForToolUse(obj);
+    const parsed = safeJsonParse(content);
+    if (parsed !== null) {
+      const found = scanForToolUse(parsed);
       if (found) return found;
-    } catch {
-      /* ignore */
     }
   }
   return undefined;
@@ -314,13 +309,13 @@ function scanForToolUse(node: unknown): string | undefined {
     }
     return undefined;
   }
-  if (typeof node !== "object") return undefined;
-  const n = node as Record<string, unknown>;
-  if (n.type === "tool_use" && typeof n.name === "string") {
-    const input = (n.input ?? {}) as Record<string, unknown>;
-    const file = String(input.file_path ?? input.path ?? "");
+  if (!isRecord(node)) return undefined;
+  const n = node;
+  if (n["type"] === "tool_use" && typeof n["name"] === "string") {
+    const input = isRecord(n["input"]) ? n["input"] : {};
+    const file = String(input["file_path"] ?? input["path"] ?? "");
     const base = file.split("/").filter(Boolean).slice(-2).join("/");
-    switch (n.name) {
+    switch (n["name"]) {
       case "Read":
         return base ? `Reading ${base}` : "Reading file";
       case "Write":
@@ -328,18 +323,18 @@ function scanForToolUse(node: unknown): string | undefined {
       case "MultiEdit":
         return base ? `Writing ${base}` : "Writing file";
       case "Bash": {
-        const cmd = String(input.command ?? "").slice(0, 40);
+        const cmd = String(input["command"] ?? "").slice(0, 40);
         return cmd ? `Running: ${cmd}` : "Running command";
       }
       case "Glob":
       case "Grep":
         return "Searching files";
       default:
-        return `Calling ${String(n.name)}`;
+        return `Calling ${String(n["name"])}`;
     }
   }
-  if (n.type === "thinking" && typeof n.thinking === "string") {
-    const t = n.thinking.trim().slice(0, 60);
+  if (n["type"] === "thinking" && typeof n["thinking"] === "string") {
+    const t = n["thinking"].trim().slice(0, 60);
     return t ? `Thinking: ${t}` : "Thinking…";
   }
   // Recurse into nested fields.

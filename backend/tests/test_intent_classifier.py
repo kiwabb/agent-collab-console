@@ -86,5 +86,5 @@ def test_pure_refine_action_with_punctuation():
 
 
 def test_none_or_falsy_input_returns_chat():
-    assert classify_intent(None) == "chat"  # type: ignore[arg-type]
+    assert classify_intent(None) == "chat"
     assert classify_intent("") == "chat"

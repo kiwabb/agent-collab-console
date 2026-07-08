@@ -43,6 +43,7 @@ export interface PrototypeCodeCandidate {
   primary_source_path: string;
   source_hash: string;
   source_excerpt: string;
+  editable_brief: string;
   signals: string[];
   action: PrototypeCodeCandidateAction;
   prototype_id: string | null;

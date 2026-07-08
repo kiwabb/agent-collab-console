@@ -155,6 +155,7 @@ def _build(store, wm):
 async def _measure_peak_concurrency(reg, n_agents):
     """Run a batch of n_agents and return the peak simultaneous in-flight count."""
     state = {"current": 0, "peak": 0}
+    dispatch_count = 0
 
     async def fake_dispatch_role(
         *,
@@ -169,10 +170,9 @@ async def _measure_peak_concurrency(reg, n_agents):
         batch_key=None,
         register_completion=False,
     ):
-        fake_dispatch_role.n += 1
-        return f"task-{fake_dispatch_role.n}", f"node-{fake_dispatch_role.n}"
-
-    fake_dispatch_role.n = 0
+        nonlocal dispatch_count
+        dispatch_count += 1
+        return f"task-{dispatch_count}", f"node-{dispatch_count}"
 
     async def fake_wait(self, task_id, *, idle_timeout, hard_timeout, activity_age):
         state["current"] += 1
@@ -184,19 +184,14 @@ async def _measure_peak_concurrency(reg, n_agents):
 
     import app.application.task_completion_registry as tcr_mod  # noqa: F401
 
-    orig_dispatch = task_dispatcher.dispatch_role
-    orig_wait = TaskCompletionRegistry.wait_for_active
-    task_dispatcher.dispatch_role = fake_dispatch_role
-    TaskCompletionRegistry.wait_for_active = fake_wait
-    try:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(task_dispatcher, "dispatch_role", fake_dispatch_role)
+        patch.setattr(TaskCompletionRegistry, "wait_for_active", fake_wait)
         agents = [{"role": f"engineer", "prompt": str(i)} for i in range(n_agents)]  # noqa: F541
         # Distinct roles so the per-role limiter (default 3) never masks the
         # budget downscale we are measuring.
         agents = [{"role": f"role{i}", "prompt": str(i)} for i in range(n_agents)]
         out = await reg.tools["dispatch_batch"]({"agents": agents})
-    finally:
-        task_dispatcher.dispatch_role = orig_dispatch
-        TaskCompletionRegistry.wait_for_active = orig_wait
     return out, state["peak"]
 
 

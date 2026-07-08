@@ -7,17 +7,35 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable
 from datetime import datetime
+from typing import Protocol
 from uuid import uuid4
 
-from app.domain.models import WorkflowEdge, WorkflowGraph, WorkflowNode
+import aiosqlite
+
+from app.domain.models import Agent, WorkflowEdge, WorkflowGraph, WorkflowNode
 
 logger = logging.getLogger(__name__)
 
 _FOUR_PHASE_ORDER = ["product_manager", "architect", "engineer", "qa"]
 
 
-async def ensure_four_phase_preset(store) -> None:
+class FourPhasePresetStore(Protocol):
+    def _get_conn(self) -> Awaitable[aiosqlite.Connection]: ...
+
+    def list_agents(self, *, workspace_id: str | None = None) -> Awaitable[list[Agent]]: ...
+
+    def save_workflow_graph(
+        self,
+        graph: WorkflowGraph,
+        *,
+        nodes: list[WorkflowNode] | None = None,
+        edges: list[WorkflowEdge] | None = None,
+    ) -> Awaitable[None]: ...
+
+
+async def ensure_four_phase_preset(store: FourPhasePresetStore | None) -> None:
     """Register a re-usable 'four_phase' preset row (idempotent)."""
     if store is None:
         return
@@ -39,7 +57,7 @@ async def ensure_four_phase_preset(store) -> None:
     await conn.commit()
 
 
-async def backfill_graphs_for_existing_issues(store) -> int:
+async def backfill_graphs_for_existing_issues(store: FourPhasePresetStore | None) -> int:
     """Create a 4-phase graph for any issue that doesn't have one yet.
 
     Idempotent: if an issue already has a graph row, it's left alone.
@@ -58,8 +76,6 @@ async def backfill_graphs_for_existing_issues(store) -> int:
         return 0
     # Pull every issue id; filter those without a graph.
     conn = await store._get_conn()
-    import aiosqlite
-
     conn.row_factory = aiosqlite.Row
     async with conn.execute("SELECT id FROM codex_issues") as cur:
         issue_rows = await cur.fetchall()
@@ -76,7 +92,9 @@ async def backfill_graphs_for_existing_issues(store) -> int:
     return created
 
 
-async def _create_four_phase_graph(store, issue_id: str, role_to_agent: dict) -> WorkflowGraph:
+async def _create_four_phase_graph(
+    store: FourPhasePresetStore, issue_id: str, role_to_agent: dict[str, Agent]
+) -> WorkflowGraph:
     graph_id = str(uuid4())
     now = datetime.now()
     nodes: list[WorkflowNode] = []

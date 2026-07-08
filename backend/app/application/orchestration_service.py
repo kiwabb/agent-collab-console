@@ -1,14 +1,56 @@
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
+from collections.abc import Awaitable
 from datetime import datetime  # noqa: I001, RUF100
+from typing import Protocol
 from uuid import uuid4
 
+from app.adapters.base import AgentArtifact, AgentResult, WorkerTaskPayload
 from app.application.task_statuses import is_task_failure_status, is_task_success_status
-from app.domain.models import Task, Message, Artifact, AgentRun
+from app.domain.models import AgentRun, Artifact, Message, PlanDetails, Session, Task
+
+
+class OrchestrationEventBus(Protocol):
+    def append(self, event: dict[str, object]) -> Awaitable[None]: ...
+
+
+class OrchestrationSessionService(Protocol):
+    sessions: dict[str, Session]
+
+    async def get_session(self, session_id: str) -> Session: ...
+
+    async def update_session(self, session: Session) -> None: ...
+
+
+class MasterAdapter(Protocol):
+    def execute(self, task_title: str) -> AgentResult: ...
+
+
+class WorkerAdapter(Protocol):
+    def execute(self, payload: WorkerTaskPayload) -> AgentResult: ...
+
+
+def _artifact_content(value: object) -> str | PlanDetails:
+    if isinstance(value, str | PlanDetails):
+        return value
+    if isinstance(value, dict):
+        return PlanDetails.model_validate(value)
+    return str(value)
+
+
+def _artifact_steps(artifact: AgentArtifact) -> list[str] | None:
+    steps = artifact.get("steps")
+    return steps if isinstance(steps, list) else None
 
 
 class OrchestrationService:
-    def __init__(self, session_service, event_bus, master_adapter=None, worker_adapter=None):
+    def __init__(
+        self,
+        session_service: OrchestrationSessionService,
+        event_bus: OrchestrationEventBus,
+        master_adapter: MasterAdapter | None = None,
+        worker_adapter: WorkerAdapter | None = None,
+    ) -> None:
         self.session_service = session_service
         self.event_bus = event_bus
         self.master_adapter = master_adapter
@@ -41,8 +83,8 @@ class OrchestrationService:
                     id=str(uuid4()),
                     task_id=task.id,
                     kind=art["kind"],
-                    content=art["content"],
-                    steps=art.get("steps"),
+                    content=_artifact_content(art["content"]),
+                    steps=_artifact_steps(art),
                     created_at=datetime.now(),
                 )
                 session.artifacts.append(artifact)
@@ -51,7 +93,9 @@ class OrchestrationService:
         await self.event_bus.append({"type": "task.assigned", "task_id": task.id})
         return task
 
-    async def run_task(self, task_id: str) -> dict:
+    async def run_task(self, task_id: str) -> AgentResult:
+        if self.worker_adapter is None:
+            raise RuntimeError("Worker adapter is not configured")
         for session in list(self.session_service.sessions.values()):
             for task in session.tasks:
                 if task.id == task_id:
@@ -68,7 +112,7 @@ class OrchestrationService:
                             plan = plan_artifact.content.model_dump()
                         elif isinstance(plan_artifact.content, str):
                             plan = {"summary": plan_artifact.content}
-                    payload = {
+                    payload: WorkerTaskPayload = {
                         "task_id": task.id,
                         "task_title": task.title,
                         "plan": plan,
@@ -84,7 +128,7 @@ class OrchestrationService:
                         role=result["role"],
                         status=run_status,
                         summary=result["summary"],
-                        payload=payload,
+                        payload=dict(payload),
                         created_at=datetime.now(),
                     )
                     message = Message(
@@ -100,7 +144,7 @@ class OrchestrationService:
                             id=str(uuid4()),
                             task_id=task.id,
                             kind=art["kind"],
-                            content=art["content"],
+                            content=_artifact_content(art["content"]),
                             created_at=datetime.now(),
                         )
                         session.artifacts.append(artifact)
@@ -116,7 +160,7 @@ class OrchestrationService:
                     return result
         raise KeyError(task_id)
 
-    async def retry_task(self, task_id: str) -> dict:
+    async def retry_task(self, task_id: str) -> AgentResult:
         """Retry a failed task by resetting its status to pending and re-running."""
         for session in list(self.session_service.sessions.values()):
             for task in session.tasks:

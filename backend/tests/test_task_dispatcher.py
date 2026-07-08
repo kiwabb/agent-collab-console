@@ -482,6 +482,9 @@ class _ConcurrencyStore:
         self.graph.nodes.append(node)  # the next dispatch must see this
         self.nodes.append(node)
 
+    async def update_workflow_node(self, node_id: str, **updates: object):
+        await asyncio.sleep(0)
+
     async def add_workflow_edge(self, edge):
         await asyncio.sleep(0)
 

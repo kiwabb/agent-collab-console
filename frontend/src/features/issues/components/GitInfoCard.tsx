@@ -8,12 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { abandonCodexIssue, getCodexIssueDiff, mergeCodexIssue } from "@/lib/api/issues";
@@ -32,7 +27,10 @@ function statusVariant(status: GitMergeStatus) {
   return "default" as const;
 }
 
-function formatFileCount(count: number, t: (key: string, params?: Record<string, string | number>) => string): string {
+function formatFileCount(
+  count: number,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
   const key = count === 1 ? "task.diff.fileCountOne" : "task.diff.fileCount";
   return t(key).replace("{count}", String(count));
 }
@@ -41,7 +39,10 @@ const MERGE_STATUS_KEY = {
   open: "task.mergeStatus.open",
   merged: "task.mergeStatus.merged",
   abandoned: "task.mergeStatus.abandoned",
-} as const satisfies Record<GitMergeStatus, "task.mergeStatus.open" | "task.mergeStatus.merged" | "task.mergeStatus.abandoned">;
+} as const satisfies Record<
+  GitMergeStatus,
+  "task.mergeStatus.open" | "task.mergeStatus.merged" | "task.mergeStatus.abandoned"
+>;
 
 export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   const { t } = useI18n();
@@ -105,7 +106,9 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
       busEventMatchers.issueId(issue.id),
       busEventMatchers.typeIn("worktree_dirty", "task_status"),
     ),
-    onEvent: () => { void fetchStat(); },
+    onEvent: () => {
+      void fetchStat();
+    },
     throttleMs: 1000,
     enabled: issue.git_merge_status === "open",
   });
@@ -156,12 +159,18 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   }
 
   return (
-    <Card data-density="git-ops" className="enterprise-card overflow-hidden rounded-lg border-border-subtle/60 bg-surface/90 p-1 transition-colors hover:border-border-strong/40">
+    <Card
+      data-density="git-ops"
+      className="enterprise-card overflow-hidden rounded-lg border-border-subtle/60 bg-surface/90 p-1 transition-colors hover:border-border-strong/40"
+    >
       <CardHeader className="flex flex-col gap-3 space-y-0 px-3 pb-3 pt-3 sm:px-4 lg:flex-row lg:items-start lg:justify-between">
         <CardTitle className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-bold tracking-wide text-foreground">
           <GitBranch size={15} className="text-brand shrink-0" />
           <span>{t("task.git.title")}</span>
-          <Badge variant={statusVariant(issue.git_merge_status)} className="rounded-md uppercase text-[10px] tracking-wider font-extrabold">
+          <Badge
+            variant={statusVariant(issue.git_merge_status)}
+            className="rounded-md uppercase text-[10px] tracking-wider font-extrabold"
+          >
             {t(MERGE_STATUS_KEY[issue.git_merge_status])}
           </Badge>
           {stat && stat.files > 0 && (
@@ -172,8 +181,14 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
             </span>
           )}
           {commitsAhead > 0 && (
-            <Badge variant="outline" className="font-mono border-brand/40 text-brand bg-brand-muted/10 rounded">
-              ↑ {t(commitsAhead === 1 ? "task.git.commitCountOne" : "task.git.commitCount", { count: commitsAhead })}
+            <Badge
+              variant="outline"
+              className="font-mono border-brand/40 text-brand bg-brand-muted/10 rounded"
+            >
+              ↑{" "}
+              {t(commitsAhead === 1 ? "task.git.commitCountOne" : "task.git.commitCount", {
+                count: commitsAhead,
+              })}
             </Badge>
           )}
         </CardTitle>
@@ -215,23 +230,38 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
 
       <CardContent className="m-2 grid grid-cols-1 gap-2 rounded-lg border border-border-subtle/50 bg-surface-input/30 p-2.5 text-xs md:grid-cols-3">
         <div className="flex flex-col gap-1.5 min-w-0">
-          <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">{t("task.branch")}</div>
-          <div className="font-mono text-foreground font-bold truncate bg-surface-input px-2 py-1 rounded border border-border-subtle/50 select-all" title={issue.git_branch ?? undefined}>
+          <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">
+            {t("task.branch")}
+          </div>
+          <div
+            className="font-mono text-foreground font-bold truncate bg-surface-input px-2 py-1 rounded border border-border-subtle/50 select-all"
+            title={issue.git_branch ?? undefined}
+          >
             {issue.git_branch ?? "—"}
           </div>
         </div>
-        
+
         <div className="flex flex-col gap-1.5 min-w-0">
-          <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">{t("task.base")}</div>
-          <div className="font-mono text-foreground font-bold truncate bg-surface-input px-2 py-1 rounded border border-border-subtle/50 select-all" title={issue.git_base_branch ?? undefined}>
+          <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">
+            {t("task.base")}
+          </div>
+          <div
+            className="font-mono text-foreground font-bold truncate bg-surface-input px-2 py-1 rounded border border-border-subtle/50 select-all"
+            title={issue.git_base_branch ?? undefined}
+          >
             {issue.git_base_branch ?? "—"}
           </div>
         </div>
-        
+
         <div className="flex flex-col gap-1.5 min-w-0">
-          <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">{t("task.worktree")}</div>
+          <div className="text-[10px] uppercase tracking-wider font-extrabold text-text-muted">
+            {t("task.worktree")}
+          </div>
           <div className="flex items-center gap-1 min-w-0 bg-surface-input px-2 py-1 rounded border border-border-subtle/50">
-            <div className="font-mono text-foreground font-bold truncate flex-1 select-all" title={issue.git_worktree_path ?? undefined}>
+            <div
+              className="font-mono text-foreground font-bold truncate flex-1 select-all"
+              title={issue.git_worktree_path ?? undefined}
+            >
               {issue.git_worktree_path ?? "—"}
             </div>
             {issue.git_worktree_path && (

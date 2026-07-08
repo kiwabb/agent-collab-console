@@ -95,19 +95,14 @@ export default function BenchmarksRoutePage() {
     setError(message);
   }, []);
 
-  const handleViewJob = useCallback(
-    (jobId: string) => {
-      setActiveJobId(jobId);
-    },
-    [],
-  );
+  const handleViewJob = useCallback((jobId: string) => {
+    setActiveJobId(jobId);
+  }, []);
 
   // Poll the active job. When it completes and surfaces a run id,
   // refresh the leaderboard and fetch the new run's diff (if
   // the run is also the user's current selection).
-  const { job: activeJob, resultRef: completedRunId } = useBenchmarkJob(
-    activeJobId,
-  );
+  const { job: activeJob, resultRef: completedRunId } = useBenchmarkJob(activeJobId);
   useEffect(() => {
     if (activeJob?.status === "completed" && completedRunId) {
       void refreshLeaderboard();
@@ -166,7 +161,8 @@ export default function BenchmarksRoutePage() {
             )}
             {activeJob && (
               <div className="px-4 py-3 rounded-md bg-surface-input/30 border border-border-subtle/40 text-[12px] font-mono">
-                job <span className="text-brand">{activeJob.id}</span> · {t(`benchmark.status.${activeJob.status}` as Parameters<typeof t>[0])} ·{" "}
+                job <span className="text-brand">{activeJob.id}</span> ·{" "}
+                {t(`benchmark.status.${activeJob.status}` as Parameters<typeof t>[0])} ·{" "}
                 {Math.round(activeJob.progress * 100)}%
               </div>
             )}
@@ -179,11 +175,7 @@ export default function BenchmarksRoutePage() {
             />
           </div>
           <div className="space-y-5">
-            <ScoreCostFrontier
-              runs={runs}
-              baseline={baseline}
-              onPickRun={handlePickFromFrontier}
-            />
+            <ScoreCostFrontier runs={runs} baseline={baseline} onPickRun={handlePickFromFrontier} />
           </div>
         </div>
       )}
@@ -200,11 +192,7 @@ export default function BenchmarksRoutePage() {
             />
           </div>
           <div className="space-y-5">
-            <ScoreCostFrontier
-              runs={runs}
-              baseline={baseline}
-              onPickRun={handlePickFromFrontier}
-            />
+            <ScoreCostFrontier runs={runs} baseline={baseline} onPickRun={handlePickFromFrontier} />
           </div>
         </div>
       )}

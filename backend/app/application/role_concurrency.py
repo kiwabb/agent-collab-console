@@ -18,6 +18,7 @@ a synchronous (no-``await``) section and so is atomic with respect to other
 coroutines.
 """
 import asyncio  # noqa: E402
+from collections.abc import AsyncIterator  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 
 from app.application import timeouts  # noqa: E402
@@ -27,6 +28,8 @@ class RoleConcurrencyLimiter:
     """Process-singleton: one bounded semaphore per role key."""
 
     _instance: "RoleConcurrencyLimiter | None" = None  # noqa: UP037
+    _semaphores: dict[str, asyncio.Semaphore]
+    _limit: int | None
 
     def __new__(cls) -> "RoleConcurrencyLimiter":  # noqa: UP037
         if cls._instance is None:
@@ -80,7 +83,7 @@ class RoleConcurrencyLimiter:
             sem.release()
 
     @asynccontextmanager
-    async def slot(self, role: str, *, timeout: float):
+    async def slot(self, role: str, *, timeout: float) -> AsyncIterator[bool]:
         """Async context manager that holds a role slot, or yields False on timeout.
 
         Usage::

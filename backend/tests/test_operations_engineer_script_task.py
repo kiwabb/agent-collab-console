@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import cast
 
 import pytest
 
+from app.application.engineer_workflow import EngineerWorkflow
+from app.application.knowledge_index_service import ArtifactRow, DbConnection, IssueInput
 from app.application.role_workflow_service import RoleWorkflowService
-from app.domain.models import CodexTask, ExecutionProcess, Project
+from app.application.specialist_orchestrator import SpecialistGraphRef
+from app.domain.models import AgentMessage, CodexSession, CodexTask, ExecutionProcess, Project
 
 
 def _project(repo_path: str) -> Project:
@@ -60,6 +64,37 @@ class FakeStore:
     async def save_codex_task(self, task: CodexTask) -> None:
         self.saved_tasks.append(task)
 
+    async def load_codex_task(self, task_id: str) -> CodexTask | None:
+        return next((task for task in self.saved_tasks if task.id == task_id), None)
+
+    async def _get_conn(self) -> DbConnection:
+        raise RuntimeError("FakeStore has no database connection")
+
+    async def list_codex_issues(
+        self, session_id: str | None = None, project_id: str | None = None
+    ) -> list[IssueInput]:
+        return []
+
+    async def list_artifacts(self, issue_id: str) -> list[ArtifactRow]:
+        return []
+
+    async def save_artifact(self, artifact: ArtifactRow) -> None:
+        return None
+
+    async def load_workflow_graph_for_issue(self, issue_id: str) -> SpecialistGraphRef | None:
+        return None
+
+    async def save_agent_message(self, msg: AgentMessage) -> None:
+        return None
+
+    async def update_execution_process_status(
+        self,
+        proc_id: str,
+        status: str,
+        completed_at: datetime | None = None,
+    ) -> None:
+        return None
+
 
 @pytest.mark.asyncio
 async def test_operations_prompt_preserves_explicit_empty_request_context(tmp_path):
@@ -74,6 +109,7 @@ async def test_operations_prompt_preserves_explicit_empty_request_context(tmp_pa
 
     prompt = await service.build_prompt(task)
 
+    assert prompt is not None
     assert "Existing setup script: (empty)" in prompt
     assert "Existing run command: (empty)" in prompt
     assert "stale setup" not in prompt
@@ -95,7 +131,7 @@ def test_operations_request_context_reads_legacy_prompt_lines():
 
 
 @pytest.mark.asyncio
-async def test_persist_result_surfaces_specialist_request_failure():
+async def test_persist_result_surfaces_specialist_request_failure(monkeypatch):
     class SpecialistDoc:
         call_specialist = {
             "role_key": "specialist:security_reviewer",
@@ -108,14 +144,14 @@ async def test_persist_result_surfaces_specialist_request_failure():
             return SpecialistDoc()
 
     service = RoleWorkflowService()
-    service._engineer_service = EngineerService()
+    service._engineer_service = cast(EngineerWorkflow, EngineerService())
     task = _task(prompt="Implement auth flow")
     task.role = "engineer"
 
     async def fail_request(*args, **kwargs):
         raise RuntimeError("specialist unavailable")
 
-    service._request_specialist = fail_request
+    monkeypatch.setattr(service, "_request_specialist", fail_request)
 
     with pytest.raises(RuntimeError, match="specialist unavailable"):
         await service.persist_result(task)
@@ -218,15 +254,15 @@ class ScriptTaskStore(FakeStore):
 class WorkspaceScriptTaskStore(ScriptTaskStore):
     def __init__(self, project: Project):
         super().__init__(project)
-        self.saved_workspaces = []
+        self.saved_workspaces: list[CodexSession] = []
 
-    async def load_codex_workspace(self, workspace_id: str):
+    async def load_codex_workspace(self, workspace_id: str) -> CodexSession | None:
         for workspace in self.saved_workspaces:
             if workspace.id == workspace_id:
                 return workspace
         return None
 
-    async def save_codex_workspace(self, workspace) -> None:
+    async def save_codex_workspace(self, workspace: CodexSession) -> None:
         self.saved_workspaces.append(workspace)
 
 

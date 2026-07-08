@@ -1,9 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createIssueAndInitialTask, runCodexTaskWithExecutor } from "../src/features/workbench/workbenchActions";
-import { updateCodexTaskExecutor, chatCodexTask, refineCodexTask, rerunCodexTask, sendCodexTask } from "../src/lib/api";
+import {
+  createIssueAndInitialTask,
+  runCodexTaskWithExecutor,
+} from "../src/features/workbench/workbenchActions";
+import {
+  updateCodexTaskExecutor,
+  chatCodexTask,
+  refineCodexTask,
+  rerunCodexTask,
+  sendCodexTask,
+} from "../src/lib/api";
 import type { CodexTask } from "@/lib/types";
+import { jsonRequestBody, withMockFetch } from "./fetchTestUtils";
+import { at } from "./testAssertions";
 
 test("createIssueAndInitialTask creates issue then auto-starts the DAG graph", async () => {
   const calls: string[] = [];
@@ -57,186 +68,189 @@ test("createIssueAndInitialTask creates issue then auto-starts the DAG graph", a
 });
 
 test("chatCodexTask posts to /chat with content", async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-  globalThis.fetch = async (input, init) => {
-    calls.push({ input, init });
-    return new Response(
-      JSON.stringify({ message: { id: "m1" }, assistant_message: null, task: { id: "t1" }, execution_process: { id: "ep1", kind: "chat" } }),
-      { status: 201, headers: { "Content-Type": "application/json" } },
-    );
-  };
-  try {
-    const result = await chatCodexTask("t1", "你好");
-    assert.equal(result.execution_process.kind, "chat");
-    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/chat");
-    assert.equal(calls[0].init?.method, "POST");
-    assert.equal(JSON.parse(String(calls[0].init?.body)).content, "你好");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await withMockFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          message: { id: "m1" },
+          assistant_message: null,
+          task: { id: "t1" },
+          execution_process: { id: "ep1", kind: "chat" },
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    async (calls) => {
+      const result = await chatCodexTask("t1", "你好");
+      assert.equal(result.execution_process.kind, "chat");
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/codex/tasks/t1/chat");
+      assert.equal(call.init?.method, "POST");
+      assert.equal(jsonRequestBody(call)["content"], "你好");
+    },
+  );
 });
 
 test("refineCodexTask posts to /refine with content", async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-  globalThis.fetch = async (input, init) => {
-    calls.push({ input, init });
-    return new Response(
-      JSON.stringify({ message: { id: "m1" }, assistant_message: null, task: { id: "t1" }, execution_process: { id: "ep1", kind: "refine" } }),
-      { status: 201, headers: { "Content-Type": "application/json" } },
-    );
-  };
-  try {
-    const result = await refineCodexTask("t1", "加一条 X");
-    assert.equal(result.execution_process.kind, "refine");
-    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/refine");
-    assert.equal(calls[0].init?.method, "POST");
-    assert.equal(JSON.parse(String(calls[0].init?.body)).content, "加一条 X");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await withMockFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          message: { id: "m1" },
+          assistant_message: null,
+          task: { id: "t1" },
+          execution_process: { id: "ep1", kind: "refine" },
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    async (calls) => {
+      const result = await refineCodexTask("t1", "加一条 X");
+      assert.equal(result.execution_process.kind, "refine");
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/codex/tasks/t1/refine");
+      assert.equal(call.init?.method, "POST");
+      assert.equal(jsonRequestBody(call)["content"], "加一条 X");
+    },
+  );
 });
 
 test("sendCodexTask posts to /send with content (auto mode)", async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-  globalThis.fetch = async (input, init) => {
-    calls.push({ input, init });
-    return new Response(
-      JSON.stringify({
-        message: { id: "m1" }, assistant_message: null, task: { id: "t1" },
-        execution_process: { id: "ep1", kind: "chat" },
-        resolved_mode: "chat",
-      }),
-      { status: 201, headers: { "Content-Type": "application/json" } },
-    );
-  };
-  try {
-    const result = await sendCodexTask("t1", "你好");
-    assert.equal(result.resolved_mode, "chat");
-    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/send");
-    const body = JSON.parse(String(calls[0].init?.body));
-    assert.equal(body.content, "你好");
-    assert.equal(body.force_mode, undefined);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await withMockFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          message: { id: "m1" },
+          assistant_message: null,
+          task: { id: "t1" },
+          execution_process: { id: "ep1", kind: "chat" },
+          resolved_mode: "chat",
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    async (calls) => {
+      const result = await sendCodexTask("t1", "你好");
+      assert.equal(result.resolved_mode, "chat");
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/codex/tasks/t1/send");
+      const body = jsonRequestBody(call);
+      assert.equal(body["content"], "你好");
+      assert.equal(body["force_mode"], undefined);
+    },
+  );
 });
 
 test("sendCodexTask passes force_mode in body when provided", async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-  globalThis.fetch = async (input, init) => {
-    calls.push({ input, init });
-    return new Response(
-      JSON.stringify({
-        message: { id: "m1" }, assistant_message: null, task: { id: "t1" },
-        execution_process: { id: "ep1", kind: "refine" },
-        resolved_mode: "refine",
-      }),
-      { status: 201, headers: { "Content-Type": "application/json" } },
-    );
-  };
-  try {
-    await sendCodexTask("t1", "改一下", "refine");
-    const body = JSON.parse(String(calls[0].init?.body));
-    assert.equal(body.force_mode, "refine");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await withMockFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          message: { id: "m1" },
+          assistant_message: null,
+          task: { id: "t1" },
+          execution_process: { id: "ep1", kind: "refine" },
+          resolved_mode: "refine",
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    async (calls) => {
+      await sendCodexTask("t1", "改一下", "refine");
+      const call = at(calls, 0, "fetch call");
+      assert.equal(jsonRequestBody(call)["force_mode"], "refine");
+    },
+  );
 });
 
 test("rerunCodexTask posts to /rerun with executor overrides in body", async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-  globalThis.fetch = async (input, init) => {
-    calls.push({ input, init });
-    return new Response(
-      JSON.stringify({ message: null, assistant_message: null, task: { id: "t1" }, execution_process: { id: "ep1", kind: "rerun" } }),
-      { status: 201, headers: { "Content-Type": "application/json" } },
-    );
-  };
-  try {
-    await rerunCodexTask("t1", { executor: "claude", provider: "anthropic", model: "claude-opus-4-7" });
-    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/rerun");
-    assert.equal(calls[0].init?.method, "POST");
-    const body = JSON.parse(String(calls[0].init?.body));
-    assert.equal(body.executor, "claude");
-    assert.equal(body.provider, "anthropic");
-    assert.equal(body.model, "claude-opus-4-7");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await withMockFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          message: null,
+          assistant_message: null,
+          task: { id: "t1" },
+          execution_process: { id: "ep1", kind: "rerun" },
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    async (calls) => {
+      await rerunCodexTask("t1", {
+        executor: "claude",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      });
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/codex/tasks/t1/rerun");
+      assert.equal(call.init?.method, "POST");
+      const body = jsonRequestBody(call);
+      assert.equal(body["executor"], "claude");
+      assert.equal(body["provider"], "anthropic");
+      assert.equal(body["model"], "claude-opus-4-7");
+    },
+  );
 });
 
 test("rerunCodexTask posts to /rerun with no body", async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-  globalThis.fetch = async (input, init) => {
-    calls.push({ input, init });
-    return new Response(
-      JSON.stringify({ message: null, assistant_message: null, task: { id: "t1" }, execution_process: { id: "ep1", kind: "rerun" } }),
-      { status: 201, headers: { "Content-Type": "application/json" } },
-    );
-  };
-  try {
-    const result = await rerunCodexTask("t1");
-    assert.equal(result.execution_process.kind, "rerun");
-    assert.equal(String(calls[0].input), "/api/codex/tasks/t1/rerun");
-    assert.equal(calls[0].init?.method, "POST");
-    assert.equal(calls[0].init?.body, undefined);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await withMockFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          message: null,
+          assistant_message: null,
+          task: { id: "t1" },
+          execution_process: { id: "ep1", kind: "rerun" },
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    async (calls) => {
+      const result = await rerunCodexTask("t1");
+      assert.equal(result.execution_process.kind, "rerun");
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/codex/tasks/t1/rerun");
+      assert.equal(call.init?.method, "POST");
+      assert.equal(call.init?.body, undefined);
+    },
+  );
 });
 
 test("updateCodexTaskExecutor posts PATCH with executor to the update endpoint", async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-
-  globalThis.fetch = async (input, init) => {
-    calls.push({ input, init });
-    return new Response(
-      JSON.stringify({
-        id: "task-1",
-        session_id: "ws-1",
-        issue_id: "issue-1",
-        phase: "development",
-        title: "开发 - 购物车 - 实现购物车API",
-        prompt: "实现购物车增删改查接口",
-        role: "engineer",
-        executor: "claude",
-        provider: null,
-        model: null,
-        status: "pending",
-        result: null,
-        parent_task_id: null,
-        task_kind: "normal",
-        blocked_by_help_id: null,
-        workspace_path: "/tmp",
-        resume_session_id: null,
-        resume_message_id: null,
-        last_execution_process_id: null,
-        sequence_index: 0,
-        sequence_group: "issue-1",
-        created_at: null,
-        updated_at: null,
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
-  };
-
-  try {
-    const result = await updateCodexTaskExecutor("task-1", "claude");
-    assert.equal(result.executor, "claude");
-    assert.equal(String(calls[0].input), "/api/codex/tasks/task-1");
-    assert.equal(calls[0].init?.method, "PATCH");
-    const body = JSON.parse(calls[0].init?.body as string);
-    assert.equal(body.executor, "claude");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await withMockFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          id: "task-1",
+          session_id: "ws-1",
+          issue_id: "issue-1",
+          phase: "development",
+          title: "开发 - 购物车 - 实现购物车API",
+          prompt: "实现购物车增删改查接口",
+          role: "engineer",
+          executor: "claude",
+          provider: null,
+          model: null,
+          status: "pending",
+          result: null,
+          parent_task_id: null,
+          task_kind: "normal",
+          blocked_by_help_id: null,
+          workspace_path: "/tmp",
+          resume_session_id: null,
+          resume_message_id: null,
+          last_execution_process_id: null,
+          sequence_index: 0,
+          sequence_group: "issue-1",
+          created_at: null,
+          updated_at: null,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    async (calls) => {
+      const result = await updateCodexTaskExecutor("task-1", "claude");
+      assert.equal(result.executor, "claude");
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/codex/tasks/task-1");
+      assert.equal(call.init?.method, "PATCH");
+      assert.equal(jsonRequestBody(call)["executor"], "claude");
+    },
+  );
 });
 
 test("runCodexTaskWithExecutor skips update when executor unchanged", async () => {

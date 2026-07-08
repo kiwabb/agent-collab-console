@@ -55,21 +55,33 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function StatusDot({ status, isError }: { status?: "running" | "success" | "failed"; isError?: boolean }) {
+function pickArgString(args: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return "";
+}
+
+function StatusDot({
+  status,
+  isError,
+}: {
+  status?: "running" | "success" | "failed" | undefined;
+  isError?: boolean | undefined;
+}) {
   if (status === "failed" || isError) {
     return <span className="size-1.5 rounded-full bg-error shadow-[0_0_6px_rgba(239,68,68,0.6)]" />;
   }
   if (status === "success") {
-    return <span className="size-1.5 rounded-full bg-success shadow-[0_0_6px_rgba(34,197,94,0.5)]" />;
+    return (
+      <span className="size-1.5 rounded-full bg-success shadow-[0_0_6px_rgba(34,197,94,0.5)]" />
+    );
   }
   return null;
 }
 
-function StatusLabel({
-  entry,
-}: {
-  entry: NormalizedEntry;
-}) {
+function StatusLabel({ entry }: { entry: NormalizedEntry }) {
   const { t } = useI18n();
   const parts: string[] = [];
   if (entry.status === "running") parts.push(t("tools.runningEllipsis"));
@@ -85,7 +97,11 @@ function StatusLabel({
     <span
       className={cn(
         "text-[9px] font-black uppercase tracking-[0.16em]",
-        entry.status === "failed" ? "text-error" : entry.status === "running" ? "text-brand" : "text-success",
+        entry.status === "failed"
+          ? "text-error"
+          : entry.status === "running"
+            ? "text-brand"
+            : "text-success",
       )}
     >
       {parts.join(" · ")}
@@ -145,12 +161,11 @@ function ToolHeader({
       <span className="shrink-0 inline-flex items-center justify-center size-6 rounded-md bg-surface-raised border border-border-subtle">
         {categoryIcon(entry.category, "text-text-secondary")}
       </span>
-      <span className="text-[10px] font-black uppercase tracking-[0.18em] text-text-secondary">{title}</span>
+      <span className="text-[10px] font-black uppercase tracking-[0.18em] text-text-secondary">
+        {title}
+      </span>
       {summary ? (
-        <span
-          className="flex-1 truncate text-[12px] font-mono text-foreground/80"
-          title={summary}
-        >
+        <span className="flex-1 truncate text-[12px] font-mono text-foreground/80" title={summary}>
           {summary}
         </span>
       ) : (
@@ -196,7 +211,9 @@ function BashBlock({ entry }: ToolBlockProps) {
           {command && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">$</span>
+                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">
+                  $
+                </span>
                 <CopyButton text={command} />
               </div>
               {preBlock(command)}
@@ -205,7 +222,9 @@ function BashBlock({ entry }: ToolBlockProps) {
           {entry.output && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">stdout</span>
+                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">
+                  stdout
+                </span>
                 <CopyButton text={entry.output} />
               </div>
               {preBlock(entry.output)}
@@ -222,7 +241,10 @@ function ReadBlock({ entry }: ToolBlockProps) {
   const [open, setOpen] = useState(false);
   const fileName = getFileName(entry.filePath || "");
   const summary = entry.filePath || fileName || "";
-  const lineCount = useMemo(() => (entry.output ? entry.output.split(/\r?\n/).length : 0), [entry.output]);
+  const lineCount = useMemo(
+    () => (entry.output ? entry.output.split(/\r?\n/).length : 0),
+    [entry.output],
+  );
   return (
     <div className="rounded-xl border border-border-subtle bg-surface/40">
       <ToolHeader
@@ -257,8 +279,8 @@ function EditBlock({ entry }: ToolBlockProps) {
   const fileName = getFileName(entry.filePath || "");
   const summary = entry.filePath || fileName || "";
   const args = entry.args || {};
-  const oldStr = (args.old_string as string) || (args.oldString as string) || "";
-  const newStr = (args.new_string as string) || (args.newString as string) || (args.content as string) || "";
+  const oldStr = pickArgString(args, ["old_string", "oldString"]);
+  const newStr = pickArgString(args, ["new_string", "newString", "content"]);
   return (
     <div className="rounded-xl border border-border-subtle bg-surface/40">
       <ToolHeader
@@ -273,7 +295,9 @@ function EditBlock({ entry }: ToolBlockProps) {
           {oldStr && (
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-error">- removed</span>
+                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-error">
+                  - removed
+                </span>
                 <CopyButton text={oldStr} />
               </div>
               <pre className="m-0 px-3 py-2 max-h-[200px] overflow-auto rounded-lg bg-error/5 border border-error/20 font-mono text-[11.5px] leading-relaxed text-error/90 whitespace-pre-wrap break-words">
@@ -284,7 +308,9 @@ function EditBlock({ entry }: ToolBlockProps) {
           {newStr && (
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-success">+ added</span>
+                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-success">
+                  + added
+                </span>
                 <CopyButton text={newStr} />
               </div>
               <pre className="m-0 px-3 py-2 max-h-[200px] overflow-auto rounded-lg bg-success/5 border border-success/20 font-mono text-[11.5px] leading-relaxed text-success/90 whitespace-pre-wrap break-words">
@@ -303,8 +329,8 @@ function SearchBlock({ entry }: ToolBlockProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const args = entry.args || {};
-  const pattern = (args.pattern as string) || (args.query as string) || (args.regex as string) || "";
-  const pathHint = (args.path as string) || (args.glob as string) || "";
+  const pattern = pickArgString(args, ["pattern", "query", "regex"]);
+  const pathHint = pickArgString(args, ["path", "glob"]);
   const summary = [pattern, pathHint].filter(Boolean).join("  in  ");
   return (
     <div className="rounded-xl border border-border-subtle bg-surface/40">
@@ -332,20 +358,22 @@ function TodoBlock({ entry }: ToolBlockProps) {
   const [open, setOpen] = useState(true);
   const items = useMemo(() => {
     const args = entry.args || {};
-    const raw = (args.todos as unknown) || (args.items as unknown) || (args.list as unknown);
+    const raw = args["todos"] ?? args["items"] ?? args["list"];
     if (!Array.isArray(raw)) return [];
     return raw
       .map((it) => {
         const r = asRecord(it);
         if (!r) return null;
         return {
-          content: (r.content as string) || (r.title as string) || (r.text as string) || "",
-          status: String(r.status || r.state || "pending").toLowerCase(),
+          content: pickArgString(r, ["content", "title", "text"]),
+          status: String(r["status"] || r["state"] || "pending").toLowerCase(),
         };
       })
       .filter((it): it is { content: string; status: string } => !!it);
   }, [entry.args]);
-  const summary = items.length ? `${items.filter((i) => i.status === "completed" || i.status === "done").length} / ${items.length}` : "";
+  const summary = items.length
+    ? `${items.filter((i) => i.status === "completed" || i.status === "done").length} / ${items.length}`
+    : "";
   return (
     <div className="rounded-xl border border-border-subtle bg-surface/40">
       <ToolHeader
@@ -416,7 +444,9 @@ function McpBlock({ entry }: ToolBlockProps) {
           {argsJson && argsJson !== "{}" && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">args</span>
+                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">
+                  args
+                </span>
                 <CopyButton text={argsJson} />
               </div>
               {preBlock(argsJson)}
@@ -425,7 +455,9 @@ function McpBlock({ entry }: ToolBlockProps) {
           {entry.output && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">{t("tools.result")}</span>
+                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">
+                  {t("tools.result")}
+                </span>
                 <CopyButton text={entry.output} />
               </div>
               {preBlock(entry.output)}
@@ -463,7 +495,9 @@ function GenericBlock({ entry }: ToolBlockProps) {
           {argsJson && argsJson !== "{}" && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">args</span>
+                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">
+                  args
+                </span>
                 <CopyButton text={argsJson} />
               </div>
               {preBlock(argsJson)}
@@ -472,7 +506,9 @@ function GenericBlock({ entry }: ToolBlockProps) {
           {entry.output && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">{t("tools.result")}</span>
+                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-text-muted">
+                  {t("tools.result")}
+                </span>
                 <CopyButton text={entry.output} />
               </div>
               {preBlock(entry.output)}

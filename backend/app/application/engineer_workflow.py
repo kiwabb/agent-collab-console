@@ -4,7 +4,11 @@ import json
 
 from pydantic import BaseModel, Field, ValidationError
 
+from app.adapters.local_process import TimeoutExpired, run_trusted_local
 from app.application.issue_artifact_documents import IssueArtifactDocuments
+from app.application.specialist_requests import SpecialistCallRequest
+from app.domain.models import CodexTask
+from app.json_safety import object_dict
 
 
 def _normalize_repo_path(path: str) -> str:
@@ -32,25 +36,24 @@ def git_changed_files(workspace_path: str | None) -> list[str]:
     """
     if not workspace_path:
         return []
-    import subprocess
 
     for base in ("origin/main", "main", "HEAD~1"):
         try:
-            result = subprocess.run(
+            result = run_trusted_local(
                 ["git", "diff", "--name-only", f"{base}..HEAD"],
                 cwd=workspace_path,
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, TimeoutExpired):
             return []
         if result.returncode == 0:
             committed = [line.strip() for line in result.stdout.splitlines() if line.strip()]
             # Also include uncommitted working-tree changes the model
             # may not have committed yet.
             try:
-                wt = subprocess.run(
+                wt = run_trusted_local(
                     ["git", "status", "--porcelain"],
                     cwd=workspace_path,
                     capture_output=True,
@@ -64,7 +67,7 @@ def git_changed_files(workspace_path: str | None) -> list[str]:
                         if line.strip() and not line[3:].startswith("issues/")
                     ]
                     return list({*committed, *wt_files})
-            except (FileNotFoundError, subprocess.TimeoutExpired):
+            except (FileNotFoundError, TimeoutExpired):
                 pass
             return committed
     return []
@@ -134,7 +137,7 @@ class EngineerReportDocument(BaseModel):
     # Phase 4: Request specialist assistance (e.g., security review) without waiting for Conductor.
     # Set this field to call a specialist agent directly. The specialist will complete,
     # and the Engineer will resume with the specialist's findings in review_comment.
-    call_specialist: dict | None = (
+    call_specialist: SpecialistCallRequest | None = (
         None  # {"role_key": "security_reviewer", "prompt": "...", "why": "..."}
     )
 
@@ -172,12 +175,13 @@ class EngineerWorkflow:
     def __init__(self) -> None:
         self._docs = IssueArtifactDocuments()
 
-    def build_prompt(self, task, workspace_title: str | None = None) -> str:
+    def build_prompt(self, task: CodexTask, workspace_title: str | None = None) -> str:
         project_name = workspace_title or "workspace-project"
         issue_id = task.issue_id or task.id
+        workspace_path = task.workspace_path or ""
 
-        pm_artifacts = self._read_pm_artifacts(task.workspace_path, issue_id)
-        architect_artifacts = self._read_architect_artifacts(task.workspace_path, issue_id)
+        pm_artifacts = self._read_pm_artifacts(workspace_path, issue_id)
+        architect_artifacts = self._read_architect_artifacts(workspace_path, issue_id)
 
         requirement_text = pm_artifacts.get("requirement", "")
         prd_text = pm_artifacts.get("prd", "")
@@ -297,7 +301,7 @@ class EngineerWorkflow:
             f"user_requirement:\n{task.prompt}"
         )
 
-    def persist_result(self, task, workspace_title: str | None = None) -> EngineerReportDocument:
+    def persist_result(self, task: CodexTask, workspace_title: str | None = None) -> EngineerReportDocument:
         if not task.workspace_path:
             raise EngineerWorkflowError("Task workspace_path is required for Engineer artifacts")
         if not task.result or not task.result.strip():
@@ -308,7 +312,7 @@ class EngineerWorkflow:
         try:
             from app.application.tolerant_json import tolerant_json_loads
 
-            payload = tolerant_json_loads(task.result)
+            payload = object_dict(tolerant_json_loads(task.result))
         except json.JSONDecodeError as exc:
             raise EngineerWorkflowError(f"Engineer output is not valid JSON: {exc}") from exc
 
@@ -367,7 +371,7 @@ class EngineerWorkflow:
         return git_changed_files(workspace_path)
 
     @staticmethod
-    def _claims_implementation(report) -> bool:
+    def _claims_implementation(report: EngineerReportDocument) -> bool:
         """Does the report assert it LANDED CODE?
 
         The only unambiguous code-landing signal is a non-empty ``changed_files``
@@ -381,7 +385,9 @@ class EngineerWorkflow:
             return False
         return bool(report.changed_files)
 
-    def _apply_diff_cross_check(self, report, actually_changed: list[str]) -> None:
+    def _apply_diff_cross_check(
+        self, report: EngineerReportDocument, actually_changed: list[str]
+    ) -> None:
         """Reconcile the Engineer report against the real git diff in place.
 
         C1 (HARD downgrade): a report that claims it landed code
@@ -507,8 +513,8 @@ class EngineerWorkflow:
 
         return "\n".join(parts)
 
-    def _normalize_payload_keys(self, payload: dict) -> dict:
-        normalized = {}
+    def _normalize_payload_keys(self, payload: dict[str, object]) -> dict[str, object]:
+        normalized: dict[str, object] = {}
         for key, value in payload.items():
             compact_key = "".join(ch for ch in str(key).lower() if ch.isalnum() or ch == "_")
             target_key = self.KEY_ALIASES.get(compact_key, self.KEY_ALIASES.get(str(key), key))

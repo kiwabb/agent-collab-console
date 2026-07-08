@@ -1,6 +1,6 @@
 // Project-level resume maintenance APIs.
 
-import { API_BASE, handleResponse } from "./fetch";
+import { API_BASE, apiJsonRequest, apiRequest } from "./fetch";
 
 export interface ProjectResume {
   project_id: string;
@@ -22,20 +22,18 @@ export interface ProjectResumeImport {
 }
 
 export async function getProjectResume(projectId: string): Promise<ProjectResume> {
-  const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/resume`);
-  return handleResponse(response);
+  return apiRequest<ProjectResume>(`${API_BASE}/projects/${encodeURIComponent(projectId)}/resume`);
 }
 
 export async function saveProjectResume(
   projectId: string,
   markdown: string,
 ): Promise<ProjectResume> {
-  const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/resume`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ markdown }),
-  });
-  return handleResponse(response);
+  return apiJsonRequest<ProjectResume>(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/resume`,
+    "PUT",
+    { markdown },
+  );
 }
 
 export async function importProjectResumePdf(
@@ -44,12 +42,11 @@ export async function importProjectResumePdf(
 ): Promise<ProjectResumeImport> {
   const body = new FormData();
   body.set("file", file);
-  const response = await fetch(
+  return apiRequest<ProjectResumeImport>(
     `${API_BASE}/projects/${encodeURIComponent(projectId)}/resume/import-pdf`,
     {
       method: "POST",
       body,
     },
   );
-  return handleResponse(response);
 }

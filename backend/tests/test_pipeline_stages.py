@@ -95,6 +95,8 @@ async def test_pipeline_stages_extracts_pm_acceptance_count(monkeypatch, tmp_pat
 
     result = await api_module.get_issue_pipeline_stages(issue.id)
     pm = result["stages"][0]
+    assert pm["summary"] is not None
+    assert pm["foot"] is not None
     assert "3 acceptance criteria" in pm["summary"]
     assert "2 goals" in pm["foot"]
     assert "1 reqs" in pm["foot"]

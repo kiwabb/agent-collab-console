@@ -1,0 +1,8 @@
+{
+  "hasSettingsV4": true,
+  "htmlComplete": true,
+  "iframeTitle": "prototype-preview",
+  "srcdocEnd": "ling;\n      console.log('locale changed →', e.target.value);\n    });\n  });\n</script>\n</body>\n</html>",
+  "srcdocLength": 16622,
+  "srcdocStart": "<!DOCTYPE html>\n<!-- source: /settings frontend/src/app/settings/page.tsx -->\n<html lang=\"en\">\n<head"
+}

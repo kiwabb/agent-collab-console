@@ -67,8 +67,26 @@ test("monolithic api entrypoint keeps split-module compatibility exports", () =>
   );
   assert.match(
     API_SOURCE,
-    /export function getGlobalEventsStreamUrl/,
+    /getGlobalEventsStreamUrl[\s\S]*} from "\.\/api\/health";/,
     "useExecutionProcesses needs getGlobalEventsStreamUrl from '@/lib/api'",
+  );
+});
+
+test("monolithic api entrypoint reuses shared fetch helpers", () => {
+  assert.match(
+    API_SOURCE,
+    /handleResponse,[\s\S]*} from "\.\/api\/fetch";/,
+    "legacy '@/lib/api' functions should share split API response handling",
+  );
+  assert.doesNotMatch(
+    API_SOURCE,
+    /async function handleResponse/,
+    "do not reintroduce a second response handler in the monolithic API entrypoint",
+  );
+  assert.doesNotMatch(
+    API_SOURCE,
+    /const API_BASE = process\.env/,
+    "API_BASE should be imported from api/fetch so split and legacy modules share one base",
   );
 });
 
@@ -225,12 +243,12 @@ test("runtime-critical callers import split api modules directly", () => {
   );
   assert.match(
     readSource("store/workbenchStore.ts"),
-    /from '@\/lib\/api\/approvals'/,
+    /from ["']@\/lib\/api\/approvals["']/,
     "workbench store pending approvals should come from api/approvals",
   );
   assert.match(
     readSource("store/workbenchStore.ts"),
-    /from '@\/lib\/api\/tasks'/,
+    /from ["']@\/lib\/api\/tasks["']/,
     "workbench store task list and help requests should come from api/tasks",
   );
   assert.match(
@@ -491,12 +509,12 @@ test("runtime-critical callers import split api modules directly", () => {
   );
   assert.match(
     readSource("store/workbenchStore.ts"),
-    /from '@\/lib\/api\/runtime'/,
+    /from ["']@\/lib\/api\/runtime["']/,
     "workbench store runtime catalog calls should come from api/runtime",
   );
   assert.match(
     readSource("store/workbenchStore.ts"),
-    /from '@\/lib\/api\/workspaces'/,
+    /from ["']@\/lib\/api\/workspaces["']/,
     "workbench store workspace list should come from api/workspaces",
   );
 });
@@ -531,7 +549,11 @@ test("runtime split api imports reference exported names", () => {
       for (const part of (match[1] ?? "").split(",")) {
         const raw = part.trim();
         if (!raw) continue;
-        const imported = raw.replace(/^type\s+/, "").split(/\s+as\s+/)[0]?.trim() ?? "";
+        const imported =
+          raw
+            .replace(/^type\s+/, "")
+            .split(/\s+as\s+/)[0]
+            ?.trim() ?? "";
         if (!exportNames.has(imported)) {
           problems.push(`${file}: ${imported} is not exported by @/lib/api/${moduleName}`);
         }

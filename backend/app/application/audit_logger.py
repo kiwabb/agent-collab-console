@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Compatibility shim — the audit writer moved to `app.application.audit`.
 
 The unified audit trail was refactored into a dedicated `audit/` package so
@@ -16,7 +14,9 @@ singleton instance the recorders resolve via `audit.default_sink()`, so the
 shim and the package share one object — patching here is observed there.
 """
 
-from app.application.audit.categories import (  # noqa: F401
+from __future__ import annotations
+
+from app.application.audit.categories import (
     AUDIT_CATEGORIES,
     CATEGORY_AGENT_FINALIZE,
     CATEGORY_CLI_SPAWN,
@@ -28,7 +28,7 @@ from app.application.audit.categories import (  # noqa: F401
     CATEGORY_TOOL_RESULT,
     CATEGORY_TOOL_USE,
 )
-from app.application.audit.writer import (  # noqa: F401
+from app.application.audit.writer import (
     AuditLogger,
     _serialize_payload,
     audit_logger,

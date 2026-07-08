@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Awaitable, Callable, Protocol  # noqa: UP035
 
-from app.domain.models import CodexIssue
+from app.domain.models import CodexIssue, CodexTask
+from app.json_safety import object_dict_or_none
 
 
 class GitHubPRFollowupError(Exception):
@@ -30,8 +31,8 @@ class GitHubPRFollowupStore(Protocol):
     async def list_codex_tasks(
         self, session_id: str | None = None, issue_id: str | None = None
     ) -> list[dict[str, object]]: ...
-    async def load_codex_task(self, task_id: str) -> object | None: ...
-    async def save_codex_task(self, task: object) -> None: ...
+    async def load_codex_task(self, task_id: str) -> CodexTask | None: ...
+    async def save_codex_task(self, task: CodexTask) -> None: ...
     async def append_project_audit(
         self,
         *,
@@ -127,6 +128,11 @@ class GitHubPRFollowupResult:
 class GitHubPRFollowupSummary:
     project_id: str
     results: list[GitHubPRFollowupResult] = field(default_factory=list)
+    issues_seen: int = 0
+    issues_with_pr: int = 0
+    skipped_no_pr: int = 0
+    skipped_merged: int = 0
+    checked_prs: int = 0
 
     @property
     def counts(self) -> dict[str, int]:
@@ -139,6 +145,11 @@ class GitHubPRFollowupSummary:
         return {
             "project_id": self.project_id,
             "counts": self.counts,
+            "issues_seen": self.issues_seen,
+            "issues_with_pr": self.issues_with_pr,
+            "skipped_no_pr": self.skipped_no_pr,
+            "skipped_merged": self.skipped_merged,
+            "checked_prs": self.checked_prs,
             "results": [result.to_dict() for result in self.results],
         }
 
@@ -180,10 +191,11 @@ async def _record_failed_followup(
 
 def _parse_pr_view(stdout: str) -> dict[str, object]:
     try:
-        decoded = json.loads(stdout)
+        parsed: object = json.loads(stdout)
     except json.JSONDecodeError as exc:
         raise GitHubPRFollowupError("gh pr view returned non-JSON") from exc
-    if not isinstance(decoded, dict):
+    decoded = object_dict_or_none(parsed)
+    if decoded is None:
         raise GitHubPRFollowupError("gh pr view returned an unexpected JSON shape")
     return decoded
 
@@ -430,13 +442,20 @@ async def sweep_project_github_prs(
     try:
         issue_rows = await store.list_codex_issues(project_id=project_id)
         results: list[GitHubPRFollowupResult] = []
+        issues_seen = len(issue_rows)
+        issues_with_pr = 0
+        skipped_no_pr = 0
+        skipped_merged = 0
         for row in issue_rows:
             issue_id = str(row.get("id") or "")
             if not issue_id:
                 continue
             if not row.get("github_pr_url"):
+                skipped_no_pr += 1
                 continue
+            issues_with_pr += 1
             if str(row.get("git_merge_status") or "open") == "merged":
+                skipped_merged += 1
                 continue
             try:
                 result = await refresh_issue_github_pr(
@@ -451,13 +470,26 @@ async def sweep_project_github_prs(
                     issue_id=issue_id, status=exc.status, error=exc.message
                 )
             results.append(result)
-        summary = GitHubPRFollowupSummary(project_id=project_id, results=results)
+        summary = GitHubPRFollowupSummary(
+            project_id=project_id,
+            results=results,
+            issues_seen=issues_seen,
+            issues_with_pr=issues_with_pr,
+            skipped_no_pr=skipped_no_pr,
+            skipped_merged=skipped_merged,
+            checked_prs=len(results),
+        )
         await _append_event(
             event_bus,
             {
                 "type": "project_pr_followup_sweep",
                 "project_id": project_id,
                 "counts": summary.counts,
+                "issues_seen": summary.issues_seen,
+                "issues_with_pr": summary.issues_with_pr,
+                "skipped_no_pr": summary.skipped_no_pr,
+                "skipped_merged": summary.skipped_merged,
+                "checked_prs": summary.checked_prs,
             },
         )
     except Exception as exc:  # noqa: BLE001, RUF100

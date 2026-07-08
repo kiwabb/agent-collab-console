@@ -1,17 +1,147 @@
 import asyncio
 import json
+import logging
+import re
+from collections.abc import Sequence
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 import aiosqlite
 
 from app.adapters.audit_log_query import build_audit_log_query as _build_audit_log_query
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, Project, Prototype, PrototypeVersion, Skill, SelfImprovementProposal
+from app.domain.models import (
+    Agent,
+    AgentCallTrace,
+    AgentMessage,
+    AgentRun,
+    Approval,
+    ApprovalEvent,
+    Artifact,
+    AuditLog,
+    CodexIssue,
+    CodexMessage,
+    CodexSession,
+    CodexTask,
+    CodexTaskMessage,
+    ConductorDecision,
+    ConductorState,
+    ConductorStateLog,
+    ConductorTask,
+    ConductorTurn,
+    ExecutionProcess,
+    GraphReplanPending,
+    HelpRequest,
+    LogEvent,
+    Message,
+    PlanDetails,
+    Project,
+    ProjectConductorState,
+    ProjectMemoryEmbedding,
+    Prototype,
+    PrototypeVersion,
+    RuntimeCatalog,
+    SelfImprovementApplicationEvent,
+    SelfImprovementProposal,
+    Session,
+    Skill,
+    Task,
+    WorkflowEdge,
+    WorkflowGraph,
+    WorkflowNode,
+)
+from app.json_safety import object_dict_list, object_dict_or_none
+
+logger = logging.getLogger(__name__)
+
+
+class RowWithKeys(Protocol):
+    def keys(self) -> Sequence[str]: ...
+
+
+SQLITE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _row_has_key(row: RowWithKeys, key: str) -> bool:
+    """Return whether a sqlite row exposes a column name."""
+    return key in row.keys()  # noqa: SIM118 - sqlite Row membership checks values, not column names.
+
+
+def _quote_sqlite_identifier(name: object) -> str:
+    if not isinstance(name, str) or SQLITE_IDENTIFIER_RE.fullmatch(name) is None:
+        raise ValueError(f"unsafe sqlite identifier: {name!r}")
+    return f'"{name}"'
+
+
+def _log_events_query(
+    *, has_task_id: bool, has_execution_process_id: bool, reverse: bool
+) -> str:
+    if has_task_id and has_execution_process_id:
+        if reverse:
+            return "SELECT * FROM log_events WHERE session_id = ? AND task_id = ? AND execution_process_id = ? ORDER BY created_at DESC LIMIT ?"
+        return "SELECT * FROM log_events WHERE session_id = ? AND task_id = ? AND execution_process_id = ? ORDER BY created_at ASC LIMIT ?"
+    if has_execution_process_id:
+        if reverse:
+            return "SELECT * FROM log_events WHERE session_id = ? AND execution_process_id = ? ORDER BY created_at DESC LIMIT ?"
+        return "SELECT * FROM log_events WHERE session_id = ? AND execution_process_id = ? ORDER BY created_at ASC LIMIT ?"
+    if has_task_id:
+        if reverse:
+            return "SELECT * FROM log_events WHERE session_id = ? AND task_id = ? ORDER BY created_at DESC LIMIT ?"
+        return "SELECT * FROM log_events WHERE session_id = ? AND task_id = ? ORDER BY created_at ASC LIMIT ?"
+    if reverse:
+        return "SELECT * FROM log_events WHERE session_id = ? ORDER BY created_at DESC LIMIT ?"
+    return "SELECT * FROM log_events WHERE session_id = ? ORDER BY created_at ASC LIMIT ?"
+
+
+def _json_object(value: str | None) -> dict[str, object] | None:
+    if not value:
+        return None
+    parsed: object = json.loads(value)
+    return object_dict_or_none(parsed)
+
+
+def _json_string_list(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    parsed: object = json.loads(value)
+    if not isinstance(parsed, list):
+        return None
+    return [item for item in parsed if isinstance(item, str)]
+
+
+def _json_object_list(value: str | None) -> list[dict[str, object]]:
+    if not value:
+        return []
+    parsed: object = json.loads(value)
+    return object_dict_list(parsed)
+
+
+def _codex_settings(value: str | None) -> dict[str, bool]:
+    parsed = _json_object(value)
+    if parsed is None:
+        return {"plan_first_pm": True}
+    settings = {key: item for key, item in parsed.items() if isinstance(item, bool)}
+    return settings or {"plan_first_pm": True}
+
+
+def _plan_details(value: str | None) -> PlanDetails | None:
+    parsed = _json_object(value)
+    if parsed is None:
+        return None
+    summary = parsed.get("summary")
+    next_steps = parsed.get("next_steps")
+    task_title = parsed.get("task_title")
+    if not isinstance(summary, str) or not isinstance(task_title, str):
+        return None
+    if not isinstance(next_steps, list) or not all(isinstance(item, str) for item in next_steps):
+        return None
+    return PlanDetails(summary=summary, next_steps=next_steps, task_title=task_title)
 
 
 class AsyncSQLiteStore:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path | str) -> None:
         self.db_path = db_path
         self._conn: aiosqlite.Connection | None = None
         self._conn_lock = asyncio.Lock()
@@ -31,7 +161,7 @@ class AsyncSQLiteStore:
                 await self._conn.execute("PRAGMA synchronous=NORMAL")
             return self._conn
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         conn = await self._get_conn()
         await conn.executescript("""
             PRAGMA journal_mode=WAL;
@@ -162,6 +292,9 @@ class AsyncSQLiteStore:
                 resume_session_id TEXT,
                 resume_message_id TEXT,
                 last_execution_process_id TEXT,
+                trace_id TEXT,
+                span_id TEXT,
+                parent_span_id TEXT,
                 sequence_index INTEGER,
                 sequence_group TEXT,
                 review_comment TEXT,
@@ -185,6 +318,9 @@ class AsyncSQLiteStore:
                 content TEXT NOT NULL,
                 task_id TEXT,
                 execution_process_id TEXT,
+                trace_id TEXT,
+                span_id TEXT,
+                parent_span_id TEXT,
                 created_at TEXT,
                 FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
             );
@@ -228,200 +364,114 @@ class AsyncSQLiteStore:
             );
         """)
         for table in ["tasks", "runs", "artifacts", "messages", "approvals", "approval_events"]:
-            try:
+            with suppress(aiosqlite.OperationalError):
                 await conn.execute(f"ALTER TABLE {table} ADD COLUMN created_at TEXT")
-            except aiosqlite.OperationalError:
-                pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_sessions ADD COLUMN thread_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_sessions ADD COLUMN claude_thread_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_sessions ADD COLUMN project_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_sessions ADD COLUMN settings_json TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE log_events ADD COLUMN task_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_task_messages ADD COLUMN execution_process_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE log_events ADD COLUMN execution_process_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN phase TEXT DEFAULT 'requirements'")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN issue_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN role TEXT DEFAULT 'general'")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN executor TEXT DEFAULT 'codex'")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_session_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_message_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN workspace_path TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN last_execution_process_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        # Distributed-tracing identity (approach C) on tasks, log_events, audit_log.
+        for _trace_col in ("trace_id", "span_id", "parent_span_id"):
+            with suppress(aiosqlite.OperationalError):
+                await conn.execute(f"ALTER TABLE codex_tasks ADD COLUMN {_trace_col} TEXT")
+            with suppress(aiosqlite.OperationalError):
+                await conn.execute(f"ALTER TABLE log_events ADD COLUMN {_trace_col} TEXT")
+            with suppress(aiosqlite.OperationalError):
+                await conn.execute(f"ALTER TABLE audit_log ADD COLUMN {_trace_col} TEXT")
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN task_kind TEXT DEFAULT 'normal'")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN blocked_by_help_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
         # Add provider and model columns to codex_tasks
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN provider TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN model TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN result_json TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE agents ADD COLUMN agent_tier TEXT DEFAULT 'managed'")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN project_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN review_comment TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN milestone TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_branch TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_base_branch TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_worktree_path TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_merge_status TEXT DEFAULT 'open'")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN git_last_commit_sha TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_url TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_state TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
-        except aiosqlite.OperationalError:
-            pass
         # Issue-level executor selection (propagated to Conductor sub-agents)
         for _issue_exec_col in ("executor", "provider", "model"):
-            try:
+            with suppress(aiosqlite.OperationalError):
                 await conn.execute(f"ALTER TABLE codex_issues ADD COLUMN {_issue_exec_col} TEXT")
-            except aiosqlite.OperationalError:
-                pass
         # Per-issue cost budget (cost-aware conductor scheduling, PR2)
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_issues ADD COLUMN budget_usd REAL")
-        except aiosqlite.OperationalError:
-            pass
         # Add executor/provider/model snapshot columns to execution_processes
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN provider TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN model TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN kind TEXT NOT NULL DEFAULT 'initial'")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN triggering_message_id TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_index INTEGER")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_group TEXT")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN review_comment TEXT")
-        except aiosqlite.OperationalError:
-            pass
         # Add token usage and cost columns to execution_processes
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN input_tokens INTEGER")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN output_tokens INTEGER")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN cache_read_tokens INTEGER")
-        except aiosqlite.OperationalError:
-            pass
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE execution_processes ADD COLUMN total_cost_usd REAL")
-        except aiosqlite.OperationalError:
-            pass
         # --- Project / git worktree feature additions ---
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS projects (
@@ -437,10 +487,8 @@ class AsyncSQLiteStore:
             )
         """)
         for stmt in ("ALTER TABLE projects ADD COLUMN run_command TEXT",):
-            try:
+            with suppress(aiosqlite.OperationalError):
                 await conn.execute(stmt)
-            except aiosqlite.OperationalError:
-                pass
         await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_repo_path ON projects(repo_path)")
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS prototypes (
@@ -477,10 +525,8 @@ class AsyncSQLiteStore:
             "ALTER TABLE prototypes ADD COLUMN source_hash TEXT",
             "ALTER TABLE prototypes ADD COLUMN source_meta_json TEXT",
         ):
-            try:
+            with suppress(aiosqlite.OperationalError):
                 await conn.execute(stmt)
-            except aiosqlite.OperationalError:
-                pass
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_prototypes_project_id ON prototypes(project_id)"
         )
@@ -529,10 +575,8 @@ class AsyncSQLiteStore:
             "ALTER TABLE codex_issues ADD COLUMN github_pr_url TEXT",
             "ALTER TABLE codex_issues ADD COLUMN github_pr_state TEXT",
         ):
-            try:
+            with suppress(aiosqlite.OperationalError):
                 await conn.execute(stmt)
-            except aiosqlite.OperationalError:
-                pass
         # One-time wipe of legacy codex data so all rows have project_id.
         # The decision to clear was made explicitly (dev-stage data).
         version_row = await (await conn.execute("SELECT version FROM schema_version WHERE id = 1")).fetchone()
@@ -704,10 +748,8 @@ class AsyncSQLiteStore:
             )
         """)
         # Add workflow_node_id FK to codex_tasks for DAG-aware runtime routing.
-        try:
+        with suppress(Exception):
             await conn.execute("ALTER TABLE codex_tasks ADD COLUMN workflow_node_id TEXT")
-        except Exception:
-            pass  # Column already exists
         # Knowledge stack: FTS5 virtual tables + embedding stores + team-notes state
         await conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
@@ -873,6 +915,22 @@ class AsyncSQLiteStore:
                 updated_at TEXT
             )
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS self_improvement_application_events (
+                id TEXT PRIMARY KEY,
+                proposal_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                issue_id TEXT NOT NULL,
+                target_kind TEXT NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                path TEXT,
+                content_sha256 TEXT,
+                result_json TEXT NOT NULL DEFAULT '{}',
+                error TEXT,
+                created_at TEXT
+            )
+        """)
         # Unified audit trail (PR1). One row per LLM call/return, tool use/result,
         # command exec, git command, CLI spawn, generic event, or agent finalize.
         # Line-level stdout/stderr stays in log_events (joined via
@@ -888,10 +946,34 @@ class AsyncSQLiteStore:
                 conductor_task_id TEXT,
                 execution_process_id TEXT,
                 correlation_id TEXT,
+                trace_id TEXT,
+                span_id TEXT,
+                parent_span_id TEXT,
                 status TEXT,
                 duration_ms INTEGER,
                 payload_json TEXT NOT NULL DEFAULT '{}',
                 error TEXT
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_call_traces (
+                id TEXT PRIMARY KEY,
+                audit_log_id TEXT,
+                trace_id TEXT,
+                span_id TEXT,
+                parent_span_id TEXT,
+                issue_id TEXT,
+                task_id TEXT,
+                execution_process_id TEXT,
+                kind TEXT NOT NULL,
+                title TEXT,
+                request_json TEXT,
+                response_json TEXT,
+                request_preview TEXT,
+                response_preview TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                is_truncated INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT
             )
         """)
         # Create indexes for frequently queried columns
@@ -909,13 +991,19 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_session_id ON log_events(session_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_task_id ON log_events(task_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)")
+        # Trace lookups: fetch one trace's spans/steps across both tables. Guarded
+        # by suppress because on an existing DB the ALTER above adds the column in
+        # the same _init_db pass, but an index build racing a failed ALTER would
+        # otherwise crash init.
+        with suppress(aiosqlite.OperationalError):
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_trace_id ON log_events(trace_id)")
+        with suppress(aiosqlite.OperationalError):
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_trace_id ON audit_log(trace_id)")
         # Must run BEFORE idx_conductor_turns_inbox below; the index
         # references consumed_at, and on an existing DB without the column
         # the CREATE INDEX otherwise raises and crashes _init_db().
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE conductor_turns ADD COLUMN consumed_at TEXT")
-        except aiosqlite.OperationalError:
-            pass
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
@@ -948,37 +1036,37 @@ class AsyncSQLiteStore:
             "ALTER TABLE conductor_tasks ADD COLUMN heartbeat_at TEXT",
             "ALTER TABLE conductor_tasks ADD COLUMN lease_expires_at TEXT",
         ):
-            try:
+            with suppress(aiosqlite.OperationalError):
                 await conn.execute(stmt)
-            except aiosqlite.OperationalError:
-                pass
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_lease ON conductor_tasks(status, lease_expires_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memory_embeddings_project_id ON project_memory_embeddings(project_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_project_created ON self_improvement_proposals(project_id, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_issue ON self_improvement_proposals(issue_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_status ON self_improvement_proposals(status)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_events_project_created ON self_improvement_application_events(project_id, created_at)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_events_proposal_created ON self_improvement_application_events(proposal_id, created_at)")
         # Audit log filter/pagination indexes (PR3 read API will lean on these).
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_category_created ON audit_log(category, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_audit_log_id ON agent_call_traces(audit_log_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_trace_id ON agent_call_traces(trace_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_task_id ON agent_call_traces(task_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_execution_process_id ON agent_call_traces(execution_process_id)")
         # Phase 4: add instance_index to workflow_nodes for existing DBs
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute(
                 "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
             )
-        except aiosqlite.OperationalError:
-            pass
         # Parallel swarm: add batch_key to group nodes from one dispatch_batch call
-        try:
+        with suppress(aiosqlite.OperationalError):
             await conn.execute(
                 "ALTER TABLE workflow_nodes ADD COLUMN batch_key TEXT"
             )
-        except aiosqlite.OperationalError:
-            pass
         await conn.commit()
 
-    async def _ensure_db(self):
+    async def _ensure_db(self) -> None:
         await self._init_db()
 
     def _format_datetime(self, dt: datetime | None) -> str | None:
@@ -987,7 +1075,7 @@ class AsyncSQLiteStore:
     def _parse_datetime(self, s: str | None) -> datetime | None:
         return datetime.fromisoformat(s) if s else None
 
-    async def save_session(self, session: Session):
+    async def save_session(self, session: Session) -> None:
         conn = await self._get_conn()
         await conn.execute(
             "INSERT OR REPLACE INTO sessions (id, title, state) VALUES (?, ?, ?)",
@@ -1044,7 +1132,7 @@ class AsyncSQLiteStore:
             state=row["state"],
         )
 
-        async def load_tasks():
+        async def load_tasks() -> None:
             async with conn.execute("SELECT * FROM tasks WHERE session_id = ?", (session_id,)) as cur:
                 async for t_row in cur:
                     session.tasks.append(Task(
@@ -1056,7 +1144,7 @@ class AsyncSQLiteStore:
                         created_at=self._parse_datetime(t_row["created_at"]),
                     ))
 
-        async def load_runs():
+        async def load_runs() -> None:
             async with conn.execute("SELECT * FROM runs WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)) as cur:
                 async for r_row in cur:
                     session.runs.append(AgentRun(
@@ -1066,20 +1154,18 @@ class AsyncSQLiteStore:
                         role=r_row["role"],
                         status=r_row["status"],
                         summary=r_row["summary"],
-                        payload=json.loads(r_row["payload"]) if r_row["payload"] else None,
+                        payload=_json_object(r_row["payload"]),
                         created_at=self._parse_datetime(r_row["created_at"]),
                     ))
 
-        async def load_artifacts():
+        async def load_artifacts() -> None:
             async with conn.execute("SELECT * FROM artifacts WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)) as cur:
                 async for a_row in cur:
                     content = a_row["content"]
                     try:
-                        parsed = json.loads(content)
-                        if isinstance(parsed, dict):
-                            content = PlanDetails(**parsed)
-                        else:
-                            content = parsed
+                        parsed_plan = _plan_details(content)
+                        if parsed_plan is not None:
+                            content = parsed_plan
                     except (json.JSONDecodeError, TypeError):
                         pass
                     session.artifacts.append(Artifact(
@@ -1087,11 +1173,11 @@ class AsyncSQLiteStore:
                         task_id=a_row["task_id"],
                         kind=a_row["kind"],
                         content=content,
-                        steps=json.loads(a_row["steps"]) if a_row["steps"] else None,
+                        steps=_json_string_list(a_row["steps"]),
                         created_at=self._parse_datetime(a_row["created_at"]),
                     ))
 
-        async def load_messages():
+        async def load_messages() -> None:
             async with conn.execute("SELECT * FROM messages WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)) as cur:
                 async for m_row in cur:
                     session.messages.append(Message(
@@ -1103,7 +1189,7 @@ class AsyncSQLiteStore:
                         created_at=self._parse_datetime(m_row["created_at"]),
                     ))
 
-        async def load_approvals():
+        async def load_approvals() -> None:
             async with conn.execute("SELECT * FROM approvals WHERE session_id = ?", (session_id,)) as cur:
                 async for ap_row in cur:
                     session.approvals.append(Approval(
@@ -1115,7 +1201,7 @@ class AsyncSQLiteStore:
                         created_at=self._parse_datetime(ap_row["created_at"]),
                     ))
 
-        async def load_approval_events():
+        async def load_approval_events() -> None:
             async with conn.execute("SELECT * FROM approval_events WHERE session_id = ?", (session_id,)) as cur:
                 async for ev_row in cur:
                     session.approval_events.append(ApprovalEvent(
@@ -1135,14 +1221,14 @@ class AsyncSQLiteStore:
         await load_approval_events()
         return session
 
-    async def list_sessions(self) -> list[dict]:
+    async def list_sessions(self) -> list[dict[str, object]]:
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
         async with conn.execute("SELECT id, title, state FROM sessions") as cur:
             rows = await cur.fetchall()
         return [{"id": r["id"], "title": r["title"], "state": r["state"]} for r in rows]
 
-    async def save_codex_session(self, session: CodexSession):
+    async def save_codex_session(self, session: CodexSession) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -1163,7 +1249,7 @@ class AsyncSQLiteStore:
             )
         await conn.commit()
 
-    async def save_codex_workspace(self, workspace: CodexSession):
+    async def save_codex_workspace(self, workspace: CodexSession) -> None:
         await self.save_codex_session(workspace)
 
     async def load_codex_session(self, session_id: str) -> CodexSession | None:
@@ -1193,21 +1279,21 @@ class AsyncSQLiteStore:
             id=row["id"],
             title=row["title"],
             cwd=row["cwd"],
-            project_id=row["project_id"] if "project_id" in row.keys() else None,
+            project_id=row["project_id"] if _row_has_key(row, "project_id") else None,
             status=row["status"],
             created_at=self._parse_datetime(row["created_at"]),
             last_active_at=self._parse_datetime(row["last_active_at"]),
             log_path=row["log_path"],
-            thread_id=row["thread_id"] if "thread_id" in row.keys() else None,
-            claude_thread_id=row["claude_thread_id"] if "claude_thread_id" in row.keys() else None,
-            settings=json.loads(row["settings_json"]) if "settings_json" in row.keys() and row["settings_json"] else {"plan_first_pm": True},
+            thread_id=row["thread_id"] if _row_has_key(row, "thread_id") else None,
+            claude_thread_id=row["claude_thread_id"] if _row_has_key(row, "claude_thread_id") else None,
+            settings=_codex_settings(row["settings_json"] if _row_has_key(row, "settings_json") else None),
             messages=messages,
         )
 
     async def load_codex_workspace(self, workspace_id: str) -> CodexSession | None:
         return await self.load_codex_session(workspace_id)
 
-    async def list_codex_sessions(self, project_id: str | None = None) -> list[dict]:
+    async def list_codex_sessions(self, project_id: str | None = None) -> list[dict[str, object]]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -1220,13 +1306,13 @@ class AsyncSQLiteStore:
                 rows = await cur.fetchall()
         return [{"id": r["id"], "title": r["title"], "project_id": r["project_id"], "status": r["status"],
                  "created_at": r["created_at"], "last_active_at": r["last_active_at"],
-                 "settings": json.loads(r["settings_json"]) if "settings_json" in r.keys() and r["settings_json"] else {"plan_first_pm": True}}
+                 "settings": _codex_settings(r["settings_json"] if _row_has_key(r, "settings_json") else None)}
                 for r in rows]
 
-    async def list_codex_workspaces(self, project_id: str | None = None) -> list[dict]:
+    async def list_codex_workspaces(self, project_id: str | None = None) -> list[dict[str, object]]:
         return await self.list_codex_sessions(project_id=project_id)
 
-    async def delete_codex_session(self, session_id: str):
+    async def delete_codex_session(self, session_id: str) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -1240,16 +1326,16 @@ class AsyncSQLiteStore:
         await conn.execute("DELETE FROM codex_sessions WHERE id = ?", (session_id,))
         await conn.commit()
 
-    async def delete_codex_issue(self, issue_id: str):
+    async def delete_codex_issue(self, issue_id: str) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute("DELETE FROM codex_issues WHERE id = ?", (issue_id,))
         await conn.commit()
 
-    async def delete_codex_workspace(self, workspace_id: str):
+    async def delete_codex_workspace(self, workspace_id: str) -> None:
         await self.delete_codex_session(workspace_id)
 
-    async def save_codex_issue(self, issue: CodexIssue):
+    async def save_codex_issue(self, issue: CodexIssue) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -1295,8 +1381,8 @@ class AsyncSQLiteStore:
                 "INSERT INTO issues_fts (issue_id, project_id, title, description) VALUES (?, ?, ?, ?)",
                 (issue.id, issue.project_id or "", issue.title or "", issue.description or ""),
             )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:
+            logger.debug("issue fts sync failed: issue_id=%s", issue.id, exc_info=True)
         await conn.commit()
 
     async def load_codex_issue(self, issue_id: str) -> CodexIssue | None:
@@ -1307,39 +1393,41 @@ class AsyncSQLiteStore:
             row = await cur.fetchone()
         if not row:
             return None
-        keys = row.keys()
         return CodexIssue(
             id=row["id"],
             session_id=row["session_id"],
-            project_id=row["project_id"] if "project_id" in keys else None,
+            project_id=row["project_id"] if _row_has_key(row, "project_id") else None,
             title=row["title"],
             description=row["description"],
             current_phase=row["current_phase"],
             status=row["status"],
-            review_comment=row["review_comment"] if "review_comment" in keys else None,
-            is_pinned=bool(row["is_pinned"]) if "is_pinned" in keys else False,
-            milestone=row["milestone"] if "milestone" in keys and row["milestone"] else None,
-            git_branch=row["git_branch"] if "git_branch" in keys and row["git_branch"] else None,
-            git_base_branch=row["git_base_branch"] if "git_base_branch" in keys and row["git_base_branch"] else None,
-            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in keys and row["git_worktree_path"] else None,
-            git_merge_status=row["git_merge_status"] if "git_merge_status" in keys and row["git_merge_status"] else "open",
-            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in keys and row["git_last_commit_sha"] else None,
-            github_pr_url=row["github_pr_url"] if "github_pr_url" in keys and row["github_pr_url"] else None,
-            github_pr_state=row["github_pr_state"] if "github_pr_state" in keys and row["github_pr_state"] else None,
-            executor=row["executor"] if "executor" in keys and row["executor"] else None,
-            provider=row["provider"] if "provider" in keys and row["provider"] else None,
-            model=row["model"] if "model" in keys and row["model"] else None,
-            budget_usd=row["budget_usd"] if "budget_usd" in keys and row["budget_usd"] is not None else None,
+            review_comment=row["review_comment"] if _row_has_key(row, "review_comment") else None,
+            is_pinned=bool(row["is_pinned"]) if _row_has_key(row, "is_pinned") else False,
+            milestone=row["milestone"] if _row_has_key(row, "milestone") and row["milestone"] else None,
+            git_branch=row["git_branch"] if _row_has_key(row, "git_branch") and row["git_branch"] else None,
+            git_base_branch=row["git_base_branch"] if _row_has_key(row, "git_base_branch") and row["git_base_branch"] else None,
+            git_worktree_path=row["git_worktree_path"] if _row_has_key(row, "git_worktree_path") and row["git_worktree_path"] else None,
+            git_merge_status=row["git_merge_status"] if _row_has_key(row, "git_merge_status") and row["git_merge_status"] else "open",
+            git_last_commit_sha=row["git_last_commit_sha"] if _row_has_key(row, "git_last_commit_sha") and row["git_last_commit_sha"] else None,
+            github_pr_url=row["github_pr_url"] if _row_has_key(row, "github_pr_url") and row["github_pr_url"] else None,
+            github_pr_state=row["github_pr_state"] if _row_has_key(row, "github_pr_state") and row["github_pr_state"] else None,
+            executor=row["executor"] if _row_has_key(row, "executor") and row["executor"] else None,
+            provider=row["provider"] if _row_has_key(row, "provider") and row["provider"] else None,
+            model=row["model"] if _row_has_key(row, "model") and row["model"] else None,
+            budget_usd=row["budget_usd"] if _row_has_key(row, "budget_usd") and row["budget_usd"] is not None else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def list_codex_issues(self, session_id: str | None = None, project_id: str | None = None) -> list[dict]:
+    async def list_codex_issues(
+        self, session_id: str | None = None, project_id: str | None = None
+    ) -> list[dict[str, object]]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
         select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, budget_usd, created_at, updated_at FROM codex_issues"
-        clauses, params = [], []
+        clauses: list[str] = []
+        params: list[object] = []
         if session_id:
             clauses.append("session_id = ?")
             params.append(session_id)
@@ -1352,7 +1440,7 @@ class AsyncSQLiteStore:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def save_codex_task(self, task: CodexTask):
+    async def save_codex_task(self, task: CodexTask) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -1361,13 +1449,15 @@ class AsyncSQLiteStore:
                 status, result, result_json, parent_task_id, task_kind, blocked_by_help_id, workspace_path,
                 git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha,
                 resume_session_id, resume_message_id, last_execution_process_id,
+                trace_id, span_id, parent_span_id,
                 sequence_index, sequence_group, review_comment, workflow_node_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (task.id, task.session_id, task.project_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
              task.provider, task.model, task.status, task.result, task.result_json, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
              task.workspace_path,
              task.git_branch, task.git_base_branch, task.git_worktree_path, task.git_merge_status, task.git_last_commit_sha,
              task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
+             task.trace_id, task.span_id, task.parent_span_id,
              task.sequence_index, task.sequence_group, task.review_comment,
              task.workflow_node_id,
              self._format_datetime(task.created_at),
@@ -1383,38 +1473,40 @@ class AsyncSQLiteStore:
             row = await cur.fetchone()
         if not row:
             return None
-        keys = row.keys()
         return CodexTask(
             id=row["id"],
             session_id=row["session_id"],
-            project_id=row["project_id"] if "project_id" in keys and row["project_id"] else None,
-            issue_id=row["issue_id"] if "issue_id" in keys and row["issue_id"] else None,
-            phase=row["phase"] if "phase" in keys and row["phase"] else "requirements",
+            project_id=row["project_id"] if _row_has_key(row, "project_id") and row["project_id"] else None,
+            issue_id=row["issue_id"] if _row_has_key(row, "issue_id") and row["issue_id"] else None,
+            phase=row["phase"] if _row_has_key(row, "phase") and row["phase"] else "requirements",
             title=row["title"],
             prompt=row["prompt"],
-            role=row["role"] if "role" in keys and row["role"] else "general",
+            role=row["role"] if _row_has_key(row, "role") and row["role"] else "general",
             executor=row["executor"] if row["executor"] else "codex",
-            provider=row["provider"] if "provider" in keys and row["provider"] else None,
-            model=row["model"] if "model" in keys and row["model"] else None,
+            provider=row["provider"] if _row_has_key(row, "provider") and row["provider"] else None,
+            model=row["model"] if _row_has_key(row, "model") and row["model"] else None,
             status=row["status"],
             result=row["result"],
-            result_json=row["result_json"] if "result_json" in keys and row["result_json"] else None,
+            result_json=row["result_json"] if _row_has_key(row, "result_json") and row["result_json"] else None,
             parent_task_id=row["parent_task_id"] if row["parent_task_id"] else None,
-            task_kind=row["task_kind"] if "task_kind" in keys and row["task_kind"] else "normal",
-            blocked_by_help_id=row["blocked_by_help_id"] if "blocked_by_help_id" in keys and row["blocked_by_help_id"] else None,
-            workspace_path=row["workspace_path"] if "workspace_path" in keys and row["workspace_path"] else None,
-            git_branch=row["git_branch"] if "git_branch" in keys and row["git_branch"] else None,
-            git_base_branch=row["git_base_branch"] if "git_base_branch" in keys and row["git_base_branch"] else None,
-            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in keys and row["git_worktree_path"] else None,
-            git_merge_status=row["git_merge_status"] if "git_merge_status" in keys and row["git_merge_status"] else "open",
-            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in keys and row["git_last_commit_sha"] else None,
-            resume_session_id=row["resume_session_id"] if "resume_session_id" in keys and row["resume_session_id"] else None,
-            resume_message_id=row["resume_message_id"] if "resume_message_id" in keys and row["resume_message_id"] else None,
-            last_execution_process_id=row["last_execution_process_id"] if "last_execution_process_id" in keys and row["last_execution_process_id"] else None,
-            sequence_index=row["sequence_index"] if "sequence_index" in keys else None,
-            sequence_group=row["sequence_group"] if "sequence_group" in keys else None,
-            review_comment=row["review_comment"] if "review_comment" in keys else None,
-            workflow_node_id=row["workflow_node_id"] if "workflow_node_id" in keys and row["workflow_node_id"] else None,
+            task_kind=row["task_kind"] if _row_has_key(row, "task_kind") and row["task_kind"] else "normal",
+            blocked_by_help_id=row["blocked_by_help_id"] if _row_has_key(row, "blocked_by_help_id") and row["blocked_by_help_id"] else None,
+            workspace_path=row["workspace_path"] if _row_has_key(row, "workspace_path") and row["workspace_path"] else None,
+            git_branch=row["git_branch"] if _row_has_key(row, "git_branch") and row["git_branch"] else None,
+            git_base_branch=row["git_base_branch"] if _row_has_key(row, "git_base_branch") and row["git_base_branch"] else None,
+            git_worktree_path=row["git_worktree_path"] if _row_has_key(row, "git_worktree_path") and row["git_worktree_path"] else None,
+            git_merge_status=row["git_merge_status"] if _row_has_key(row, "git_merge_status") and row["git_merge_status"] else "open",
+            git_last_commit_sha=row["git_last_commit_sha"] if _row_has_key(row, "git_last_commit_sha") and row["git_last_commit_sha"] else None,
+            resume_session_id=row["resume_session_id"] if _row_has_key(row, "resume_session_id") and row["resume_session_id"] else None,
+            resume_message_id=row["resume_message_id"] if _row_has_key(row, "resume_message_id") and row["resume_message_id"] else None,
+            last_execution_process_id=row["last_execution_process_id"] if _row_has_key(row, "last_execution_process_id") and row["last_execution_process_id"] else None,
+            trace_id=row["trace_id"] if _row_has_key(row, "trace_id") and row["trace_id"] else None,
+            span_id=row["span_id"] if _row_has_key(row, "span_id") and row["span_id"] else None,
+            parent_span_id=row["parent_span_id"] if _row_has_key(row, "parent_span_id") and row["parent_span_id"] else None,
+            sequence_index=row["sequence_index"] if _row_has_key(row, "sequence_index") else None,
+            sequence_group=row["sequence_group"] if _row_has_key(row, "sequence_group") else None,
+            review_comment=row["review_comment"] if _row_has_key(row, "review_comment") else None,
+            workflow_node_id=row["workflow_node_id"] if _row_has_key(row, "workflow_node_id") and row["workflow_node_id"] else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1424,7 +1516,8 @@ class AsyncSQLiteStore:
         session_id: str | None = None,
         issue_id: str | None = None,
         project_id: str | None = None,
-    ) -> list[dict]:
+        status: str | None = None,
+    ) -> list[dict[str, object]]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -1433,9 +1526,11 @@ class AsyncSQLiteStore:
             "parent_task_id, task_kind, blocked_by_help_id, workspace_path, "
             "git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, "
             "resume_session_id, resume_message_id, last_execution_process_id, "
-            "sequence_index, sequence_group, review_comment, created_at, updated_at FROM codex_tasks"
+            "trace_id, span_id, parent_span_id, "
+            "sequence_index, sequence_group, review_comment, workflow_node_id, created_at, updated_at FROM codex_tasks"
         )
-        clauses, params = [], []
+        clauses: list[str] = []
+        params: list[object] = []
         if session_id:
             clauses.append("session_id = ?")
             params.append(session_id)
@@ -1445,6 +1540,9 @@ class AsyncSQLiteStore:
         if project_id:
             clauses.append("project_id = ?")
             params.append(project_id)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         async with conn.execute(f"{select_sql}{where} ORDER BY created_at ASC", tuple(params)) as cur:
             rows = await cur.fetchall()
@@ -1452,7 +1550,7 @@ class AsyncSQLiteStore:
 
     # --- Project CRUD ---
 
-    async def save_project(self, project: Project):
+    async def save_project(self, project: Project) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -1532,7 +1630,7 @@ class AsyncSQLiteStore:
             for r in rows
         ]
 
-    async def delete_project(self, project_id: str):
+    async def delete_project(self, project_id: str) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
@@ -1786,7 +1884,7 @@ class AsyncSQLiteStore:
         *,
         limit: int = 50,
         since: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -1796,7 +1894,7 @@ class AsyncSQLiteStore:
                 "FROM project_audit WHERE project_id = ? AND created_at >= ? "
                 "ORDER BY id DESC LIMIT ?"
             )
-            params = (project_id, since, limit)
+            params: tuple[object, ...] = (project_id, since, limit)
         else:
             query = (
                 "SELECT id, project_id, issue_id, event, sha, base_branch, created_at "
@@ -1807,7 +1905,7 @@ class AsyncSQLiteStore:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def save_help_request(self, help_request: HelpRequest):
+    async def save_help_request(self, help_request: HelpRequest) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -1846,7 +1944,6 @@ class AsyncSQLiteStore:
             row = await cur.fetchone()
         if not row:
             return None
-        continuation_payload = json.loads(row["continuation_payload"]) if row["continuation_payload"] else None
         return HelpRequest(
             id=row["id"],
             workspace_id=row["workspace_id"],
@@ -1859,7 +1956,7 @@ class AsyncSQLiteStore:
             context_summary=row["context_summary"],
             status=row["status"],
             error_message=row["error_message"],
-            continuation_payload=continuation_payload,
+            continuation_payload=_json_object(row["continuation_payload"]),
             created_at=self._parse_datetime(row["created_at"]),
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
@@ -1899,7 +1996,7 @@ class AsyncSQLiteStore:
                 context_summary=row["context_summary"],
                 status=row["status"],
                 error_message=row["error_message"],
-                continuation_payload=json.loads(row["continuation_payload"]) if row["continuation_payload"] else None,
+                continuation_payload=_json_object(row["continuation_payload"]),
                 created_at=self._parse_datetime(row["created_at"]),
                 started_at=self._parse_datetime(row["started_at"]),
                 completed_at=self._parse_datetime(row["completed_at"]),
@@ -1909,7 +2006,7 @@ class AsyncSQLiteStore:
             for row in rows
         ]
 
-    async def delete_codex_task(self, task_id: str):
+    async def delete_codex_task(self, task_id: str) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -1919,10 +2016,11 @@ class AsyncSQLiteStore:
         await conn.execute("DELETE FROM codex_task_messages WHERE task_id = ?", (task_id,))
         await conn.execute("DELETE FROM execution_processes WHERE task_id = ?", (task_id,))
         await conn.execute("DELETE FROM log_events WHERE task_id = ?", (task_id,))
+        await conn.execute("DELETE FROM agent_call_traces WHERE task_id = ?", (task_id,))
         await conn.execute("DELETE FROM codex_tasks WHERE id = ?", (task_id,))
         await conn.commit()
 
-    async def save_codex_task_message(self, message: CodexTaskMessage):
+    async def save_codex_task_message(self, message: CodexTaskMessage) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -1962,7 +2060,7 @@ class AsyncSQLiteStore:
             CodexTaskMessage(
                 id=r["id"],
                 task_id=r["task_id"],
-                execution_process_id=r["execution_process_id"] if "execution_process_id" in r.keys() else None,
+                execution_process_id=r["execution_process_id"] if _row_has_key(r, "execution_process_id") else None,
                 role=r["role"],
                 content=r["content"],
                 created_at=self._parse_datetime(r["created_at"]),
@@ -1970,7 +2068,7 @@ class AsyncSQLiteStore:
             for r in rows
         ]
 
-    async def reset(self):
+    async def reset(self) -> None:
         conn = await self._get_conn()
         async with conn.execute("SELECT name FROM sqlite_master WHERE type='table'") as cur:
             async for table in cur:
@@ -1980,14 +2078,16 @@ class AsyncSQLiteStore:
                 # Skip FTS5 virtual table shadow tables to prevent corruption
                 if name.startswith(("issues_fts_", "artifacts_fts_")):
                     continue
-                await conn.execute(f"DELETE FROM {name}")
+                quoted_name = _quote_sqlite_identifier(name)
+                # Identifier is validated by _quote_sqlite_identifier.
+                await conn.execute(f"DELETE FROM {quoted_name}")  # nosec B608
         await conn.commit()
 
-    async def append_log_event(self, event: LogEvent):
+    async def append_log_event(self, event: LogEvent) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
-            "INSERT INTO log_events (id, session_id, stream, content, task_id, execution_process_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO log_events (id, session_id, stream, content, task_id, execution_process_id, trace_id, span_id, parent_span_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 event.id,
                 event.session_id,
@@ -1995,6 +2095,9 @@ class AsyncSQLiteStore:
                 event.content,
                 event.task_id,
                 event.execution_process_id,
+                event.trace_id,
+                event.span_id,
+                event.parent_span_id,
                 self._format_datetime(event.created_at),
             ),
         )
@@ -2011,28 +2114,35 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        order = "DESC" if reverse else "ASC"
         if execution_process_id and task_id:
             async with conn.execute(
-                f"SELECT * FROM log_events WHERE session_id = ? AND task_id = ? AND execution_process_id = ? ORDER BY created_at {order} LIMIT ?",
+                _log_events_query(
+                    has_task_id=True, has_execution_process_id=True, reverse=reverse
+                ),
                 (session_id, task_id, execution_process_id, limit),
             ) as cur:
                 rows = await cur.fetchall()
         elif execution_process_id:
             async with conn.execute(
-                f"SELECT * FROM log_events WHERE session_id = ? AND execution_process_id = ? ORDER BY created_at {order} LIMIT ?",
+                _log_events_query(
+                    has_task_id=False, has_execution_process_id=True, reverse=reverse
+                ),
                 (session_id, execution_process_id, limit),
             ) as cur:
                 rows = await cur.fetchall()
         elif task_id:
             async with conn.execute(
-                f"SELECT * FROM log_events WHERE session_id = ? AND task_id = ? ORDER BY created_at {order} LIMIT ?",
+                _log_events_query(
+                    has_task_id=True, has_execution_process_id=False, reverse=reverse
+                ),
                 (session_id, task_id, limit),
             ) as cur:
                 rows = await cur.fetchall()
         else:
             async with conn.execute(
-                f"SELECT * FROM log_events WHERE session_id = ? ORDER BY created_at {order} LIMIT ?",
+                _log_events_query(
+                    has_task_id=False, has_execution_process_id=False, reverse=reverse
+                ),
                 (session_id, limit),
             ) as cur:
                 rows = await cur.fetchall()
@@ -2042,14 +2152,17 @@ class AsyncSQLiteStore:
                 session_id=r["session_id"],
                 stream=r["stream"],
                 content=r["content"],
-                task_id=r["task_id"] if "task_id" in r.keys() else None,
-                execution_process_id=r["execution_process_id"] if "execution_process_id" in r.keys() else None,
+                task_id=r["task_id"] if _row_has_key(r, "task_id") else None,
+                execution_process_id=r["execution_process_id"] if _row_has_key(r, "execution_process_id") else None,
+                trace_id=r["trace_id"] if _row_has_key(r, "trace_id") else None,
+                span_id=r["span_id"] if _row_has_key(r, "span_id") else None,
+                parent_span_id=r["parent_span_id"] if _row_has_key(r, "parent_span_id") else None,
                 created_at=self._parse_datetime(r["created_at"]),
             )
             for r in rows
         ]
 
-    async def save_execution_process(self, process: ExecutionProcess):
+    async def save_execution_process(self, process: ExecutionProcess) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute(
@@ -2079,15 +2192,15 @@ class AsyncSQLiteStore:
             session_id=row["session_id"],
             status=row["status"],
             exit_code=row["exit_code"],
-            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
-            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
-            model=row["model"] if "model" in row.keys() and row["model"] else None,
-            input_tokens=row["input_tokens"] if "input_tokens" in row.keys() else None,
-            output_tokens=row["output_tokens"] if "output_tokens" in row.keys() else None,
-            cache_read_tokens=row["cache_read_tokens"] if "cache_read_tokens" in row.keys() else None,
-            total_cost_usd=row["total_cost_usd"] if "total_cost_usd" in row.keys() else None,
-            kind=row["kind"] if "kind" in row.keys() and row["kind"] else "initial",
-            triggering_message_id=row["triggering_message_id"] if "triggering_message_id" in row.keys() else None,
+            executor=row["executor"] if _row_has_key(row, "executor") and row["executor"] else None,
+            provider=row["provider"] if _row_has_key(row, "provider") and row["provider"] else None,
+            model=row["model"] if _row_has_key(row, "model") and row["model"] else None,
+            input_tokens=row["input_tokens"] if _row_has_key(row, "input_tokens") else None,
+            output_tokens=row["output_tokens"] if _row_has_key(row, "output_tokens") else None,
+            cache_read_tokens=row["cache_read_tokens"] if _row_has_key(row, "cache_read_tokens") else None,
+            total_cost_usd=row["total_cost_usd"] if _row_has_key(row, "total_cost_usd") else None,
+            kind=row["kind"] if _row_has_key(row, "kind") and row["kind"] else "initial",
+            triggering_message_id=row["triggering_message_id"] if _row_has_key(row, "triggering_message_id") else None,
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
@@ -2126,15 +2239,15 @@ class AsyncSQLiteStore:
                 session_id=r["session_id"],
                 status=r["status"],
                 exit_code=r["exit_code"],
-                executor=r["executor"] if "executor" in r.keys() and r["executor"] else None,
-                provider=r["provider"] if "provider" in r.keys() and r["provider"] else None,
-                model=r["model"] if "model" in r.keys() and r["model"] else None,
-                input_tokens=r["input_tokens"] if "input_tokens" in r.keys() else None,
-                output_tokens=r["output_tokens"] if "output_tokens" in r.keys() else None,
-                cache_read_tokens=r["cache_read_tokens"] if "cache_read_tokens" in r.keys() else None,
-                total_cost_usd=r["total_cost_usd"] if "total_cost_usd" in r.keys() else None,
-                kind=r["kind"] if "kind" in r.keys() and r["kind"] else "initial",
-                triggering_message_id=r["triggering_message_id"] if "triggering_message_id" in r.keys() else None,
+                executor=r["executor"] if _row_has_key(r, "executor") and r["executor"] else None,
+                provider=r["provider"] if _row_has_key(r, "provider") and r["provider"] else None,
+                model=r["model"] if _row_has_key(r, "model") and r["model"] else None,
+                input_tokens=r["input_tokens"] if _row_has_key(r, "input_tokens") else None,
+                output_tokens=r["output_tokens"] if _row_has_key(r, "output_tokens") else None,
+                cache_read_tokens=r["cache_read_tokens"] if _row_has_key(r, "cache_read_tokens") else None,
+                total_cost_usd=r["total_cost_usd"] if _row_has_key(r, "total_cost_usd") else None,
+                kind=r["kind"] if _row_has_key(r, "kind") and r["kind"] else "initial",
+                triggering_message_id=r["triggering_message_id"] if _row_has_key(r, "triggering_message_id") else None,
                 started_at=self._parse_datetime(r["started_at"]),
                 completed_at=self._parse_datetime(r["completed_at"]),
                 created_at=self._parse_datetime(r["created_at"]),
@@ -2145,7 +2258,7 @@ class AsyncSQLiteStore:
 
     async def list_execution_process_runtime_rows(self, session_id: str) -> list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]]:
         processes = await self.list_execution_processes(session_id=session_id)
-        rows = []
+        rows: list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]] = []
         for process in processes:
             task = await self.load_codex_task(process.task_id)
             messages = await self.list_codex_task_messages(process.task_id, execution_process_id=process.id)
@@ -2153,7 +2266,7 @@ class AsyncSQLiteStore:
             rows.append((process, task, messages, logs))
         return rows
 
-    async def update_execution_process_status(self, process_id: str, status: str, exit_code: int | None = None, completed_at: datetime | None = None):
+    async def update_execution_process_status(self, process_id: str, status: str, exit_code: int | None = None, completed_at: datetime | None = None) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         from datetime import datetime as dt
@@ -2165,7 +2278,7 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def update_execution_process_usage(self, process_id: str, input_tokens: int | None = None, output_tokens: int | None = None, cache_read_tokens: int | None = None, total_cost_usd: float | None = None):
+    async def update_execution_process_usage(self, process_id: str, input_tokens: int | None = None, output_tokens: int | None = None, cache_read_tokens: int | None = None, total_cost_usd: float | None = None) -> None:
         await self._ensure_db()
         conn = await self._get_conn()
         from datetime import datetime as dt
@@ -2178,7 +2291,7 @@ class AsyncSQLiteStore:
 
     # --- Runtime Catalog ---
 
-    async def save_runtime_catalog(self, catalog: "RuntimeCatalog"):
+    async def save_runtime_catalog(self, catalog: "RuntimeCatalog") -> None:
         """Save the runtime catalog to the database."""
         await self._ensure_db()
         conn = await self._get_conn()
@@ -2199,14 +2312,16 @@ class AsyncSQLiteStore:
         if not row:
             return None
         try:
-            data = json.loads(row["data"])
-            return RuntimeCatalog(**data)
+            data = _json_object(row["data"])
+            if data is None:
+                return None
+            return RuntimeCatalog.model_validate(data)
         except (json.JSONDecodeError, TypeError, ValueError):
             return None
 
     # --- Artifact Paths ---
 
-    async def save_artifact(self, artifact: dict) -> None:
+    async def save_artifact(self, artifact: dict[str, object]) -> None:
         """Save artifact path to database. Fields: id, issue_id, task_id, name, path, kind, created_at."""
         await self._ensure_db()
         conn = await self._get_conn()
@@ -2224,7 +2339,7 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def list_artifacts(self, issue_id: str) -> list[dict]:
+    async def list_artifacts(self, issue_id: str) -> list[dict[str, object]]:
         """List all artifacts for an issue, ordered by created_at."""
         await self._ensure_db()
         conn = await self._get_conn()
@@ -2238,7 +2353,7 @@ class AsyncSQLiteStore:
 
     # --- Agents (PR1: Workflow DAG) ---
 
-    def _row_to_agent(self, row) -> "Agent":
+    def _row_to_agent(self, row: aiosqlite.Row) -> "Agent":
         from app.domain.models import Agent
         return Agent(
             id=row["id"],
@@ -2247,14 +2362,14 @@ class AsyncSQLiteStore:
             role_key=row["role_key"],
             description=row["description"],
             system_prompt_template=row["system_prompt_template"],
-            input_schema=json.loads(row["input_schema"]) if row["input_schema"] else [],
-            output_schema=json.loads(row["output_schema"]) if row["output_schema"] else {},
+            input_schema=_json_object_list(row["input_schema"]),
+            output_schema=_json_object(row["output_schema"]) or {},
             default_executor=row["default_executor"],
             default_provider=row["default_provider"],
             default_model=row["default_model"],
             artifact_subdir=row["artifact_subdir"],
             persist_kind=row["persist_kind"],
-            agent_tier=row["agent_tier"] if "agent_tier" in row.keys() and row["agent_tier"] else "managed",
+            agent_tier=row["agent_tier"] if _row_has_key(row, "agent_tier") and row["agent_tier"] else "managed",
             triggers_replan_on_done=bool(row["triggers_replan_on_done"]),
             triggers_replan_on_fail=bool(row["triggers_replan_on_fail"]),
             is_builtin=bool(row["is_builtin"]),
@@ -2311,7 +2426,7 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
         sql = "SELECT * FROM agents WHERE 1=1"
-        params: list = []
+        params: list[object] = []
         # Workspace scoping: when workspace_id is provided, return both global (NULL) and workspace-specific.
         if workspace_id is not None:
             sql += " AND (workspace_id IS NULL OR workspace_id = ?)"
@@ -2335,7 +2450,7 @@ class AsyncSQLiteStore:
 
     # --- Workflow Graphs / Nodes / Edges / Replan (PR3) ---
 
-    def _row_to_workflow_graph(self, row) -> "WorkflowGraph":
+    def _row_to_workflow_graph(self, row: aiosqlite.Row) -> "WorkflowGraph":
         from app.domain.models import WorkflowGraph
         return WorkflowGraph(
             id=row["id"],
@@ -2349,7 +2464,7 @@ class AsyncSQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def _row_to_workflow_node(self, row) -> "WorkflowNode":
+    def _row_to_workflow_node(self, row: aiosqlite.Row) -> "WorkflowNode":
         from app.domain.models import WorkflowNode
         return WorkflowNode(
             id=row["id"],
@@ -2363,15 +2478,15 @@ class AsyncSQLiteStore:
             artifact_dir=row["artifact_dir"],
             retries=row["retries"] or 0,
             max_retries=row["max_retries"] or 1,
-            instance_index=row["instance_index"] if "instance_index" in row.keys() else 0,
-            batch_key=row["batch_key"] if "batch_key" in row.keys() else None,
+            instance_index=row["instance_index"] if _row_has_key(row, "instance_index") else 0,
+            batch_key=row["batch_key"] if _row_has_key(row, "batch_key") else None,
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def _row_to_workflow_edge(self, row) -> "WorkflowEdge":
+    def _row_to_workflow_edge(self, row: aiosqlite.Row) -> "WorkflowEdge":
         from app.domain.models import WorkflowEdge
         return WorkflowEdge(
             id=row["id"],
@@ -2518,26 +2633,40 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         sets: list[str] = []
-        params: list = []
+        params: list[object] = []
         if status is not None:
-            sets.append("status = ?"); params.append(status)
+            sets.append("status = ?")
+            params.append(status)
         if task_id is not None:
-            sets.append("task_id = ?"); params.append(task_id)
+            sets.append("task_id = ?")
+            params.append(task_id)
         if artifact_dir is not None:
-            sets.append("artifact_dir = ?"); params.append(artifact_dir)
+            sets.append("artifact_dir = ?")
+            params.append(artifact_dir)
         if prompt_override is not None:
-            sets.append("prompt_override = ?"); params.append(prompt_override)
+            sets.append("prompt_override = ?")
+            params.append(prompt_override)
         if retries is not None:
-            sets.append("retries = ?"); params.append(retries)
+            sets.append("retries = ?")
+            params.append(retries)
         if started_at is not None:
-            sets.append("started_at = ?"); params.append(self._format_datetime(started_at))
+            sets.append("started_at = ?")
+            params.append(self._format_datetime(started_at))
         if completed_at is not self._UNSET:
             # Explicit None clears the column to NULL; a datetime value formats it.
-            db_val = self._format_datetime(completed_at) if completed_at is not None else None
-            sets.append("completed_at = ?"); params.append(db_val)
-        sets.append("updated_at = ?"); params.append(self._format_datetime(datetime.now()))
+            if completed_at is not None and not isinstance(completed_at, datetime):
+                raise TypeError("completed_at must be a datetime or None")
+            db_val = self._format_datetime(completed_at)
+            sets.append("completed_at = ?")
+            params.append(db_val)
+        sets.append("updated_at = ?")
+        params.append(self._format_datetime(datetime.now()))
         params.append(node_id)
-        await conn.execute(f"UPDATE workflow_nodes SET {', '.join(sets)} WHERE id = ?", tuple(params))
+        # SET fragments are built only from fixed column names above; values stay parameterized.
+        await conn.execute(
+            f"UPDATE workflow_nodes SET {', '.join(sets)} WHERE id = ?",  # nosec B608
+            tuple(params),
+        )
         await conn.commit()
 
     async def add_workflow_node(self, node: "WorkflowNode") -> None:
@@ -2803,25 +2932,24 @@ class AsyncSQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def _row_to_conductor_task(self, row) -> "ConductorTask":
+    def _row_to_conductor_task(self, row: aiosqlite.Row) -> "ConductorTask":
         from app.domain.models import ConductorTask
 
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = _json_object(row["payload_json"]) or {}
         except json.JSONDecodeError:
             payload = {}
-        keys = row.keys()
         return ConductorTask(
             id=row["id"],
             project_id=row["project_id"],
             task_kind=row["task_kind"],
-            payload=payload if isinstance(payload, dict) else {},
+            payload=payload,
             issue_id=row["issue_id"],
             status=row["status"],
             result_json=row["result_json"],
-            lease_owner=row["lease_owner"] if "lease_owner" in keys and row["lease_owner"] else None,
-            heartbeat_at=self._parse_datetime(row["heartbeat_at"] if "heartbeat_at" in keys else None),
-            lease_expires_at=self._parse_datetime(row["lease_expires_at"] if "lease_expires_at" in keys else None),
+            lease_owner=row["lease_owner"] if _row_has_key(row, "lease_owner") and row["lease_owner"] else None,
+            heartbeat_at=self._parse_datetime(row["heartbeat_at"] if _row_has_key(row, "heartbeat_at") else None),
+            lease_expires_at=self._parse_datetime(row["lease_expires_at"] if _row_has_key(row, "lease_expires_at") else None),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -3012,7 +3140,7 @@ class AsyncSQLiteStore:
                 kind=row["kind"],
                 payload_json=row["payload_json"] or "{}",
                 created_at=self._parse_datetime(row["created_at"]),
-                consumed_at=self._parse_datetime(row["consumed_at"]) if "consumed_at" in row.keys() else None,
+                consumed_at=self._parse_datetime(row["consumed_at"]) if _row_has_key(row, "consumed_at") else None,
             )
             for row in rows
         ]
@@ -3087,8 +3215,9 @@ class AsyncSQLiteStore:
         await conn.execute(
             """INSERT OR REPLACE INTO audit_log
                (id, created_at, category, actor, issue_id, task_id, conductor_task_id,
-                execution_process_id, correlation_id, status, duration_ms, payload_json, error)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                execution_process_id, correlation_id, trace_id, span_id, parent_span_id,
+                status, duration_ms, payload_json, error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 entry.id,
                 self._format_datetime(entry.created_at or datetime.now()),
@@ -3099,6 +3228,9 @@ class AsyncSQLiteStore:
                 entry.conductor_task_id,
                 entry.execution_process_id,
                 entry.correlation_id,
+                entry.trace_id,
+                entry.span_id,
+                entry.parent_span_id,
                 entry.status,
                 entry.duration_ms,
                 entry.payload_json,
@@ -3106,6 +3238,129 @@ class AsyncSQLiteStore:
             ),
         )
         await conn.commit()
+
+    async def load_audit_log(self, audit_log_id: str) -> "AuditLog" | None:
+        from app.domain.models import AuditLog
+
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM audit_log WHERE id = ?", (audit_log_id,)) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return AuditLog(
+            id=row["id"],
+            created_at=self._parse_datetime(row["created_at"]),
+            category=row["category"],
+            actor=row["actor"],
+            issue_id=row["issue_id"],
+            task_id=row["task_id"],
+            conductor_task_id=row["conductor_task_id"],
+            execution_process_id=row["execution_process_id"],
+            correlation_id=row["correlation_id"],
+            trace_id=row["trace_id"] if _row_has_key(row, "trace_id") else None,
+            span_id=row["span_id"] if _row_has_key(row, "span_id") else None,
+            parent_span_id=row["parent_span_id"] if _row_has_key(row, "parent_span_id") else None,
+            status=row["status"],
+            duration_ms=int(row["duration_ms"]) if row["duration_ms"] is not None else None,
+            payload_json=row["payload_json"],
+            error=row["error"],
+        )
+
+    async def save_agent_call_trace(self, trace: AgentCallTrace) -> None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            """INSERT OR REPLACE INTO agent_call_traces
+               (id, audit_log_id, trace_id, span_id, parent_span_id, issue_id, task_id,
+                execution_process_id, kind, title, request_json, response_json,
+                request_preview, response_preview, metadata_json, is_truncated, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                trace.id,
+                trace.audit_log_id,
+                trace.trace_id,
+                trace.span_id,
+                trace.parent_span_id,
+                trace.issue_id,
+                trace.task_id,
+                trace.execution_process_id,
+                trace.kind,
+                trace.title,
+                trace.request_json,
+                trace.response_json,
+                trace.request_preview,
+                trace.response_preview,
+                trace.metadata_json,
+                1 if trace.is_truncated else 0,
+                self._format_datetime(trace.created_at or datetime.now()),
+            ),
+        )
+        await conn.commit()
+
+    def _agent_call_trace_from_row(self, row: aiosqlite.Row) -> AgentCallTrace:
+        return AgentCallTrace(
+            id=row["id"],
+            audit_log_id=row["audit_log_id"],
+            trace_id=row["trace_id"],
+            span_id=row["span_id"],
+            parent_span_id=row["parent_span_id"],
+            issue_id=row["issue_id"],
+            task_id=row["task_id"],
+            execution_process_id=row["execution_process_id"],
+            kind=row["kind"],
+            title=row["title"],
+            request_json=row["request_json"],
+            response_json=row["response_json"],
+            request_preview=row["request_preview"],
+            response_preview=row["response_preview"],
+            metadata_json=row["metadata_json"] or "{}",
+            is_truncated=bool(row["is_truncated"]),
+            created_at=self._parse_datetime(row["created_at"]),
+        )
+
+    async def load_agent_call_trace(self, audit_log_id: str) -> AgentCallTrace | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM agent_call_traces WHERE audit_log_id = ? ORDER BY created_at DESC LIMIT 1",
+            (audit_log_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return self._agent_call_trace_from_row(row) if row is not None else None
+
+    async def list_agent_call_traces(
+        self,
+        *,
+        trace_id: str | None = None,
+        task_id: str | None = None,
+        execution_process_id: str | None = None,
+        limit: int = 100,
+    ) -> list[AgentCallTrace]:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        clauses: list[str] = []
+        params: list[object] = []
+        if trace_id:
+            clauses.append("trace_id = ?")
+            params.append(trace_id)
+        if task_id:
+            clauses.append("task_id = ?")
+            params.append(task_id)
+        if execution_process_id:
+            clauses.append("execution_process_id = ?")
+            params.append(execution_process_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, min(limit, 500)))
+        async with conn.execute(
+            f"SELECT * FROM agent_call_traces {where} ORDER BY created_at ASC LIMIT ?",  # nosec B608
+            tuple(params),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [self._agent_call_trace_from_row(row) for row in rows]
 
     async def list_audit_logs(
         self,
@@ -3153,6 +3408,9 @@ class AsyncSQLiteStore:
                 conductor_task_id=row["conductor_task_id"],
                 execution_process_id=row["execution_process_id"],
                 correlation_id=row["correlation_id"],
+                trace_id=row["trace_id"] if _row_has_key(row, "trace_id") else None,
+                span_id=row["span_id"] if _row_has_key(row, "span_id") else None,
+                parent_span_id=row["parent_span_id"] if _row_has_key(row, "parent_span_id") else None,
                 status=row["status"],
                 duration_ms=int(row["duration_ms"]) if row["duration_ms"] is not None else None,
                 payload_json=row["payload_json"],
@@ -3187,7 +3445,7 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
         sql = "SELECT * FROM project_memory_embeddings WHERE project_id = ? ORDER BY created_at ASC"
-        args: list = [project_id]
+        args: list[object] = [project_id]
         if limit is not None:
             sql += " LIMIT ?"
             args.append(limit)
@@ -3270,10 +3528,11 @@ class AsyncSQLiteStore:
             clauses.append("status = ?")
             args.append(status)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        # WHERE fragments are built only from fixed column predicates above; values stay parameterized.
         sql = (
             "SELECT id, project_id, issue_id, target_kind, title, recommendation, evidence_json, "
             "severity, confidence, status, fingerprint, created_at, updated_at "
-            f"FROM self_improvement_proposals{where} ORDER BY created_at DESC, id DESC"
+            f"FROM self_improvement_proposals{where} ORDER BY created_at DESC, id DESC"  # nosec B608
         )
         if limit is not None:
             sql += " LIMIT ?"
@@ -3295,6 +3554,134 @@ class AsyncSQLiteStore:
                 fingerprint=row["fingerprint"],
                 created_at=self._parse_datetime(row["created_at"]),
                 updated_at=self._parse_datetime(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    async def load_self_improvement_proposal(
+        self, proposal_id: str
+    ) -> "SelfImprovementProposal | None":
+        from app.domain.models import SelfImprovementProposal
+
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT id, project_id, issue_id, target_kind, title, recommendation, evidence_json, "
+            "severity, confidence, status, fingerprint, created_at, updated_at "
+            "FROM self_improvement_proposals WHERE id = ?",
+            (proposal_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return SelfImprovementProposal(
+            id=row["id"],
+            project_id=row["project_id"],
+            issue_id=row["issue_id"],
+            target_kind=row["target_kind"],
+            title=row["title"],
+            recommendation=row["recommendation"],
+            evidence_json=row["evidence_json"] or "[]",
+            severity=row["severity"] or "info",
+            confidence=float(row["confidence"] or 0),
+            status=row["status"] or "proposed",
+            fingerprint=row["fingerprint"],
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    async def update_self_improvement_proposal_status(
+        self, proposal_id: str, status: str
+    ) -> "SelfImprovementProposal | None":
+        await self._ensure_db()
+        conn = await self._get_conn()
+        updated_at = datetime.now()
+        cur = await conn.execute(
+            "UPDATE self_improvement_proposals SET status = ?, updated_at = ? WHERE id = ?",
+            (status, self._format_datetime(updated_at), proposal_id),
+        )
+        await conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return await self.load_self_improvement_proposal(proposal_id)
+
+    async def save_self_improvement_application_event(
+        self, event: "SelfImprovementApplicationEvent"
+    ) -> None:
+        from app.domain.models import SelfImprovementApplicationEvent  # noqa: F401
+
+        await self._ensure_db()
+        conn = await self._get_conn()
+        created_at = event.created_at or datetime.now()
+        await conn.execute(
+            """INSERT OR REPLACE INTO self_improvement_application_events
+               (id, proposal_id, project_id, issue_id, target_kind, action, status,
+                path, content_sha256, result_json, error, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event.id,
+                event.proposal_id,
+                event.project_id,
+                event.issue_id,
+                event.target_kind,
+                event.action,
+                event.status,
+                event.path,
+                event.content_sha256,
+                event.result_json or "{}",
+                event.error,
+                self._format_datetime(created_at),
+            ),
+        )
+        await conn.commit()
+
+    async def list_self_improvement_application_events(
+        self,
+        project_id: str | None = None,
+        proposal_id: str | None = None,
+        limit: int | None = None,
+    ) -> list["SelfImprovementApplicationEvent"]:
+        from app.domain.models import SelfImprovementApplicationEvent
+
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        clauses: list[str] = []
+        args: list[object] = []
+        if project_id is not None:
+            clauses.append("project_id = ?")
+            args.append(project_id)
+        if proposal_id is not None:
+            clauses.append("proposal_id = ?")
+            args.append(proposal_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        # WHERE fragments are built only from fixed column predicates above; values stay parameterized.
+        sql = (
+            "SELECT id, proposal_id, project_id, issue_id, target_kind, action, status, "
+            "path, content_sha256, result_json, error, created_at "
+            f"FROM self_improvement_application_events{where} "  # nosec B608
+            "ORDER BY created_at DESC, id DESC"
+        )
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(max(1, min(int(limit), 100)))
+        async with conn.execute(sql, tuple(args)) as cur:
+            rows = await cur.fetchall()
+        return [
+            SelfImprovementApplicationEvent(
+                id=row["id"],
+                proposal_id=row["proposal_id"],
+                project_id=row["project_id"],
+                issue_id=row["issue_id"],
+                target_kind=row["target_kind"],
+                action=row["action"],
+                status=row["status"],
+                path=row["path"],
+                content_sha256=row["content_sha256"],
+                result_json=row["result_json"] or "{}",
+                error=row["error"],
+                created_at=self._parse_datetime(row["created_at"]),
             )
             for row in rows
         ]
@@ -3346,10 +3733,10 @@ class AsyncSQLiteStore:
 
     # --- Skill CRUD ---
 
-    def _row_to_skill(self, r) -> Skill:
+    def _row_to_skill(self, r: aiosqlite.Row) -> Skill:
         tags_raw = r["tags"]
         try:
-            tags = json.loads(tags_raw) if tags_raw else []
+            tags = _json_string_list(tags_raw) or []
         except (ValueError, TypeError):
             tags = []
         return Skill(
@@ -3399,7 +3786,7 @@ class AsyncSQLiteStore:
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
         clauses: list[str] = []
-        params: list = []
+        params: list[object] = []
         if search:
             clauses.append("(name LIKE ? OR description LIKE ? OR tags LIKE ?)")
             like = f"%{search}%"
@@ -3416,7 +3803,7 @@ class AsyncSQLiteStore:
         return [self._row_to_skill(r) for r in rows]
 
     async def list_skill_categories(self) -> list[str]:
-        """Union of (categories observed on skills) ∪ (user-pre-created empty
+        """Union of categories observed on skills and user-pre-created empty
         categories). Returned sorted alphabetically.
         """
         await self._ensure_db()

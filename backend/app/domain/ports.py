@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Domain ports (hexagonal boundaries).
 
 A *port* is a `typing.Protocol` the domain/application layer depends on, with
@@ -14,7 +12,9 @@ Protocol; production wires the real `AuditLogger` (which implements it), tests
 pass a trivial fake that just appends to a list.
 """
 
-from typing import Any, Protocol
+from __future__ import annotations
+
+from typing import Protocol
 
 
 class AuditSink(Protocol):
@@ -39,9 +39,12 @@ class AuditSink(Protocol):
         conductor_task_id: str | None = None,
         execution_process_id: str | None = None,
         correlation_id: str | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+        parent_span_id: str | None = None,
         status: str | None = None,
         duration_ms: int | None = None,
-        payload: Any | None = None,
+        payload: object | None = None,
         error: str | None = None,
     ) -> None:
         ...

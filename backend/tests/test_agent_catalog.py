@@ -1,4 +1,7 @@
 from pathlib import Path  # noqa: I001
+from typing import cast
+
+import pytest
 
 from app.application.agent_catalog.catalog import AgentCatalog
 from app.application.agent_catalog.generic_specialist_workflow import GenericSpecialistWorkflow
@@ -36,6 +39,33 @@ def test_catalog_registers_custom_agent():
         catalog.resolve_agent("custom:diagram_drawer").prompt_template
         == "Draw architecture diagrams"
     )
+
+
+def test_catalog_loader_rejects_missing_required_string(tmp_path: Path):
+    (tmp_path / "bad.yaml").write_text(
+        '{"role_key":"broken","prompt_template":"Review things"}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="display_name"):
+        AgentCatalog(specialists_dir=tmp_path)
+
+
+def test_catalog_loader_coerces_optional_schema_and_retry_fields(tmp_path: Path):
+    (tmp_path / "minimal.yaml").write_text(
+        (
+            '{"role_key":"minimal","display_name":"Minimal",'
+            '"prompt_template":"Review things",'
+            '"output_schema":["not", "an", "object"],'
+            '"default_max_retries":"not-int"}'
+        ),
+        encoding="utf-8",
+    )
+
+    definition = AgentCatalog(specialists_dir=tmp_path).resolve_agent("minimal")
+
+    assert definition.output_schema == {"type": "object"}
+    assert definition.default_max_retries == 1
 
 
 def test_seed_builtin_agents_adds_specialists_with_tier(tmp_path: Path):
@@ -89,6 +119,7 @@ def test_generic_specialist_workflow_persists_json_artifact(tmp_path: Path):
             "kind": "specialist",
         }
     ]
+    assert task.result is not None
     assert "Specialist security_reviewer report generated" in task.result
 
 
@@ -179,7 +210,9 @@ def test_subagent_result_builder_preserves_specialist_artifact(tmp_path: Path):
 
     result = build_subagent_result(task=task, node=node, doc=doc)
 
-    assert result.artifact_json["artifact"]["summary"] == "Specialist says ok"
+    assert result.artifact_json is not None
+    artifact = cast(dict[str, object], result.artifact_json["artifact"])
+    assert artifact["summary"] == "Specialist says ok"
     assert result.artifact_paths == [
         str(
             tmp_path

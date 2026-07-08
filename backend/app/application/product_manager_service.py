@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, ValidationError
 
 from app.application.product_manager_documents import ProductManagerDocuments
 from app.application.product_manager_router import ProductManagerRouter, RequirementRoute
+from app.json_safety import object_dict
 
 
 class PRDRequirement(BaseModel):
@@ -40,7 +43,7 @@ class ProductRequirementDocument(BaseModel):
     # e.g. [{"title":"Frontend", "scope":"UI layer", "role_suffix":"frontend"},
     #        {"title":"Backend",  "scope":"API layer", "role_suffix":"backend"}]
     # Leave null (omit) for single-engineer issues.
-    subtask_split: list[dict] | None = None
+    subtask_split: list[dict[str, str]] | None = None
 
 
 class BugfixRequirementDocument(BaseModel):
@@ -58,6 +61,20 @@ class BugfixRequirementDocument(BaseModel):
 
 class ProductManagerArtifactError(ValueError):
     pass
+
+
+class ProductManagerTask(Protocol):
+    id: str
+    issue_id: str | None
+    title: str
+    prompt: str
+    workspace_path: str | None
+    result: str | None
+
+
+@runtime_checkable
+class ProductManagerTaskDescription(Protocol):
+    description: object
 
 
 class ProductManagerService:
@@ -111,23 +128,24 @@ class ProductManagerService:
         "risks": "risks",
     }
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.documents = ProductManagerDocuments()
         self.router = ProductManagerRouter(self.documents)
 
-    def build_prompt(self, task, workspace_title: str | None = None) -> str:
+    def build_prompt(self, task: ProductManagerTask, workspace_title: str | None = None) -> str:
         project_name = workspace_title or "workspace-project"
         issue_id = task.issue_id or task.id
+        workspace_path = _require_workspace_path(task)
         self.prepare_documents(
             issue_id=issue_id,
             issue_title=task.title,
-            issue_description=getattr(task, "description", None),
-            workspace_path=task.workspace_path,
+            issue_description=_task_description(task),
+            workspace_path=workspace_path,
             prompt=task.prompt,
         )
         route = self.route_requirement(
             prompt=task.prompt,
-            workspace_path=task.workspace_path,
+            workspace_path=workspace_path,
             issue_id=issue_id,
         )
         requirement_document = ""
@@ -185,9 +203,11 @@ class ProductManagerService:
     ) -> str:
         if not workspace_path or not issue_id:
             return "bugfix" if self._is_bugfix_prompt(prompt) else "new_requirement"
-        return self.route_requirement(
-            prompt=prompt, workspace_path=workspace_path, issue_id=issue_id
-        ).name
+        return str(
+            self.route_requirement(
+                prompt=prompt, workspace_path=workspace_path, issue_id=issue_id
+            ).name
+        )
 
     def route_requirement(
         self, *, prompt: str, workspace_path: str, issue_id: str
@@ -196,14 +216,17 @@ class ProductManagerService:
             prompt=prompt, workspace_path=workspace_path, issue_id=issue_id
         )
 
-    def merge_with_existing_prd(self, *, existing_prd_path: Path, new_payload: dict) -> dict:
-        existing = json.loads(existing_prd_path.read_text(encoding="utf-8"))
+    def merge_with_existing_prd(
+        self, *, existing_prd_path: Path, new_payload: Mapping[str, object]
+    ) -> dict[str, object]:
+        existing = object_dict(json.loads(existing_prd_path.read_text(encoding="utf-8")))
         return {**existing, **new_payload}
 
-    def persist_bugfix_artifact(self, task) -> Path:
+    def persist_bugfix_artifact(self, task: ProductManagerTask) -> Path:
         issue_id = task.issue_id or task.id
-        self.documents.ensure_issue_root(task.workspace_path, issue_id)
-        bugfix_path = self.documents.bugfix_path(task.workspace_path, issue_id)
+        workspace_path = _require_workspace_path(task)
+        self.documents.ensure_issue_root(workspace_path, issue_id)
+        bugfix_path = self.documents.bugfix_path(workspace_path, issue_id)
         payload = self._parse_bugfix_payload(task)
         bugfix_path.write_text(self.render_bugfix_markdown(payload), encoding="utf-8")
         task.result = (
@@ -213,7 +236,7 @@ class ProductManagerService:
         return bugfix_path
 
     def persist_prd_from_result(
-        self, task, workspace_title: str | None = None
+        self, task: ProductManagerTask, workspace_title: str | None = None
     ) -> ProductRequirementDocument:
         if not task.workspace_path:
             raise ProductManagerArtifactError(
@@ -223,16 +246,17 @@ class ProductManagerService:
             raise ProductManagerArtifactError("ProductManager task result is empty")
 
         canonical_issue_id = task.issue_id or task.id
+        workspace_path = task.workspace_path
         self.prepare_documents(
             issue_id=canonical_issue_id,
             issue_title=task.title,
-            issue_description=getattr(task, "description", None),
-            workspace_path=task.workspace_path,
+            issue_description=_task_description(task),
+            workspace_path=workspace_path,
             prompt=task.prompt,
         )
         route = self.route_requirement(
             prompt=task.prompt,
-            workspace_path=task.workspace_path,
+            workspace_path=workspace_path,
             issue_id=canonical_issue_id,
         )
         if route.name == "bugfix":
@@ -264,13 +288,17 @@ class ProductManagerService:
         try:
             from app.application.tolerant_json import tolerant_json_loads
 
-            payload = tolerant_json_loads(task.result)
-            prd = ProductRequirementDocument.model_validate(payload)
+            payload_raw: object = tolerant_json_loads(task.result)
+            payload_dict = self._normalize_payload_keys(
+                object_dict(payload_raw), self.PRD_KEY_ALIASES
+            )
+            prd = ProductRequirementDocument.model_validate(payload_dict)
             if not prd.plan_summary:
                 fallback_plan = []
-                if getattr(prd, "development_task_list", None):
-                    fallback_plan = list(prd.development_task_list[:10])
-                elif prd.product_goals:
+                development_task_list = payload_dict.get("development_task_list")
+                if isinstance(development_task_list, list):
+                    fallback_plan = [str(item) for item in development_task_list[:10]]
+                if not fallback_plan and prd.product_goals:
                     fallback_plan = list(prd.product_goals[:10])
                 if not fallback_plan:
                     fallback_plan = [task.title]
@@ -278,15 +306,15 @@ class ProductManagerService:
                     item if str(item).strip().startswith("-") else f"- {item}"
                     for item in fallback_plan
                 ][:10]
-            prd_json_path = self.documents.prd_json_path(task.workspace_path, canonical_issue_id)
-            prd_md_path = self.documents.prd_md_path(task.workspace_path, canonical_issue_id)
-            self.documents.ensure_issue_root(task.workspace_path, canonical_issue_id)
+            prd_json_path = self.documents.prd_json_path(workspace_path, canonical_issue_id)
+            prd_md_path = self.documents.prd_md_path(workspace_path, canonical_issue_id)
+            self.documents.ensure_issue_root(workspace_path, canonical_issue_id)
 
             if route.name == "requirement_update" and prd_json_path.exists():
-                payload = self.merge_with_existing_prd(
-                    existing_prd_path=prd_json_path, new_payload=payload
+                payload_dict = self.merge_with_existing_prd(
+                    existing_prd_path=prd_json_path, new_payload=payload_dict
                 )
-                prd = ProductRequirementDocument.model_validate(payload)
+                prd = ProductRequirementDocument.model_validate(payload_dict)
 
             prd_json_path.write_text(prd.model_dump_json(indent=2), encoding="utf-8")
             prd_md_path.write_text(self.render_markdown(prd), encoding="utf-8")
@@ -307,8 +335,8 @@ class ProductManagerService:
 
             logger = logging.getLogger(__name__)
 
-            self.documents.ensure_issue_root(task.workspace_path, canonical_issue_id)
-            prd_md_path = self.documents.prd_md_path(task.workspace_path, canonical_issue_id)
+            self.documents.ensure_issue_root(workspace_path, canonical_issue_id)
+            prd_md_path = self.documents.prd_md_path(workspace_path, canonical_issue_id)
 
             error_msg = f"Failed to parse PRD JSON for task {task.id}: {type(exc).__name__}: {exc}"
             logger.error(error_msg)
@@ -473,14 +501,18 @@ class ProductManagerService:
         lines.append("")
         return "\n".join(lines)
 
-    def _parse_bugfix_payload(self, task) -> BugfixRequirementDocument:
+    def _parse_bugfix_payload(self, task: ProductManagerTask) -> BugfixRequirementDocument:
+        if not task.result:
+            raise ProductManagerArtifactError("ProductManager task result is empty")
         try:
-            payload = json.loads(task.result)
+            payload_raw: object = json.loads(task.result)
         except json.JSONDecodeError as exc:
             raise ProductManagerArtifactError(
                 f"ProductManager output is not valid JSON: {exc}"
             ) from exc
-        payload = self._normalize_payload_keys(payload, self.BUGFIX_KEY_ALIASES)
+        payload = self._normalize_payload_keys(
+            object_dict(payload_raw), self.BUGFIX_KEY_ALIASES
+        )
 
         payload.setdefault("project_name", "workspace-project")
         payload.setdefault("issue_id", task.issue_id or task.id)
@@ -565,10 +597,27 @@ class ProductManagerService:
             )
         )
 
-    def _normalize_payload_keys(self, payload: dict, aliases: dict[str, str]) -> dict:
-        normalized = {}
+    def _normalize_payload_keys(
+        self, payload: Mapping[str, object], aliases: Mapping[str, str]
+    ) -> dict[str, object]:
+        normalized: dict[str, object] = {}
         for key, value in payload.items():
             compact_key = "".join(ch for ch in str(key).lower() if ch.isalnum() or ch == "_")
             target_key = aliases.get(compact_key, aliases.get(str(key), key))
             normalized[target_key] = value
         return normalized
+
+
+def _require_workspace_path(task: ProductManagerTask) -> str:
+    if not task.workspace_path:
+        raise ProductManagerArtifactError(
+            "Task workspace_path is required for ProductManager artifacts"
+        )
+    return task.workspace_path
+
+
+def _task_description(task: ProductManagerTask) -> str | None:
+    if not isinstance(task, ProductManagerTaskDescription):
+        return None
+    return task.description if isinstance(task.description, str) else None
+

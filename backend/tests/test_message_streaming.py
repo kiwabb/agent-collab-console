@@ -5,25 +5,56 @@ The Claude CLI emits multiple "assistant" type messages during a single turn
 Backend must compute the increment vs. last emission and broadcast a
 "message_delta" event so the frontend can render a typewriter effect."""
 
+from asyncio.subprocess import Process
 from datetime import datetime
+from pathlib import Path
+from typing import cast
 
 import pytest
 
-from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime
+from app.adapters.async_sqlite_store import AsyncSQLiteStore
+from app.application.codex_app_server_runtime import CodexAppServerRuntime
+from app.application.process_runtime_common import (
+    AsyncProcessEntry,
+    BaseProcessRuntime,
+    ProcessEntry,
+)
 from app.domain.models import CodexSession, CodexTask, ExecutionProcess
 
 
 class _EventBusSpy:
     def __init__(self):
-        self.events: list[dict] = []
+        self.events: list[dict[str, object]] = []
 
-    async def append(self, event: dict):
+    async def append(self, event: dict[str, object]) -> None:
         self.events.append(event)
+
+    async def queue_log_event(self, event) -> None:
+        return None
+
+
+def _message_delta_sequences(deltas: list[dict[str, object]]) -> list[int]:
+    seqs: list[int] = []
+    for delta in deltas:
+        seq = delta.get("seq")
+        assert isinstance(seq, int)
+        seqs.append(seq)
+    return seqs
+
+
+class _TestProcessRuntime(BaseProcessRuntime):
+    def _owns_entry(self, entry: AsyncProcessEntry) -> bool:
+        return True
+
+    async def _cleanup_entry(
+        self, workspace_id: str, entry: ProcessEntry | AsyncProcessEntry
+    ) -> None:
+        entry.alive = False
 
 
 def _make_entry(task_id: str) -> AsyncProcessEntry:
     return AsyncProcessEntry(
-        proc=None,  # type: ignore[arg-type]
+        proc=cast(Process, None),
         output_task=None,
         alive=True,
         session_id="ws-1",
@@ -34,9 +65,7 @@ def _make_entry(task_id: str) -> AsyncProcessEntry:
     )
 
 
-async def _seed_db(tmp_path, ep_id="ep-stream-1"):
-    from app.adapters.async_sqlite_store import AsyncSQLiteStore
-
+async def _seed_db(tmp_path: Path, ep_id: str = "ep-stream-1") -> AsyncSQLiteStore:
     db = AsyncSQLiteStore(str(tmp_path / "db.sqlite"))
     now = datetime.now()
     session = CodexSession(
@@ -71,12 +100,24 @@ async def _seed_db(tmp_path, ep_id="ep-stream-1"):
     return db
 
 
+def _make_codex_runtime_for_notifications(
+    db: AsyncSQLiteStore, bus: _EventBusSpy, tmp_path: Path
+) -> CodexAppServerRuntime:
+    return CodexAppServerRuntime(
+        codex_store=db,
+        log_store=db,
+        data_dir=str(tmp_path),
+        event_bus=bus,
+        refresh_task_result=None,
+    )
+
+
 @pytest.mark.asyncio
 async def test_terminate_task_emits_complete_task_status_payload(tmp_path):
     db = await _seed_db(tmp_path, ep_id="ep-kill-1")
     try:
         bus = _EventBusSpy()
-        runtime = BaseProcessRuntime(
+        runtime = _TestProcessRuntime(
             codex_store=db,
             log_store=db,
             data_dir=str(tmp_path),
@@ -84,12 +125,6 @@ async def test_terminate_task_emits_complete_task_status_payload(tmp_path):
             refresh_task_result=None,
         )
         runtime._processes["task-1"] = _make_entry("task-1")
-
-        async def cleanup_entry(process_key, entry):
-            return None
-
-        runtime._owns_entry = lambda entry: True  # type: ignore[method-assign]
-        runtime._cleanup_entry = cleanup_entry  # type: ignore[method-assign]
 
         await runtime.terminate_task("task-1")
 
@@ -140,7 +175,7 @@ async def test_assistant_partials_emit_message_delta_events(tmp_path):
         assert deltas[0]["delta_text"] == "Hello"
         assert deltas[1]["delta_text"] == ", world"
         assert deltas[2]["delta_text"] == "!"
-        seqs = [d["seq"] for d in deltas]
+        seqs = _message_delta_sequences(deltas)
         assert seqs == sorted(seqs) and len(set(seqs)) == 3, (
             f"seq must be strictly monotonic: {seqs}"
         )
@@ -269,31 +304,10 @@ async def test_codex_item_delta_emits_message_delta_events(tmp_path):
     try:
         bus = _EventBusSpy()
 
-        from app.application.codex_app_server_runtime import CodexAppServerRuntime
-
         # CodexAppServerRuntime requires several dependencies; we build a minimal
         # instance by constructing manually and only exercising the notification path.
-        runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
-        runtime.codex_store = db
-        runtime._log_store = db
-        runtime._event_bus = bus
-        runtime._processes = {}
-        runtime.help_orchestrator = None
-        runtime._mock_manager_cls = None
-        runtime._data_dir = str(tmp_path)
-        runtime.refresh_task_result = None
-
-        entry = AsyncProcessEntry(
-            proc=None,  # type: ignore[arg-type]
-            output_task=None,
-            alive=True,
-            session_id="ws-1",
-            task_id="task-1",
-            executor="codex",
-            cwd=str(tmp_path),
-            resume_session_id=None,
-        )
-        runtime._processes["task-1"] = entry
+        runtime = _make_codex_runtime_for_notifications(db, bus, tmp_path)
+        runtime._processes["task-1"] = _make_entry("task-1")
 
         callback = runtime._make_app_server_notification_callback("ws-1", "task-1")
 
@@ -307,7 +321,7 @@ async def test_codex_item_delta_emits_message_delta_events(tmp_path):
         assert deltas[0]["delta_text"] == "Hello"
         assert deltas[1]["delta_text"] == ", world"
         assert deltas[2]["delta_text"] == "!"
-        seqs = [d["seq"] for d in deltas]
+        seqs = _message_delta_sequences(deltas)
         assert seqs == sorted(seqs) and len(set(seqs)) == 3
         for d in deltas:
             assert d["execution_process_id"] == "ep-codex-1"
@@ -322,28 +336,8 @@ async def test_codex_item_delta_ignored_for_non_agent_message_item(tmp_path):
     db = await _seed_db(tmp_path, ep_id="ep-codex-2")
     try:
         bus = _EventBusSpy()
-        from app.application.codex_app_server_runtime import CodexAppServerRuntime
-
-        runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
-        runtime.codex_store = db
-        runtime._log_store = db
-        runtime._event_bus = bus
-        runtime._processes = {}
-        runtime.help_orchestrator = None
-        runtime._data_dir = str(tmp_path)
-        runtime.refresh_task_result = None
-
-        entry = AsyncProcessEntry(
-            proc=None,
-            output_task=None,
-            alive=True,
-            session_id="ws-1",  # type: ignore[arg-type]
-            task_id="task-1",
-            executor="codex",
-            cwd=str(tmp_path),
-            resume_session_id=None,
-        )
-        runtime._processes["task-1"] = entry
+        runtime = _make_codex_runtime_for_notifications(db, bus, tmp_path)
+        runtime._processes["task-1"] = _make_entry("task-1")
 
         callback = runtime._make_app_server_notification_callback("ws-1", "task-1")
         await callback("item.delta", {"item": {"type": "tool_use", "text": "ignored"}})
@@ -364,29 +358,8 @@ async def test_codex_failed_turn_uses_turn_error_not_prior_final_answer(tmp_path
     try:
         bus = _EventBusSpy()
 
-        from app.application.codex_app_server_runtime import CodexAppServerRuntime
-
-        runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
-        runtime.codex_store = db
-        runtime._log_store = db
-        runtime._event_bus = bus
-        runtime._processes = {}
-        runtime.help_orchestrator = None
-        runtime._mock_manager_cls = None
-        runtime._data_dir = str(tmp_path)
-        runtime.refresh_task_result = None
-
-        entry = AsyncProcessEntry(
-            proc=None,  # type: ignore[arg-type]
-            output_task=None,
-            alive=True,
-            session_id="ws-1",
-            task_id="task-1",
-            executor="codex",
-            cwd=str(tmp_path),
-            resume_session_id=None,
-        )
-        runtime._processes["task-1"] = entry
+        runtime = _make_codex_runtime_for_notifications(db, bus, tmp_path)
+        runtime._processes["task-1"] = _make_entry("task-1")
 
         callback = runtime._make_app_server_notification_callback("ws-1", "task-1")
 
@@ -428,29 +401,8 @@ async def test_codex_error_turn_status_marks_task_failed(tmp_path):
     try:
         bus = _EventBusSpy()
 
-        from app.application.codex_app_server_runtime import CodexAppServerRuntime
-
-        runtime = CodexAppServerRuntime.__new__(CodexAppServerRuntime)
-        runtime.codex_store = db
-        runtime._log_store = db
-        runtime._event_bus = bus
-        runtime._processes = {}
-        runtime.help_orchestrator = None
-        runtime._mock_manager_cls = None
-        runtime._data_dir = str(tmp_path)
-        runtime.refresh_task_result = None
-
-        entry = AsyncProcessEntry(
-            proc=None,  # type: ignore[arg-type]
-            output_task=None,
-            alive=True,
-            session_id="ws-1",
-            task_id="task-1",
-            executor="codex",
-            cwd=str(tmp_path),
-            resume_session_id=None,
-        )
-        runtime._processes["task-1"] = entry
+        runtime = _make_codex_runtime_for_notifications(db, bus, tmp_path)
+        runtime._processes["task-1"] = _make_entry("task-1")
 
         callback = runtime._make_app_server_notification_callback("ws-1", "task-1")
 
@@ -545,7 +497,7 @@ async def test_event_bus_treats_error_task_status_as_terminal(monkeypatch):
     async def _notify(task_id: str) -> None:
         scheduler_notifications.append(task_id)
 
-    bus._notify_workflow_scheduler = _notify
+    monkeypatch.setattr(bus, "_notify_workflow_scheduler", _notify)
 
     await bus._broadcast_to_ws(
         {

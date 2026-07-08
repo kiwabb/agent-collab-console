@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CodexTask, ExecutionProcess } from "@/lib/types";
 import type { Phase } from "@/features/issues/phaseUtils";
@@ -22,7 +22,10 @@ function isDevelopmentTaskUnlocked(task: CodexTask, allTasks: CodexTask[]): bool
   if (task.sequence_index === 0) return true;
   const prevIndex = task.sequence_index - 1;
   const prevTask = allTasks.find(
-    (t) => t.phase === "development" && t.sequence_index === prevIndex && t.sequence_group === task.sequence_group
+    (t) =>
+      t.phase === "development" &&
+      t.sequence_index === prevIndex &&
+      t.sequence_group === task.sequence_group,
   );
   return prevTask?.status === "done";
 }
@@ -32,7 +35,6 @@ export function VirtualizedTaskList({
   allTasks,
   executionProcesses,
   onSelectTask,
-  phase,
 }: TaskListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -84,7 +86,7 @@ export function VirtualizedTaskList({
               onClick={() => onSelectTask(task.id)}
               className={cn(
                 "group/card p-5 rounded-2xl bg-surface/40 border hover:bg-surface-hover hover:border-brand/30 hover:shadow-2xl hover:-translate-y-0.5 transition-all cursor-pointer animate-in fade-in duration-500",
-                !unlocked && "opacity-60"
+                !unlocked && "opacity-60",
               )}
             >
               <div className="flex items-start justify-between mb-3">
@@ -97,14 +99,20 @@ export function VirtualizedTaskList({
                       <AgentThinkingIndicator phase="dispatching" size={10} />
                     </div>
                   ) : (
-                    <div className={cn(
-                      "size-1.5 rounded-full",
-                      status === "failed" ? "bg-error" :
-                      status === "completed" || status === "done" ? "bg-success" :
-                      status === "awaiting_review" ? "bg-warning animate-pulse" :
-                      status === "rework" ? "bg-error shadow-[0_0_8px_rgba(239,68,68,0.4)]" :
-                      "bg-text-muted"
-                    )} />
+                    <div
+                      className={cn(
+                        "size-1.5 rounded-full",
+                        status === "failed"
+                          ? "bg-error"
+                          : status === "completed" || status === "done"
+                            ? "bg-success"
+                            : status === "awaiting_review"
+                              ? "bg-warning animate-pulse"
+                              : status === "rework"
+                                ? "bg-error shadow-[0_0_8px_rgba(239,68,68,0.4)]"
+                                : "bg-text-muted",
+                      )}
+                    />
                   )}
                   <span className="text-[9px] font-black uppercase tracking-widest text-text-secondary group-hover/card:text-foreground">
                     {rawStatus}
@@ -112,10 +120,12 @@ export function VirtualizedTaskList({
                 </div>
                 <div className="flex items-center gap-2">
                   {task.phase === "development" && task.sequence_index != null && (
-                    <span className={cn(
-                      "text-[9px] font-black px-1.5 py-0.5 rounded-md",
-                      unlocked ? "text-brand bg-brand/10" : "text-warning bg-warning/10"
-                    )}>
+                    <span
+                      className={cn(
+                        "text-[9px] font-black px-1.5 py-0.5 rounded-md",
+                        unlocked ? "text-brand bg-brand/10" : "text-warning bg-warning/10",
+                      )}
+                    >
                       #{task.sequence_index + 1}
                     </span>
                   )}
@@ -137,11 +147,18 @@ export function VirtualizedTaskList({
               <div className="flex items-center gap-4 text-[10px] font-bold text-text-muted">
                 <div className="flex items-center gap-1.5">
                   <Activity size={12} />
-                  <span>{task.role.split('_').pop()?.toUpperCase()}</span>
+                  <span>{task.role.split("_").pop()?.toUpperCase()}</span>
                 </div>
                 <div className="flex items-center gap-1.5 ml-auto">
                   <Clock size={12} />
-                  <span>{task.created_at ? new Date(task.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                  <span>
+                    {task.created_at
+                      ? new Date(task.created_at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : ""}
+                  </span>
                 </div>
               </div>
             </div>

@@ -1,10 +1,8 @@
-import { create } from 'zustand';
-import { immer } from 'zustand/middleware/immer';
+import { create } from "zustand";
+import { immer } from "zustand/middleware/immer";
 
 type WorkbenchTransitionFlag =
-  | 'isTransitioningToArchitecture'
-  | 'isTransitioningToDevelopment'
-  | 'isTransitioningToTesting';
+  "isTransitioningToArchitecture" | "isTransitioningToDevelopment" | "isTransitioningToTesting";
 type WorkbenchStoreShape = WorkbenchState & WorkbenchActions;
 type WorkbenchSetter = (updater: (state: WorkbenchStoreShape) => void) => void;
 
@@ -19,7 +17,9 @@ async function startGraphForIssue(
   issueId: string,
   newPhase: string,
 ) {
-  set((state) => { state[flagKey] = true; });
+  set((state) => {
+    state[flagKey] = true;
+  });
   try {
     await autoStartIssueGraph(issueId);
     const issue = get().issues.find((i) => i.id === issueId);
@@ -30,10 +30,14 @@ async function startGraphForIssue(
       await get().loadIssueArtifacts(issueId);
     }
   } catch (err) {
-    set((state) => { state.error = err instanceof Error ? err.message : 'Conductor start failed'; });
+    set((state) => {
+      state.error = err instanceof Error ? err.message : "Conductor start failed";
+    });
     throw err;
   } finally {
-    set((state) => { state[flagKey] = false; });
+    set((state) => {
+      state[flagKey] = false;
+    });
   }
 }
 import type {
@@ -50,17 +54,23 @@ import type {
   RuntimeCatalog,
   RunMode,
   SendMessageResult,
-} from '@/lib/types';
-import type { BusEvent } from '@/contexts/ExecutionProcessesContext';
-import { autoStartIssueGraph } from '@/lib/api/conductors';
-import { getCodexIssues, getCodexIssueArtifacts } from '@/lib/api/issues';
-import { getPendingApprovals } from '@/lib/api/approvals';
-import { listProjects, getProject } from '@/lib/api/projects';
-import { getRuntimeCatalog } from '@/lib/api/runtime';
-import { chatCodexTask, getCodexTasks, getTaskHelpRequests, refineCodexTask, sendCodexTask } from '@/lib/api/tasks';
-import { getWorkspaces } from '@/lib/api/workspaces';
+} from "@/lib/types";
+import type { BusEvent } from "@/contexts/ExecutionProcessesContext";
+import { autoStartIssueGraph } from "@/lib/api/conductors";
+import { getCodexIssues, getCodexIssueArtifacts } from "@/lib/api/issues";
+import { getPendingApprovals } from "@/lib/api/approvals";
+import { listProjects, getProject } from "@/lib/api/projects";
+import { getRuntimeCatalog } from "@/lib/api/runtime";
+import {
+  chatCodexTask,
+  getCodexTasks,
+  getTaskHelpRequests,
+  refineCodexTask,
+  sendCodexTask,
+} from "@/lib/api/tasks";
+import { getWorkspaces } from "@/lib/api/workspaces";
 
-type NavigationState = 'home' | 'workspace' | 'issue';
+type NavigationState = "home" | "workspace" | "issue";
 
 interface WorkbenchState {
   // Navigation
@@ -88,7 +98,7 @@ interface WorkbenchState {
   optimisticProcess: ExecutionProcess | null;
   processLogs: LogEvent[];
   processMessages: CodexTaskMessage[];
-  lastResolvedMode: 'chat' | 'refine' | null;
+  lastResolvedMode: "chat" | "refine" | null;
 
   // Loading states
   isLoadingWorkspaces: boolean;
@@ -202,7 +212,7 @@ interface WorkbenchActions {
   loadIssueArtifacts: (issueId: string) => Promise<void>;
   loadPendingApprovals: () => Promise<void>;
   loadRuntimeCatalog: () => Promise<void>;
-  
+
   // High-level Actions
   transitionToArchitecture: (issueId: string) => Promise<void>;
   transitionToDevelopment: (issueId: string) => Promise<void>;
@@ -215,7 +225,7 @@ interface WorkbenchActions {
 }
 
 const initialState: WorkbenchState = {
-  view: 'home',
+  view: "home",
   currentWorkspaceId: null,
   currentIssueId: null,
   currentTaskId: null,
@@ -255,176 +265,312 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>()(
     ...initialState,
 
     // Navigation
-    setView: (view) => set((state) => { state.view = view; }),
-    setCurrentWorkspaceId: (id) => set((state) => { state.currentWorkspaceId = id; }),
-    setCurrentIssueId: (id) => set((state) => { state.currentIssueId = id; }),
-    setCurrentTaskId: (id) => set((state) => { state.currentTaskId = id; }),
+    setView: (view) =>
+      set((state) => {
+        state.view = view;
+      }),
+    setCurrentWorkspaceId: (id) =>
+      set((state) => {
+        state.currentWorkspaceId = id;
+      }),
+    setCurrentIssueId: (id) =>
+      set((state) => {
+        state.currentIssueId = id;
+      }),
+    setCurrentTaskId: (id) =>
+      set((state) => {
+        state.currentTaskId = id;
+      }),
 
     // Project
-    setCurrentProject: (project) => set((state) => { state.currentProject = project; }),
-    setProjects: (projects) => set((state) => { state.projects = projects; }),
+    setCurrentProject: (project) =>
+      set((state) => {
+        state.currentProject = project;
+      }),
+    setProjects: (projects) =>
+      set((state) => {
+        state.projects = projects;
+      }),
 
     // Workspace
-    setWorkspaces: (workspaces) => set((state) => { state.workspaces = workspaces; }),
-    updateWorkspaces: (updater) => set((state) => {
-      state.workspaces = updater(state.workspaces);
-    }),
-    addWorkspace: (workspace) => set((state) => { state.workspaces.push(workspace); }),
-    removeWorkspace: (id) => set((state) => {
-      state.workspaces = state.workspaces.filter((w) => w.id !== id);
-    }),
+    setWorkspaces: (workspaces) =>
+      set((state) => {
+        state.workspaces = workspaces;
+      }),
+    updateWorkspaces: (updater) =>
+      set((state) => {
+        state.workspaces = updater(state.workspaces);
+      }),
+    addWorkspace: (workspace) =>
+      set((state) => {
+        state.workspaces.push(workspace);
+      }),
+    removeWorkspace: (id) =>
+      set((state) => {
+        state.workspaces = state.workspaces.filter((w) => w.id !== id);
+      }),
 
     // Issues
-    setIssues: (issues) => set((state) => { state.issues = issues; }),
-    updateIssues: (updater) => set((state) => {
-      state.issues = updater(state.issues);
-    }),
-    addIssue: (issue) => set((state) => { state.issues.push(issue); }),
-    updateIssue: (id, updates) => set((state) => {
-      const index = state.issues.findIndex((i) => i.id === id);
-      if (index !== -1) {
-        state.issues[index] = { ...state.issues[index], ...updates };
-      }
-    }),
-    removeIssue: (id) => set((state) => {
-      state.issues = state.issues.filter((i) => i.id !== id);
-    }),
+    setIssues: (issues) =>
+      set((state) => {
+        state.issues = issues;
+      }),
+    updateIssues: (updater) =>
+      set((state) => {
+        state.issues = updater(state.issues);
+      }),
+    addIssue: (issue) =>
+      set((state) => {
+        state.issues.push(issue);
+      }),
+    updateIssue: (id, updates) =>
+      set((state) => {
+        const index = state.issues.findIndex((i) => i.id === id);
+        const issue = index !== -1 ? state.issues[index] : undefined;
+        if (issue) {
+          state.issues[index] = { ...issue, ...updates };
+        }
+      }),
+    removeIssue: (id) =>
+      set((state) => {
+        state.issues = state.issues.filter((i) => i.id !== id);
+      }),
 
     // Tasks
-    setTasks: (tasks) => set((state) => { state.tasks = tasks; }),
-    updateTasks: (updater) => set((state) => {
-      state.tasks = updater(state.tasks);
-    }),
-    addTask: (task) => set((state) => {
-      if (!state.tasks.some((t) => t.id === task.id)) {
-        state.tasks.push(task);
-      }
-    }),
-    updateTask: (id, updates) => set((state) => {
-      const index = state.tasks.findIndex((t) => t.id === id);
-      if (index !== -1) {
-        state.tasks[index] = { ...state.tasks[index], ...updates };
-      }
-    }),
-    removeTask: (id) => set((state) => {
-      state.tasks = state.tasks.filter((t) => t.id !== id);
-    }),
+    setTasks: (tasks) =>
+      set((state) => {
+        state.tasks = tasks;
+      }),
+    updateTasks: (updater) =>
+      set((state) => {
+        state.tasks = updater(state.tasks);
+      }),
+    addTask: (task) =>
+      set((state) => {
+        if (!state.tasks.some((t) => t.id === task.id)) {
+          state.tasks.push(task);
+        }
+      }),
+    updateTask: (id, updates) =>
+      set((state) => {
+        const index = state.tasks.findIndex((t) => t.id === id);
+        const task = index !== -1 ? state.tasks[index] : undefined;
+        if (task) {
+          state.tasks[index] = { ...task, ...updates };
+        }
+      }),
+    removeTask: (id) =>
+      set((state) => {
+        state.tasks = state.tasks.filter((t) => t.id !== id);
+      }),
 
     // Artifacts
-    setArtifacts: (artifacts) => set((state) => { state.artifacts = artifacts; }),
+    setArtifacts: (artifacts) =>
+      set((state) => {
+        state.artifacts = artifacts;
+      }),
 
     // Execution Processes
-    setExecutionProcesses: (processes) => set((state) => {
-      state.executionProcesses = processes;
-    }),
-    updateExecutionProcess: (id, updates) => set((state) => {
-      if (state.executionProcesses[id]) {
-        state.executionProcesses[id] = { ...state.executionProcesses[id], ...updates };
-      }
-    }),
-    addExecutionProcess: (process) => set((state) => {
-      state.executionProcesses[process.id] = process;
-    }),
-    setSelectedProcessId: (id) => set((state) => { state.selectedProcessId = id; }),
-    setOptimisticProcess: (process) => set((state) => { state.optimisticProcess = process; }),
-    clearOptimisticProcess: () => set((state) => { state.optimisticProcess = null; }),
+    setExecutionProcesses: (processes) =>
+      set((state) => {
+        state.executionProcesses = processes;
+      }),
+    updateExecutionProcess: (id, updates) =>
+      set((state) => {
+        if (state.executionProcesses[id]) {
+          state.executionProcesses[id] = { ...state.executionProcesses[id], ...updates };
+        }
+      }),
+    addExecutionProcess: (process) =>
+      set((state) => {
+        state.executionProcesses[process.id] = process;
+      }),
+    setSelectedProcessId: (id) =>
+      set((state) => {
+        state.selectedProcessId = id;
+      }),
+    setOptimisticProcess: (process) =>
+      set((state) => {
+        state.optimisticProcess = process;
+      }),
+    clearOptimisticProcess: () =>
+      set((state) => {
+        state.optimisticProcess = null;
+      }),
 
     // Logs & Messages
-    setProcessLogs: (logs) => set((state) => { state.processLogs = logs; }),
-    setProcessMessages: (messages) => set((state) => { state.processMessages = messages; }),
-    appendProcessMessage: (message) => set((state) => {
-      const index = state.processMessages.findIndex((m) => m.id === message.id);
-      if (index !== -1) {
-        state.processMessages[index] = message;
-      } else {
-        state.processMessages.push(message);
-      }
-    }),
-    appendProcessLog: (log) => set((state) => {
-      const key = log.id || `${log.created_at}-${log.stream}-${log.content}`;
-      if (!state.processLogs.some((l) => (l.id || `${l.created_at}-${l.stream}-${l.content}`) === key)) {
-        state.processLogs.push(log);
-      }
-    }),
+    setProcessLogs: (logs) =>
+      set((state) => {
+        state.processLogs = logs;
+      }),
+    setProcessMessages: (messages) =>
+      set((state) => {
+        state.processMessages = messages;
+      }),
+    appendProcessMessage: (message) =>
+      set((state) => {
+        const index = state.processMessages.findIndex((m) => m.id === message.id);
+        if (index !== -1) {
+          state.processMessages[index] = message;
+        } else {
+          state.processMessages.push(message);
+        }
+      }),
+    appendProcessLog: (log) =>
+      set((state) => {
+        const key = log.id || `${log.created_at}-${log.stream}-${log.content}`;
+        if (
+          !state.processLogs.some(
+            (l) => (l.id || `${l.created_at}-${l.stream}-${l.content}`) === key,
+          )
+        ) {
+          state.processLogs.push(log);
+        }
+      }),
 
     // Help Requests
-    setHelpRequests: (requests) => set((state) => { state.helpRequests = requests; }),
+    setHelpRequests: (requests) =>
+      set((state) => {
+        state.helpRequests = requests;
+      }),
 
     // Approvals
-    setPendingApprovals: (approvals) => set((state) => { state.pendingApprovals = approvals; }),
-    updatePendingApprovals: (updater) => set((state) => {
-      state.pendingApprovals = updater(state.pendingApprovals);
-    }),
-    removeApproval: (id) => set((state) => {
-      state.pendingApprovals = state.pendingApprovals.filter((a) => a.id !== id);
-    }),
+    setPendingApprovals: (approvals) =>
+      set((state) => {
+        state.pendingApprovals = approvals;
+      }),
+    updatePendingApprovals: (updater) =>
+      set((state) => {
+        state.pendingApprovals = updater(state.pendingApprovals);
+      }),
+    removeApproval: (id) =>
+      set((state) => {
+        state.pendingApprovals = state.pendingApprovals.filter((a) => a.id !== id);
+      }),
 
     // Runtime Catalog
-    setRuntimeCatalog: (catalog) => set((state) => { state.runtimeCatalog = catalog; }),
+    setRuntimeCatalog: (catalog) =>
+      set((state) => {
+        state.runtimeCatalog = catalog;
+      }),
 
     // Loading states
-    setIsLoadingWorkspaces: (loading) => set((state) => { state.isLoadingWorkspaces = loading; }),
-    setIsLoadingIssues: (loading) => set((state) => { state.isLoadingIssues = loading; }),
-    setIsLoadingLogs: (loading) => set((state) => { state.isLoadingLogs = loading; }),
-    setIsLoadingMessages: (loading) => set((state) => { state.isLoadingMessages = loading; }),
-    setIsLoadingProcess: (loading) => set((state) => { state.isLoadingProcess = loading; }),
+    setIsLoadingWorkspaces: (loading) =>
+      set((state) => {
+        state.isLoadingWorkspaces = loading;
+      }),
+    setIsLoadingIssues: (loading) =>
+      set((state) => {
+        state.isLoadingIssues = loading;
+      }),
+    setIsLoadingLogs: (loading) =>
+      set((state) => {
+        state.isLoadingLogs = loading;
+      }),
+    setIsLoadingMessages: (loading) =>
+      set((state) => {
+        state.isLoadingMessages = loading;
+      }),
+    setIsLoadingProcess: (loading) =>
+      set((state) => {
+        state.isLoadingProcess = loading;
+      }),
 
     // Connection
-    setIsConnected: (connected) => set((state) => { state.isConnected = connected; }),
-    setWasConnected: (wasConnected) => set((state) => { state.wasConnected = wasConnected; }),
-    setConnectionWarning: (warning) => set((state) => { state.connectionWarning = warning; }),
+    setIsConnected: (connected) =>
+      set((state) => {
+        state.isConnected = connected;
+      }),
+    setWasConnected: (wasConnected) =>
+      set((state) => {
+        state.wasConnected = wasConnected;
+      }),
+    setConnectionWarning: (warning) =>
+      set((state) => {
+        state.connectionWarning = warning;
+      }),
 
     // Error
-    setError: (error) => set((state) => { state.error = error; }),
+    setError: (error) =>
+      set((state) => {
+        state.error = error;
+      }),
 
     // Transitions
-    setIsTransitioningToArchitecture: (transitioning) => set((state) => {
-      state.isTransitioningToArchitecture = transitioning;
-    }),
-    setIsTransitioningToDevelopment: (transitioning) => set((state) => {
-      state.isTransitioningToDevelopment = transitioning;
-    }),
-    setIsTransitioningToTesting: (transitioning) => set((state) => {
-      state.isTransitioningToTesting = transitioning;
-    }),
-    setIsRunning: (running) => set((state) => { state.isRunning = running; }),
+    setIsTransitioningToArchitecture: (transitioning) =>
+      set((state) => {
+        state.isTransitioningToArchitecture = transitioning;
+      }),
+    setIsTransitioningToDevelopment: (transitioning) =>
+      set((state) => {
+        state.isTransitioningToDevelopment = transitioning;
+      }),
+    setIsTransitioningToTesting: (transitioning) =>
+      set((state) => {
+        state.isTransitioningToTesting = transitioning;
+      }),
+    setIsRunning: (running) =>
+      set((state) => {
+        state.isRunning = running;
+      }),
 
     // Last event
-    setLastEvent: (event) => set((state) => { state.lastEvent = event; }),
+    setLastEvent: (event) =>
+      set((state) => {
+        state.lastEvent = event;
+      }),
 
     // Async Actions
     loadProjects: async () => {
       try {
         const projects = await listProjects();
-        set((state) => { state.projects = projects; });
+        set((state) => {
+          state.projects = projects;
+        });
       } catch (err) {
-        set((state) => { state.error = err instanceof Error ? err.message : 'Failed to load projects'; });
+        set((state) => {
+          state.error = err instanceof Error ? err.message : "Failed to load projects";
+        });
       }
     },
 
     loadProject: async (id) => {
       try {
         const project = await getProject(id);
-        set((state) => { state.currentProject = project; });
+        set((state) => {
+          state.currentProject = project;
+        });
       } catch (err) {
-        set((state) => { state.error = err instanceof Error ? err.message : 'Failed to load project'; });
+        set((state) => {
+          state.error = err instanceof Error ? err.message : "Failed to load project";
+        });
       }
     },
 
     loadWorkspaces: async (projectId) => {
-      set((state) => { state.isLoadingWorkspaces = true; });
+      set((state) => {
+        state.isLoadingWorkspaces = true;
+      });
       try {
         const workspaces = await getWorkspaces(projectId);
-        set((state) => { state.workspaces = workspaces; });
+        set((state) => {
+          state.workspaces = workspaces;
+        });
       } catch (err) {
-        set((state) => { state.error = err instanceof Error ? err.message : 'Failed to load workspaces'; });
+        set((state) => {
+          state.error = err instanceof Error ? err.message : "Failed to load workspaces";
+        });
       } finally {
-        set((state) => { state.isLoadingWorkspaces = false; });
+        set((state) => {
+          state.isLoadingWorkspaces = false;
+        });
       }
     },
 
     loadWorkspaceData: async (workspaceId) => {
-      set((state) => { state.isLoadingIssues = true; });
+      set((state) => {
+        state.isLoadingIssues = true;
+      });
       try {
         const [iss, tks] = await Promise.all([
           getCodexIssues(workspaceId),
@@ -436,46 +582,64 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>()(
         });
 
         const helpResults = await Promise.allSettled(
-          tks.map((task) => getTaskHelpRequests(task.id))
+          tks.map((task) => getTaskHelpRequests(task.id)),
         );
         const hrs: HelpRequest[] = [];
         for (const result of helpResults) {
-          if (result.status === 'fulfilled') {
+          if (result.status === "fulfilled") {
             hrs.push(...result.value);
           }
         }
-        set((state) => { state.helpRequests = hrs; });
+        set((state) => {
+          state.helpRequests = hrs;
+        });
       } catch (err) {
-        set((state) => { state.error = err instanceof Error ? err.message : 'Failed to load workspace data'; });
+        set((state) => {
+          state.error = err instanceof Error ? err.message : "Failed to load workspace data";
+        });
       } finally {
-        set((state) => { state.isLoadingIssues = false; });
+        set((state) => {
+          state.isLoadingIssues = false;
+        });
       }
     },
 
     loadIssueArtifacts: async (issueId) => {
       try {
         const artifacts = await getCodexIssueArtifacts(issueId);
-        set((state) => { state.artifacts = artifacts; });
+        set((state) => {
+          state.artifacts = artifacts;
+        });
       } catch {
-        set((state) => { state.artifacts = []; });
+        set((state) => {
+          state.artifacts = [];
+        });
       }
     },
 
     loadPendingApprovals: async () => {
       try {
         const res = await getPendingApprovals();
-        set((state) => { state.pendingApprovals = res.pending; });
+        set((state) => {
+          state.pendingApprovals = res.pending;
+        });
       } catch {
-        set((state) => { state.pendingApprovals = []; });
+        set((state) => {
+          state.pendingApprovals = [];
+        });
       }
     },
 
     loadRuntimeCatalog: async () => {
       try {
         const catalog = await getRuntimeCatalog();
-        set((state) => { state.runtimeCatalog = catalog; });
+        set((state) => {
+          state.runtimeCatalog = catalog;
+        });
       } catch {
-        set((state) => { state.runtimeCatalog = null; });
+        set((state) => {
+          state.runtimeCatalog = null;
+        });
       }
     },
 
@@ -483,61 +647,72 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>()(
     // Conductor decides which agent to dispatch next. The `phase` arg only
     // updates the issue's display label so existing UI labels keep working.
     transitionToArchitecture: async (issueId) => {
-      await startGraphForIssue(get, set, 'isTransitioningToArchitecture', issueId, 'architecture');
+      await startGraphForIssue(get, set, "isTransitioningToArchitecture", issueId, "architecture");
     },
     transitionToDevelopment: async (issueId) => {
-      await startGraphForIssue(get, set, 'isTransitioningToDevelopment', issueId, 'development');
+      await startGraphForIssue(get, set, "isTransitioningToDevelopment", issueId, "development");
     },
     transitionToTesting: async (issueId) => {
-      await startGraphForIssue(get, set, 'isTransitioningToTesting', issueId, 'testing');
+      await startGraphForIssue(get, set, "isTransitioningToTesting", issueId, "testing");
     },
 
     sendMessage: async (taskId, content, mode) => {
       try {
         let result: SendMessageResult;
-        if (mode === 'refine') {
+        if (mode === "refine") {
           result = await refineCodexTask(taskId, content);
-          set((state) => { state.lastResolvedMode = null; });
-        } else if (mode === 'chat') {
+          set((state) => {
+            state.lastResolvedMode = null;
+          });
+        } else if (mode === "chat") {
           result = await chatCodexTask(taskId, content);
-          set((state) => { state.lastResolvedMode = null; });
+          set((state) => {
+            state.lastResolvedMode = null;
+          });
         } else {
           result = await sendCodexTask(taskId, content);
-          if (result?.resolved_mode) set((state) => { state.lastResolvedMode = result.resolved_mode ?? null; });
+          if (result?.resolved_mode)
+            set((state) => {
+              state.lastResolvedMode = result.resolved_mode ?? null;
+            });
         }
 
         if (result?.message) get().appendProcessMessage(result.message as CodexTaskMessage);
-        if (result?.assistant_message) get().appendProcessMessage(result.assistant_message as CodexTaskMessage);
-        
+        if (result?.assistant_message)
+          get().appendProcessMessage(result.assistant_message as CodexTaskMessage);
+
         if (result?.execution_process) {
           get().setOptimisticProcess(result.execution_process as ExecutionProcess);
           get().setSelectedProcessId(result.execution_process.id);
         }
       } catch (err) {
-        set((state) => { state.error = err instanceof Error ? err.message : 'Failed to send message'; });
+        set((state) => {
+          state.error = err instanceof Error ? err.message : "Failed to send message";
+        });
         throw err;
       }
     },
 
     // Reset
-    resetWorkspaceState: () => set((state) => {
-      state.view = 'home';
-      state.currentWorkspaceId = null;
-      state.currentIssueId = null;
-      state.currentTaskId = null;
-      state.workspaces = [];
-      state.issues = [];
-      state.tasks = [];
-      state.artifacts = [];
-      state.helpRequests = [];
-      state.selectedProcessId = null;
-      state.optimisticProcess = null;
-      state.processLogs = [];
-      state.processMessages = [];
-    }),
+    resetWorkspaceState: () =>
+      set((state) => {
+        state.view = "home";
+        state.currentWorkspaceId = null;
+        state.currentIssueId = null;
+        state.currentTaskId = null;
+        state.workspaces = [];
+        state.issues = [];
+        state.tasks = [];
+        state.artifacts = [];
+        state.helpRequests = [];
+        state.selectedProcessId = null;
+        state.optimisticProcess = null;
+        state.processLogs = [];
+        state.processMessages = [];
+      }),
 
     reset: () => set(() => ({ ...initialState })),
-  }))
+  })),
 );
 
 // Selectors

@@ -23,26 +23,35 @@ export function DecisionTimeline({ items, onOpenItem, liveThinking }: Props) {
   const executionSummary = deriveTimelineExecutionSummary(items);
 
   return (
-    <section className="rounded-lg border border-border-subtle bg-surface/90 p-3" data-decision-timeline>
+    <section
+      className="rounded-lg border border-border-subtle bg-surface/90 p-3"
+      data-decision-timeline
+    >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-text-muted">
             <History size={15} />
             {t("issue.command.timelineTitle")}
           </div>
-          <p className="mt-1 text-sm leading-relaxed text-text-secondary">{t("issue.command.timelineDescription")}</p>
+          <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+            {t("issue.command.timelineDescription")}
+          </p>
         </div>
         <div className="shrink-0 rounded-md border border-border-subtle bg-surface-input px-2 py-1 font-mono text-xs text-text-muted">
           {t("issue.command.eventCount", { count: items.length })}
         </div>
       </div>
 
-      {(executionSummary.developmentDispatched > 0 || executionSummary.qaDone > 0 || executionSummary.finalized) && (
+      {(executionSummary.developmentDispatched > 0 ||
+        executionSummary.qaDone > 0 ||
+        executionSummary.finalized) && (
         <div className="mb-3 flex flex-wrap gap-2" data-timeline-execution-summary>
           {executionSummary.developmentDispatched > 0 && (
             <span className="inline-flex items-center gap-1.5 rounded-md border border-status-done/25 bg-status-done/10 px-2.5 py-1 text-xs font-semibold text-status-done">
               <CheckCircle2 size={13} />
-              {t("issue.command.executionSummary.devDispatchCount", { count: executionSummary.developmentDispatched })}
+              {t("issue.command.executionSummary.devDispatchCount", {
+                count: executionSummary.developmentDispatched,
+              })}
             </span>
           )}
           {executionSummary.qaDone > 0 && (
@@ -89,7 +98,9 @@ export function DecisionTimeline({ items, onOpenItem, liveThinking }: Props) {
                 <AgentThinkingIndicator phase="thinking" size={12} />
                 {t("issue.command.liveThinking")}
               </div>
-              <p className="whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">{liveThinking}</p>
+              <p className="whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">
+                {liveThinking}
+              </p>
             </div>
           )}
         </div>

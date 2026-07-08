@@ -15,6 +15,14 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+class _EventBus:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    async def append(self, event: dict[str, object]) -> None:
+        self.events.append(event)
+
+
 def _project(tmp_path: Path) -> Project:
     repo = tmp_path / "repo"
     notes_dir = repo / ".agent-collab"
@@ -86,6 +94,7 @@ def test_project_conductor_compacts_hot_to_warm_and_warm_to_cold(tmp_path: Path)
             issue_id="issue-1",
         )
         state = await store.load_project_conductor_state(project.id)
+        assert state is not None
         warm = json.loads(state.warm_summaries_json)
         cold = await store.list_project_memory_embeddings(project.id)
         await store.close()
@@ -134,12 +143,15 @@ def test_project_conductor_answer_uses_pinned_warm_and_cold_memory(tmp_path: Pat
 
         result = await conductor.handle_task(task)
         state = await store.load_project_conductor_state(project.id)
+        assert state is not None
         await store.close()
 
         assert result["status"] == "done"
-        assert "Pinned: keep API contracts stable." in result["answer"]
-        assert "missing migrations" in result["answer"]
-        assert "token refresh" in result["answer"]
+        answer = result["answer"]
+        assert isinstance(answer, str)
+        assert "Pinned: keep API contracts stable." in answer
+        assert "missing migrations" in answer
+        assert "token refresh" in answer
         assert state.total_tasks_handled == 1
 
     _run(run())
@@ -177,7 +189,7 @@ def test_project_conductor_scheduled_review_runs_pr_followup_sweep(monkeypatch, 
         )
         monkeypatch.setattr(project_conductor_module, "_run_subprocess", object(), raising=False)
 
-        conductor = ProjectConductor(project_id=project.id, store=store, event_bus="events")
+        conductor = ProjectConductor(project_id=project.id, store=store, event_bus=_EventBus())
         task = ConductorTask(
             id=str(uuid4()),
             project_id=project.id,
@@ -188,6 +200,7 @@ def test_project_conductor_scheduled_review_runs_pr_followup_sweep(monkeypatch, 
         result = await conductor.handle_task(task)
         loaded_task = await store.load_conductor_task(task.id)
         state = await store.load_project_conductor_state(project.id)
+        assert state is not None
         hot = json.loads(state.hot_thread_json)
         await store.close()
         return result, loaded_task, hot, calls
@@ -306,6 +319,7 @@ def test_project_conductor_start_loop_api_uses_deterministic_checkpoint_without_
             ProjectConductorStartLoopRequest(prompt="Inspect current project risk."),
         )
         state = await store.load_project_conductor_state(project.id)
+        assert state is not None
         hot = json.loads(state.hot_thread_json)
         await store.close()
         return payload, hot

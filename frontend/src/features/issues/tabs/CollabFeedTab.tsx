@@ -6,6 +6,7 @@ import { ArrowRight, MessageSquareQuote, RefreshCw } from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { getAgentMessages, type AgentMessage } from "@/lib/api/conductors";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
+import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -28,46 +29,45 @@ const ROLE_LABEL: Record<string, string> = {
   "specialist:log_summarizer": "📊 Log Summarizer",
 };
 
-
 const TYPE_CONFIG: Record<
   AgentMessage["message_type"],
-  { label: string; colorClass: string; borderClass: string; bgClass: string }
+  { labelKey: string; colorClass: string; borderClass: string; bgClass: string }
 > = {
   critique: {
-    label: "Critique",
+    labelKey: "collab.type.critique",
     colorClass: "text-status-failed",
     borderClass: "border-l-status-failed",
     bgClass: "bg-surface-raised",
   },
   handoff: {
-    label: "Handoff",
+    labelKey: "collab.type.handoff",
     colorClass: "text-status-done",
     borderClass: "border-l-status-done",
     bgClass: "bg-surface-raised",
   },
   clarification: {
-    label: "Question",
+    labelKey: "collab.type.clarification",
     colorClass: "text-brand",
     borderClass: "border-l-brand",
     bgClass: "bg-surface-raised",
   },
   answer: {
-    label: "Answer",
+    labelKey: "collab.type.answer",
     colorClass: "text-text-secondary",
     borderClass: "border-l-border-muted",
     bgClass: "bg-surface-raised",
   },
   specialist_call: {
-    label: "Specialist Call",
-    colorClass: "text-blue-500",
-    borderClass: "border-l-blue-500",
-    bgClass: "bg-blue-50",
+    labelKey: "collab.type.specialistCall",
+    colorClass: "text-brand",
+    borderClass: "border-l-brand",
+    bgClass: "bg-brand-muted/10",
   },
   specialist_result: {
-    label: "Specialist Result",
-    colorClass: "text-blue-700",
-    borderClass: "border-l-blue-700",
-    bgClass: "bg-blue-100",
+    labelKey: "collab.type.specialistResult",
+    colorClass: "text-brand",
+    borderClass: "border-l-brand",
+    bgClass: "bg-surface-raised",
   },
 };
 
@@ -77,6 +77,7 @@ interface Props {
 }
 
 export function CollabFeedTab({ issueId, active }: Props) {
+  const { t } = useI18n();
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -108,7 +109,9 @@ export function CollabFeedTab({ issueId, active }: Props) {
       busEventMatchers.issueId(issueId),
       busEventMatchers.typeIn("agent_message_posted"),
     ),
-    onEvent: () => { void load(); },
+    onEvent: () => {
+      void load();
+    },
     throttleMs: 200,
   });
 
@@ -120,7 +123,7 @@ export function CollabFeedTab({ issueId, active }: Props) {
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle shrink-0">
         <div className="flex items-center gap-2 text-[12px] text-text-muted">
           <MessageSquareQuote size={13} />
-          <span>Agent inter-communications</span>
+          <span>{t("collab.title")}</span>
           {messages.length > 0 && (
             <span className="font-mono text-[11px] bg-surface-input border border-border-subtle rounded px-1.5 py-0.5">
               {messages.length}
@@ -131,9 +134,13 @@ export function CollabFeedTab({ issueId, active }: Props) {
           type="button"
           onClick={() => void load()}
           disabled={loading}
+          aria-label={t("collab.refresh")}
           data-density={loading ? "mesh-feed-refresh-tool" : "mesh-feed-refresh"}
-          className={cn("text-text-muted hover:text-foreground transition-colors", loading && "motion-essential")}
-          title="Refresh"
+          className={cn(
+            "text-text-muted hover:text-foreground transition-colors",
+            loading && "motion-essential",
+          )}
+          title={t("collab.refresh")}
         >
           {loading ? <AgentThinkingIndicator phase="tool" size={12} /> : <RefreshCw size={12} />}
         </button>
@@ -144,9 +151,9 @@ export function CollabFeedTab({ issueId, active }: Props) {
         {messages.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center h-40 text-center text-text-muted text-[12px] gap-2">
             <MessageSquareQuote size={28} strokeWidth={1.2} className="opacity-30" />
-            <span>No inter-agent messages yet.</span>
+            <span>{t("collab.emptyTitle")}</span>
             <span className="text-[11px] opacity-60">
-              Critiques, handoffs, and clarifications between agents will appear here.
+              {t("collab.emptyDescription")}
             </span>
           </div>
         )}
@@ -158,13 +165,18 @@ export function CollabFeedTab({ issueId, active }: Props) {
           const isActiveSpecialistDispatch =
             msg.message_type === "specialist_call" && index === messages.length - 1;
           const ts = msg.created_at
-            ? new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            ? new Date(msg.created_at).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
             : null;
 
           return (
             <div
               key={msg.id}
-              data-density={isActiveSpecialistDispatch ? "mesh-specialist-dispatch" : "mesh-agent-message"}
+              data-density={
+                isActiveSpecialistDispatch ? "mesh-specialist-dispatch" : "mesh-agent-message"
+              }
               className={cn(
                 "relative overflow-hidden rounded-lg border border-border-subtle border-l-2 px-3 py-2.5",
                 cfg.borderClass,
@@ -187,15 +199,16 @@ export function CollabFeedTab({ issueId, active }: Props) {
                   className={cn(
                     "ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] font-semibold uppercase tracking-wide border border-current/20",
                     cfg.colorClass,
-                    isActiveSpecialistDispatch && "motion-essential border-brand/25 bg-brand-muted/15 text-brand",
+                    isActiveSpecialistDispatch &&
+                      "motion-essential border-brand/25 bg-brand-muted/15 text-brand",
                   )}
                 >
-                  {isActiveSpecialistDispatch && <AgentThinkingIndicator phase="dispatching" size={10} />}
-                  {cfg.label}
+                  {isActiveSpecialistDispatch && (
+                    <AgentThinkingIndicator phase="dispatching" size={10} />
+                  )}
+                  {t(cfg.labelKey)}
                 </span>
-                {ts && (
-                  <span className="ml-auto text-text-faint font-mono text-[10px]">{ts}</span>
-                )}
+                {ts && <span className="ml-auto text-text-faint font-mono text-[10px]">{ts}</span>}
               </div>
 
               {/* Body */}

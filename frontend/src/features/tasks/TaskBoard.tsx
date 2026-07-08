@@ -20,14 +20,29 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { CodexTask, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
-import { Plus, Layout, Activity, Clock, Terminal, Trash2, GripVertical, Link, Check, Table2, Kanban } from "lucide-react";
+import {
+  Plus,
+  Layout,
+  Activity,
+  Clock,
+  Trash2,
+  GripVertical,
+  Link,
+  Check,
+  Table2,
+  Kanban,
+} from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { type Phase, PHASE_CONFIG } from "@/features/issues/phaseUtils";
+import type { Phase } from "@/features/issues/phaseUtils";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
 import { pickLatestExecutionProcessForTask } from "@/lib/task-selection";
-import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
+import {
+  ExecutionConfigSelector,
+  getFallbackConfig,
+  type ExecutionConfigValue,
+} from "@/components/runtime/ExecutionConfigSelector";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -56,26 +71,15 @@ function formatRelativeTime(dateStr: string | null): string {
   return date.toLocaleDateString();
 }
 
-function formatDuration(startStr: string | null, endStr: string | null): string {
-  if (!startStr) return "-";
-  const start = new Date(startStr).getTime();
-  const end = endStr ? new Date(endStr).getTime() : Date.now();
-  const diffMs = end - start;
-  if (diffMs < 0) return "-";
-  const diffSec = Math.floor(diffMs / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHour = Math.floor(diffMin / 60);
-  if (diffHour > 0) return `${diffHour}h ${diffMin % 60}m`;
-  if (diffMin > 0) return `${diffMin}m ${diffSec % 60}s`;
-  return `${diffSec}s`;
-}
-
 function isDevelopmentTaskUnlocked(task: CodexTask, allTasks: CodexTask[]): boolean {
   if (task.phase !== "development" || task.sequence_index == null) return true;
   if (task.sequence_index === 0) return true;
   const prevIndex = task.sequence_index - 1;
   const prevTask = allTasks.find(
-    (t) => t.phase === "development" && t.sequence_index === prevIndex && t.sequence_group === task.sequence_group
+    (t) =>
+      t.phase === "development" &&
+      t.sequence_index === prevIndex &&
+      t.sequence_group === task.sequence_group,
   );
   return prevTask?.status === "done";
 }
@@ -91,10 +95,15 @@ interface TaskBoardProps {
   tasks: CodexTask[];
   executionProcesses: ExecutionProcess[];
   onSelectTask: (id: string) => void;
-  onRunPhase: (phase: Phase, executor: "codex" | "claude", provider: string | null, model: string | null) => void;
-  onReorderTasks?: (tasks: CodexTask[]) => void;
-  issueTitle?: string | null;
-  onDeleteIssue?: () => Promise<void> | void;
+  onRunPhase: (
+    phase: Phase,
+    executor: "codex" | "claude",
+    provider: string | null,
+    model: string | null,
+  ) => void;
+  onReorderTasks?: ((tasks: CodexTask[]) => void) | undefined;
+  issueTitle?: string | null | undefined;
+  onDeleteIssue?: (() => Promise<void> | void) | undefined;
 }
 
 interface TaskCardProps {
@@ -131,7 +140,7 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
         "group/card relative overflow-hidden p-5 rounded-2xl bg-surface/40 border border-border-subtle hover:bg-surface-hover hover:border-brand/30 transition-all cursor-pointer",
         isRunningTask && "motion-essential border-brand/35 bg-brand/5",
         !unlocked && "opacity-60",
-        isDragging && "shadow-2xl border-brand/50 bg-surface-raised rotate-2 z-50"
+        isDragging && "shadow-2xl border-brand/50 bg-surface-raised rotate-2 z-50",
       )}
     >
       {isRunningTask ? (
@@ -145,14 +154,20 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
           {isRunningTask ? (
             <AgentThinkingIndicator phase="dispatching" size={12} />
           ) : (
-            <div className={cn(
-              "size-1.5 rounded-full",
-              status === "failed" ? "bg-error" :
-              status === "completed" || status === "done" ? "bg-success" :
-              status === "awaiting_review" ? "bg-warning animate-pulse" :
-              status === "rework" ? "bg-error shadow-[0_0_8px_rgba(239,68,68,0.4)]" :
-              "bg-text-muted"
-            )} />
+            <div
+              className={cn(
+                "size-1.5 rounded-full",
+                status === "failed"
+                  ? "bg-error"
+                  : status === "completed" || status === "done"
+                    ? "bg-success"
+                    : status === "awaiting_review"
+                      ? "bg-warning animate-pulse"
+                      : status === "rework"
+                        ? "bg-error shadow-[0_0_8px_rgba(239,68,68,0.4)]"
+                        : "bg-text-muted",
+              )}
+            />
           )}
           <span className="text-[9px] font-black uppercase tracking-widest text-text-secondary group-hover/card:text-foreground transition-colors">
             {rawStatus}
@@ -170,10 +185,12 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
             <GripVertical size={12} className="text-text-muted cursor-grab" />
           </div>
           {task.phase === "development" && task.sequence_index != null && (
-            <span className={cn(
-              "text-[9px] font-black px-1.5 py-0.5 rounded-md transition-colors",
-              unlocked ? "text-brand bg-brand/10" : "text-warning bg-warning/10"
-            )}>
+            <span
+              className={cn(
+                "text-[9px] font-black px-1.5 py-0.5 rounded-md transition-colors",
+                unlocked ? "text-brand bg-brand/10" : "text-warning bg-warning/10",
+              )}
+            >
               #{task.sequence_index + 1}
             </span>
           )}
@@ -192,7 +209,7 @@ function TaskCard({ task, process, unlocked, onClick, isDragging }: TaskCardProp
       <div className="flex items-center gap-4 text-[10px] font-bold text-text-muted">
         <div className="flex items-center gap-1.5 transition-colors group-hover/card:text-text-secondary">
           <Activity size={12} />
-          <span>{task.role.split('_').pop()?.toUpperCase()}</span>
+          <span>{task.role.split("_").pop()?.toUpperCase()}</span>
         </div>
         <div className="flex items-center gap-1.5 ml-auto transition-colors group-hover/card:text-text-secondary">
           <Clock size={12} />
@@ -211,14 +228,9 @@ interface SortableTaskCardProps {
 }
 
 function SortableTaskCard({ task, process, unlocked, onClick }: SortableTaskCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: task.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+  });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -251,13 +263,12 @@ export function TaskBoard({
   const { t } = useI18n();
   const { addToast } = useToast();
   const [catalog, setCatalog] = useState<RuntimeCatalog | null>(null);
-  const defaultExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
-    catalog,
-    "codex",
-    null,
-    null,
-  ), [catalog]);
-  const [executionConfig, setExecutionConfig] = useState<ExecutionConfigValue>(defaultExecutionConfig);
+  const defaultExecutionConfig = useMemo<ExecutionConfigValue>(
+    () => getFallbackConfig(catalog, "codex", null, null),
+    [catalog],
+  );
+  const [executionConfig, setExecutionConfig] =
+    useState<ExecutionConfigValue>(defaultExecutionConfig);
   const [deleteIssueOpen, setDeleteIssueOpen] = useState(false);
   const [isDeletingIssue, setIsDeletingIssue] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -271,11 +282,13 @@ export function TaskBoard({
     }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
-    })
+    }),
   );
 
   useEffect(() => {
-    getRuntimeCatalog().then(setCatalog).catch(() => setCatalog(null));
+    getRuntimeCatalog()
+      .then(setCatalog)
+      .catch(() => setCatalog(null));
   }, []);
 
   useEffect(() => {
@@ -284,16 +297,23 @@ export function TaskBoard({
 
   const boardPhases = BOARD_PHASES;
 
-  const tasksByPhase = useMemo(() => boardPhases.reduce((acc, phase) => {
-    let phaseTasks = tasks.filter((t) => t.phase === phase.id);
-    if (phase.id === "development") {
-      phaseTasks = phaseTasks
-        .slice()
-        .sort((a, b) => (a.sequence_index ?? 0) - (b.sequence_index ?? 0));
-    }
-    acc[phase.id] = phaseTasks;
-    return acc;
-  }, {} as Record<Phase, CodexTask[]>), [boardPhases, tasks]);
+  const tasksByPhase = useMemo(
+    () =>
+      boardPhases.reduce(
+        (acc, phase) => {
+          let phaseTasks = tasks.filter((t) => t.phase === phase.id);
+          if (phase.id === "development") {
+            phaseTasks = phaseTasks
+              .slice()
+              .sort((a, b) => (a.sequence_index ?? 0) - (b.sequence_index ?? 0));
+          }
+          acc[phase.id] = phaseTasks;
+          return acc;
+        },
+        {} as Record<Phase, CodexTask[]>,
+      ),
+    [boardPhases, tasks],
+  );
 
   const handleDeleteIssue = useCallback(async () => {
     if (!onDeleteIssue) return;
@@ -335,6 +355,7 @@ export function TaskBoard({
         if (oldIndex !== -1 && newIndex !== -1) {
           const reordered = [...phaseTasks];
           const [removed] = reordered.splice(oldIndex, 1);
+          if (!removed) return;
           reordered.splice(newIndex, 0, removed);
 
           const updatedTasks = tasks.map((task) => {
@@ -367,8 +388,12 @@ export function TaskBoard({
               <Layout size={18} className="text-brand" />
             </div>
             <div>
-              <h2 className="text-lg font-black tracking-tighter text-foreground">{t("task.boardTitle")}</h2>
-              <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-text-muted">{t("task.workflowExecution")}</p>
+              <h2 className="text-lg font-black tracking-tighter text-foreground">
+                {t("task.boardTitle")}
+              </h2>
+              <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-text-muted">
+                {t("task.workflowExecution")}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -439,7 +464,14 @@ export function TaskBoard({
                       </span>
                     </div>
                     <button
-                      onClick={() => onRunPhase(phase.id, executionConfig.executor as "codex" | "claude", executionConfig.provider, executionConfig.model)}
+                      onClick={() =>
+                        onRunPhase(
+                          phase.id,
+                          executionConfig.executor as "codex" | "claude",
+                          executionConfig.provider,
+                          executionConfig.model,
+                        )
+                      }
                       className="p-1.5 rounded-lg hover:bg-surface-hover text-text-muted hover:text-brand transition-all opacity-0 group-hover/column:opacity-100"
                       title={t("issue.runPhase")}
                       aria-label={t("issue.runPhase")}
@@ -453,10 +485,13 @@ export function TaskBoard({
                     strategy={verticalListSortingStrategy}
                     id={phase.id}
                   >
-                    <div className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20" data-tour="artifacts">
+                    <div
+                      className="flex flex-col gap-4 flex-1 overflow-y-auto no-scrollbar pb-20"
+                      data-tour="artifacts"
+                    >
                       <AnimatePresence mode="popLayout">
                         {phaseTasks.length === 0 ? (
-                          <motion.div 
+                          <motion.div
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.95 }}
@@ -465,11 +500,16 @@ export function TaskBoard({
                             <div className="size-10 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center mb-3 opacity-40">
                               <Plus size={16} className="text-text-muted" />
                             </div>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-text-muted/50">{t("task.ready")}</p>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-text-muted/50">
+                              {t("task.ready")}
+                            </p>
                           </motion.div>
                         ) : (
                           phaseTasks.map((task, index) => {
-                            const process = pickLatestExecutionProcessForTask(executionProcesses, task.id);
+                            const process = pickLatestExecutionProcessForTask(
+                              executionProcesses,
+                              task.id,
+                            );
                             const unlocked = isDevelopmentTaskUnlocked(task, tasks);
 
                             return (
@@ -503,7 +543,9 @@ export function TaskBoard({
           {activeTask && (
             <TaskCard
               task={activeTask}
-              process={pickLatestExecutionProcessForTask(executionProcesses, activeTask.id) ?? undefined}
+              process={
+                pickLatestExecutionProcessForTask(executionProcesses, activeTask.id) ?? undefined
+              }
               unlocked={isDevelopmentTaskUnlocked(activeTask, tasks)}
               onClick={() => {}}
               isDragging
@@ -518,11 +560,7 @@ export function TaskBoard({
             <DialogTitle>{t("issue.delete")}</DialogTitle>
             <DialogDescription className="space-y-3">
               <p>{t("issue.deleteConfirmBody")}</p>
-              {issueTitle && (
-                <p className="text-foreground font-semibold">
-                  {issueTitle}
-                </p>
-              )}
+              {issueTitle && <p className="text-foreground font-semibold">{issueTitle}</p>}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="sm:justify-end">

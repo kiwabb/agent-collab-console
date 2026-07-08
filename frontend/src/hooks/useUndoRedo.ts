@@ -8,14 +8,6 @@ interface UndoEntry<T> {
   future: T[];
 }
 
-interface UndoRedoState<T> {
-  past: T[];
-  present: T;
-  future: T[];
-  canUndo: boolean;
-  canRedo: boolean;
-}
-
 export function useUndoRedo<T>(initialPresent: T, maxHistory = 50) {
   const [state, setState] = useState<UndoEntry<T>>({
     past: [],
@@ -28,18 +20,21 @@ export function useUndoRedo<T>(initialPresent: T, maxHistory = 50) {
   const canUndo = state.past.length > 0;
   const canRedo = state.future.length > 0;
 
-  const set = useCallback((newPresent: T, addToHistory = true) => {
-    setState((current) => {
-      if (!addToHistory) {
-        return { ...current, present: newPresent };
-      }
-      return {
-        past: [...current.past, current.present].slice(-maxHistory),
-        present: newPresent,
-        future: [],
-      };
-    });
-  }, [maxHistory]);
+  const set = useCallback(
+    (newPresent: T, addToHistory = true) => {
+      setState((current) => {
+        if (!addToHistory) {
+          return { ...current, present: newPresent };
+        }
+        return {
+          past: [...current.past, current.present].slice(-maxHistory),
+          present: newPresent,
+          future: [],
+        };
+      });
+    },
+    [maxHistory],
+  );
 
   const undo = useCallback(() => {
     setState((current) => {
@@ -91,20 +86,23 @@ export function useUndoRedo<T>(initialPresent: T, maxHistory = 50) {
 export function useUndoRedoSimple<T>(
   getValue: () => T,
   setValue: (value: T) => void,
-  maxHistory = 50
+  maxHistory = 50,
 ) {
   const historyRef = useRef<T[]>([]);
   const futureRef = useRef<T[]>([]);
   const isUndoRedoRef = useRef(false);
 
-  const pushHistory = useCallback((value: T) => {
-    if (isUndoRedoRef.current) return;
-    historyRef.current.push(value);
-    if (historyRef.current.length > maxHistory) {
-      historyRef.current.shift();
-    }
-    futureRef.current = [];
-  }, [maxHistory]);
+  const pushHistory = useCallback(
+    (value: T) => {
+      if (isUndoRedoRef.current) return;
+      historyRef.current.push(value);
+      if (historyRef.current.length > maxHistory) {
+        historyRef.current.shift();
+      }
+      futureRef.current = [];
+    },
+    [maxHistory],
+  );
 
   const undo = useCallback(() => {
     if (historyRef.current.length === 0) return;

@@ -6,6 +6,7 @@ Scope: table + async writer infrastructure only. No choke-point instrumentation
 
 import asyncio
 import json
+from typing import cast
 
 import pytest
 
@@ -15,6 +16,7 @@ from app.application.audit_logger import (
     AuditLogger,
     _serialize_payload,
 )
+from app.domain.models import ConductorTurnKind
 
 
 def _new_logger(store):
@@ -24,11 +26,19 @@ def _new_logger(store):
     return logger
 
 
-@pytest.mark.asyncio
-async def test_record_each_category_lands_in_db(tmp_path):
+@pytest.fixture
+async def audit_store(tmp_path):
     store = AsyncSQLiteStore(tmp_path / "console.db")
     await store._ensure_db()
-    logger = _new_logger(store)
+    try:
+        yield store
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_record_each_category_lands_in_db(audit_store):
+    logger = _new_logger(audit_store)
 
     for category in sorted(AUDIT_CATEGORIES):
         logger.record(
@@ -39,10 +49,10 @@ async def test_record_each_category_lands_in_db(tmp_path):
             payload={"k": category},
             status="ok",
             duration_ms=12,
-        )
+    )
     await logger.drain()
 
-    rows = await store.list_audit_logs(limit=100)
+    rows = await audit_store.list_audit_logs(limit=100)
     assert len(rows) == len(AUDIT_CATEGORIES)
     categories = {r.category for r in rows}
     assert categories == set(AUDIT_CATEGORIES)
@@ -57,16 +67,14 @@ async def test_record_each_category_lands_in_db(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_payload_truncation(tmp_path):
-    store = AsyncSQLiteStore(tmp_path / "console.db")
-    await store._ensure_db()
-    logger = _new_logger(store)
+async def test_payload_truncation(audit_store):
+    logger = _new_logger(audit_store)
 
     big = {"blob": "x" * 20000}
     logger.record("llm_return", payload=big)
     await logger.drain()
 
-    rows = await store.list_audit_logs(limit=10)
+    rows = await audit_store.list_audit_logs(limit=10)
     assert len(rows) == 1
     parsed = json.loads(rows[0].payload_json)
     assert parsed.get("__truncated__") is True
@@ -115,19 +123,16 @@ async def test_write_failure_is_best_effort(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_enqueue_before_worker_starts_drains_later(tmp_path):
-    store = AsyncSQLiteStore(tmp_path / "console.db")
-    await store._ensure_db()
-
+async def test_enqueue_before_worker_starts_drains_later(audit_store):
     logger = AuditLogger()
     # Record BEFORE store/loop are set — should buffer in the queue.
     logger.record("event", payload={"early": True})
 
-    logger.set_store(store)
+    logger.set_store(audit_store)
     logger.set_loop(asyncio.get_event_loop())
     await logger.drain()
 
-    rows = await store.list_audit_logs(limit=10)
+    rows = await audit_store.list_audit_logs(limit=10)
     assert len(rows) == 1
     assert json.loads(rows[0].payload_json) == {"early": True}
 
@@ -137,31 +142,32 @@ async def test_enqueue_before_worker_starts_drains_later(tmp_path):
 @pytest.mark.asyncio
 async def test_table_idempotent_create(tmp_path):
     store = AsyncSQLiteStore(tmp_path / "console.db")
-    # Repeated init must not raise (IF NOT EXISTS guards).
-    await store._init_db()
-    await store._init_db()
-    await store._ensure_db()
+    try:
+        # Repeated init must not raise (IF NOT EXISTS guards).
+        await store._init_db()
+        await store._init_db()
+        await store._ensure_db()
 
-    rows = await store.list_audit_logs(limit=10)
-    assert rows == []
+        rows = await store.list_audit_logs(limit=10)
+        assert rows == []
+    finally:
+        await store.close()
 
 
 @pytest.mark.asyncio
-async def test_list_filters_by_category_and_issue(tmp_path):
-    store = AsyncSQLiteStore(tmp_path / "console.db")
-    await store._ensure_db()
-    logger = _new_logger(store)
+async def test_list_filters_by_category_and_issue(audit_store):
+    logger = _new_logger(audit_store)
 
     logger.record("git_command", issue_id="i1", payload={"n": 1})
     logger.record("git_command", issue_id="i2", payload={"n": 2})
     logger.record("llm_call", issue_id="i1", payload={"n": 3})
     await logger.drain()
 
-    git_rows = await store.list_audit_logs(category="git_command")
+    git_rows = await audit_store.list_audit_logs(category="git_command")
     assert len(git_rows) == 2
-    i1_rows = await store.list_audit_logs(issue_id="i1")
+    i1_rows = await audit_store.list_audit_logs(issue_id="i1")
     assert len(i1_rows) == 2
-    git_i1 = await store.list_audit_logs(category="git_command", issue_id="i1")
+    git_i1 = await audit_store.list_audit_logs(category="git_command", issue_id="i1")
     assert len(git_i1) == 1
 
     await logger.shutdown()
@@ -305,7 +311,7 @@ def test_conductor_turn_audit_maps_kinds(monkeypatch):
         lambda category, **kw: captured.append((category, kw)),
     )
 
-    cases = {
+    cases: dict[ConductorTurnKind, str] = {
         "llm_request": "llm_call",
         "llm_response": "llm_return",
         "tool_use": "tool_use",
@@ -321,7 +327,10 @@ def test_conductor_turn_audit_maps_kinds(monkeypatch):
         )
     # Unknown kind -> not audited.
     cml._audit_conductor_turn(
-        issue_id="issue-1", conductor_task_id="ct-1", kind="state_log", payload={}
+        issue_id="issue-1",
+        conductor_task_id="ct-1",
+        kind=cast(ConductorTurnKind, "state_log"),
+        payload={},
     )
 
     got = {c[0] for c in captured}
@@ -429,3 +438,51 @@ def test_sync_store_save_and_list_audit_log(tmp_path):
     assert len(rows) == 1
     assert rows[0].id == "a1"
     assert rows[0].issue_id == "i1"
+
+
+def test_record_event_preserves_business_fields_for_agent_timeline():
+    """Business events keep readable fields, not only a repr payload preview."""
+    from app.application.audit import record_event
+    from app.domain.ports import AuditSink
+
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    class Sink:
+        def record(self, category: str, **kwargs: object) -> None:
+            captured.append((category, dict(kwargs)))
+
+    record_event(
+        {
+            "type": "project_script_updated",
+            "event_id": "evt-1",
+            "ts": "2026-07-08T10:55:56",
+            "payload": {
+                "project_id": "project-1",
+                "task_id": "task-1",
+                "execution_process_id": "ep-1",
+                "trace_id": "ep-1",
+                "span_id": "task-1",
+                "role": "operations_engineer",
+                "task_kind": "project_script_suggestion",
+                "setup_script": "npm install",
+                "run_command": "npm run dev",
+            },
+        },
+        sink=cast(AuditSink, Sink()),
+    )
+
+    assert captured and captured[0][0] == "event"
+    row = captured[0][1]
+    assert row["actor"] == "project_script_updated"
+    assert row["task_id"] == "task-1"
+    assert row["execution_process_id"] == "ep-1"
+    assert row["trace_id"] == "ep-1"
+    assert row["correlation_id"] == "ep-1"
+    assert row["status"] == "ok"
+    payload = row["payload"]
+    assert isinstance(payload, dict)
+    assert payload["type"] == "project_script_updated"
+    assert payload["role"] == "operations_engineer"
+    assert payload["task_kind"] == "project_script_suggestion"
+    assert payload["setup_script"] == "npm install"
+    assert payload["run_command"] == "npm run dev"

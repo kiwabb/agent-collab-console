@@ -1,0 +1,9 @@
+{
+  "hasSettingsV5": true,
+  "htmlComplete": true,
+  "iframeTitle": "prototype-preview",
+  "mentionsSettings": true,
+  "srcdocEnd": "t.remove('border-transparent', 'text-[color:var(--muted)]');\n    });\n  });\n</script>\n</body>\n</html>",
+  "srcdocLength": 17174,
+  "srcdocStart": "<!DOCTYPE html>\n<!-- source: /settings frontend/src/app/settings/page.tsx -->\n<html lang=\"zh-CN\">\n<h"
+}

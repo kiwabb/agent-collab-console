@@ -1,10 +1,11 @@
 """Tests for ExecutionProcess.kind / triggering_message_id (P1 Foundation)."""
 
 from datetime import datetime
+from typing import cast
 
 import pytest
 
-from app.domain.models import ExecutionProcess
+from app.domain.models import ExecutionProcess, ExecutionProcessKind
 
 
 def test_execution_process_defaults_to_initial_kind():
@@ -23,7 +24,9 @@ def test_execution_process_accepts_all_four_kinds():
 def test_execution_process_kind_invalid_value_rejected():
     """Pydantic Literal rejects unknown kind values."""
     with pytest.raises(Exception):  # noqa: B017
-        ExecutionProcess(id="ep", task_id="t", session_id="s", kind="bogus")
+        ExecutionProcess(
+            id="ep", task_id="t", session_id="s", kind=cast(ExecutionProcessKind, "bogus")
+        )
 
 
 def test_execution_process_persists_triggering_message_id():
@@ -83,6 +86,7 @@ def test_sync_store_defaults_kind_to_initial_on_load(tmp_path):
     )
     store.save_execution_process(ep)
     loaded = store.load_execution_process("ep-2")
+    assert loaded is not None
     assert loaded.kind == "initial"
     assert loaded.triggering_message_id is None
 
@@ -196,6 +200,7 @@ async def test_async_store_defaults_kind_to_initial_on_load(tmp_path):
         )
         await store.save_execution_process(ep)
         loaded = await store.load_execution_process("ep-async-2")
+        assert loaded is not None
         assert loaded.kind == "initial"
         assert loaded.triggering_message_id is None
     finally:

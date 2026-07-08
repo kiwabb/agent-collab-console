@@ -45,9 +45,7 @@ export function ApprovalCard({
           <span className="size-1.5 rounded-full bg-brand" />
           {title}
         </span>
-        {meta && (
-          <span className="text-[11px] text-text-muted font-mono">{meta}</span>
-        )}
+        {meta && <span className="text-[11px] text-text-muted font-mono">{meta}</span>}
       </div>
       <div className="text-sm leading-relaxed text-foreground">{body}</div>
       <div className="flex items-center gap-2 pt-1">

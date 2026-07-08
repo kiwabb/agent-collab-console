@@ -1,6 +1,15 @@
 "use client";
 
-import { ArrowRight, CheckCircle2, Clock3, GitBranch, PauseCircle, PlayCircle, Trash2, XCircle } from "lucide-react";
+import {
+  ArrowRight,
+  CheckCircle2,
+  Clock3,
+  GitBranch,
+  PauseCircle,
+  PlayCircle,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
@@ -29,7 +38,12 @@ export function getIssueStatusBucket(status: string | null | undefined): IssueSt
   return "queued";
 }
 
-export function getPhaseProgress(phase: string | null | undefined): { index: number; total: number; label: string; role: string } {
+export function getPhaseProgress(phase: string | null | undefined): {
+  index: number;
+  total: number;
+  label: string;
+  role: string;
+} {
   const normalized = PHASES.includes(phase as Phase) ? (phase as Phase) : "requirements";
   const index = PHASES.indexOf(normalized) + 1;
   return {
@@ -43,7 +57,12 @@ export function getPhaseProgress(phase: string | null | undefined): { index: num
 export function pickCurrentRole(issue: CodexIssue, tasks: CodexTask[]): string {
   const active = tasks.find((task) => {
     const status = String(task.status || "").toLowerCase();
-    return status === "running" || status === "responding" || status === "pending" || status === "awaiting_review";
+    return (
+      status === "running" ||
+      status === "responding" ||
+      status === "pending" ||
+      status === "awaiting_review"
+    );
   });
   return active?.role || getPhaseProgress(issue.current_phase).role;
 }
@@ -53,7 +72,7 @@ interface Props {
   tasks: CodexTask[];
   project: Project | null;
   onOpen: () => void;
-  onDelete?: () => void;
+  onDelete?: (() => void) | undefined;
 }
 
 export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
@@ -68,22 +87,30 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
   // than stuck at 1/4. See CLAUDE.md "WorkflowGraph 是 Conductor 决策时间线".
   const isComplete = bucket === "done";
   const displayIndex = isComplete ? progress.total : progress.index;
-  const percent = isComplete ? 100 : Math.max(8, Math.round((progress.index / progress.total) * 100));
+  const percent = isComplete
+    ? 100
+    : Math.max(8, Math.round((progress.index / progress.total) * 100));
   const phaseLabel = isComplete ? t("workspace.console.status.done") : progress.label;
   const isIssueScheduling = bucket === "running";
   const statusLabel =
-    bucket === "running" ? t("workspace.console.status.running")
-    : bucket === "done" ? t("workspace.console.status.done")
-    : bucket === "failed" ? t("workspace.console.status.failed")
-    : bucket === "awaiting" ? t("workspace.console.status.awaitingApproval")
-    : t("workspace.console.status.queued");
+    bucket === "running"
+      ? t("workspace.console.status.running")
+      : bucket === "done"
+        ? t("workspace.console.status.done")
+        : bucket === "failed"
+          ? t("workspace.console.status.failed")
+          : bucket === "awaiting"
+            ? t("workspace.console.status.awaitingApproval")
+            : t("workspace.console.status.queued");
 
   return (
     <div
       role="button"
       tabIndex={0}
       onClick={onOpen}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpen(); }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") onOpen();
+      }}
       data-density="workspace-scheduling-row"
       className={cn(
         "group relative grid min-h-[72px] w-full cursor-pointer grid-cols-[minmax(0,1fr)_128px_156px_84px] gap-3 overflow-hidden border-border-subtle bg-surface-input/25 px-4 py-3 text-left transition-colors hover:bg-surface-hover max-lg:grid-cols-1",
@@ -103,13 +130,19 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
             className={cn(
               "inline-flex size-8 shrink-0 items-center justify-center rounded-lg border",
               isIssueScheduling && "motion-essential border-brand/35 bg-brand-muted/15 text-brand",
-              bucket === "awaiting" && "border-status-awaiting/30 bg-status-awaiting/10 text-status-awaiting",
+              bucket === "awaiting" &&
+                "border-status-awaiting/30 bg-status-awaiting/10 text-status-awaiting",
               bucket === "queued" && "border-border-subtle bg-surface-raised text-text-muted",
               bucket === "done" && "border-status-done/30 bg-status-done/10 text-status-done",
-              bucket === "failed" && "border-status-failed/30 bg-status-failed/10 text-status-failed",
+              bucket === "failed" &&
+                "border-status-failed/30 bg-status-failed/10 text-status-failed",
             )}
           >
-            {isIssueScheduling ? <AgentThinkingIndicator phase="dispatching" size={16} /> : <Icon size={17} />}
+            {isIssueScheduling ? (
+              <AgentThinkingIndicator phase="dispatching" size={16} />
+            ) : (
+              <Icon size={17} />
+            )}
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -120,9 +153,7 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
                 </span>
               )}
             </div>
-            <h2 className="mt-1 truncate text-sm font-bold text-foreground">
-              {issue.title}
-            </h2>
+            <h2 className="mt-1 truncate text-sm font-bold text-foreground">{issue.title}</h2>
           </div>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-text-muted">
@@ -130,7 +161,9 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
             <GitBranch size={12} />
             {issue.git_branch || project?.default_branch || "main"}
           </span>
-          <span>{issue.updated_at ? relTime(issue.updated_at, t("workspace.console.time.now")) : "—"}</span>
+          <span>
+            {issue.updated_at ? relTime(issue.updated_at, t("workspace.console.time.now")) : "—"}
+          </span>
         </div>
       </div>
 
@@ -147,7 +180,9 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
               isIssueScheduling && "motion-essential border-brand/30 bg-brand-muted/10 text-brand",
             )}
           >
-            {isIssueScheduling && <AgentThinkingIndicator phase="dispatching" size={10} className="shrink-0" />}
+            {isIssueScheduling && (
+              <AgentThinkingIndicator phase="dispatching" size={10} className="shrink-0" />
+            )}
             <span className="truncate">{getWorkspaceConsoleRoleLabel(currentRole)}</span>
           </span>
           <span className="font-mono text-text-muted">
@@ -155,7 +190,10 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
           </span>
         </div>
         <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-raised">
-          <div className="h-full rounded-full bg-[linear-gradient(90deg,#22d3ee,#84cc16)] transition-all" style={{ width: `${percent}%` }} />
+          <div
+            className="h-full rounded-full bg-[linear-gradient(90deg,#22d3ee,#84cc16)] transition-all"
+            style={{ width: `${percent}%` }}
+          />
         </div>
         <div className="mt-1 text-[11px] capitalize text-text-muted">{phaseLabel}</div>
       </div>
@@ -164,7 +202,10 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
         {onDelete && (
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
             className="rounded-lg p-1.5 text-text-muted opacity-0 transition-all hover:bg-error/10 hover:text-error group-hover:opacity-100"
             aria-label={t("issue.delete")}
             title={t("issue.delete")}
@@ -175,7 +216,10 @@ export function IssueRow({ issue, tasks, project, onOpen, onDelete }: Props) {
         <span className="text-xs font-bold text-text-muted transition-colors group-hover:text-foreground">
           {t("workspace.console.openIssue")}
         </span>
-        <ArrowRight size={15} className="text-text-muted transition-all group-hover:translate-x-1 group-hover:text-foreground" />
+        <ArrowRight
+          size={15}
+          className="text-text-muted transition-all group-hover:translate-x-1 group-hover:text-foreground"
+        />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, handleResponse } from "./fetch";
+import { API_BASE, apiJsonRequest, apiRequest } from "./fetch";
 import type {
   RuntimeCatalog,
   RuntimeCatalogRequest,
@@ -10,8 +10,7 @@ import type {
 
 export async function getRuntimeCatalog(): Promise<RuntimeCatalog> {
   try {
-    const response = await fetch(`${API_BASE}/runtime-catalog`);
-    return handleResponse<RuntimeCatalog>(response);
+    return await apiRequest<RuntimeCatalog>(`${API_BASE}/runtime-catalog`);
   } catch (err) {
     console.error(`getRuntimeCatalog failed:`, err);
     throw err;
@@ -19,23 +18,17 @@ export async function getRuntimeCatalog(): Promise<RuntimeCatalog> {
 }
 export async function updateRuntimeCatalog(catalog: RuntimeCatalog): Promise<RuntimeCatalog> {
   const body: RuntimeCatalogRequest = { catalog };
-  const response = await fetch(`${API_BASE}/runtime-catalog`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<RuntimeCatalog>(response);
+  return apiJsonRequest<RuntimeCatalog>(`${API_BASE}/runtime-catalog`, "PUT", body);
 }
 export async function validateRuntimeCatalog(
   catalog: RuntimeCatalog,
 ): Promise<ValidateRuntimeCatalogResponse> {
   const body: RuntimeCatalogRequest = { catalog };
-  const response = await fetch(`${API_BASE}/runtime-catalog/validate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<ValidateRuntimeCatalogResponse>(response);
+  return apiJsonRequest<ValidateRuntimeCatalogResponse>(
+    `${API_BASE}/runtime-catalog/validate`,
+    "POST",
+    body,
+  );
 }
 export interface TestExecutorRequest {
   executor_id: string;
@@ -47,10 +40,14 @@ export interface TestExecutorRequest {
 export async function testRuntimeExecutor(
   request: TestExecutorRequest,
 ): Promise<TestExecutorResponse> {
-  const response = await fetch(`${API_BASE}/runtime-catalog/test`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  });
-  return handleResponse<TestExecutorResponse>(response);
+  return apiJsonRequest<TestExecutorResponse>(`${API_BASE}/runtime-catalog/test`, "POST", request);
+}
+export async function testRuntimeExecutorCli(
+  request: TestExecutorRequest,
+): Promise<TestExecutorResponse> {
+  return apiJsonRequest<TestExecutorResponse>(
+    `${API_BASE}/runtime-catalog/test-cli`,
+    "POST",
+    request,
+  );
 }

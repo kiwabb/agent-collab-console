@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
@@ -23,7 +30,14 @@ interface Props {
   onCreated: (issue: CodexIssue) => void;
 }
 
-export function NewIssueDialog({ open, onOpenChange, workspaceId, project, catalog, onCreated }: Props) {
+export function NewIssueDialog({
+  open,
+  onOpenChange,
+  workspaceId,
+  project,
+  catalog,
+  onCreated,
+}: Props) {
   const { t } = useI18n();
   const { addToast } = useToast();
   const [title, setTitle] = useState("");
@@ -117,9 +131,7 @@ export function NewIssueDialog({ open, onOpenChange, workspaceId, project, catal
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t("workspace.console.newIssue")}</DialogTitle>
-          <DialogDescription>
-            {t("workspace.console.newIssueDesc")}
-          </DialogDescription>
+          <DialogDescription>{t("workspace.console.newIssueDesc")}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -175,7 +187,10 @@ export function NewIssueDialog({ open, onOpenChange, workspaceId, project, catal
                 onChange={(e) => setExecutor(e.target.value)}
                 className="mt-1 w-full rounded-md border border-border-subtle bg-surface-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand/50"
               >
-                {(enabledExecutors.length > 0 ? enabledExecutors : [{ id: "codex", label: "Codex" } as const]).map((item) => (
+                {(enabledExecutors.length > 0
+                  ? enabledExecutors
+                  : [{ id: "codex", label: "Codex" } as const]
+                ).map((item) => (
                   <option key={item.id} value={item.id}>
                     {describeExecutorOption(item, t("runtime.executor.localCliBadge"))}
                   </option>

@@ -67,9 +67,10 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       const project = await createProject({
         name: name.trim(),
         source,
-        repo_path: source === "local" ? repoPath.trim() : undefined,
-        origin_url: source === "clone" ? originUrl.trim() : undefined,
-        dest_parent: source === "clone" ? destParent.trim() : undefined,
+        ...(source === "local" ? { repo_path: repoPath.trim() } : {}),
+        ...(source === "clone"
+          ? { origin_url: originUrl.trim(), dest_parent: destParent.trim() }
+          : {}),
       });
       emitDataEvent("projects:changed");
       reset();

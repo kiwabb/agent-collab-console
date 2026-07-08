@@ -15,7 +15,7 @@ from __future__ import annotations  # noqa: I001
 import shutil
 import subprocess
 from pathlib import Path
-from typing import AsyncIterator  # noqa: UP035
+from typing import AsyncGenerator, AsyncIterator  # noqa: UP035
 
 import pytest
 
@@ -23,15 +23,24 @@ from app.adapters.async_sqlite_store import AsyncSQLiteStore
 from app.application.prototype_service import (
     PrototypeError,
     PrototypeService,
+    RuntimePrototypeEvidence,
     StreamEvent,  # noqa: F401
-    _stream_html,  # noqa: F401
+    _stream_html,
+    build_code_backed_brief,
+    compact_code_source_excerpt,
     build_html_system_prompt,
     build_iteration_system_prompt,
+    is_complete_html_document,
     strip_markdown_fence,
 )
-from app.application.code_prototype_discovery import CodePrototypeDiscoveryService
+from app.application.code_prototype_discovery import (
+    CodePrototypeCandidate,
+    CodePrototypeDiscoveryService,
+)
 from app.application.runtime_catalog_service import RuntimeCatalogService  # noqa: F401
-from app.domain.models import Project, RuntimeExecutorConfig
+from app.application.runtime_prototype_capture import resolve_runtime_route
+from app.domain.models import Project, PrototypeVersion, RuntimeExecutorConfig
+from app.application.llm_runner import StreamingPlanContext
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +49,7 @@ from app.domain.models import Project, RuntimeExecutorConfig
 
 
 @pytest.fixture
-async def store(tmp_path: Path) -> AsyncSQLiteStore:
+async def store(tmp_path: Path) -> AsyncGenerator[AsyncSQLiteStore, None]:
     s = AsyncSQLiteStore(tmp_path / "test.db")
     await s._init_db()
     try:
@@ -80,6 +89,25 @@ def fake_catalog_service():
 @pytest.fixture
 def svc(store: AsyncSQLiteStore, fake_catalog_service) -> PrototypeService:
     return PrototypeService(store=store, runtime_catalog_service=fake_catalog_service)
+
+
+def _project_repo_path(project: Project) -> Path:
+    assert project.repo_path is not None
+    return Path(project.repo_path)
+
+
+def _versions(detail: dict[str, object]) -> list[PrototypeVersion]:
+    versions = detail["versions"]
+    assert isinstance(versions, list)
+    assert all(isinstance(version, PrototypeVersion) for version in versions)
+    return versions
+
+
+def _candidate_items(preview: dict[str, object]) -> list[dict[str, object]]:
+    candidates = preview["candidates"]
+    assert isinstance(candidates, list)
+    assert all(isinstance(item, dict) for item in candidates)
+    return [{str(key): value for key, value in item.items()} for item in candidates]
 
 
 def _make_git_repo(path: Path) -> Path:
@@ -133,6 +161,13 @@ def test_strip_markdown_fence_handles_known_shapes():
     assert strip_markdown_fence(truncated).startswith("<!DOCTYPE html>")
 
 
+def test_is_complete_html_document_requires_doctype_and_closing_html():
+    assert is_complete_html_document("<!DOCTYPE html><html><body>x</body></html>")
+    assert not is_complete_html_document("<html><body>x</body></html>")
+    assert not is_complete_html_document("<!DOCTYPE html><html><body>x</body>")
+    assert not is_complete_html_document("<!DOCTYPE html><html><body>x</")
+
+
 def test_build_html_system_prompt_includes_brief_and_doctype_anchor():
     p = build_html_system_prompt("a SaaS pricing page, three cards")
     assert "<!DOCTYPE html>" in p
@@ -146,6 +181,162 @@ def test_build_iteration_system_prompt_carries_latest_html_and_instruction():
     assert latest in p
     assert "make headings bigger" in p
     assert "<!DOCTYPE html>" in p
+
+
+def test_build_code_backed_brief_prioritizes_complete_compact_output(project: Project):
+    candidate = CodePrototypeCandidate(
+        id="next-app-router--help",
+        title="Help",
+        route="/help",
+        kind="page",
+        framework_hint="next-app-router",
+        source_paths=["frontend/src/app/help/page.tsx"],
+        primary_source_path="frontend/src/app/help/page.tsx",
+        source_hash="sha256:test",
+        source_excerpt="export default function Page() { return <HelpPage /> }",
+        signals=["app-router-page"],
+    )
+
+    brief = build_code_backed_brief(candidate, project)
+
+    assert "Prefer a compact complete prototype" in brief
+    assert "finish within the response budget" in brief
+    assert "representative loading/empty/error states" in brief
+    assert "ending with </html>" in brief
+    assert "80-140 lines" in brief
+    assert "representative first-screen slice" in brief
+
+
+def test_build_code_backed_brief_uses_safe_runtime_evidence(project: Project):
+    candidate = CodePrototypeCandidate(
+        id="next-app-router--help",
+        title="Help",
+        route="/help",
+        kind="page",
+        framework_hint="next-app-router",
+        source_paths=["frontend/src/app/help/page.tsx"],
+        primary_source_path="frontend/src/app/help/page.tsx",
+        source_hash="sha256:test",
+        source_excerpt="export default function Page() { return <HelpPage /> }",
+        signals=["app-router-page"],
+    )
+    evidence = RuntimePrototypeEvidence.from_payload(
+        {
+            "attempted_url": "http://127.0.0.1:3000/help",
+            "final_url": "http://127.0.0.1:3000/help",
+            "success": True,
+            "title": "Help Center",
+            "viewport": {"width": 1440, "height": 900},
+            "visible_text_excerpt": "Help Center\nSearch docs\nCommon setup questions",
+            "structure_summary": "headings: Help Center; buttons: Search, Open ticket",
+            "console_errors": ["hydration warning"],
+            "screenshot_path": ".agent-collab/prototypes/captures/help.png",
+            "cookies": "secret-cookie",
+            "localStorage": {"token": "secret-token"},
+            "html": "<html>full page html should not be accepted</html>",
+        }
+    )
+    assert evidence is not None
+
+    brief = build_code_backed_brief(candidate, project, evidence)
+
+    assert "Runtime evidence priority" in brief
+    assert "Capture status: success" in brief
+    assert "Help Center" in brief
+    assert "Common setup questions" in brief
+    assert "secret-cookie" not in brief
+    assert "secret-token" not in brief
+    assert "full page html" not in brief
+
+
+def test_build_code_backed_brief_failed_runtime_evidence_falls_back(project: Project):
+    candidate = CodePrototypeCandidate(
+        id="next-app-router--settings",
+        title="Settings",
+        route="/settings",
+        kind="page",
+        framework_hint="next-app-router",
+        source_paths=["frontend/src/app/settings/page.tsx"],
+        primary_source_path="frontend/src/app/settings/page.tsx",
+        source_hash="sha256:test",
+        source_excerpt="export default function Page() { return <SettingsPage /> }",
+        signals=["app-router-page"],
+    )
+    evidence = RuntimePrototypeEvidence(
+        attempted_url="http://127.0.0.1:3000/settings",
+        success=False,
+        failure_reason="connection refused",
+    )
+
+    brief = build_code_backed_brief(candidate, project, evidence)
+
+    assert "Capture status: failed or unavailable" in brief
+    assert "fall back to the source excerpt" in brief
+    assert "connection refused" in brief
+    assert "Source excerpt:" in brief
+
+
+def test_build_code_backed_brief_includes_user_edited_candidate_brief(project: Project):
+    candidate = CodePrototypeCandidate(
+        id="next-app-router--approvals",
+        title="Approvals",
+        route="/approvals",
+        kind="page",
+        framework_hint="next-app-router",
+        source_paths=["frontend/src/app/approvals/page.tsx"],
+        primary_source_path="frontend/src/app/approvals/page.tsx",
+        source_hash="sha256:test",
+        source_excerpt="export default function Page() { return <main>Approvals</main> }",
+        signals=["app-router-page"],
+    )
+
+    brief = build_code_backed_brief(
+        candidate,
+        project,
+        editable_brief_override="Focus the prototype on the approval queue and compact reviewer actions.",
+    )
+
+    assert "User-edited candidate brief override" in brief
+    assert "approval queue" in brief
+    assert "Use this edited brief as the primary page intent" in brief
+    assert "Source excerpt:" in brief
+
+
+def test_compact_code_source_excerpt_preserves_high_signal_ui_lines():
+    source = (
+        "--- frontend/src/features/agents/AgentLibraryPage.tsx ---\n"
+        + "\n".join(f"import {{ Thing{i} }} from './thing-{i}';" for i in range(200))
+        + "\nexport function AgentLibraryPage() {\n"
+        + "  const [loading, setLoading] = useState(true);\n"
+        + "  const [error, setError] = useState<string | null>(null);\n"
+        + "  return (\n"
+        + "    <PageFrame title={t(\"agents.pageTitle\")} description={t(\"agents.pageSubtitle\")}>\n"
+        + "      {loading && <InteractionEmptyState tone=\"loading\" title={t(\"agents.loadingTitle\")} />}\n"
+        + "      {error && <div className=\"rounded-md border border-error\">{error}</div>}\n"
+        + "      <Button>{t(\"agents.new\")}</Button>\n"
+        + "    </PageFrame>\n"
+        + "  );\n"
+        + "}\n"
+    )
+
+    compacted = compact_code_source_excerpt(source)
+
+    assert len(compacted) < len(source)
+    assert "Source excerpt compacted for generation" in compacted
+    assert "AgentLibraryPage" in compacted
+    assert "InteractionEmptyState" in compacted
+    assert "agents.pageTitle" in compacted
+    assert "border-error" in compacted
+
+
+def test_resolve_runtime_route_uses_deterministic_dynamic_placeholders():
+    issue = resolve_runtime_route("http://localhost:4000", "/issues/:id/workflow")
+    workspace = resolve_runtime_route("http://localhost:4000/", "/workspaces/:wsId")
+    next_dynamic = resolve_runtime_route("http://localhost:4000", "/projects/[projectId]")
+
+    assert issue.attempted_url == "http://localhost:4000/issues/demo-id/workflow"
+    assert workspace.attempted_url == "http://localhost:4000/workspaces/demo-ws"
+    assert next_dynamic.attempted_url == "http://localhost:4000/projects/demo"
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +394,70 @@ async def _fake_stream_html_chunks(prompt: str, ctx) -> AsyncIterator[str]:  # n
 
 async def _collect(svc: PrototypeService, prototype_id: str, instruction: str | None):
     return [ev async for ev in svc.stream_events(prototype_id, instruction)]
+
+
+class _FakePrototypeStreamResponse:
+    def __init__(self, lines: list[str], status_code: int = 200) -> None:
+        self._lines = lines
+        self.status_code = status_code
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+    async def aread(self) -> bytes:
+        return b""
+
+
+class _NoisyPrototypeStreamClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def stream(self, method, url, headers=None, json=None):  # noqa: ANN001, RUF100
+        return _FakePrototypeStreamResponse(
+            [
+                "data: []",
+                "data: not json",
+                'data: {"type":"content_block_delta","delta":"bad"}',
+                'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"<!DOCTYPE html>"}}',
+                'data: {"type":"message_stop"}',
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_stream_html_skips_non_object_and_malformed_sse_events(monkeypatch):
+    def fake_http_client(timeout_s: float):
+        return _NoisyPrototypeStreamClient()
+
+    monkeypatch.setattr("app.application.prototype_service._llm_http_client", fake_http_client)
+
+    chunks = [
+        chunk
+        async for chunk in _stream_html(
+            "prompt",
+            StreamingPlanContext(
+                executor_id="claude",
+                executor_label="Claude",
+                model="claude-test",
+                endpoint="https://example.test",
+                api_key="secret",
+                max_tokens=1024,
+                timeout_s=10,
+            ),
+        )
+    ]
+
+    assert chunks == ["<!DOCTYPE html>"]
 
 
 @pytest.mark.asyncio
@@ -277,7 +532,7 @@ async def test_iterate_with_instruction_produces_v2(
     assert "refined" in done["html"]
 
     detail = await svc.get_with_versions(proto.id)
-    assert [v.version_no for v in detail["versions"]] == [1, 2]
+    assert [v.version_no for v in _versions(detail)] == [1, 2]
     reloaded = await svc.get(proto.id)
     assert reloaded.current_version == 2
 
@@ -317,6 +572,26 @@ async def test_empty_llm_response_yields_error_and_no_db_write(
     assert events[-1].data["message"] == "LLM returned empty HTML"
     reloaded = await svc.get(proto.id)
     assert reloaded.current_version == 0
+
+
+@pytest.mark.asyncio
+async def test_incomplete_html_response_yields_error_and_no_db_write(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    async def truncated_stream(prompt, ctx):  # noqa: ARG001, RUF100
+        yield "<!DOCTYPE html><html><body><h1>Cut off</h1></"
+
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        truncated_stream,
+    )
+    proto = await svc.create(project.id, "Help", "help page")
+    events = await _collect(svc, proto.id, None)
+    assert events[-1].event == "error"
+    assert "incomplete HTML" in events[-1].data["message"]
+    reloaded = await svc.get(proto.id)
+    assert reloaded.current_version == 0
+    assert await svc.store.load_prototype_version(proto.id, 1) is None
 
 
 @pytest.mark.asyncio
@@ -503,6 +778,90 @@ def test_code_discovery_detects_supported_pages_and_ignores_heavy_dirs(project: 
     assert not any(candidate.route.startswith("/api") for candidate in candidates)
 
 
+def test_code_discovery_includes_direct_local_import_context(project: Project):
+    repo = Path(project.repo_path)
+    _write_page(
+        repo,
+        "frontend/src/app/help/page.tsx",
+        (
+            "import { HelpPage } from '@/features/help/HelpPage';\n"
+            "export default function Page() { return <HelpPage /> }\n"
+        ),
+    )
+    help_component = repo / "frontend/src/features/help/HelpPage.tsx"
+    _write_page(
+        repo,
+        "frontend/src/features/help/HelpPage.tsx",
+        "export function HelpPage() { return <main><h1>Real Help Structure</h1></main> }",
+    )
+
+    candidate = CodePrototypeDiscoveryService().scan_project(project)[0]
+    assert candidate.primary_source_path == "frontend/src/app/help/page.tsx"
+    assert candidate.source_paths == [
+        "frontend/src/app/help/page.tsx",
+        "frontend/src/features/help/HelpPage.tsx",
+    ]
+    assert "Real Help Structure" in candidate.source_excerpt
+
+    original_hash = candidate.source_hash
+    help_component.write_text(
+        "export function HelpPage() { return <main><h1>Changed Help Structure</h1></main> }",
+        encoding="utf-8",
+    )
+    changed = CodePrototypeDiscoveryService().scan_project(project)[0]
+    assert changed.source_hash != original_hash
+    assert "Changed Help Structure" in changed.source_excerpt
+
+
+def test_code_discovery_includes_referenced_i18n_copy(project: Project):
+    repo = Path(project.repo_path)
+    _write_page(
+        repo,
+        "frontend/src/app/help/page.tsx",
+        (
+            "import { HelpPage } from '@/features/help/HelpPage';\n"
+            "export default function Page() { return <HelpPage /> }\n"
+        ),
+    )
+    _write_page(
+        repo,
+        "frontend/src/features/help/HelpPage.tsx",
+        (
+            "import { useI18n } from '@/providers/I18nProvider';\n"
+            "export function HelpPage() { const { t } = useI18n(); "
+            "return <main>{t('help.quickStart')}</main> }"
+        ),
+    )
+    zh = repo / "frontend/src/lib/i18n/zh-CN.ts"
+    en = repo / "frontend/src/lib/i18n/en-US.ts"
+    _write_page(
+        repo,
+        "frontend/src/lib/i18n/zh-CN.ts",
+        'export const zh = {\n  "help.quickStart": "快速开始",\n};\n',
+    )
+    _write_page(
+        repo,
+        "frontend/src/lib/i18n/en-US.ts",
+        'export const en = {\n  "help.quickStart": "Quick start",\n};\n',
+    )
+
+    candidate = CodePrototypeDiscoveryService().scan_project(project)[0]
+    assert "frontend/src/lib/i18n/zh-CN.ts" in candidate.source_paths
+    assert str(en.relative_to(repo)) in candidate.source_paths
+    assert "frontend/src/lib/i18n/en-US.ts" in candidate.source_paths
+    assert "快速开始" in candidate.source_excerpt
+    assert "Quick start" in candidate.source_excerpt
+
+    original_hash = candidate.source_hash
+    zh.write_text(
+        'export const zh = {\n  "help.quickStart": "新手引导",\n};\n',
+        encoding="utf-8",
+    )
+    changed = CodePrototypeDiscoveryService().scan_project(project)[0]
+    assert changed.source_hash != original_hash
+    assert "新手引导" in changed.source_excerpt
+
+
 async def _collect_code_batch(svc: PrototypeService, project_id: str):
     return [ev async for ev in svc.generate_all_from_code_stream(project_id)]
 
@@ -550,8 +909,13 @@ async def test_code_generation_changed_source_appends_new_version(
         "app.application.prototype_service._stream_html",
         _fake_stream_html_chunks,
     )
-    page = Path(project.repo_path) / "src/app/settings/page.tsx"
-    _write_page(project.repo_path and Path(project.repo_path), "src/app/settings/page.tsx", "export default function SettingsPage() { return <main>One</main> }")
+    repo = _project_repo_path(project)
+    page = repo / "src/app/settings/page.tsx"
+    _write_page(
+        repo,
+        "src/app/settings/page.tsx",
+        "export default function SettingsPage() { return <main>One</main> }",
+    )
     await _collect_code_batch(svc, project.id)
     proto = (await svc.list_for_project(project.id))[0]
 
@@ -593,8 +957,13 @@ async def test_code_generation_failure_continues_with_remaining(
     assert len([ev for ev in events if ev.event == "prototype_done"]) == 1
 
     retry_preview = await svc.list_code_candidates(project.id)
-    retry_actions = {item["route"]: item["action"] for item in retry_preview["candidates"]}
-    assert sorted(retry_actions.values()) == ["regenerate", "skip"]
+    retry_actions = [
+        action
+        for item in _candidate_items(retry_preview)
+        for action in [item.get("action")]
+        if isinstance(action, str)
+    ]
+    assert sorted(retry_actions) == ["regenerate", "skip"]
 
 
 @pytest.mark.asyncio
@@ -602,4 +971,213 @@ async def test_list_code_candidates_reports_actions(svc: PrototypeService, proje
     _write_page(Path(project.repo_path), "src/app/page.tsx", "export default function HomePage() { return <main /> }")
     preview = await svc.list_code_candidates(project.id)
     assert preview["count"] == 1
-    assert preview["candidates"][0]["action"] == "create"
+    candidates = _candidate_items(preview)
+    assert candidates[0]["action"] == "create"
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_code_generation_can_target_selected_candidates_with_guidance(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    _write_page(Path(project.repo_path), "src/app/a/page.tsx", "export default function APage() { return <main>A</main> }")
+    _write_page(Path(project.repo_path), "src/app/b/page.tsx", "export default function BPage() { return <main>B</main> }")
+
+    events = [
+        ev
+        async for ev in svc.generate_all_from_code_stream(
+            project.id,
+            candidate_ids=["next-app-router--a"],
+            instruction="Use a mobile-first operations layout.",
+        )
+    ]
+
+    assert events[0].data["count"] == 1
+    assert events[0].data["requested_count"] == 1
+    assert events[-1].data["created"] == 1
+    listing = await svc.list_for_project(project.id)
+    assert len(listing) == 1
+    assert listing[0].source_ref == "next-app-router--a"
+    seed = await svc.store.load_prototype_version(listing[0].id, 0)
+    assert seed is not None
+    assert "Use a mobile-first operations layout." in (seed.instruction or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_code_generation_applies_candidate_specific_guidance(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    _write_page(Path(project.repo_path), "src/app/a/page.tsx", "export default function APage() { return <main>A</main> }")
+    _write_page(Path(project.repo_path), "src/app/b/page.tsx", "export default function BPage() { return <main>B</main> }")
+
+    events = [
+        ev
+        async for ev in svc.generate_all_from_code_stream(
+            project.id,
+            candidate_ids=["next-app-router--a", "next-app-router--b"],
+            instruction="Use the console design language.",
+            candidate_instructions={
+                "next-app-router--a": "Make candidate A mobile-first.",
+            },
+        )
+    ]
+
+    assert events[-1].data["created"] == 2
+    by_source = {p.source_ref: p for p in await svc.list_for_project(project.id)}
+    seed_a = await svc.store.load_prototype_version(by_source["next-app-router--a"].id, 0)
+    seed_b = await svc.store.load_prototype_version(by_source["next-app-router--b"].id, 0)
+    assert seed_a is not None
+    assert seed_b is not None
+    assert "Shared guidance: Use the console design language." in (seed_a.instruction or "")
+    assert "Candidate-specific guidance: Make candidate A mobile-first." in (
+        seed_a.instruction or ""
+    )
+    assert "Shared guidance: Use the console design language." in (seed_b.instruction or "")
+    assert "Candidate-specific guidance" not in (seed_b.instruction or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_code_generation_runtime_evidence_regenerates_unchanged_candidate(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    _write_page(
+        Path(project.repo_path),
+        "src/app/help/page.tsx",
+        "export default function HelpPage() { return <main>Help from source</main> }",
+    )
+
+    first = [ev async for ev in svc.generate_all_from_code_stream(project.id)]
+    assert first[-1].data["created"] == 1
+    prototype = (await svc.list_for_project(project.id))[0]
+
+    evidence = RuntimePrototypeEvidence(
+        attempted_url="http://127.0.0.1:3000/help",
+        final_url="http://127.0.0.1:3000/help",
+        success=True,
+        title="Runtime Help",
+        visible_text_excerpt="Runtime Help\nLive search box",
+        structure_summary="headings: Runtime Help; inputs: Search",
+    )
+    second = [
+        ev
+        async for ev in svc.generate_all_from_code_stream(
+            project.id,
+            candidate_ids=["next-app-router--help"],
+            runtime_evidence_by_candidate={"next-app-router--help": evidence},
+        )
+    ]
+
+    assert second[0].data["changed_count"] == 1
+    assert second[-1].data["regenerated"] == 1
+    seed = await svc.store.load_prototype_version(prototype.id, 0)
+    assert seed is not None
+    assert "Runtime browser evidence" in (seed.instruction or "")
+    assert "Live search box" in (seed.instruction or "")
+    updated = await svc.store.load_prototype(prototype.id)
+    assert updated is not None
+    assert "runtime_evidence" in (updated.source_meta_json or "")
+    assert "Runtime Help" in (updated.source_meta_json or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_code_generation_can_capture_runtime_evidence_before_generation(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    _write_page(
+        Path(project.repo_path),
+        "src/app/issues/[id]/page.tsx",
+        "export default function IssuePage() { return <main>Issue</main> }",
+    )
+
+    class _FakeCapture:
+        async def capture_candidate(self, project, candidate, base_url):
+            assert candidate.route == "/issues/:id"
+            assert base_url == "http://localhost:4000"
+            return RuntimePrototypeEvidence(
+                attempted_url="http://localhost:4000/issues/demo-id",
+                final_url="http://localhost:4000/issues/demo-id",
+                success=True,
+                title="Runtime Issue",
+                visible_text_excerpt="Runtime Issue Detail",
+                structure_summary="headings: Runtime Issue",
+            )
+
+    svc.runtime_capture_service = _FakeCapture()
+
+    events = [
+        ev
+        async for ev in svc.generate_all_from_code_stream(
+            project.id,
+            use_runtime_evidence=True,
+            runtime_base_url="http://localhost:4000",
+        )
+    ]
+
+    assert "candidate_capture" in [ev.event for ev in events]
+    assert "candidate_capture_done" in [ev.event for ev in events]
+    assert events[-1].data["created"] == 1
+    prototype = (await svc.list_for_project(project.id))[0]
+    seed = await svc.store.load_prototype_version(prototype.id, 0)
+    assert seed is not None
+    assert "Runtime Issue Detail" in (seed.instruction or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_code_generation_capture_failure_falls_back_to_source_generation(
+    svc: PrototypeService, project: Project, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    _write_page(
+        Path(project.repo_path),
+        "src/app/settings/page.tsx",
+        "export default function SettingsPage() { return <main>Settings</main> }",
+    )
+
+    class _FakeCapture:
+        async def capture_candidate(self, project, candidate, base_url):
+            return RuntimePrototypeEvidence(
+                attempted_url="http://localhost:4999/settings",
+                success=False,
+                failure_reason="connection refused",
+            )
+
+    svc.runtime_capture_service = _FakeCapture()
+
+    events = [
+        ev
+        async for ev in svc.generate_all_from_code_stream(
+            project.id,
+            use_runtime_evidence=True,
+            runtime_base_url="http://localhost:4999",
+        )
+    ]
+
+    assert "candidate_capture_failed" in [ev.event for ev in events]
+    assert events[-1].data["created"] == 1
+    prototype = (await svc.list_for_project(project.id))[0]
+    seed = await svc.store.load_prototype_version(prototype.id, 0)
+    assert seed is not None
+    assert "Capture status: failed or unavailable" in (seed.instruction or "")

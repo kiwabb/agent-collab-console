@@ -19,11 +19,7 @@ interface Props {
 
 export function AgentStatusProvider({ issueId, children }: Props) {
   const snapshot = useAgentStatus(issueId);
-  return (
-    <AgentStatusContext.Provider value={snapshot}>
-      {children}
-    </AgentStatusContext.Provider>
-  );
+  return <AgentStatusContext.Provider value={snapshot}>{children}</AgentStatusContext.Provider>;
 }
 
 export function useAgentStatusContext(): AgentStatusSnapshot {

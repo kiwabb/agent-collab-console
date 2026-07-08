@@ -5,7 +5,7 @@ const { applyPatch } = jsonPatch;
 
 export function applyExecutionProcessPatch(
   current: ExecutionProcessesState | null,
-  patches: Operation[]
+  patches: Operation[],
 ): ExecutionProcessesState {
   const base = current ?? { execution_processes: {} };
   const result = applyPatch(base, patches, false, false);

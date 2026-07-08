@@ -35,7 +35,9 @@ export function ConductorAlerts({ alerts, onDismiss }: Props) {
         return (
           <div
             key={alert.id}
-            data-density={isOperationalConductorAlert ? "conductor-alert-operational" : "conductor-alert-info"}
+            data-density={
+              isOperationalConductorAlert ? "conductor-alert-operational" : "conductor-alert-info"
+            }
             className={cn(
               "relative flex items-center justify-between gap-3 overflow-hidden rounded-2xl border px-4 py-2.5",
               SEVERITY_STYLE[alert.severity],

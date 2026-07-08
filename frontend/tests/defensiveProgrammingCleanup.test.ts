@@ -143,5 +143,5 @@ test("Task conversation helpers rely on typed arrays without redundant fallbacks
   assert.doesNotMatch(source, /taskMessages \|\| \[\]/);
   assert.doesNotMatch(source, /taskMessages \?\? \[\]/);
   assert.match(source, /const processMessages = executionProcesses\.flatMap/);
-  assert.match(source, /messages: buildConversationMessages\(\[\.\.\.taskMessages,/);
+  assert.match(source, /messages:\s*buildConversationMessages\(\s*\[\.\.\.taskMessages,/);
 });

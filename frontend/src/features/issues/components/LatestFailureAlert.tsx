@@ -21,7 +21,10 @@ export function LatestFailureAlert({ failure, onJump, onOpenDetail }: Props) {
         <div className="min-w-0">
           <div className="mb-1 flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-status-failed">
             <AlertTriangle size={15} />
-            {t("issue.command.latestFailure", { role: failure.role, time: failure.createdAt ? `@ ${formatTime(failure.createdAt, locale)}` : "" })}
+            {t("issue.command.latestFailure", {
+              role: failure.role,
+              time: failure.createdAt ? `@ ${formatTime(failure.createdAt, locale)}` : "",
+            })}
           </div>
           <p className="truncate text-sm text-foreground">{failure.summary}</p>
         </div>
@@ -30,7 +33,11 @@ export function LatestFailureAlert({ failure, onJump, onOpenDetail }: Props) {
             <ListTree size={14} />
             {t("issue.command.jumpToTimeline")}
           </Button>
-          <Button size="sm" onClick={onOpenDetail} className="gap-2 rounded-xl bg-status-failed text-white hover:bg-status-failed/90">
+          <Button
+            size="sm"
+            onClick={onOpenDetail}
+            className="gap-2 rounded-xl bg-status-failed text-white hover:bg-status-failed/90"
+          >
             <ExternalLink size={14} />
             {t("issue.command.fullOutput")}
           </Button>

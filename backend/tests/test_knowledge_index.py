@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -55,7 +56,7 @@ async def test_search_artifact_content(store, tmp_path):
     await store.save_codex_issue(issue)
     p = tmp_path / "prd.md"
     p.write_text("# PRD\nWe will refactor the websocket reconnection logic.", encoding="utf-8")
-    artifact = {
+    artifact: kidx.ArtifactRow = {
         "id": "i2:prd.md",
         "issue_id": "i2",
         "task_id": "t1",
@@ -69,7 +70,32 @@ async def test_search_artifact_content(store, tmp_path):
     assert any(r["artifact_id"] == "i2:prd.md" for r in out["artifacts"])
     # Snippet should contain the marked hit
     matches = [r for r in out["artifacts"] if r["artifact_id"] == "i2:prd.md"]
-    assert "<mark>" in (matches[0]["snippet"] or "")
+    snippet = cast(str | None, matches[0]["snippet"])
+    assert "<mark>" in (snippet or "")
+
+
+@pytest.mark.asyncio
+async def test_search_json_artifact_array_content(store, tmp_path):
+    issue = _make_issue(id="json-artifact-issue", title="Structured artifact", description="-")
+    await store.save_codex_issue(issue)
+    p = tmp_path / "report.json"
+    p.write_text('["alpha-token", {"summary": "beta-token"}]', encoding="utf-8")
+    await kidx.index_artifact(
+        store,
+        {
+            "id": "json-array-artifact",
+            "issue_id": issue.id,
+            "task_id": "t",
+            "name": "report.json",
+            "path": str(p),
+            "kind": "specialist",
+            "created_at": datetime.now().isoformat(),
+        },
+    )
+
+    out = await kidx.search(store, "beta-token", scope="artifacts", mode="fts")
+
+    assert any(r["artifact_id"] == "json-array-artifact" for r in out["artifacts"])
 
 
 @pytest.mark.asyncio
@@ -93,7 +119,7 @@ async def test_search_snippet_escapes_indexed_html_but_keeps_mark_tags(store, tm
 
     out = await kidx.search(store, "vulnerable-token", scope="artifacts", mode="fts")
     hit = next(r for r in out["artifacts"] if r["artifact_id"] == "xss-artifact")
-    snippet = hit["snippet"]
+    snippet = cast(str, hit["snippet"])
     assert "<mark>vulnerable-token</mark>" in snippet
     assert "<img" not in snippet
     assert "onerror" in snippet
@@ -182,8 +208,14 @@ async def test_reindex_walks_existing_issues(store, tmp_path):
 
 
 def test_rrf_merge_ranks_overlap_first():
-    a = [{"issue_id": "x", "source": "fts"}, {"issue_id": "y", "source": "fts"}]
-    b = [{"issue_id": "y", "source": "semantic"}, {"issue_id": "z", "source": "semantic"}]
+    a: list[kidx.SearchHit] = [
+        {"issue_id": "x", "source": "fts"},
+        {"issue_id": "y", "source": "fts"},
+    ]
+    b: list[kidx.SearchHit] = [
+        {"issue_id": "y", "source": "semantic"},
+        {"issue_id": "z", "source": "semantic"},
+    ]
     merged = kidx._merge_rrf(a, b, limit=10)
     # 'y' appears in both — it should rank ahead of 'x' and 'z'.
     assert merged[0]["issue_id"] == "y"

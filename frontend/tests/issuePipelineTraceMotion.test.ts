@@ -12,7 +12,10 @@ test("issue pipeline trace marks running stages with dispatch motion", () => {
   );
 
   assert.match(source, /const isRunningStage = stage\.status === "running"/);
-  assert.match(source, /data-density=\{isRunningStage \? "issue-pipeline-running-stage" : "issue-pipeline-stage"\}/);
+  assert.match(
+    source,
+    /data-density=\{isRunningStage \? "issue-pipeline-running-stage" : "issue-pipeline-stage"\}/,
+  );
   assert.match(source, /<AgentThinkingIndicator phase="dispatching" size=\{12\} \/>/);
   assert.match(source, /animate-shimmer-sweep/);
   assert.match(source, /motion-essential/);

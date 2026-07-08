@@ -1,0 +1,207 @@
+一、i18n(系统性,跨全部域)
+
+整页/整组件级(影响最大)
+- ApprovalsPage.tsx:211 — 整页文案几乎全硬编码英文(h1/Refresh/6 tab/Loading/Approve/Reject),已import useI18n 却只用一次。中文环境此页全英文。CONFIRMED
+- CollabFeedTab.tsx:1 — 整 tab 未引入 useI18n,标题/空态/Refresh 全英文。CONFIRMED
+- RunRecoveryPanel.tsx:16 — 整面板未接i18n。CONFIRMED
+- WorkspaceConsoleHeader.tsx:87 — 队列汇总 {running} running · {awaiting} awaiting 硬编码,同页其它走 t()。CONFIRMED
+- AgentTimelinePanel.tsx:69/73 — 标题 Timeline · {N} entries、空态 No activity yet硬编码。CONFIRMED
+- WorkbenchPage.tsx:885 — toast 标题中英混排(发送失败与 Issue created 并存)。CONFIRMED
+- AccountPopover.tsx:73 — 文案硬编码,头像字母写死 Z。CONFIRMED
+- InboxDashboard.tsx:157 — hero 标题 + 6 个 KPI label 硬编码。CONFIRMED
+条通过。
+
+一句话:role/子任务之间不会再共享上下文;只有人类工作台的连续对话才刻意共享,这是设计意图不是 bug。
+
+---
+现在重启前端展示审查工作流(上次被打断了)。
+/workflows to view dynamic workflow runs
+
+工作流已重新启动(Task wcr2xqa3p):12 域并行初审 → 对抗复核 → 合成排序。跑完我把报告给你。用 /workflows 可看实时进度。
+
+✻ Cogitated for 51s
+
+⏺ Dynamic workflow "并行审查前端各功能域的展示不合理之处，对抗性复核后合成排序报告" completed · 45m 8s
+
+工作流跑完了(25 agent、117 条初审→ 114 条复核存活)。报告被截断了,我读完整版再呈给你。
+
+  Read 1 file
+
+审查完成。25 个agent、117 条初审 → 对抗复核后 114 条存活,每条都亲自扒过真实代码。下面是完整报告。
+
+---
+前端展示合理性复核报告
+
+总体判断
+
+这套前端工程化程度不低,已有成熟设计系统底座(components/ui 下 Dialog/Select/Confirmn 齐全)、暗色主题语义 token也铺得比较全。问题不在"没规范",而在"规范落地不彻底"——大量页面绕过已有统一组件和 i18n 体系各写各的。三类系统性问题:
+
+1. i18n 覆盖是最大漏洞(约 40 条,跨全部域)。三种模式:整页未接 useI18n(Approvals/CollabFeedTab/RunRecoveryPanel)、局部漏翻中英混排、裸渲染后端枚举(awaiting_review 这种 snake_case 直接上屏)。
+2. 可访问性普遍短板,且踩中 CLAUDE.md 自己记的老坑。纯图标按钮无 aria-label、<div o 盘/屏读不可达)、全局 Toast 无 aria-live(30+ 调用点听不到)。
+3. 响应式裁切 + 绕过设计系统的视觉割裂。固定像素宽 + overflow-hidden 导致窄屏操作列被切掉不可点;原生 <select>/window.confirm/手写遮罩替代库内组件。
+
+外加两处Hello World 脚手架泄漏到生产首页,最扎眼。
+
+---
+一、i18n(系统性,跨全部域)
+
+整页/整组件级(影响最大)
+- ApprovalsPage.tsx:211 — 整页文案几乎全硬编码英文(h1/Refresh/6 tab/Loading/Approve/Reject),已import useI18n 却只用一次。中文环境此页全英文。CONFIRMED
+- CollabFeedTab.tsx:1 — 整 tab 未引入 useI18n,标题/空态/Refresh 全英文。CONFIRMED
+- RunRecoveryPanel.tsx:16 — 整面板未接i18n。CONFIRMED
+- WorkspaceConsoleHeader.tsx:87 — 队列汇总 {running} running · {awaiting} awaitingRMED
+- AgentTimelinePanel.tsx:69/73 — 标题 Timeline · {N} entries、空态 No activity yet硬编码。CONFIRMED
+- WorkbenchPage.tsx:885 — toast 标题中英混排(发送失败与 Issue created 并存)。CONFI
+- AccountPopover.tsx:73 — 文案硬编码,头像字母写死 Z。CONFIRMED
+- InboxDashboard.tsx:157 — hero 标题 + 6 个 KPI label 硬编码。CONFIRMED
+
+裸渲染后端枚举(建议统一映射工具)
+- RunDetail.tsx:901 — StatusBadge 直接渲染 {status},awaiting_review 带下划线上屏。CONFIRMED
+- RunDetail.tsx:625 — 消息角色标签裸渲染 {msg.role}。CONFIRMED
+- AgentCoordinationPanel.tsx:99/176 — status裸渲染;role.replace("_"," ") 只替换首个下划线(engineer_frontend_x→engineer frontend_x),应用 /_/g 或复用 getWorkspaceConsoleRoleLabel。CONFIRMED
+- IssueGrid.tsx:424 — phase badge 用 .replace("_"," "),与 IssueBoard 的 t(phase.labelKey) 不一致。CONFIRMED
+- TaskBoard.tsx:173 — 任务卡 rawStatus 裸渲染,连下划线都没去。CONFIRMED
+
+设置页两处逻辑 bug
+- SettingsPage.tsx:252 — 语言副标题三元只判断"是否选中"不看 option.value,选英文时
+- SettingsPage.tsx:274 — 字号描述用两个 key 拼成 字号 / 中 像占位符,缺 settings.fontSizeDesc。CONFIRMED
+
+其它相对时间/低危漏翻:ConductorLogPanel.tsx:176 与 AgentTimelinePanel.tsx:30 的 relTime(just now/Xs ago)英文、AgentDagNode.tsx:390(humanStatus + ROLE_LABEL 混排)、ProjectPrototypesPage.tsx:950(3 处 Loading…)、benchmarks/page.tsx:62/204,及IssueGrid.tsx:477、AppStatusBar.tsx:84(写死codex 0.1.0)等约十处,均 CONFIRMED。
+
+---
+二、accessibility(系统性)
+
+- toast.tsx:69 — 全局 Toast 无 aria-live/role,关闭按钮无 aria-label。全局挂载 30+ 调用点,屏读完全听不到成功/错误。加 aria-live="polite"、error 用 role="alert"。一处改动惠及全局。CONFIRMED
+- KnowledgePage.tsx:262 — 搜索结果整行用 <li onClick> 跳转(issues/artifacts 两处),盘屏读不可达。改 <button>(参考 ArtifactsHubPage.tsx:150)。CONFIRMED
+- WorkbenchPage.tsx:905 —品牌区回首页用 <div onClick>。CONFIRMED
+- WorkbenchPage.tsx:1132 — 错误 banner 关闭按钮用旋转 45° 的 RotateCcw(撤销图标)表NFIRMED
+- AccountPopover.tsx:52 — 自实现popover 无 Escape/focus trap/aria-expanded,改用库内 DropdownMenu。CONFIRMED
+- 一批纯图标按钮无 aria-label:RunDetail.tsx:463(Stop/Delete)、IssueBoard.tsx:507(Plus)、CreateProjectDialog.tsx:169/200、CollabFeedTab.tsx:131、BenchmarksPage.tsx:236(仅一个 ↻ 字符)、KnowledgePage.tsx:186(select 无 label)、ProjectPrototypesPage.tsx:1281。均 CONFIRMED。
+
+---
+三、visual-consistency(脚手架残留 + 绕过设计系统)
+
+- app/page.tsx:7 + WorkbenchPage.tsx:1159 — 首页渲染两个 Hello World 脚手架泄漏到生产,含 components/HelloWorld.tsx 的 text-4xl font-black 大字。直接删。CONFIRMED
+- CollabFeedTab.tsx:59 — specialist 条目用原生 bg-blue-50/100,暗底上刺眼浅底,应用语义 token。CONFIRMED
+- TasksRunsTab.tsx:445、PrototypeCanvas.tsx:205 — 危险操作用原生 window.confirm,全库统一用 ConfirmDialog(10+ 处)。CONFIRMED
+- IssueBoard.tsx:599 — 导入弹窗手写 fixed inset-0 遮罩,未复用 Dialog,缺焦点陷阱/ESC。CONFIRMED
+- IssueBoard.tsx:298 — assignee 筛选、批量移阶段用原生 <select>,与同页 Base UI Select 割裂。CONFIRMED
+- AccountPopover.tsx:128 — "Report an issue" 指向 github.com/anthropics/claude-codMED
+- ProjectConductorThreadDock.tsx:263 — 错误态硬编码 text-red-500,本域其它用 text-error。CONFIRMED
+
+---
+四、responsive(固定像素 + overflow-hidden 裁切)
+
+这类是真正会导致"功能不可用"的:
+- WorkbenchPage.tsx:1273 + TaskExecutionSheet.tsx:256 — 右侧面板固定 w-[500px],SheetContent 仅 w-[90vw];窄屏 90vw<500px,左侧详情压到 0 宽被 overflow-hidden 裁掉。两处同修(窄屏 flex-col)。CONFIRMED
+- ProjectWorkspacesPage.tsx:606 — 表格固定列宽网格 + overflow-hidden 无 overflow-x辑/删除)被切掉不可点。CONFIRMED
+- ProjectPrototypesPage.tsx:899 — grid-cols-[280px_...] 无断点,窄屏侧栏不折叠、iframe 被压不可用。CONFIRMED
+- ProjectsPage.tsx:703、WorkbenchPage.tsx:1241 — badge/按钮行无 flex-wrap 溢出被裁。CONFIRMED
+- BenchmarksPage.tsx:421 — Score×cost SVG 固定 width=480 无 viewBox,窄屏溢出。CONFIRMED
+- TasksRunsTab.tsx:283 — 三栏前两栏 460px 不收缩。CONFIRMED
+
+---
+五、interaction-feedback(死交互 + 缺 loading 防重复)
+
+- TaskBoard.tsx:275 — 看板/表格视图切换是死交互:viewMode 状态和两个切换按钮都在,点击会高亮,但渲染树无一处按 viewMode 分支,Swimlanes 无条件渲染,table 视图永不出现。要么实现要么删 toggle。CONFIRMED
+- WorkbenchPage.tsx:1148 — 重连成功时正文写"连接已恢复",但banner 标题恒为"核心离线"且仍是橙色 warning,自相矛盾。CONFIRMED
+- ProjectDashboard.tsx:118、ProjectsPage.tsx:726、PrototypeCanvas.tsx:232 — 提交/删除按钮无 in-flight disabled,请求期间可重复触发。CONFIRMED
+- button.tsx:13 — default 变体 hover 背景被限定在 [a]:hover:,渲染为 <button> 的主 CTA 悬停无反馈,补 hover:bg-primary/90。CONFIRMED
+- IssueSideStack.tsx:205 — 验收清单 li 带 cursor-pointer+hover 但无 onClick,误导性反馈。CONFIRMED
+
+---
+六、空态/加载/错误态
+
+- ApprovalsPage.tsx:257 — 加载失败被伪装成成功空态:catch 只 addToast 不置error 态,数据空 → 渲染绿色 "Inbox zero"。接口挂了和真无待办无法区分。CONFIRMED
+- IssueBoard.tsx:542 — 泳道空态 opacity-[0.03](3% 不透明度),虚线框和 READY 文案几乎不可见,等同没有空态。提到 opacity-40。CONFIRMED
+- BenchmarksPage.tsx:563/757 — loading 态与空态复用同一 'No data.',无 Skeleton,无法区分。CONFIRMED
+- AgentLiveTimeline.tsx:479 — 时间线底部错误用 10px 极小字裸放,顶部同类却是醒目色
+
+---
+七、截断/溢出(无 title / 静默丢弃)
+
+- AppSidebar.tsx:373 — 工作区只渲染前 8 个 issue(slice(0,8)),超出静默丢弃,无"还有 N 个"。CONFIRMED
+- BranchListView.tsx:25、ProjectDashboard.tsx:181 — 分支名在 min-w-0 容器却无 trunFIRMED
+- ProjectConductorPage.tsx:224/308 — 问答 answer 与记忆条目全量渲染无 max-h,超长无限撑高。CONFIRMED
+- AgentDagNode.tsx:211 — 工具 chip 无 truncate,卡片 overflow-hidden 静默裁切工具名。CONFIRMED
+- ArtifactsHubPage.tsx:175、ProjectPrototypesPage.tsx:873、BenchmarksPage.tsx:834 — truncate 无 title 看不全。CONFIRMED
+
+---
+八、layout /密度 / 对比度
+
+- RunDetail.tsx:354(+378/405/430/441) — 用了不存在的 flex-2 类(Tailwind v4 只有 fl  flex-[2]。CONFIRMED
+- ApprovalDialog.tsx:30 — 卡片容器无 relative,absolute 关闭按钮相对全屏遮罩定位,× 跑到视口右上角。加 relative。CONFIRMED
+- AppSidebar.tsx:179 — WORKSPACE 计数徽标只统计已展开的,展示误导性部分计数。CONFIRMED
+- AgentLibraryPage.tsx:125 — 4 列网格无表头,executor/artifact_subdir 两列无标签看不懂。CONFIRMED
+- empty-state.tsx:254 — 描述 text-text-muted/60 实测约 2.7:1,低于 WCAG AA 4.5:1。
+
+
+一、专家网格（Specialist Mesh）—— 子系统级失效（最高优先级）
+
+四个 HIGH 缺陷沿同一条 resume 链层层叠加，走专家路径的 issue 正常使用下几乎必然卡死或静默丢产物。建议整体重构而非逐点打补丁：
+
+- 1.1 专家 child 永不回路 (specialist_orchestrator.py:146-171)：child 没有 workflow_node_id，而 on_task_completed(workflow_scheduler.py:320) 和 _notify_workflow_scheduler(event_bus.py:307) 都在 falsy workflow_node_id 上短路 → 唯一唤醒 parent 的 complete_specialist_request 永不执行 → parent 永久 waiting_for_specialist，只能靠 CONDUCTOR_LOOP_MAX_S=7200兜底杀成 failed。
+- 1.2 runtime 终态覆盖 waiting 状态 (process_runtime_common.py:981-1010)：request_specialist 改的是 reload 出的新副本，runtime 手里旧 task 对象随后 save_codex_task(done) 全行覆盖回 done。对象身份 bug（对比 apply_clarification_if_needed 改的是同一对象就能存活）。
+- 1.3 崩溃后不可恢复 (specialist_orchestrator.py:174-177)：pause-resume 关联纯 DB 状态，boot 恢复绕过 event bus 直接写行标 failed，无任何启动扫描对账 waiting_for_specialist parent。
+- 1.4 resume 只置 pending 从不重派 (workflow_scheduler.py:636-724)：complete_specialist_request 注入 findings 后置 parent 为 pending 就 return，不调 dispatch_role；真正带重派逻辑的 _maybe_resume_from_specialist 是零调用者的死代码。模块 docstring 承诺"reset to pending, re-dispatched"，只实现了一半。
+- 1.5 (MEDIUM) 专家派发绕过 role 并发槽和 over_budget 门禁。
+
+二、收尾门禁被绕过
+
+- 2.1 (HIGH) end_turn 纯文本封issue 为 done，完全绕过成功门禁 (conductor_main_loop.py:438-456)：生产中 on_token_delta 恒非空使 end_turn 分支的守卫短路，即使零派发也返回 status="done" 并 seal issue completed，从不检查"有 implementation+verification 节点、无未决节点"的成功不变式。更糟：finalize_task 门禁拒绝的 done 请求，其[finalize rejected] 文本会成为 final_text，下一轮 end_turn 即可把被拒 issue 从无门禁分支封成 done。
+- 2.2 (MEDIUM) 合并冲突从不落到 WorkflowGraph (conductor_tools.py:998-1103)：冲突只在返回 dict 里，没有任何节点被标成冲突态；门禁里 conflict/merge_conflict/awaiting_merge 那些 blocker 项是从无写入方的死代码，导致带冲突（B 的产物不在 issue 分支）也能通过门禁 finalize。
+
+三、并行 Swarm 数据完整性
+
+- **3.1 (HIGH) 同一轮多个 dispatch_subagent 并发跑在同一个共享 issue worktree** (conductor_main_loop.py:488-493)：协议无禁止，注释还主动鼓励"fan out several reviewers"，_execute_tool_uses用gather 并发，cwd 都是共享 issue worktree → 两个 CLI 同时写文件和 git index → 交错/丢失编辑、index.lock 损坏。dispatch_start_lock 只串行化节点创建，RoleConcurrencyLimiter` 按 role 计数，都拦不住。
+- 3.2 (MEDIUM) fan-out 与join 之间崩溃，merge_candidates 仅存内存 → 重启后终态清理 git branch -D 静默删除已提交但未合并的产物。
+- 3.3 (MEDIUM) fan-out 前 flush 是 best-effort，失败静默继续 → 隔离 agent 从缺产物的陈旧分支 fork。
+- 3.4 (MEDIUM) 冲突 diff base用移动后的 issue_branch，被本轮更早成功合并污染，误导 resolver。
+
+四、看门狗与结果恢复
+
+- 4.1 (MEDIUM) 看门狗先 signal failed 再 nudge (stall_watchdog.py:145-202)：Conductor 的 wait_for_active 在 nudge 恢复运行前就以 failed 解阻并pop 掉自己的 Event；随后 agent 对 nudge 给出有效结果，_recover_nudge_result 写库时不重发事件也不重新 signal registry，结果永远到不了 Conductor，节点被二次派发。
+
+五~九（中低危，摘要）
+
+- 5.1 (MEDIUM) relaunch 熔断计的是终身 orphan-stall 无窗口无衰减 → 长命 issue 跨 4 次重启被误封failed。
+- 6.1/6.2 (MEDIUM) setup_script 失败泄漏 worktree 且同issue 重试永久跳过 setup；per-agent 分支名截断到 24 字符导致长角色名（operations_engineer）跨批次分支别名。
+- 7.1/7.2 (MEDIUM) dispatch_batch 在共享锁内串行跑 setup 同时占满 role 槽饿死其他 issue；batch cap(4) > role cap(2) 导致同角色 agent 假失败浪费 ~30s。
+- 8.1(MEDIUM) 单 loop 内 LLM 消息历史无界增长（tool_result 含无上限 artifact_json），可撑爆上下文窗口。
+- 8.2/8.3 (LOW) per-issue 锁字典永久增长；ev.wait() 孤儿 future累积。
+- 9.1/9.2 (LOW) 非法相位转移只告警不阻止；heartbeat 退化告警只发一次（== 应为 >=）。
+
+架构层面的三条系统性根因
+
+1. 非终态状态既不驱动控制流、又无持久化对账层 — waiting_for_specialist/pending/swarm"待合并"都只存于 DB 行或内存，没有后台协调器在崩溃/事件丢失后对账。专家四连爆(1.1-1.4)、swarm丢产物(3.2) 都是"假设事件必达、进程不崩"这一个缺陷的不同投影。
+2. 关键编排决策停留在内存，落库是事后附带效果 — merge_candidates、join 后的 SHA、专家 parent 状态被 runtime 覆盖，反复出现"真相在内存/git 盘、DB 是过时影子"。应对影响 finalize/丢产物的决策做 write-ahead。
+3. 门禁被实现为"事后建议"而非"前置强制" — 成功门禁被 end_turn 绕过、冲突只进 LLM 提示不进节点态、非法转移只告警、flush 失败只 debug 日志。护栏被反复降级为"LLM 自觉/运维看日志"。
+
+修复优先级：先修专家网格（整体重构 resume 链+ 对账恢复）和 end_turn 绕过门禁(2.1)——这两处正常使用下必然发生且影响 issue 正确收尾；再是 swarm 数据完整性(3.1/3.2/3.3) 和看门狗结果孤儿(4.1)。
+
+需要我针对最严重的某一组（比如专家网格 resume 链，或 end_turn 门禁绕过）落地具体的代码修复吗？
+
+
+- 链路监控是否完整：不完整（大部分未落地）。有多套可用数据源，但缺统一 trace 模型，无法用单一 key 把「Conductor 决策 → 子 agent → 内部步骤」串成一棵链；预留的关联字段实际从不填值。
+- 前端体现是否正常：部分正常。实时执行流（Tasks·Runs Live / DAG / Conductor Turns）是活的、端到端打通；但 audit 页的「角色调用链」可视化组件已写好却未挂载，线上只有扁平表格。
+
+已具备的能力
+
+两套并行存储都在真实写入：
+- log_events（CLI 逐行流，tool_use/tool_result 已按 id 解析去重，process_runtime_common.py:769）
+- audit_log（9 类语义选段，6 个 recorder 全接到真实调用点：QA/Conductor/event/autoplan/git/cli_spawn）
+- 对外表面：GET /api/codex/audit-log、执行进程日志、issues/{id}/graph（Conductor 决策时间线）、agent-mesh（handoff 有向边）都可读
+
+前端最强的一环是实时 log 流：AgentLiveTimeline + useExecutionProcessLogStream（去重/排序/心跳/重连）+ codexLogNormalizer（统一 claude/codex）→ 渲染 bash/read/edit/search 带命令/diff/stdout/退出码的卡片。DAG 视图（拓扑布局 + 并行泳道 + 节点脚注 token/cost）也正常。
+
+关键缺口（按严重度）
+
+S1 — 方案 C 的 trace 模型根本没落地。全后端（除测试）grep trace_id/span_id/parent_span 零命中。AuditLog/WorkflowNode/AgentMessage 都没有 trace/span 字段。链路重建全靠共享外键的读时JOIN，没有 span 树、没有父子链接。记忆里记的"标准 trace 模型、源头透传进runtime"尚未实现。
+
+S1 — correlation_id 是死字段。列/dataclass/port/writer 参数/INSERT/SELECT/API 序列化整条管道都铺好了，但没有任何调用点传真实值——6 个 recorder 全写成 correlation_id=None，也不是可过滤参数。
+
+S2 — 无单一 key 拼接 Conductor 行与子 agent 的 log_events。各来源 key 互不相交：log_events 用 execution_process_id/task_id/session_id，Conductor turn 只带 conductor_task_id+issue_id，cli_spawn 只带 task_id，git/autoplan 两者都无。audit_log.execution_process_id（注释里本应做连接键）几乎从不填。
+
+S2 — 前端调用链可视化是死 UI。AuditRoleChainView.tsx:52（role 卡片 → turn 子组 → 有序步骤 + 可折叠 input/output）和 buildAuditRoleGroups（auditRoleChains.ts:62）已实现，全仓grep 仅命中文件自身，无任何挂载。这正是记忆里 2026-06-29 记的半成品状态——至今仍未挂进AuditLogPage。
+
+S3 — conductor_turns 无 HTTP 端点（表和 save/list 都在，interfaces/ 无路由）；audit 写入是drop-newest 有界队列，高负载静默丢行；log_events 无 role/category 一等字段；实时时间线缺 model+session 头（步骤流与 executor/model 显示脱节）。

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Mapping
 from datetime import datetime
+from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from app.application.task_status_events import build_task_status_event
@@ -19,6 +21,43 @@ HELP_REQUEST_TERMINAL_STATUSES = frozenset(
 HELP_REQUEST_RUNNING_STATUS = "running"
 
 
+class HelpStore(Protocol):
+    async def load_codex_task(self, task_id: str) -> CodexTask | None: ...
+
+    async def save_codex_task(self, task: CodexTask) -> None: ...
+
+    async def save_help_request(self, help_request: HelpRequest) -> None: ...
+
+    async def load_help_request(self, help_request_id: str) -> HelpRequest | None: ...
+
+    async def list_help_requests(
+        self, *, parent_task_id: str | None = None, child_task_id: str | None = None
+    ) -> list[HelpRequest]: ...
+
+    async def save_codex_task_message(self, message: CodexTaskMessage) -> None: ...
+
+    async def update_execution_process_status(
+        self,
+        process_id: str,
+        status: str,
+        exit_code: int | None = None,
+        completed_at: datetime | None = None,
+    ) -> object: ...
+
+
+class HelpEventBus(Protocol):
+    async def append(self, event: dict[str, object]) -> None: ...
+
+
+class HelpTaskRunner(Protocol):
+    def start_task_run(self, task: CodexTask, **kwargs: object) -> Awaitable[object]: ...
+
+
+@runtime_checkable
+class ExecutionProcessRef(Protocol):
+    id: object
+
+
 def is_help_request_running_status(status: object | None) -> bool:
     return normalize_task_status(status) == HELP_REQUEST_RUNNING_STATUS
 
@@ -27,15 +66,37 @@ def is_help_request_terminal_status(status: object | None) -> bool:
     return normalize_task_status(status) in HELP_REQUEST_TERMINAL_STATUSES
 
 
+def _execution_process_id(value: object) -> str | None:
+    if not isinstance(value, ExecutionProcessRef):
+        return None
+    return value.id if isinstance(value.id, str) else None
+
+
+def _payload_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _payload_text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
 class HelpOrchestrator:
-    def __init__(self, codex_store, event_bus, task_runner):
+    def __init__(
+        self, codex_store: HelpStore, event_bus: HelpEventBus, task_runner: HelpTaskRunner
+    ) -> None:
         self.codex_store = codex_store
         self.event_bus = event_bus
         self.task_runner = task_runner
 
     async def request_help(
-        self, *, parent_task_id, target_executor, title, prompt, context_summary=None
-    ):
+        self,
+        *,
+        parent_task_id: str,
+        target_executor: str | None,
+        title: str | None,
+        prompt: str | None,
+        context_summary: str | None = None,
+    ) -> HelpRequest:
         parent = await self._load_running_parent(parent_task_id)
         if not target_executor:
             raise ValueError("Help target executor is required")
@@ -125,7 +186,7 @@ class HelpOrchestrator:
         try:
             exec_process = await self.task_runner.start_task_run(child)
             child.status = "running"
-            child.last_execution_process_id = getattr(exec_process, "id", None)
+            child.last_execution_process_id = _execution_process_id(exec_process)
             child.updated_at = datetime.now()
             await self.codex_store.save_codex_task(child)
             await self.event_bus.append(
@@ -202,14 +263,14 @@ class HelpOrchestrator:
     async def request_help_from_runtime(
         self,
         *,
-        task_id,
-        workspace_id=None,
-        source_executor=None,
-        target_executor=None,
-        title=None,
-        prompt=None,
-        context_summary=None,
-    ):
+        task_id: str,
+        workspace_id: str | None = None,
+        source_executor: str | None = None,
+        target_executor: str | None = None,
+        title: str | None = None,
+        prompt: str | None = None,
+        context_summary: str | None = None,
+    ) -> HelpRequest:
         if source_executor is not None or workspace_id is not None:
             parent = await self.codex_store.load_codex_task(task_id)
             if parent is None:
@@ -228,7 +289,7 @@ class HelpOrchestrator:
 
     async def complete_help_request(
         self, help_request_id: str, *, child_status: str, child_result: str | None
-    ):
+    ) -> HelpRequest:
         help_request = await self.codex_store.load_help_request(help_request_id)
         if help_request is None:
             raise KeyError(help_request_id)
@@ -335,7 +396,7 @@ class HelpOrchestrator:
         await self.codex_store.save_help_request(help_request)
         return True
 
-    async def _load_running_parent(self, task_id: str):
+    async def _load_running_parent(self, task_id: str) -> CodexTask:
         task = await self.codex_store.load_codex_task(task_id)
         if task is None:
             raise KeyError(task_id)
@@ -422,9 +483,9 @@ class HelpOrchestrator:
 
     def _build_continuation_payload(
         self, help_request: HelpRequest, child_status: str, child_result: str | None
-    ):
+    ) -> dict[str, object]:
         status = "completed" if is_task_success_status(child_status) else "failed"
-        payload = {
+        payload: dict[str, object] = {
             "type": "help_result",
             "help_request_id": help_request.id,
             "target": help_request.target_executor,
@@ -442,25 +503,25 @@ class HelpOrchestrator:
             }
         return payload
 
-    def _build_continuation_prompt(self, payload: dict):
+    def _build_continuation_prompt(self, payload: Mapping[str, object]) -> str:
         if payload.get("status") == "completed":
-            result = payload.get("result") or {}
+            result = _payload_mapping(payload.get("result"))
             return (
                 "System continuation:\n"
                 "Your help request has completed.\n\n"
                 f"Help request id: {payload['help_request_id']}\n"
                 f"Status: {payload['status']}\n\n"
                 "Help result:\n"
-                f"{result.get('raw_result', '')}"
+                f"{_payload_text(result.get('raw_result'))}"
             )
-        error = payload.get("error") or {}
+        error = _payload_mapping(payload.get("error"))
         return (
             "System continuation:\n"
             "Your help request failed.\n\n"
             f"Help request id: {payload['help_request_id']}\n"
             f"Status: {payload['status']}\n\n"
             "Error:\n"
-            f"{error.get('message', '')}"
+            f"{_payload_text(error.get('message'))}"
         )
 
     def _build_help_result_message(

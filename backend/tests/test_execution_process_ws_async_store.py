@@ -1,6 +1,8 @@
 from datetime import datetime  # noqa: I001
+from typing import cast
 
 import pytest
+from fastapi import WebSocket
 
 from app.domain.models import CodexTask, ExecutionProcess, LogEvent
 from app.interfaces.codex_ws import (
@@ -121,7 +123,7 @@ async def test_update_task_status_preserves_fallback_event_when_task_missing(mon
 
     store = StoreWithoutTask()
     manager = ExecutionProcessWorkspaceStreamManager()
-    fallback = {
+    fallback: dict[str, object] = {
         "type": "task_status",
         "task_id": "task-missing",
         "project_id": "project-1",
@@ -158,7 +160,7 @@ async def test_update_task_status_uses_fallback_event_when_task_load_raises(monk
 
     store = StoreWithBrokenTaskLoad()
     manager = ExecutionProcessWorkspaceStreamManager()
-    fallback = {
+    fallback: dict[str, object] = {
         "type": "task_status",
         "task_id": "task-1",
         "workspace_id": "workspace-1",
@@ -191,11 +193,16 @@ async def test_get_state_supports_async_runtime_rows(monkeypatch):
 
     state = await manager.get_state(store.task.session_id)
 
-    process_payload = state["execution_processes"][store.process.id]
+    execution_processes = state["execution_processes"]
+    assert isinstance(execution_processes, dict)
+    process_payload = execution_processes[store.process.id]
+    assert isinstance(process_payload, dict)
     assert process_payload["id"] == store.process.id
     assert process_payload["task_id"] == store.task.id
     assert process_payload["title"] == store.task.title
-    assert process_payload["logs"][0]["id"] == "log-1"
+    logs = process_payload["logs"]
+    assert isinstance(logs, list)
+    assert logs[0]["id"] == "log-1"
 
 
 @pytest.mark.asyncio
@@ -210,7 +217,7 @@ async def test_initial_snapshot_flushes_pending_events():
     websocket = FakeWebSocket()
 
     ok = await _send_workspace_initial_snapshot(
-        websocket,
+        cast(WebSocket, websocket),
         {"execution_processes": {}},
         [{"type": "task_status", "task_id": "task-1", "status": "done"}],
     )
@@ -244,7 +251,7 @@ async def test_subscribed_workspace_receives_events_without_pending_patch():
             return None
 
     manager = ExecutionProcessWorkspaceStreamManager()
-    sub = codex_ws_module.WsSubscriber(FakeWebSocket(), maxsize=10)
+    sub = codex_ws_module.WsSubscriber(cast(WebSocket, FakeWebSocket()), maxsize=10)
     manager.subscribe("workspace-1", sub)
 
     await manager.publish_event(

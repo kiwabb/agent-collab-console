@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 class _ConductorControl:
     pause_requested: bool = False
     wake_event: asyncio.Event = field(default_factory=asyncio.Event)
-    inflight_llm_task: asyncio.Task | None = None
+    inflight_llm_task: asyncio.Task[object] | None = None
 
     def __post_init__(self) -> None:
         self.wake_event.set()
@@ -44,7 +44,7 @@ class ConductorPauseRegistry:
             self._controls.pop(conductor_task_id, None)
 
     async def set_inflight_llm_task(
-        self, conductor_task_id: str, task: asyncio.Task | None
+        self, conductor_task_id: str, task: asyncio.Task[object] | None
     ) -> None:
         async with self._lock:
             control = self._controls.get(conductor_task_id)

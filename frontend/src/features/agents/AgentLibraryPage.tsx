@@ -4,12 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { WorkbenchShell } from "@/features/workbench/WorkbenchShell";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import {
-  createAgent,
-  deleteAgent,
-  listAgents,
-  updateAgent,
-} from "@/lib/api/agents";
+import { createAgent, deleteAgent, listAgents, updateAgent } from "@/lib/api/agents";
 import type { Agent, CreateAgentRequest, UpdateAgentRequest } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -90,7 +85,7 @@ export function AgentLibraryPage() {
         eyebrow={t("agents.pageTitle")}
         title={t("agents.pageTitle")}
         description={t("agents.pageSubtitle")}
-        actions={(
+        actions={
           <Button
             size="sm"
             onClick={() => {
@@ -101,10 +96,9 @@ export function AgentLibraryPage() {
           >
             <Plus size={14} /> {t("agents.new")}
           </Button>
-        )}
+        }
         contentClassName="space-y-4"
       >
-
         {loading && (
           <InteractionEmptyState
             tone="loading"
@@ -142,9 +136,7 @@ export function AgentLibraryPage() {
                       </span>
                     )}
                   </div>
-                  <div className="text-[11px] text-text-muted truncate font-mono">
-                    {a.role_key}
-                  </div>
+                  <div className="text-[11px] text-text-muted truncate font-mono">{a.role_key}</div>
                 </div>
                 <div className="text-[11px] text-text-muted truncate font-mono">
                   {a.default_executor ?? "—"}
@@ -195,9 +187,7 @@ export function AgentLibraryPage() {
           onOpenChange={(o) => !o && setConfirmDelete(null)}
           title={t("agents.deleteTitle")}
           description={
-            confirmDelete
-              ? t("agents.deleteDescription", { name: confirmDelete.name })
-              : ""
+            confirmDelete ? t("agents.deleteDescription", { name: confirmDelete.name }) : ""
           }
           confirmText={t("agents.delete")}
           variant="destructive"
@@ -239,7 +229,8 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
   }, [open, editing]);
 
   const isBuiltin = editing?.is_builtin ?? false;
-  const canSubmit = name.trim().length > 0 && roleKey.trim().length > 0 && systemPromptTemplate.trim().length > 0;
+  const canSubmit =
+    name.trim().length > 0 && roleKey.trim().length > 0 && systemPromptTemplate.trim().length > 0;
 
   const handleSave = async () => {
     if (!canSubmit) return;
@@ -288,9 +279,7 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
         <DialogHeader>
           <DialogTitle>{editing ? t("agents.editTitle") : t("agents.newTitle")}</DialogTitle>
           <DialogDescription>
-            {isBuiltin
-              ? t("agents.builtinDescription")
-              : t("agents.customDescription")}
+            {isBuiltin ? t("agents.builtinDescription") : t("agents.customDescription")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -304,10 +293,15 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
                 className="bg-surface-input border-border-subtle"
               />
             </Field>
-            <Field label={t("agents.field.roleKey")} hint={editing ? t("agents.field.roleKeyImmutable") : t("agents.field.roleKeyHint")}>
+            <Field
+              label={t("agents.field.roleKey")}
+              hint={editing ? t("agents.field.roleKeyImmutable") : t("agents.field.roleKeyHint")}
+            >
               <Input
                 value={roleKey}
-                onChange={(e) => setRoleKey(e.target.value.replace(/[^a-z0-9_]/g, "").toLowerCase())}
+                onChange={(e) =>
+                  setRoleKey(e.target.value.replace(/[^a-z0-9_]/g, "").toLowerCase())
+                }
                 placeholder={t("agents.placeholder.roleKey")}
                 disabled={!!editing}
                 className="bg-surface-input border-border-subtle font-mono text-[12px]"
@@ -324,11 +318,7 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
           </Field>
           <Field
             label={t("agents.field.prompt")}
-            hint={
-              isBuiltin
-                ? t("agents.field.promptBuiltinHint")
-                : t("agents.field.promptHint")
-            }
+            hint={isBuiltin ? t("agents.field.promptBuiltinHint") : t("agents.field.promptHint")}
           >
             <textarea
               value={systemPromptTemplate}
@@ -354,7 +344,10 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
                 <option value="codex">codex</option>
               </select>
             </Field>
-            <Field label={t("agents.field.artifactSubdir")} hint={t("agents.field.artifactSubdirHint")}>
+            <Field
+              label={t("agents.field.artifactSubdir")}
+              hint={t("agents.field.artifactSubdirHint")}
+            >
               <Input
                 value={artifactSubdir}
                 onChange={(e) => setArtifactSubdir(e.target.value)}
@@ -372,13 +365,20 @@ function AgentEditorDialog({ open, onClose, editing, onSaved }: AgentEditorDialo
             onClick={() => void handleSave()}
             disabled={!canSubmit || saving}
             data-density={saving ? "agent-library-save-tool" : "agent-library-save"}
-            className={cn("bg-brand hover:bg-brand-strong text-black font-semibold", saving && "motion-essential")}
+            className={cn(
+              "bg-brand hover:bg-brand-strong text-black font-semibold",
+              saving && "motion-essential",
+            )}
           >
             {saving ? (
               <span className="flex items-center gap-1.5">
                 <AgentThinkingIndicator phase="tool" size={12} /> {t("agents.saving")}
               </span>
-            ) : editing ? t("agents.saveChanges") : t("agents.createAgent")}
+            ) : editing ? (
+              t("agents.saveChanges")
+            ) : (
+              t("agents.createAgent")
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

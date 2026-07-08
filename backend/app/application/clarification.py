@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Agent clarification flow.
 
 Each role's JSON output schema carries an optional `clarification_question`
@@ -19,6 +17,10 @@ stay blocked until the user replies via /codex/tasks/{id}/answer.
 The instruction injected into every role's prompt nudges them to use this
 field whenever they would otherwise have to invent context.
 """
+from __future__ import annotations
+
+from typing import Protocol
+
 CLARIFY_PREFIX = "[CLARIFY] "
 
 
@@ -38,18 +40,23 @@ CLARIFICATION_PROMPT_INSTRUCTION = (
 )
 
 
-def question_text(task) -> str | None:
+class ClarificationTask(Protocol):
+    status: str
+    review_comment: str | None
+
+
+def question_text(task: ClarificationTask) -> str | None:
     """Extract the question text from a task whose review_comment is in
     [CLARIFY] format. Returns None when the task isn't currently asking."""
-    rc = getattr(task, "review_comment", None)  # type: ignore[arg-type]
-    if not rc:
+    rc = task.review_comment
+    if not isinstance(rc, str) or not rc:
         return None
     if not rc.startswith(CLARIFY_PREFIX):
         return None
     return rc[len(CLARIFY_PREFIX) :].strip()
 
 
-def mark_task_pending_clarification(task, question: str) -> None:
+def mark_task_pending_clarification(task: ClarificationTask, question: str) -> None:
     """Mutate task in place to signal a clarification is needed."""
     question = (question or "").strip()
     if not question:
@@ -58,7 +65,7 @@ def mark_task_pending_clarification(task, question: str) -> None:
     task.review_comment = f"{CLARIFY_PREFIX}{question}"
 
 
-def apply_clarification_if_needed(task, doc) -> bool:
+def apply_clarification_if_needed(task: ClarificationTask, doc: object) -> bool:
     """If the doc carries a populated `clarification_question`, transition the
     task into the clarification-pending state and return True. Otherwise
     return False so the caller can mark the task done normally.

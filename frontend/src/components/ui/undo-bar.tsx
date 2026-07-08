@@ -57,9 +57,7 @@ export function UndoBar({ message, countdownSeconds, onUndo, onExpire, onDismiss
       role="alert"
     >
       <span className="text-[13px] font-medium">{message}</span>
-      <span className="text-[11px] tabular-nums text-background/60">
-        {remaining}s
-      </span>
+      <span className="text-[11px] tabular-nums text-background/60">{remaining}s</span>
       <button
         type="button"
         onClick={() => {

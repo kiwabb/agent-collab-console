@@ -12,10 +12,10 @@ import { useI18n } from "@/providers/I18nProvider";
 
 interface Props {
   children: React.ReactNode;
-  breadcrumbs?: BreadcrumbItem[];
-  headerRight?: React.ReactNode;
-  workspaceId?: string | null;
-  issueId?: string | null;
+  breadcrumbs?: BreadcrumbItem[] | undefined;
+  headerRight?: React.ReactNode | undefined;
+  workspaceId?: string | null | undefined;
+  issueId?: string | null | undefined;
 }
 
 export function WorkbenchShell({
@@ -26,9 +26,7 @@ export function WorkbenchShell({
   issueId,
 }: Props) {
   return (
-    <SelectionProvider
-      initial={{ workspaceId: workspaceId ?? undefined, issueId: issueId ?? undefined }}
-    >
+    <SelectionProvider initial={{ workspaceId: workspaceId ?? null, issueId: issueId ?? null }}>
       <ExecutionProcessesProvider workspaceId={workspaceId ?? null}>
         <WorkbenchInner breadcrumbs={breadcrumbs} headerRight={headerRight}>
           {children}
@@ -44,8 +42,8 @@ function WorkbenchInner({
   headerRight,
 }: {
   children: React.ReactNode;
-  breadcrumbs?: BreadcrumbItem[];
-  headerRight?: React.ReactNode;
+  breadcrumbs?: BreadcrumbItem[] | undefined;
+  headerRight?: React.ReactNode | undefined;
 }) {
   const pathname = usePathname();
   const { t } = useI18n();

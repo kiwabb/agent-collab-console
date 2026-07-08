@@ -13,7 +13,18 @@ def test_defaults_pass_invariants():
     assert timeouts.check_invariants() == []
 
 
-def test_default_values_match_shipped_ladder():
+def test_default_values_match_shipped_ladder(monkeypatch):
+    for key in (
+        "SQLITE_DB_PATH",
+        "CODEX_LAUNCH_ENABLED",
+        "REAL_CLI",
+        "USE_SQLITE",
+        "WORKFLOW_DAG_ENABLED",
+        "CLAUDE_CMD",
+        "CODEX_CMD",
+        "CODEX_DATA_DIR",
+    ):
+        monkeypatch.delenv(key, raising=False)
     # These are the shipped defaults. subagent_idle was raised 600→1200 so the
     # stall watchdog (900s) can reap a hung subprocess before the conductor
     # gives up and re-dispatches; idle must stay > stall_threshold + 120.
@@ -35,7 +46,7 @@ def test_default_values_match_shipped_ladder():
     assert timeouts.real_cli_enabled() is True
     assert timeouts.claude_cli_cmd() == "claude"
     assert timeouts.codex_cli_cmd() == "codex"
-    assert timeouts.codex_data_dir() == "/tmp"
+    assert timeouts.codex_data_dir() == timeouts.DEFAULT_CODEX_DATA_DIR
     assert timeouts.claude_cmd() == "claude -p --output-format=stream-json --verbose"
     assert timeouts.anthropic_api_key_configured() is False
     assert timeouts.process_idle_timeout_s() == 180

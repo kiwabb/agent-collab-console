@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useTheme } from "./ThemeProvider";
+import { safeJsonRecord } from "@/lib/utils";
 
 export type FontSize = "small" | "medium" | "large";
 export type ReducedMotion = boolean;
@@ -29,21 +30,42 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   compactMode: false,
 };
 
+function isFontSize(value: unknown): value is FontSize {
+  return value === "small" || value === "medium" || value === "large";
+}
+
 function readStoredPreferences(): UserPreferences {
   if (typeof window === "undefined") return DEFAULT_PREFERENCES;
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
     if (stored) {
-      return { ...DEFAULT_PREFERENCES, ...JSON.parse(stored) };
+      const parsed = safeJsonRecord(stored);
+      if (!parsed) return DEFAULT_PREFERENCES;
+      return {
+        fontSize: isFontSize(parsed["fontSize"])
+          ? parsed["fontSize"]
+          : DEFAULT_PREFERENCES.fontSize,
+        reducedMotion:
+          typeof parsed["reducedMotion"] === "boolean"
+            ? parsed["reducedMotion"]
+            : DEFAULT_PREFERENCES.reducedMotion,
+        compactMode:
+          typeof parsed["compactMode"] === "boolean"
+            ? parsed["compactMode"]
+            : DEFAULT_PREFERENCES.compactMode,
+      };
     }
   } catch {}
   return DEFAULT_PREFERENCES;
 }
 
 function applyPreferences(prefs: UserPreferences) {
-  document.documentElement.dataset.fontSize = prefs.fontSize;
-  document.documentElement.dataset.compactMode = String(prefs.compactMode);
-  document.documentElement.style.setProperty("--motion-reduced", prefs.reducedMotion ? "reduce" : "auto");
+  document.documentElement.dataset["fontSize"] = prefs.fontSize;
+  document.documentElement.dataset["compactMode"] = String(prefs.compactMode);
+  document.documentElement.style.setProperty(
+    "--motion-reduced",
+    prefs.reducedMotion ? "reduce" : "auto",
+  );
 }
 
 export function PreferencesProvider({ children }: { children: React.ReactNode }) {
@@ -57,7 +79,8 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [hydrated, setHydrated] = useState(false);
 
   const setFontSize = (fontSize: FontSize) => setPrefs((p) => ({ ...p, fontSize }));
-  const setReducedMotion = (reducedMotion: ReducedMotion) => setPrefs((p) => ({ ...p, reducedMotion }));
+  const setReducedMotion = (reducedMotion: ReducedMotion) =>
+    setPrefs((p) => ({ ...p, reducedMotion }));
   const setCompactMode = (compactMode: CompactMode) => setPrefs((p) => ({ ...p, compactMode }));
 
   useEffect(() => {

@@ -1,5 +1,6 @@
 from __future__ import annotations  # noqa: I001
 
+from collections.abc import AsyncGenerator
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,7 +16,7 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git binary 
 
 
 @pytest.fixture
-async def store(tmp_path: Path) -> AsyncSQLiteStore:
+async def store(tmp_path: Path) -> AsyncGenerator[AsyncSQLiteStore, None]:
     s = AsyncSQLiteStore(tmp_path / "test.db")
     await s._init_db()
     try:

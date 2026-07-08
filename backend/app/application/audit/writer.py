@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Unified audit-trail writer.
 
 Single write entry-point for the `audit_log` table. Every choke point — LLM
@@ -25,15 +23,24 @@ Business modules depend only on the `AuditSink` Protocol + the typed recorder
 facade in `audit.recorders`; they never import this writer directly.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
-import sys
+import logging
 import threading
 from datetime import datetime
-from typing import Any
+from typing import Protocol
 from uuid import uuid4
 
 from app.application import timeouts
+from app.domain.models import AuditLog
+
+logger = logging.getLogger(__name__)
+
+
+class AuditLogStore(Protocol):
+    async def save_audit_log(self, entry: AuditLog) -> None: ...
 
 # Payload truncation budget. Same 8000-char ceiling + `__truncated__` marker
 # strategy as conductor_main_loop._prepare_payload (intentionally duplicated to
@@ -62,7 +69,7 @@ _DEFAULT_MAX_QUEUE = timeouts.audit_log_max_queue()
 _DROP_WARN_EVERY = 500
 
 
-def _serialize_payload(payload: Any | None) -> str:
+def _serialize_payload(payload: object | None) -> str:
     """JSON-serialize a payload, truncating when it exceeds the budget.
 
     Mirrors `conductor_main_loop._prepare_payload`: if the serialized form is
@@ -97,21 +104,21 @@ class AuditLogger:
     """
 
     def __init__(self, max_queue: int | None = None) -> None:
-        self._store = None
+        self._store: AuditLogStore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         # Bounded queue: full -> drop-newest (see module docstring). maxsize<=0
         # would mean unbounded; clamp to at least 1 so the bound is always real.
         size = _DEFAULT_MAX_QUEUE if max_queue is None else max_queue
         self._max_queue = max(1, int(size))
-        self._queue: asyncio.Queue = asyncio.Queue(maxsize=self._max_queue)
-        self._worker_task: asyncio.Task | None = None
+        self._queue: asyncio.Queue[AuditLog | None] = asyncio.Queue(maxsize=self._max_queue)
+        self._worker_task: asyncio.Task[None] | None = None
         self._lock = threading.Lock()
         # Backpressure observability: total dropped since process start.
         self._dropped = 0
 
     # --- lifecycle -----------------------------------------------------------
 
-    def set_store(self, store) -> None:
+    def set_store(self, store: AuditLogStore) -> None:
         self._store = store
         self._maybe_start_worker()
 
@@ -135,8 +142,8 @@ class AuditLogger:
                     break
                 if self._store is not None:
                     await self._store.save_audit_log(entry)
-            except Exception as exc:  # noqa: BLE001, RUF100
-                print(f"[AuditLogger] write error: {exc}", file=sys.stderr)
+            except Exception:  # noqa: BLE001, RUF100
+                logger.exception("audit log write failed")
             finally:
                 self._queue.task_done()
 
@@ -162,13 +169,14 @@ class AuditLogger:
         conductor_task_id: str | None,
         execution_process_id: str | None,
         correlation_id: str | None,
+        trace_id: str | None,
+        span_id: str | None,
+        parent_span_id: str | None,
         status: str | None,
         duration_ms: int | None,
-        payload: Any | None,
+        payload: object | None,
         error: str | None,
-    ):
-        from app.domain.models import AuditLog
-
+    ) -> AuditLog:
         return AuditLog(
             id=f"audit-{uuid4().hex}",
             category=category,
@@ -178,7 +186,10 @@ class AuditLogger:
             task_id=task_id,
             conductor_task_id=conductor_task_id,
             execution_process_id=execution_process_id,
-            correlation_id=correlation_id,
+            correlation_id=correlation_id or trace_id or execution_process_id,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
             status=status,
             duration_ms=duration_ms,
             payload_json=_serialize_payload(payload),
@@ -193,20 +204,20 @@ class AuditLogger:
         """
         self._dropped += 1
         if self._dropped == 1 or self._dropped % _DROP_WARN_EVERY == 0:
-            print(
-                f"[AuditLogger] queue full (maxsize={self._max_queue}); dropped "
-                f"{self._dropped} audit entries (drop-newest, best-effort)",
-                file=sys.stderr,
+            logger.warning(
+                "audit log queue full: maxsize=%s dropped=%s policy=drop-newest",
+                self._max_queue,
+                self._dropped,
             )
 
-    def _put_or_drop(self, entry) -> None:
+    def _put_or_drop(self, entry: AuditLog) -> None:
         """put_nowait, counting a drop instead of raising when the queue is full."""
         try:
             self._queue.put_nowait(entry)
         except asyncio.QueueFull:
             self._note_drop()
 
-    def _enqueue(self, entry) -> None:
+    def _enqueue(self, entry: AuditLog) -> None:
         """Thread-safe enqueue that always wakes the worker's `queue.get()`.
 
         `asyncio.Queue` is NOT thread-safe: calling `put_nowait` from a thread
@@ -257,9 +268,12 @@ class AuditLogger:
         conductor_task_id: str | None = None,
         execution_process_id: str | None = None,
         correlation_id: str | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+        parent_span_id: str | None = None,
         status: str | None = None,
         duration_ms: int | None = None,
-        payload: Any | None = None,
+        payload: object | None = None,
         error: str | None = None,
     ) -> None:
         """Enqueue an audit row, fire-and-forget. Never raises.
@@ -278,14 +292,17 @@ class AuditLogger:
                 conductor_task_id=conductor_task_id,
                 execution_process_id=execution_process_id,
                 correlation_id=correlation_id,
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
                 status=status,
                 duration_ms=duration_ms,
                 payload=payload,
                 error=error,
             )
             self._enqueue(entry)
-        except Exception as exc:  # noqa: BLE001, RUF100
-            print(f"[AuditLogger] enqueue error: {exc}", file=sys.stderr)
+        except Exception:  # noqa: BLE001, RUF100
+            logger.exception("audit log enqueue failed")
 
     @property
     def dropped(self) -> int:

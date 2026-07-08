@@ -1,24 +1,23 @@
 import type { NormalizedEntry } from "./types";
 import { classifyTool, extractCommand, pickString, PATH_KEYS, asRecord } from "./toolConstants";
+import { safeJsonRecord } from "./utils";
 
 type LogEventInput = {
-  id?: string;
-  stream?: string;
-  content?: string;
-  task_id?: string | null;
-  execution_process_id?: string | null;
-  created_at?: string | null;
+  id?: string | undefined;
+  stream?: string | undefined;
+  content?: string | undefined;
+  task_id?: string | null | undefined;
+  execution_process_id?: string | null | undefined;
+  created_at?: string | null | undefined;
 };
+
+type HiddenNormalizedEntry = { id: string; type: "hidden"; hidden: true };
 
 function tryParseJSON(line: string): Record<string, unknown> | null {
   if (typeof line !== "string") return null;
   const trimmed = line.trim();
   if (!trimmed.startsWith("{")) return null;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return null;
-  }
+  return safeJsonRecord(trimmed);
 }
 
 function stripAnsi(str: string): string {
@@ -35,30 +34,57 @@ function extractPreview(val: unknown, max = 200): string {
   }
 }
 
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function optionalString(value: unknown): string | undefined {
+  const text = stringValue(value);
+  return text || undefined;
+}
+
+function nullableString(value: unknown): string | null {
+  const text = stringValue(value);
+  return text || null;
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = stringValue(value);
+    if (text) return text;
+  }
+  return "";
+}
+
 function itemIdToIdx(itemId: string): string {
   const m = String(itemId).match(/item_(\d+)/);
-  return m ? m[1] : String(itemId);
+  return m?.[1] ?? String(itemId);
 }
 
 function buildToolEntry(
-  base: { id: string; timestamp?: string; executionProcessId?: string | null },
+  base: {
+    id: string;
+    timestamp?: string | undefined;
+    executionProcessId?: string | null | undefined;
+  },
   opts: {
-    toolUseId?: string;
-    toolName?: string;
-    itemType?: string | null;
-    args?: Record<string, unknown>;
-    command?: string;
-    filePath?: string;
-    output?: string;
-    isError?: boolean;
-    status?: string | null;
-    durationMs?: number | null;
+    toolUseId?: string | undefined;
+    toolName?: string | undefined;
+    itemType?: string | null | undefined;
+    args?: Record<string, unknown> | undefined;
+    command?: string | undefined;
+    filePath?: string | undefined;
+    output?: string | undefined;
+    isError?: boolean | undefined;
+    status?: string | null | undefined;
+    durationMs?: number | null | undefined;
   },
 ): NormalizedEntry {
   const toolName = opts.toolName || "";
   const category = classifyTool(toolName, opts.itemType);
   const args = opts.args ?? {};
-  const filePath = opts.filePath || pickString(args, PATH_KEYS) || pickString(asRecord(args.input), PATH_KEYS);
+  const filePath =
+    opts.filePath || pickString(args, PATH_KEYS) || pickString(asRecord(args["input"]), PATH_KEYS);
   const command = opts.command || extractCommand(args);
   const hasOutput = Boolean(opts.output);
   const status: "running" | "success" | "failed" = opts.isError
@@ -88,42 +114,43 @@ function normalizeNotificationEvent(
   _idx: number,
   keyBase: string,
 ): NormalizedEntry | null {
-  const method = typeof event.method === "string" ? event.method.replaceAll("/", ".") : "";
+  const method = typeof event["method"] === "string" ? event["method"].replaceAll("/", ".") : "";
   if (!method) return null;
-  const params = asRecord(event.params) ?? {};
+  const params = asRecord(event["params"]) ?? {};
 
   if (method === "error") {
-    const errorPayload = asRecord(params.error);
+    const errorPayload = asRecord(params["error"]);
     return {
       id: `${keyBase}-error`,
       timestamp: new Date().toISOString(),
       type: "error",
       label: "Error",
-      content: (errorPayload?.message as string) || (params.message as string) || JSON.stringify(params),
+      content: firstString(errorPayload?.["message"], params["message"]) || JSON.stringify(params),
     };
   }
 
   if (method === "item.agentMessage.delta" || method === "item.agent_message.delta") {
+    const itemId = firstString(params["itemId"], params["item_id"]);
     return {
-      id: `${keyBase}-${(params.itemId || params.item_id || "agent-delta") as string}`,
+      id: `${keyBase}-${itemId || "agent-delta"}`,
       timestamp: new Date().toISOString(),
       type: "assistant",
       label: "Assistant",
-      content: typeof params.delta === "string" ? params.delta : "",
-      itemId: (params.itemId || params.item_id || null) as string | null,
+      content: typeof params["delta"] === "string" ? params["delta"] : "",
+      itemId: itemId || null,
     };
   }
 
   if (method.startsWith("turn.")) {
-    const turn = asRecord(event.turn) ?? asRecord(params.turn);
-    const turnStatus = String(turn?.status || params.status || "").toLowerCase();
+    const turn = asRecord(event["turn"]) ?? asRecord(params["turn"]);
+    const turnStatus = String(turn?.["status"] || params["status"] || "").toLowerCase();
     if (turnStatus === "failed") {
-      const err = asRecord(turn?.error) ?? asRecord(params.error);
+      const err = asRecord(turn?.["error"]) ?? asRecord(params["error"]);
       return {
         id: `${keyBase}-turn`,
         type: "error",
         label: "Turn Failed",
-        content: (err?.message as string) || "Turn failed",
+        content: stringValue(err?.["message"]) || "Turn failed",
         timestamp: new Date().toISOString(),
       };
     }
@@ -138,29 +165,31 @@ function normalizeNotificationEvent(
   }
 
   if (method === "item.completed") {
-    const item = asRecord(params.item);
+    const item = asRecord(params["item"]);
     if (!item) return null;
-    const itemType = String(item.type || "").replace(/_/g, "").toLowerCase();
+    const itemType = String(item["type"] || "")
+      .replace(/_/g, "")
+      .toLowerCase();
     if (itemType === "agentmessage") {
-      const text = String(item.text || "");
+      const text = String(item["text"] || "");
       if (!text) return null;
       return {
-        id: `${keyBase}-${String(item.id || "item")}`,
-        timestamp: (item.created_at as string) || new Date().toISOString(),
+        id: `${keyBase}-${String(item["id"] || "item")}`,
+        timestamp: stringValue(item["created_at"]) || new Date().toISOString(),
         type: "assistant",
         label: "Assistant",
         content: text,
       };
     }
     if (itemType === "commandexecution") {
-      const output = String(item.aggregated_output ?? item.output ?? "");
-      const exitCode = item.exit_code != null ? Number(item.exit_code) : 0;
+      const output = String(item["aggregated_output"] ?? item["output"] ?? "");
+      const exitCode = item["exit_code"] != null ? Number(item["exit_code"]) : 0;
       return {
-        id: `${keyBase}-${String(item.id || "cmd")}`,
+        id: `${keyBase}-${String(item["id"] || "cmd")}`,
         timestamp: new Date().toISOString(),
         type: "command",
         label: "Command",
-        command: (item.command as string) || undefined,
+        command: optionalString(item["command"]),
         output: output || undefined,
         exitCode,
         status: exitCode === 0 ? "success" : "failed",
@@ -177,26 +206,27 @@ function normalizeCodexStdoutEvent(
   idx: number,
   keyBase: string,
 ): NormalizedEntry | null {
-  const method = typeof event.method === "string" ? event.method : "";
+  const method = typeof event["method"] === "string" ? event["method"] : "";
   if (method.startsWith("item/") || method.startsWith("item.")) return null;
   if (method.startsWith("turn/") || method.startsWith("turn.")) return null;
   if (method === "initialize" || method === "initialized") return null;
 
-  const type = (event.type as string) || "";
-  const item = asRecord(event.item) ?? {};
-  const itemId = (item.id as string) || `item-${idx}`;
-  const itemType = (item.type as string) || "";
+  const type = stringValue(event["type"]);
+  const item = asRecord(event["item"]) ?? {};
+  const itemId = stringValue(item["id"]) || `item-${idx}`;
+  const itemType = stringValue(item["type"]);
 
   if (type === "thread.started" || type === "turn.started" || type === "turn.completed") {
-    const turn = asRecord(event.turn);
-    const failed = type === "turn.completed" && String(turn?.status || "").toLowerCase() === "failed";
+    const turn = asRecord(event["turn"]);
+    const failed =
+      type === "turn.completed" && String(turn?.["status"] || "").toLowerCase() === "failed";
     if (failed) {
-      const err = asRecord(turn?.error);
+      const err = asRecord(turn?.["error"]);
       return {
         id: `${keyBase}-turn`,
         type: "error",
         label: "Turn Failed",
-        content: (err?.message as string) || "Codex turn failed",
+        content: stringValue(err?.["message"]) || "Codex turn failed",
         timestamp: new Date().toISOString(),
       };
     }
@@ -205,11 +235,11 @@ function normalizeCodexStdoutEvent(
 
   if (type === "item.completed") {
     if (itemType === "agent_message" || itemType === "agentMessage") {
-      const text = (item.text as string) || "";
+      const text = stringValue(item["text"]);
       if (!text) return null;
       return {
         id: `${keyBase}-${itemIdToIdx(itemId)}`,
-        timestamp: (item.created_at as string) || new Date().toISOString(),
+        timestamp: stringValue(item["created_at"]) || new Date().toISOString(),
         type: "assistant",
         label: "Assistant",
         content: text,
@@ -227,16 +257,16 @@ function normalizeClaudeEvent(
   keyBase: string,
 ): NormalizedEntry | null {
   const base: { id: string; timestamp: string } = {
-    id: (event.uuid as string) || `${keyBase}-claude`,
+    id: stringValue(event["uuid"]) || `${keyBase}-claude`,
     timestamp: new Date().toISOString(),
   };
-  switch (event.type) {
+  switch (event["type"]) {
     case "help_requested":
       return {
         ...base,
         type: "help",
         label: "Help Requested",
-        content: `Waiting for ${(event.target as string) || "helper"} (${(event.help_request_id as string) || "pending"})`,
+        content: `Waiting for ${stringValue(event["target"]) || "helper"} (${stringValue(event["help_request_id"]) || "pending"})`,
         variant: "requested",
       };
     case "help_child_started":
@@ -244,47 +274,52 @@ function normalizeClaudeEvent(
         ...base,
         type: "help",
         label: "Help Child Started",
-        content: `Child task ${(event.child_task_id as string) || ""} is running`,
+        content: `Child task ${stringValue(event["child_task_id"])} is running`,
         variant: "started",
       };
-    case "help_completed":
+    case "help_completed": {
+      const result = asRecord(event["result"]);
       return {
         ...base,
         type: "help",
         label: "Help Completed",
         content:
-          ((asRecord(event.result)?.result as Record<string, unknown>)?.raw_result as string) ||
-          (asRecord(event.result)?.raw_result as string) ||
+          firstString(asRecord(result?.["result"])?.["raw_result"], result?.["raw_result"]) ||
           "Help request completed",
         variant: "completed",
       };
-    case "help_failed":
+    }
+    case "help_failed": {
+      const error = asRecord(event["error"]);
+      const failedResult = asRecord(event["result"]);
       return {
         ...base,
         type: "help",
         label: "Help Failed",
         content:
-          (asRecord(event.error)?.message as string) ||
-          (asRecord(asRecord(event.result)?.error)?.message as string) ||
+          firstString(error?.["message"], asRecord(failedResult?.["error"])?.["message"]) ||
           "Help request failed",
         variant: "failed",
       };
+    }
     case "task_resumed":
       return {
         ...base,
         type: "help",
         label: "Task Resumed",
-        content: `Resumed after help request ${(event.help_request_id as string) || ""}`,
+        content: `Resumed after help request ${stringValue(event["help_request_id"])}`,
         variant: "resumed",
       };
     case "assistant": {
-      const msg = asRecord(event.message);
-      const content = Array.isArray(msg?.content) ? (msg!.content as unknown[]) : null;
+      const msg = asRecord(event["message"]);
+      const rawContent = msg?.["content"];
+      const content = Array.isArray(rawContent) ? rawContent : null;
       if (!content) return null;
       const textParts = content
         .map((c) => {
-          if (c && typeof c === "object" && (c as { type?: string }).type === "text") {
-            return ((c as { text?: string }).text ?? "");
+          const block = asRecord(c);
+          if (block?.["type"] === "text") {
+            return typeof block["text"] === "string" ? block["text"] : "";
           }
           return "";
         })
@@ -297,9 +332,14 @@ function normalizeClaudeEvent(
     case "user":
       return null;
     case "text_delta":
-      return { ...base, type: "assistant", label: "Assistant", content: (event.delta as string) || "" };
+      return {
+        ...base,
+        type: "assistant",
+        label: "Assistant",
+        content: stringValue(event["delta"]),
+      };
     case "result":
-      if (event.subtype === "success") {
+      if (event["subtype"] === "success") {
         return { ...base, type: "status", label: "Done", content: "Turn completed" };
       }
       return null;
@@ -309,15 +349,15 @@ function normalizeClaudeEvent(
         ...base,
         type: "error",
         label: "Error",
-        content: (event.message as string) || (event.error as string) || "Execution error",
+        content: firstString(event["message"], event["error"]) || "Execution error",
       };
     case "system":
-      if (event.subtype === "api_retry") {
+      if (event["subtype"] === "api_retry") {
         return {
           ...base,
           type: "status",
           label: "Retrying",
-          content: `Rate limited. Retry ${event.attempt}/${event.max_retries}…`,
+          content: `Rate limited. Retry ${event["attempt"]}/${event["max_retries"]}…`,
         };
       }
       return null;
@@ -326,52 +366,51 @@ function normalizeClaudeEvent(
   }
 }
 
-function normalizeSingle(log: LogEventInput, idx: number): NormalizedEntry | { id: string; type: "hidden"; hidden: true } {
+function normalizeSingle(log: LogEventInput, idx: number): NormalizedEntry | HiddenNormalizedEntry {
   const { stream, content } = log;
   const keyBase = log?.id ? `norm-${log.id}` : `norm-${idx}`;
   const safeContent =
-    typeof content === "string"
-      ? content
-      : content == null
-        ? ""
-        : JSON.stringify(content);
+    typeof content === "string" ? content : content == null ? "" : JSON.stringify(content);
   const exec = log.execution_process_id || null;
   const ts = log.created_at || undefined;
 
   if (stream === "tool_use" || stream === "tool_result" || stream === "tool_event") {
     const payload = tryParseJSON(safeContent);
     if (!payload) return { id: `skip-${idx}`, type: "hidden", hidden: true };
-    const kind = payload.kind as string | undefined;
-    const toolUseId = (payload.tool_use_id as string) || "";
+    const kind = optionalString(payload["kind"]);
+    const toolUseId = stringValue(payload["tool_use_id"]);
     const id = `tool-${exec || "x"}-${toolUseId || keyBase}`;
     if (kind === "tool_use" || kind === "tool_started") {
       return buildToolEntry(
         { id, timestamp: ts, executionProcessId: exec },
         {
           toolUseId,
-          toolName: (payload.tool_name as string) || "",
-          itemType: (payload.item_type as string) || null,
-          args: asRecord(payload.input) ?? {},
-          command: payload.command as string | undefined,
-          filePath: payload.file_path as string | undefined,
+          toolName: stringValue(payload["tool_name"]),
+          itemType: nullableString(payload["item_type"]),
+          args: asRecord(payload["input"]) ?? {},
+          command: optionalString(payload["command"]),
+          filePath: optionalString(payload["file_path"]),
         },
       );
     }
     if (kind === "tool_result" || kind === "tool_completed") {
-      const output = typeof payload.output === "string" ? payload.output : extractPreview(payload.output, 4000);
+      const output =
+        typeof payload["output"] === "string"
+          ? payload["output"]
+          : extractPreview(payload["output"], 4000);
       return buildToolEntry(
         { id, timestamp: ts, executionProcessId: exec },
         {
           toolUseId,
-          toolName: (payload.tool_name as string) || "",
-          itemType: (payload.item_type as string) || null,
-          args: asRecord(payload.input) ?? {},
-          command: payload.command as string | undefined,
-          filePath: payload.file_path as string | undefined,
+          toolName: stringValue(payload["tool_name"]),
+          itemType: nullableString(payload["item_type"]),
+          args: asRecord(payload["input"]) ?? {},
+          command: optionalString(payload["command"]),
+          filePath: optionalString(payload["file_path"]),
           output,
-          isError: Boolean(payload.is_error),
-          status: (payload.status as string) || "completed",
-          durationMs: typeof payload.duration_ms === "number" ? payload.duration_ms : null,
+          isError: Boolean(payload["is_error"]),
+          status: stringValue(payload["status"]) || "completed",
+          durationMs: typeof payload["duration_ms"] === "number" ? payload["duration_ms"] : null,
         },
       );
     }
@@ -380,7 +419,7 @@ function normalizeSingle(log: LogEventInput, idx: number): NormalizedEntry | { i
 
   if (stream === "thinking") {
     const payload = tryParseJSON(safeContent);
-    const text = (payload && typeof payload.text === "string" ? (payload.text as string) : "") || safeContent;
+    const text = stringValue(payload?.["text"]) || safeContent;
     return {
       id: keyBase,
       type: "thinking",
@@ -464,17 +503,17 @@ function normalizeSingle(log: LogEventInput, idx: number): NormalizedEntry | { i
   }
 
   // stream === "stdout" or default
-  if (event.method) {
+  if (event["method"]) {
     const notification = normalizeNotificationEvent(event, idx, keyBase);
     if (!notification) return { id: `skip-${idx}`, type: "hidden", hidden: true };
     return { ...notification, executionProcessId: exec, timestamp: ts };
   }
-  if (event.item) {
+  if (event["item"]) {
     const codex = normalizeCodexStdoutEvent(event, idx, keyBase);
     if (!codex) return { id: `skip-${idx}`, type: "hidden", hidden: true };
     return { ...codex, executionProcessId: exec, timestamp: ts };
   }
-  if (event.type) {
+  if (event["type"]) {
     const claude = normalizeClaudeEvent(event, idx, keyBase);
     if (!claude) return { id: `skip-${idx}`, type: "hidden", hidden: true };
     return { ...claude, executionProcessId: exec, timestamp: ts };
@@ -523,8 +562,7 @@ function foldEntries(entries: NormalizedEntry[]): NormalizedEntry[] {
         existing.toolName = entry.toolName || existing.toolName;
         existing.command = entry.command ?? existing.command;
         existing.filePath = entry.filePath ?? existing.filePath;
-        existing.args =
-          entry.args && Object.keys(entry.args).length ? entry.args : existing.args;
+        existing.args = entry.args && Object.keys(entry.args).length ? entry.args : existing.args;
         continue;
       }
       byUseId.set(entry.toolUseId, entry);
@@ -545,7 +583,10 @@ function foldEntries(entries: NormalizedEntry[]): NormalizedEntry[] {
     ) {
       const lastContent = last.content || "";
       const nextContent = entry.content || "";
-      if (nextContent && (lastContent.endsWith(nextContent) || nextContent.startsWith(lastContent))) {
+      if (
+        nextContent &&
+        (lastContent.endsWith(nextContent) || nextContent.startsWith(lastContent))
+      ) {
         last.content = nextContent.length >= lastContent.length ? nextContent : lastContent;
       } else {
         last.content = lastContent + nextContent;
@@ -561,6 +602,6 @@ export function normalizeLogs(logs: LogEventInput[]): NormalizedEntry[] {
   if (!Array.isArray(logs)) return [];
   const entries = logs
     .map((log, idx) => normalizeSingle(log, idx))
-    .filter((entry): entry is NormalizedEntry => !(entry as { hidden?: boolean }).hidden);
+    .filter((entry): entry is NormalizedEntry => entry.type !== "hidden");
   return foldEntries(entries);
 }

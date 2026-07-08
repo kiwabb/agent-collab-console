@@ -60,6 +60,7 @@ def test_batch_key_round_trips_via_add_workflow_node(tmp_path: Path):
         loaded = await store.load_workflow_graph_for_issue(issue_id)
         await store.close()
 
+        assert loaded is not None
         by_key = {n.node_key: n for n in loaded.nodes}
         # Same-batch nodes share the persisted batch_key.
         assert by_key["engineer"].batch_key == bk
@@ -86,6 +87,7 @@ def test_batch_key_round_trips_via_save_workflow_graph(tmp_path: Path):
         loaded = await store.load_workflow_graph_for_issue(issue_id)
         await store.close()
 
+        assert loaded is not None
         by_key = {n.node_key: n for n in loaded.nodes}
         assert by_key["engineer"].batch_key == bk
         assert by_key["qa"].batch_key == bk

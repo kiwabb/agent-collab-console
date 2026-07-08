@@ -4,14 +4,14 @@ from datetime import datetime
 import pytest
 
 from app.application.self_improvement_service import extract_self_improvement_proposals
-from app.domain.models import CodexIssue, ConductorTask
+from app.domain.models import CodexIssue, ConductorTask, SelfImprovementProposal
 
 
 class MemoryStore:
     def __init__(self, *, tasks=None, save_error: Exception | None = None):
         self.tasks = tasks or []
         self.save_error = save_error
-        self.saved = []
+        self.saved: list[SelfImprovementProposal] = []
 
     async def list_conductor_tasks(self, *, status=None):
         if status is None:
@@ -35,7 +35,7 @@ def _issue(**overrides):
         "created_at": datetime(2026, 6, 8, 10, 0, 0),
     }
     data.update(overrides)
-    return CodexIssue(**data)
+    return CodexIssue.model_validate(data)
 
 
 def _task(task_id, *, status="failed", result_json=None, payload=None):

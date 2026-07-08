@@ -12,6 +12,7 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import TypedDict
 
 from app.application.git_service import GitError, GitService
 from app.application.worktree_claude_hooks import inject_worktree_claude_hooks
@@ -20,6 +21,49 @@ from app.domain.models import CodexIssue, CodexTask, Project
 
 class WorktreeError(RuntimeError):
     pass
+
+
+class MergeIssueResult(TypedDict):
+    sha: str
+    base_branch: str
+    message: str
+
+
+class AgentMergeSpec(TypedDict, total=False):
+    agent_key: str
+    worktree_key: str
+    role: str
+    branch: str
+    worktree_path: str
+
+
+class AgentMergeRecord(TypedDict):
+    agent_key: str
+    role: str | None
+    branch: str
+
+
+class AgentMergedRecord(AgentMergeRecord):
+    sha: str
+    behind_at_merge: int
+
+
+class AgentMergeConflict(AgentMergeRecord):
+    worktree_path: str | None
+    files: list[str]
+    diff: str
+
+
+class AgentMergeConflictDetail(TypedDict):
+    files: list[str]
+    diff: str
+
+
+class AgentMergeSummary(TypedDict):
+    merged: list[AgentMergedRecord]
+    conflict: AgentMergeConflict | None
+    skipped: list[AgentMergeRecord]
+    noop: list[AgentMergeRecord]
 
 
 _SAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
@@ -49,6 +93,10 @@ def _worktree_path(project: Project, kind: str, item_id: str) -> Path:
     repo = Path(project.repo_path)
     parent = repo.parent / f"{project.name}-worktrees"
     return parent / f"{kind}-{item_id}"
+
+
+def _non_empty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 class WorktreeManager:
@@ -147,7 +195,7 @@ class WorktreeManager:
         project: Project,
         issue: CodexIssue,
         message: str | None = None,
-    ) -> dict:
+    ) -> MergeIssueResult:
         if not issue.git_branch:
             raise WorktreeError("issue has no git branch to merge")
         lock = await self._lock_for(f"issue:{issue.id}")
@@ -343,7 +391,7 @@ class WorktreeManager:
         issue: CodexIssue,
         agent_branch: str,
         agent_worktree_path: str | None,
-    ) -> dict:
+    ) -> AgentMergeConflictDetail:
         """Probe a failed squash-merge to enumerate the conflicting files + diff.
 
         `git_service.squash_merge` does its merge in a throwaway detached
@@ -353,6 +401,9 @@ class WorktreeManager:
         the unmerged paths, then abort — this gives the reconcile turn the
         structured conflict info without leaving the repo dirty.
         """
+        issue_branch = issue.git_branch
+        if not issue_branch:
+            raise WorktreeError("issue has no git branch to inspect conflict against")
         repo_p = Path(project.repo_path)
         probe = repo_p.parent / f".jm-conflict-{agent_branch[:24].replace('/', '-')}"
         files: list[str] = []
@@ -364,7 +415,7 @@ class WorktreeManager:
             # branch into it without committing so conflicts surface as unmerged
             # paths we can read.
             await self.git._run(
-                ["worktree", "add", "--detach", str(probe), issue.git_branch],
+                ["worktree", "add", "--detach", str(probe), issue_branch],
                 cwd=repo_p,
                 check=False,
             )
@@ -382,7 +433,7 @@ class WorktreeManager:
         diff = ""
         if agent_worktree_path:
             try:
-                diff = await self.git.worktree_diff(agent_worktree_path, issue.git_branch)
+                diff = await self.git.worktree_diff(agent_worktree_path, issue_branch)
             except GitError:
                 diff = ""
         return {"files": files, "diff": diff}
@@ -391,14 +442,16 @@ class WorktreeManager:
         self,
         project: Project,
         issue: CodexIssue,
-        agents: list[dict],
-    ) -> dict:
+        agents: list[AgentMergeSpec],
+    ) -> AgentMergeSummary:
         """Sequentially squash-merge successful per-agent branches back into the
         issue integration branch.
 
-        `agents` is a list of `{agent_key, branch, worktree_path, role?}` for the
-        agents that produced mergeable output (the succeeded items from
-        `dispatch_batch`). Merges run strictly serially inside the issue lock so
+        `agents` is a list of `{agent_key, worktree_key?, branch,
+        worktree_path, role?}` for the agents that produced mergeable output
+        (the succeeded items from `dispatch_batch`). `agent_key` is the
+        user-facing label; `worktree_key` is the physical swarm worktree suffix
+        when they differ. Merges run strictly serially inside the issue lock so
         each merge sees the previous one's commits (no octopus, no parallel
         merge).
 
@@ -429,23 +482,26 @@ class WorktreeManager:
               "noop": [{agent_key, role, branch}],      # no changes to merge (cleaned up)
             }
         """
-        if not issue.git_branch:
+        issue_branch = issue.git_branch
+        if not issue_branch:
             raise WorktreeError("issue has no git branch to merge agent worktrees into")
 
-        merged: list[dict] = []
-        conflict: dict | None = None
-        skipped: list[dict] = []
-        noop: list[dict] = []
+        merged: list[AgentMergedRecord] = []
+        conflict: AgentMergeConflict | None = None
+        skipped: list[AgentMergeRecord] = []
+        noop: list[AgentMergeRecord] = []
+        last_merged_sha: str | None = None
 
         lock = await self._lock_for(f"issue:{issue.id}")
         async with lock:
             for spec in agents:
-                agent_key = spec.get("agent_key")
-                branch = spec.get("branch")
-                worktree_path = spec.get("worktree_path")
-                role = spec.get("role")
+                agent_key = _non_empty_str(spec.get("agent_key"))
+                branch = _non_empty_str(spec.get("branch"))
+                worktree_path = _non_empty_str(spec.get("worktree_path"))
+                role = _non_empty_str(spec.get("role"))
                 if not agent_key or not branch:
                     continue
+                cleanup_key = _non_empty_str(spec.get("worktree_key")) or agent_key
 
                 # Once a conflict has occurred, do not attempt further merges.
                 if conflict is not None:
@@ -473,12 +529,12 @@ class WorktreeManager:
                 # no-op: clean up the worktree and continue (no conflict, no stop).
                 if worktree_path:
                     try:
-                        ahead = await self.git.commits_ahead(worktree_path, issue.git_branch)
+                        ahead = await self.git.commits_ahead(worktree_path, issue_branch)
                     except GitError:
                         ahead = 1  # be conservative: attempt the merge below
                     if ahead == 0:
                         noop.append({"agent_key": agent_key, "role": role, "branch": branch})
-                        await self.cleanup_agent_worktree(project, issue, agent_key)
+                        await self.cleanup_agent_worktree(project, issue, cleanup_key)
                         continue
 
                 # Divergence detection: the issue branch may have advanced from
@@ -488,7 +544,7 @@ class WorktreeManager:
                 behind = 0
                 if worktree_path:
                     try:
-                        behind = await self.git.commits_behind(worktree_path, issue.git_branch)
+                        behind = await self.git.commits_behind(worktree_path, issue_branch)
                     except GitError:
                         behind = 0
 
@@ -503,7 +559,7 @@ class WorktreeManager:
                     sha = await self.git.squash_merge_into_branch(
                         repo_path=project.repo_path,
                         source_branch=branch,
-                        target_branch=issue.git_branch,
+                        target_branch=issue_branch,
                         message=f"merge swarm agent {agent_key}: {issue.title}",
                         target_worktree_path=issue.git_worktree_path,
                     )
@@ -516,8 +572,9 @@ class WorktreeManager:
                             "behind_at_merge": behind,
                         }
                     )
+                    last_merged_sha = sha
                     # Merged successfully → its worktree+branch are no longer needed.
-                    await self.cleanup_agent_worktree(project, issue, agent_key)
+                    await self.cleanup_agent_worktree(project, issue, cleanup_key)
                 except GitError:
                     # Merge failure: distinguish a real conflict from a no-op.
                     # Probe for unmerged paths. If there are NONE, this was an
@@ -527,7 +584,7 @@ class WorktreeManager:
                     detail = await self._collect_conflict(project, issue, branch, worktree_path)
                     if not detail["files"]:
                         noop.append({"agent_key": agent_key, "role": role, "branch": branch})
-                        await self.cleanup_agent_worktree(project, issue, agent_key)
+                        await self.cleanup_agent_worktree(project, issue, cleanup_key)
                         continue
                     # Real conflict. Keep this agent's worktree so the reconcile
                     # turn can inspect it; collect conflict detail.
@@ -540,8 +597,8 @@ class WorktreeManager:
                         "diff": detail["diff"],
                     }
 
-        if merged:
-            issue.git_last_commit_sha = merged[-1]["sha"]
+        if last_merged_sha is not None:
+            issue.git_last_commit_sha = last_merged_sha
             issue.updated_at = datetime.now()
 
         return {"merged": merged, "conflict": conflict, "skipped": skipped, "noop": noop}

@@ -129,10 +129,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [proj, ws] = await Promise.all([
-        getProject(projectId),
-        getWorkspaces(projectId),
-      ]);
+      const [proj, ws] = await Promise.all([getProject(projectId), getWorkspaces(projectId)]);
       setProject(proj);
       // Default workspace: never force the user to hand-create one. If a project
       // has no workspace yet, auto-create a default and drop straight into it.
@@ -177,17 +174,14 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   // Fetch the project's remote status: immediately on mount / projectId change
   // (with a real `git fetch`), then poll on an interval. Failures stay silent —
   // the next poll (or a manual check) retries.
-  const loadRemoteStatus = useCallback(
-    async (id: string, opts: { fetch: boolean }) => {
-      setRemoteChecking(true);
-      try {
-        return await getProjectRemoteStatus(id, { fetch: opts.fetch });
-      } finally {
-        setRemoteChecking(false);
-      }
-    },
-    [],
-  );
+  const loadRemoteStatus = useCallback(async (id: string, opts: { fetch: boolean }) => {
+    setRemoteChecking(true);
+    try {
+      return await getProjectRemoteStatus(id, { fetch: opts.fetch });
+    } finally {
+      setRemoteChecking(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -279,9 +273,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
           setRunLogs((prev) => [...prev, ...res.lines]);
         }
         setRunStatus((prev) =>
-          prev
-            ? { ...prev, running: res.running, exit_code: res.exit_code }
-            : prev,
+          prev ? { ...prev, running: res.running, exit_code: res.exit_code } : prev,
         );
       } catch {
         // Transient — retry on the next tick.
@@ -354,8 +346,8 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return workspaces;
-    return workspaces.filter((w) =>
-      (w.title || w.id).toLowerCase().includes(q) || (w.cwd || "").toLowerCase().includes(q),
+    return workspaces.filter(
+      (w) => (w.title || w.id).toLowerCase().includes(q) || (w.cwd || "").toLowerCase().includes(q),
     );
   }, [workspaces, query]);
 
@@ -364,10 +356,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
     [issuesByWs],
   );
   const activeWorkspaces = useMemo(
-    () =>
-      workspaces.filter(
-        (w) => w.status === "running" || w.status === "responding",
-      ).length,
+    () => workspaces.filter((w) => w.status === "running" || w.status === "responding").length,
     [workspaces],
   );
 
@@ -437,237 +426,234 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
 
   return (
     <ProjectShell projectId={projectId} project={project}>
-        {/* KPIs */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {/* KPIs */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Kpi
+          icon={<Layers size={14} />}
+          label={t("sidebar.workspaces")}
+          value={workspaces.length}
+          tint="brand"
+          loading={loading}
+        />
+        <Kpi
+          icon={<Activity size={14} />}
+          label={t("workspace.projectPage.kpiActive")}
+          value={activeWorkspaces}
+          tint="running"
+          pulse={activeWorkspaces > 0}
+          loading={loading}
+        />
+        <Kpi
+          icon={<Inbox size={14} />}
+          label={t("workspace.projectPage.kpiIssues")}
+          value={totalIssues}
+          tint="info"
+          loading={loading}
+        />
+        <div className="relative">
           <Kpi
-            icon={<Layers size={14} />}
-            label={t("sidebar.workspaces")}
-            value={workspaces.length}
-            tint="brand"
+            icon={<CheckCircle2 size={14} />}
+            label={t("workspace.projectPage.kpiBranch")}
+            valueText={project?.default_branch ?? "—"}
+            tint="done"
             loading={loading}
           />
-          <Kpi
-            icon={<Activity size={14} />}
-            label={t("workspace.projectPage.kpiActive")}
-            value={activeWorkspaces}
-            tint="running"
-            pulse={activeWorkspaces > 0}
-            loading={loading}
-          />
-          <Kpi
-            icon={<Inbox size={14} />}
-            label={t("workspace.projectPage.kpiIssues")}
-            value={totalIssues}
-            tint="info"
-            loading={loading}
-          />
-          <div className="relative">
-            <Kpi
-              icon={<CheckCircle2 size={14} />}
-              label={t("workspace.projectPage.kpiBranch")}
-              valueText={project?.default_branch ?? "—"}
-              tint="done"
-              loading={loading}
+          <div className="absolute right-3 bottom-3">
+            <RemoteUpdateBadge
+              status={remoteStatus}
+              checking={remoteChecking && remoteStatus === null}
             />
-            <div className="absolute right-3 bottom-3">
-              <RemoteUpdateBadge
-                status={remoteStatus}
-                checking={remoteChecking && remoteStatus === null}
-              />
-            </div>
           </div>
         </div>
+      </div>
 
-        {/* Toolbar */}
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1 max-w-md">
-            <Search
-              size={14}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted"
-            />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t("workspace.projectPage.searchPlaceholder")}
-              className="pl-8 bg-surface-input border-border-subtle h-8 text-[13px]"
-            />
-          </div>
+      {/* Toolbar */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 max-w-md">
+          <Search
+            size={14}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted"
+          />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("workspace.projectPage.searchPlaceholder")}
+            className="pl-8 bg-surface-input border-border-subtle h-8 text-[13px]"
+          />
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleCheckUpdate}
+          disabled={remoteChecking}
+          aria-label={t("projects.checkUpdate")}
+          title={t("projects.checkUpdate")}
+          className="gap-1 ml-auto"
+        >
+          <RefreshCw size={14} className={cn(remoteChecking && "animate-spin")} />
+          {remoteChecking ? t("projects.checking") : t("projects.checkUpdate")}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleSync}
+          disabled={syncing || !remoteStatus?.can_fast_forward}
+          aria-label={t("projects.sync")}
+          title={t("projects.sync")}
+          className="gap-1"
+        >
+          <DownloadCloud size={14} className={cn(syncing && "animate-pulse")} />
+          {syncing ? t("projects.syncing") : t("projects.sync")}
+        </Button>
+        {running ? (
           <Button
             size="sm"
             variant="outline"
-            onClick={handleCheckUpdate}
-            disabled={remoteChecking}
-            aria-label={t("projects.checkUpdate")}
-            title={t("projects.checkUpdate")}
-            className="gap-1 ml-auto"
-          >
-            <RefreshCw size={14} className={cn(remoteChecking && "animate-spin")} />
-            {remoteChecking ? t("projects.checking") : t("projects.checkUpdate")}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleSync}
-            disabled={syncing || !remoteStatus?.can_fast_forward}
-            aria-label={t("projects.sync")}
-            title={t("projects.sync")}
+            onClick={handleStopRun}
+            disabled={runBusy}
+            aria-label={t("projects.runStop")}
+            title={t("projects.runStop")}
             className="gap-1"
           >
-            <DownloadCloud size={14} className={cn(syncing && "animate-pulse")} />
-            {syncing ? t("projects.syncing") : t("projects.sync")}
+            <span
+              aria-hidden
+              className="inline-block size-2 rounded-full bg-status-running animate-pulse"
+            />
+            <Square size={14} />
+            {runBusy ? t("projects.runStopping") : t("projects.runStop")}
           </Button>
-          {running ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleStopRun}
-              disabled={runBusy}
-              aria-label={t("projects.runStop")}
-              title={t("projects.runStop")}
-              className="gap-1"
-            >
-              <span
-                aria-hidden
-                className="inline-block size-2 rounded-full bg-status-running animate-pulse"
-              />
-              <Square size={14} />
-              {runBusy ? t("projects.runStopping") : t("projects.runStop")}
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleStartRun}
-              disabled={runBusy || !project?.run_command}
-              aria-label={t("projects.runStart")}
-              title={project?.run_command ? t("projects.runStart") : t("projects.runNoCommand")}
-              className="gap-1"
-            >
-              <Play size={14} />
-              {runBusy ? t("projects.runStarting") : t("projects.runStart")}
-            </Button>
-          )}
+        ) : (
           <Button
-            onClick={() => setCreateOpen(true)}
             size="sm"
-            className="gap-1 bg-brand hover:bg-brand-strong text-black font-semibold"
+            variant="outline"
+            onClick={handleStartRun}
+            disabled={runBusy || !project?.run_command}
+            aria-label={t("projects.runStart")}
+            title={project?.run_command ? t("projects.runStart") : t("projects.runNoCommand")}
+            className="gap-1"
           >
-            <Plus size={14} /> {t("workspace.projectPage.new")}
+            <Play size={14} />
+            {runBusy ? t("projects.runStarting") : t("projects.runStart")}
           </Button>
-        </div>
-
-        {/* Run log panel */}
-        {logsOpen && runLogs.length > 0 && (
-          <section className="rounded-xl border border-border-subtle bg-black/90 overflow-hidden">
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle bg-surface text-[12px]">
-              <span
-                aria-hidden
-                className={cn(
-                  "inline-block size-2 rounded-full",
-                  running ? "bg-status-running animate-pulse" : "bg-text-muted",
-                )}
-              />
-              <span className="font-semibold">{t("projects.runLogsTitle")}</span>
-              <span className="text-text-muted">
-                {running ? t("projects.runRunning") : t("projects.runStopped")}
-                {runStatus?.pid != null && running ? ` · pid ${runStatus.pid}` : ""}
-                {!running && runStatus?.exit_code != null
-                  ? ` · ${t("projects.runExitCode", { code: runStatus.exit_code })}`
-                  : ""}
-              </span>
-              <div className="ml-auto flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRunLogs([]);
-                    lastSeqRef.current = runStatus?.running ? lastSeqRef.current : 0;
-                  }}
-                  className="rounded-md px-2 py-1 text-text-muted hover:bg-surface-input hover:text-foreground transition-colors"
-                >
-                  {t("projects.runClearLogs")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLogsOpen(false)}
-                  aria-label={t("workspace.cancel")}
-                  className="size-7 rounded-md text-text-muted hover:bg-surface-input hover:text-foreground flex items-center justify-center transition-colors"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            </div>
-            <div className="max-h-72 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed">
-              {runLogs.map((l) => (
-                <div
-                  key={l.seq}
-                  className={cn(
-                    "whitespace-pre-wrap break-all",
-                    l.stream === "stderr" ? "text-status-failed" : "text-text-secondary",
-                  )}
-                >
-                  {l.line}
-                </div>
-              ))}
-              <div ref={logEndRef} />
-            </div>
-          </section>
         )}
+        <Button
+          onClick={() => setCreateOpen(true)}
+          size="sm"
+          className="gap-1 bg-brand hover:bg-brand-strong text-black font-semibold"
+        >
+          <Plus size={14} /> {t("workspace.projectPage.new")}
+        </Button>
+      </div>
 
-        {/* Table */}
-        <section className="rounded-xl border border-border-subtle bg-surface-raised overflow-hidden">
-          <div className="grid grid-cols-[1fr_120px_90px_1.6fr_120px_70px] gap-3 px-4 py-2.5 text-[10px] uppercase tracking-wider text-text-muted border-b border-border-subtle bg-surface">
-            <div>{t("workspace.table.title")}</div>
-            <div>{t("workspace.table.status")}</div>
-            <div className="text-right">{t("workspace.table.issues")}</div>
-            <div>{t("workspace.table.workingDir")}</div>
-            <div>{t("workspace.table.updated")}</div>
-            <div className="text-right">{t("workspace.table.actions")}</div>
-          </div>
-          {loading ? (
-            <div
-              data-density="project-workspaces-dispatch-loading"
-              className="motion-essential relative flex min-h-[200px] items-center justify-center gap-2 overflow-hidden px-4 py-10 text-sm font-semibold text-text-muted"
-            >
-              <span
-                aria-hidden
-                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
-              />
-              <AgentThinkingIndicator phase="dispatching" size={16} />
-              {t("workspace.loading")}
-            </div>
-          ) :
- filtered.length === 0 ? (
-            <div className="py-12 text-center">
-              <p className="text-sm text-text-muted">
-                {query
-                  ? t("workspace.emptyFiltered")
-                  : t("workspace.emptyCreatePrompt")}
-              </p>
-              {!query && (
-                <Button
-                  onClick={() => setCreateOpen(true)}
-                  size="sm"
-                  className="mt-3 gap-1 bg-brand hover:bg-brand-strong text-black font-semibold"
-                >
-                  <Plus size={14} /> {t("workspace.createFirst")}
-                </Button>
+      {/* Run log panel */}
+      {logsOpen && runLogs.length > 0 && (
+        <section className="rounded-xl border border-border-subtle bg-black/90 overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle bg-surface text-[12px]">
+            <span
+              aria-hidden
+              className={cn(
+                "inline-block size-2 rounded-full",
+                running ? "bg-status-running animate-pulse" : "bg-text-muted",
               )}
+            />
+            <span className="font-semibold">{t("projects.runLogsTitle")}</span>
+            <span className="text-text-muted">
+              {running ? t("projects.runRunning") : t("projects.runStopped")}
+              {runStatus?.pid != null && running ? ` · pid ${runStatus.pid}` : ""}
+              {!running && runStatus?.exit_code != null
+                ? ` · ${t("projects.runExitCode", { code: runStatus.exit_code })}`
+                : ""}
+            </span>
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setRunLogs([]);
+                  lastSeqRef.current = runStatus?.running ? lastSeqRef.current : 0;
+                }}
+                className="rounded-md px-2 py-1 text-text-muted hover:bg-surface-input hover:text-foreground transition-colors"
+              >
+                {t("projects.runClearLogs")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setLogsOpen(false)}
+                aria-label={t("workspace.cancel")}
+                className="size-7 rounded-md text-text-muted hover:bg-surface-input hover:text-foreground flex items-center justify-center transition-colors"
+              >
+                <X size={14} />
+              </button>
             </div>
-          ) : (
-            <ul className="divide-y divide-border-subtle">
-              {filtered.map((ws) => (
-                <WorkspaceRow
-                  key={ws.id}
-                  ws={ws}
-                  issueCount={issuesByWs[ws.id]?.length ?? 0}
-                  onOpen={() => router.push(`/workspaces/${ws.id}`)}
-                  onEdit={() => setEditing(ws)}
-                  onDelete={() => setPendingDelete(ws)}
-                />
-              ))}
-            </ul>
-          )}
+          </div>
+          <div className="max-h-72 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed">
+            {runLogs.map((l) => (
+              <div
+                key={l.seq}
+                className={cn(
+                  "whitespace-pre-wrap break-all",
+                  l.stream === "stderr" ? "text-status-failed" : "text-text-secondary",
+                )}
+              >
+                {l.line}
+              </div>
+            ))}
+            <div ref={logEndRef} />
+          </div>
         </section>
+      )}
+
+      {/* Table */}
+      <section className="rounded-xl border border-border-subtle bg-surface-raised overflow-hidden">
+        <div className="grid grid-cols-[1fr_120px_90px_1.6fr_120px_70px] gap-3 px-4 py-2.5 text-[10px] uppercase tracking-wider text-text-muted border-b border-border-subtle bg-surface">
+          <div>{t("workspace.table.title")}</div>
+          <div>{t("workspace.table.status")}</div>
+          <div className="text-right">{t("workspace.table.issues")}</div>
+          <div>{t("workspace.table.workingDir")}</div>
+          <div>{t("workspace.table.updated")}</div>
+          <div className="text-right">{t("workspace.table.actions")}</div>
+        </div>
+        {loading ? (
+          <div
+            data-density="project-workspaces-dispatch-loading"
+            className="motion-essential relative flex min-h-[200px] items-center justify-center gap-2 overflow-hidden px-4 py-10 text-sm font-semibold text-text-muted"
+          >
+            <span
+              aria-hidden
+              className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
+            />
+            <AgentThinkingIndicator phase="dispatching" size={16} />
+            {t("workspace.loading")}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="py-12 text-center">
+            <p className="text-sm text-text-muted">
+              {query ? t("workspace.emptyFiltered") : t("workspace.emptyCreatePrompt")}
+            </p>
+            {!query && (
+              <Button
+                onClick={() => setCreateOpen(true)}
+                size="sm"
+                className="mt-3 gap-1 bg-brand hover:bg-brand-strong text-black font-semibold"
+              >
+                <Plus size={14} /> {t("workspace.createFirst")}
+              </Button>
+            )}
+          </div>
+        ) : (
+          <ul className="divide-y divide-border-subtle">
+            {filtered.map((ws) => (
+              <WorkspaceRow
+                key={ws.id}
+                ws={ws}
+                issueCount={issuesByWs[ws.id]?.length ?? 0}
+                onOpen={() => router.push(`/workspaces/${ws.id}`)}
+                onEdit={() => setEditing(ws)}
+                onDelete={() => setPendingDelete(ws)}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
 
       <WorkspaceFormDialog
         open={createOpen}
@@ -686,11 +672,12 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
         initial={{
           title: editing?.title ?? "",
           cwd: editing?.cwd ?? "",
-          planFirstPm: editing?.settings.plan_first_pm ?? true,
+          planFirstPm: editing?.settings?.plan_first_pm ?? true,
         }}
         defaultCwdHint={project?.repo_path ?? ""}
         onSubmit={({ title, cwd, planFirstPm }) => {
           if (editing) return handleUpdate(editing.id, title, cwd, planFirstPm);
+          return undefined;
         }}
         submitLabel={t("workspace.dialog.submitSave")}
         showPlanFirstPm
@@ -752,11 +739,7 @@ function WorkspaceRow({
           className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
         />
       )}
-      <button
-        type="button"
-        onClick={onOpen}
-        className="min-w-0 flex items-center gap-2 text-left"
-      >
+      <button type="button" onClick={onOpen} className="min-w-0 flex items-center gap-2 text-left">
         <span className="size-1.5 rounded-full bg-brand/70 shrink-0" />
         <span className="text-[13px] font-medium truncate group-hover:text-brand transition-colors">
           {workspaceLabel(ws)}
@@ -767,7 +750,9 @@ function WorkspaceRow({
         />
       </button>
       <div className="flex items-center gap-1.5">
-        {isWorkspaceActive && <AgentThinkingIndicator phase="dispatching" size={12} className="shrink-0" />}
+        {isWorkspaceActive && (
+          <AgentThinkingIndicator phase="dispatching" size={12} className="shrink-0" />
+        )}
         <StatusBadge kind={kind} label={humanStatus(t, ws.status)} />
       </div>
       <div className="text-right text-[13px] tabular-nums">
@@ -863,9 +848,7 @@ function WorkspaceFormDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            {t("workspace.dialog.description")}
-          </DialogDescription>
+          <DialogDescription>{t("workspace.dialog.description")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <Field
@@ -924,11 +907,7 @@ function WorkspaceFormDialog({
           )}
         </div>
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={saving}
-          >
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             {t("workspace.cancel")}
           </Button>
           <Button
@@ -939,7 +918,7 @@ function WorkspaceFormDialog({
               !canSubmit && "opacity-50",
             )}
           >
-            {saving ? t("workspace.saving") : (submitLabel || t("workspace.create"))}
+            {saving ? t("workspace.saving") : submitLabel || t("workspace.create")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -954,21 +933,21 @@ function Field({
   children,
 }: {
   label: string;
-  hint?: string;
-  tone?: "muted" | "warning";
+  hint?: string | undefined;
+  tone?: "muted" | "warning" | undefined;
   children: React.ReactNode;
 }) {
   return (
     <label className="block">
-      <span className="text-[11px] uppercase tracking-wider text-text-muted">
-        {label}
-      </span>
+      <span className="text-[11px] uppercase tracking-wider text-text-muted">{label}</span>
       <div className="mt-1">{children}</div>
       {hint && (
-        <p className={cn(
-          "mt-1 text-[11px]",
-          tone === "warning" ? "text-status-awaiting" : "text-text-muted",
-        )}>
+        <p
+          className={cn(
+            "mt-1 text-[11px]",
+            tone === "warning" ? "text-status-awaiting" : "text-text-muted",
+          )}
+        >
           {hint}
         </p>
       )}
@@ -1024,12 +1003,7 @@ function Kpi({
         />
       )}
       <div className="flex items-center justify-between mb-2">
-        <span
-          className={cn(
-            "size-7 rounded-md inline-flex items-center justify-center",
-            t.iconBg,
-          )}
-        >
+        <span className={cn("size-7 rounded-md inline-flex items-center justify-center", t.iconBg)}>
           {pulse ? <AgentThinkingIndicator phase="dispatching" size={14} /> : icon}
         </span>
         {pulse && (
@@ -1041,7 +1015,7 @@ function Kpi({
       <div>
         <div className="text-[10px] uppercase tracking-wider text-text-muted">{label}</div>
         <div className="text-2xl font-bold tabular-nums mt-0.5 truncate">
-          {loading ? "—" : valueText ?? value ?? 0}
+          {loading ? "—" : (valueText ?? value ?? 0)}
         </div>
       </div>
     </div>

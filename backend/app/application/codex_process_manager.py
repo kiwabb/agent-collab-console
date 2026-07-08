@@ -10,24 +10,38 @@ Phase 3: Async-only runtime - no more sync threading.Thread paths.
 from __future__ import annotations  # noqa: I001
 
 
-from typing import Any
+from collections.abc import Awaitable, Callable
 
+from app.application import timeouts
 from app.application.claude_process_runtime import ClaudeProcessRuntime
 from app.application.codex_app_server_runtime import CodexAppServerRuntime
-from app.application.process_runtime_common import AsyncProcessEntry  # noqa: F401
+from app.application.json_rpc_client import JsonObject
+from app.application.process_runtime_common import (
+    AsyncProcessEntry,
+    RefreshTaskResult,
+    RuntimeCodexStore,
+    RuntimeEventBus,
+    RuntimeLogStore,
+)
+from app.domain.models import CodexSession
 
 
 class CodexProcessManager:
     def __init__(
-        self, codex_store, log_store, data_dir=None, event_bus=None, refresh_task_result=None
-    ):
-        shared_processes = {}
+        self,
+        codex_store: RuntimeCodexStore,
+        log_store: RuntimeLogStore,
+        data_dir: str | None = None,
+        event_bus: RuntimeEventBus | None = None,
+        refresh_task_result: RefreshTaskResult | None = None,
+    ) -> None:
+        shared_processes: dict[str, AsyncProcessEntry] = {}
         # Secondary index keyed by task_id for fast lookup when multiple tasks
         # share the same workspace_id (Phase 4: concurrent same-role instances).
         # Runtimes already key _processes by `task_id or workspace_id`, so this
         # dict is a convenience alias that makes terminate_task O(1) without
         # iterating the full shared_processes dict.
-        self._task_processes: dict[str, Any] = {}
+        self._task_processes: dict[str, AsyncProcessEntry] = {}
         self._processes = shared_processes
         self._codex_runtime = CodexAppServerRuntime(
             codex_store=codex_store,
@@ -47,45 +61,52 @@ class CodexProcessManager:
         )
         self._codex_store = codex_store
         self._log_store = log_store
-        self._data_dir = data_dir or "/tmp"
+        self._data_dir = data_dir or timeouts.DEFAULT_CODEX_DATA_DIR
         self._event_bus = event_bus
         self._refresh_task_result = refresh_task_result
 
     @property
-    def codex_store(self):
+    def codex_store(self) -> RuntimeCodexStore:
         return self._codex_store
 
     @codex_store.setter
-    def codex_store(self, value):
+    def codex_store(self, value: RuntimeCodexStore) -> None:
         self._codex_store = value
         self._codex_runtime.codex_store = value
         self._claude_runtime.codex_store = value
 
     @property
-    def log_store(self):
+    def log_store(self) -> RuntimeLogStore:
         return self._log_store
 
     @log_store.setter
-    def log_store(self, value):
+    def log_store(self, value: RuntimeLogStore) -> None:
         self._log_store = value
         self._codex_runtime.log_store = value
         self._claude_runtime.log_store = value
 
     @property
-    def refresh_task_result(self):
+    def refresh_task_result(self) -> RefreshTaskResult | None:
         return self._refresh_task_result
 
     @refresh_task_result.setter
-    def refresh_task_result(self, value):
+    def refresh_task_result(self, value: RefreshTaskResult | None) -> None:
         self._refresh_task_result = value
         self._codex_runtime.refresh_task_result = value
         self._claude_runtime.refresh_task_result = value
 
     def check_availability(self) -> bool:
-        return self._codex_runtime.check_availability()
+        return bool(self._codex_runtime.check_availability())
 
-    async def launch(self, workspace_id: str | None = None, **legacy_kwargs):
-        return await self._codex_runtime.launch(workspace_id=workspace_id, **legacy_kwargs)
+    async def launch(
+        self,
+        workspace_id: str | None = None,
+        **legacy_kwargs: object,
+    ) -> CodexSession:
+        workspace = await self._codex_runtime.launch(workspace_id=workspace_id, **legacy_kwargs)
+        if not isinstance(workspace, CodexSession):
+            raise TypeError("Codex runtime launch returned an unexpected workspace payload")
+        return workspace
 
     async def write_input_async(
         self,
@@ -101,11 +122,17 @@ class CodexProcessManager:
         cwd: str | None = None,
         workspace_id: str | None = None,
         env_overrides: dict[str, str] | None = None,
+        command_args: list[str] | None = None,
         force_new_session: bool = False,
-        **legacy_kwargs,
+        **legacy_kwargs: object,
     ) -> str:
         """Async write_input - awaits runtime's write_input_async directly."""
-        resolved_workspace_id = workspace_id or session_id or legacy_kwargs.get("workspace_id")
+        legacy_workspace_id = legacy_kwargs.get("workspace_id")
+        resolved_workspace_id = (
+            workspace_id
+            or session_id
+            or (legacy_workspace_id if isinstance(legacy_workspace_id, str) else None)
+        )
         runtime = self._codex_runtime if executor == "codex" else self._claude_runtime
 
         result = await runtime.write_input_async(
@@ -120,6 +147,7 @@ class CodexProcessManager:
             resume_message_id=resume_message_id,
             cwd=cwd,
             env_overrides=env_overrides,
+            command_args=command_args,
             force_new_session=force_new_session,
             **legacy_kwargs,
         )
@@ -128,37 +156,53 @@ class CodexProcessManager:
         # iterating the full shared _processes dict.
         if task_id and task_id in self._processes:
             self._task_processes[task_id] = self._processes[task_id]
-        return result
+        return result if isinstance(result, str) else str(result or "")
 
-    async def terminate(self, workspace_id: str | None = None, **legacy_kwargs):
+    async def terminate(
+        self,
+        workspace_id: str | None = None,
+        **legacy_kwargs: object,
+    ) -> CodexSession:
         for runtime in (self._codex_runtime, self._claude_runtime):
             try:  # noqa: SIM105
                 await runtime.terminate(workspace_id=workspace_id, **legacy_kwargs)
             except KeyError:
                 pass
-        resolved_workspace_id = workspace_id or legacy_kwargs.get("session_id")
+        legacy_session_id = legacy_kwargs.get("session_id")
+        resolved_workspace_id = (
+            workspace_id if workspace_id is not None else legacy_session_id
+        )
+        if not isinstance(resolved_workspace_id, str):
+            raise KeyError(f"Workspace {resolved_workspace_id} not found")
         workspace = await self._codex_store.load_codex_workspace(resolved_workspace_id)
         if workspace is None:
             raise KeyError(f"Workspace {resolved_workspace_id} not found")
         return workspace
 
-    async def terminate_all(self):
+    async def terminate_all(self) -> list[str]:
         terminated = []
         for runtime in (self._codex_runtime, self._claude_runtime):
             terminated.extend(await runtime.terminate_all())
         return terminated
 
-    async def terminate_task(self, task_id: str):
+    async def terminate_task(self, task_id: str) -> None:
         # Clean up the secondary task_id index entry if present.
         self._task_processes.pop(task_id, None)
         for runtime in (self._codex_runtime, self._claude_runtime):
             await runtime.terminate_task(task_id)
 
     async def resolve_approval(self, item_id: str, decision: str) -> bool:
-        return await self._codex_runtime.resolve_approval(item_id, decision)
+        return bool(await self._codex_runtime.resolve_approval(item_id, decision))
 
-    def get_pending_approvals(self) -> dict[str, dict]:
-        return self._codex_runtime.get_pending_approvals()
+    def get_pending_approvals(self) -> dict[str, dict[str, object]]:
+        approvals = self._codex_runtime.get_pending_approvals()
+        return {
+            str(item_id): {str(key): value for key, value in payload.items()}
+            for item_id, payload in approvals.items()
+            if isinstance(payload, dict)
+        }
 
-    def _make_app_server_notification_callback(self, workspace_id: str, task_id: str | None):
+    def _make_app_server_notification_callback(
+        self, workspace_id: str, task_id: str | None
+    ) -> Callable[[str, JsonObject], Awaitable[bool]]:
         return self._codex_runtime._make_app_server_notification_callback(workspace_id, task_id)

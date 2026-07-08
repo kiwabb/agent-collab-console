@@ -2,15 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  CheckCircle2,
-  XCircle,
-  Inbox as InboxIcon,
-  Loader2,
-  RefreshCw,
-  ShieldCheck,
-} from "lucide-react";
+import { CheckCircle2, XCircle, Inbox as InboxIcon, RefreshCw, ShieldCheck } from "lucide-react";
 
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { getCodexIssues } from "@/lib/api/issues";
 import { getPendingApprovals, resolveApproval } from "@/lib/api/approvals";
 import { answerCodexTaskClarification, getCodexTasks, reviewCodexTask } from "@/lib/api/tasks";
@@ -19,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { StatusBadge, inferStatusKind } from "@/components/ui/status-badge";
+import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
 
 const CLARIFY_PREFIX = "[CLARIFY] ";
@@ -26,9 +21,9 @@ const CLARIFY_PREFIX = "[CLARIFY] ";
 type Tab = "all" | "issues" | "reviews" | "questions" | "qa_passed" | "tools";
 
 interface RowAction {
-  approve?: () => Promise<void>;
-  reject?: () => Promise<void>;
-  open?: () => void;
+  approve?: (() => Promise<void>) | undefined;
+  reject?: (() => Promise<void>) | undefined;
+  open?: (() => void) | undefined;
 }
 
 export function ApprovalsPage() {
@@ -76,10 +71,7 @@ export function ApprovalsPage() {
   }, [load]);
 
   const issueApprovals = useMemo(
-    () =>
-      issues.filter(
-        (i) => i.status === "awaiting_approval" || i.status === "review",
-      ),
+    () => issues.filter((i) => i.status === "awaiting_approval" || i.status === "review"),
     [issues],
   );
 
@@ -89,18 +81,12 @@ export function ApprovalsPage() {
   );
 
   const clarificationTasks = useMemo(
-    () =>
-      allAwaitingReview.filter((t) =>
-        (t.review_comment || "").startsWith(CLARIFY_PREFIX),
-      ),
+    () => allAwaitingReview.filter((t) => (t.review_comment || "").startsWith(CLARIFY_PREFIX)),
     [allAwaitingReview],
   );
 
   const taskReviews = useMemo(
-    () =>
-      allAwaitingReview.filter(
-        (t) => !(t.review_comment || "").startsWith(CLARIFY_PREFIX),
-      ),
+    () => allAwaitingReview.filter((t) => !(t.review_comment || "").startsWith(CLARIFY_PREFIX)),
     [allAwaitingReview],
   );
 
@@ -232,8 +218,14 @@ export function ApprovalsPage() {
               variant="outline"
               disabled={refreshing}
               onClick={() => void load("refresh")}
+              data-density={refreshing ? "approvals-refresh-tool" : "approvals-refresh"}
+              className={cn(refreshing && "motion-essential")}
             >
-              <RefreshCw size={12} className={cn("mr-1.5", refreshing && "animate-spin")} />
+              {refreshing ? (
+                <AgentThinkingIndicator phase="tool" size={12} />
+              ) : (
+                <RefreshCw size={12} />
+              )}
               Refresh
             </Button>
           </div>
@@ -270,9 +262,7 @@ export function ApprovalsPage() {
               <CheckCircle2 size={20} className="text-success" />
             </div>
             <h2 className="text-base font-semibold">Inbox zero</h2>
-            <p className="text-sm text-text-muted mt-1">
-              Nothing is waiting on a human right now.
-            </p>
+            <p className="text-sm text-text-muted mt-1">Nothing is waiting on a human right now.</p>
           </div>
         ) : (
           <div className="space-y-6">
@@ -321,7 +311,9 @@ export function ApprovalsPage() {
                           {task.issue_id && (
                             <button
                               type="button"
-                              onClick={() => router.push(`/issues/${task.issue_id}?tab=tasks&taskId=${task.id}`)}
+                              onClick={() =>
+                                router.push(`/issues/${task.issue_id}?tab=tasks&taskId=${task.id}`)
+                              }
                               className="text-[11px] text-brand hover:underline"
                             >
                               open task →
@@ -355,7 +347,8 @@ export function ApprovalsPage() {
                       busy={busyId === task.id}
                       action={{
                         open: task.issue_id
-                          ? () => router.push(`/issues/${task.issue_id}?tab=tasks&taskId=${task.id}`)
+                          ? () =>
+                              router.push(`/issues/${task.issue_id}?tab=tasks&taskId=${task.id}`)
                           : undefined,
                         approve: () => handleReviewTask(task, "approve"),
                         reject: () => handleReviewTask(task, "reject"),
@@ -516,9 +509,10 @@ function RowCard({
             size="sm"
             disabled={busy}
             onClick={() => void action.approve!()}
-            className="bg-success text-black hover:bg-success/90"
+            data-density={busy ? "approvals-row-approve-tool" : "approvals-row-approve"}
+            className={cn("bg-success text-black hover:bg-success/90", busy && "motion-essential")}
           >
-            {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+            {busy ? <AgentThinkingIndicator phase="tool" size={12} /> : <CheckCircle2 size={12} />}
             <span className="ml-1">Approve</span>
           </Button>
         )}
@@ -528,8 +522,10 @@ function RowCard({
             disabled={busy}
             variant="outline"
             onClick={() => void action.reject!()}
+            data-density={busy ? "approvals-row-reject-tool" : "approvals-row-reject"}
+            className={cn(busy && "motion-essential")}
           >
-            <XCircle size={12} />
+            {busy ? <AgentThinkingIndicator phase="tool" size={12} /> : <XCircle size={12} />}
             <span className="ml-1">Reject</span>
           </Button>
         )}
@@ -550,6 +546,7 @@ function AnswerInline({
   disabled: boolean;
   onSubmit: (answer: string) => void;
 }) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState("");
   return (
     <form
@@ -573,9 +570,17 @@ function AnswerInline({
         type="submit"
         size="sm"
         disabled={disabled || !draft.trim()}
-        className="bg-brand hover:bg-brand-strong text-black font-semibold"
+        data-density={disabled ? "approvals-answer-thinking" : "approvals-answer"}
+        className={cn(
+          "bg-brand hover:bg-brand-strong text-black font-semibold",
+          disabled && "motion-essential",
+        )}
       >
-        {disabled ? <Loader2 size={12} className="animate-spin" /> : "Send answer"}
+        {disabled ? (
+          <AgentThinkingIndicator phase="thinking" size={12} />
+        ) : (
+          t("approvals.sendAnswer")
+        )}
       </Button>
     </form>
   );

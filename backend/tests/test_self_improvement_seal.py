@@ -62,8 +62,10 @@ async def test_done_seal_records_memory_then_self_improvement():
 
     memory.assert_awaited_once_with("graph-1", store)
     improve.assert_awaited_once()
+    assert improve.await_args is not None
     assert improve.await_args.args[0].id == "issue-1"
     assert improve.await_args.args[1] is store
+    assert store.saved_issue is not None
     assert store.saved_issue.status == "completed"
 
 
@@ -81,5 +83,7 @@ async def test_self_improvement_failure_does_not_block_terminal_status():
             store=store, issue=_issue(), event_bus=None, result_status="done"
         )
 
+    assert store.saved_graph is not None
+    assert store.saved_issue is not None
     assert store.saved_graph.status == "done"
     assert store.saved_issue.status == "completed"

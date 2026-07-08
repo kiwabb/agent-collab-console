@@ -1,7 +1,14 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, dedupedFetch, handleResponse } from "./fetch";
-import type { WorkflowGraph } from "../types";
+import {
+  API_BASE,
+  apiJsonRequest,
+  apiRequest,
+  apiRequestOr,
+  dedupedFetch,
+  handleResponse,
+} from "./fetch";
+import type { ProposedDAG, WorkflowGraph } from "../types";
 
 export async function getIssueGraph(issueId: string): Promise<WorkflowGraph | null> {
   const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}/graph`);
@@ -9,20 +16,74 @@ export async function getIssueGraph(issueId: string): Promise<WorkflowGraph | nu
   return handleResponse<WorkflowGraph>(response);
 }
 export async function autoStartIssueGraph(issueId: string): Promise<WorkflowGraph> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/graph/start`, {
+  return apiRequest<WorkflowGraph>(`${API_BASE}/codex/issues/${issueId}/graph/start`, {
     method: "POST",
   });
-  return handleResponse<WorkflowGraph>(response);
 }
 export async function restartConductor(issueId: string): Promise<WorkflowGraph> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/conductor/restart`, {
+  return apiRequest<WorkflowGraph>(`${API_BASE}/codex/issues/${issueId}/conductor/restart`, {
     method: "POST",
   });
-  return handleResponse<WorkflowGraph>(response);
 }
 export async function resetIssue(issueId: string): Promise<WorkflowGraph> {
-  const response = await fetch(`${API_BASE}/codex/issues/${issueId}/reset`, { method: "POST" });
-  return handleResponse<WorkflowGraph>(response);
+  return apiRequest<WorkflowGraph>(`${API_BASE}/codex/issues/${issueId}/reset`, {
+    method: "POST",
+  });
+}
+
+export async function planIssue(issueId: string): Promise<ProposedDAG> {
+  return apiRequest<ProposedDAG>(`${API_BASE}/codex/issues/${issueId}/plan`, {
+    method: "POST",
+  });
+}
+
+export async function saveIssueGraph(
+  issueId: string,
+  dag: ProposedDAG,
+  createdBy = "user",
+): Promise<WorkflowGraph> {
+  return apiJsonRequest<WorkflowGraph>(`${API_BASE}/codex/issues/${issueId}/graph`, "POST", {
+    dag,
+    created_by: createdBy,
+  });
+}
+
+export async function startIssueGraph(issueId: string): Promise<WorkflowGraph> {
+  return autoStartIssueGraph(issueId);
+}
+
+export interface ReplanPending {
+  id: string;
+  graph_id: string;
+  triggered_by_node_key: string;
+  trigger_reason: string;
+  diff: {
+    added_nodes?: Array<{ node_key: string; role_key?: string; title?: string }>;
+    added_edges?: Array<{ from_node_key: string; to_node_key: string; edge_type: string }>;
+    removed_node_keys?: string[];
+    rationale?: string;
+  };
+  rationale: string | null;
+  status: string;
+  created_at: string | null;
+}
+
+export async function listReplanPending(issueId: string): Promise<ReplanPending[]> {
+  return apiRequest<ReplanPending[]>(`${API_BASE}/codex/issues/${issueId}/graph/replan-pending`);
+}
+
+export async function confirmReplan(issueId: string, replanId: string): Promise<WorkflowGraph> {
+  return apiRequest<WorkflowGraph>(
+    `${API_BASE}/codex/issues/${issueId}/graph/replan/${replanId}/confirm`,
+    { method: "POST" },
+  );
+}
+
+export async function rejectReplan(issueId: string, replanId: string): Promise<WorkflowGraph> {
+  return apiRequest<WorkflowGraph>(
+    `${API_BASE}/codex/issues/${issueId}/graph/replan/${replanId}/reject`,
+    { method: "POST" },
+  );
 }
 export interface AgentMessage {
   id: string;
@@ -36,9 +97,10 @@ export interface AgentMessage {
   created_at: string | null;
 }
 export async function getAgentMessages(issueId: string): Promise<AgentMessage[]> {
-  const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/agent-messages`);
-  if (!res.ok) return [];
-  const data = (await res.json()) as { messages: AgentMessage[] };
+  const data = await apiRequestOr<{ messages?: AgentMessage[] }>(
+    `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/agent-messages`,
+    { messages: [] },
+  );
   return data.messages ?? [];
 }
 export interface ConductorDecision {
@@ -52,9 +114,10 @@ export interface ConductorDecision {
   created_at: string | null;
 }
 export async function getConductorLog(issueId: string): Promise<ConductorDecision[]> {
-  const res = await fetch(`${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-log`);
-  if (!res.ok) return [];
-  const data = (await res.json()) as { decisions: ConductorDecision[] };
+  const data = await apiRequestOr<{ decisions?: ConductorDecision[] }>(
+    `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-log`,
+    { decisions: [] },
+  );
   return data.decisions ?? [];
 }
 export interface ConductorTurn {
@@ -83,11 +146,10 @@ export async function getConductorTurns(
   if (opts?.conductorTaskId) sp.set("conductor_task_id", opts.conductorTaskId);
   if (opts?.limit) sp.set("limit", String(opts.limit));
   const suffix = sp.size > 0 ? `?${sp.toString()}` : "";
-  const res = await fetch(
+  const data = await apiRequestOr<{ turns?: ConductorTurn[] }>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-turns${suffix}`,
+    { turns: [] },
   );
-  if (!res.ok) return [];
-  const data = (await res.json()) as { turns: ConductorTurn[] };
   return data.turns ?? [];
 }
 export interface ConductorStatePayload {
@@ -133,11 +195,10 @@ export interface ConductorPhaseEstimate {
   n_samples: number;
 }
 export async function getConductorState(issueId: string): Promise<ConductorStatePayload | null> {
-  const res = await fetch(
+  return apiRequestOr<ConductorStatePayload | null>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-state`,
+    null,
   );
-  if (!res.ok) return null;
-  return (await res.json()) as ConductorStatePayload;
 }
 export async function getConductorStateLog(
   issueId: string,
@@ -146,58 +207,50 @@ export async function getConductorStateLog(
   const sp = new URLSearchParams();
   if (opts?.limit) sp.set("limit", String(opts.limit));
   const suffix = sp.size > 0 ? `?${sp.toString()}` : "";
-  const res = await fetch(
+  const data = await apiRequestOr<{ entries?: ConductorStateLogEntry[] }>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-state-log${suffix}`,
+    { entries: [] },
   );
-  if (!res.ok) return [];
-  const data = (await res.json()) as { entries: ConductorStateLogEntry[] };
   return data.entries ?? [];
 }
 export async function getConductorPhaseEstimates(
   issueId: string,
 ): Promise<Record<string, ConductorPhaseEstimate>> {
-  const res = await fetch(
+  const data = await apiRequestOr<{ estimates?: Record<string, ConductorPhaseEstimate> }>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor-phase-estimates`,
+    { estimates: {} },
   );
-  if (!res.ok) return {};
-  const data = (await res.json()) as { estimates: Record<string, ConductorPhaseEstimate> };
   return data.estimates ?? {};
 }
 export async function sendConductorMessage(
   issueId: string,
   message: string,
 ): Promise<{ ok: boolean; status: string; conductor_task_id: string }> {
-  const response = await fetch(
+  return apiJsonRequest<{ ok: boolean; status: string; conductor_task_id: string }>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor/message`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    },
+    "POST",
+    { message },
   );
-  return handleResponse(response);
 }
 export async function pauseConductor(
   issueId: string,
 ): Promise<{ ok: boolean; status: string; conductor_task_id: string }> {
-  const response = await fetch(
+  return apiRequest<{ ok: boolean; status: string; conductor_task_id: string }>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor/pause`,
     {
       method: "POST",
     },
   );
-  return handleResponse(response);
 }
 export async function resumeConductor(
   issueId: string,
 ): Promise<{ ok: boolean; status: string; conductor_task_id: string }> {
-  const response = await fetch(
+  return apiRequest<{ ok: boolean; status: string; conductor_task_id: string }>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/conductor/resume`,
     {
       method: "POST",
     },
   );
-  return handleResponse(response);
 }
 export interface SubAgentResultPayload {
   task_id: string;
@@ -211,28 +264,22 @@ export interface SubAgentResultPayload {
   updated_at: string | null;
 }
 export async function getSubAgentResults(issueId: string): Promise<SubAgentResultPayload[]> {
-  const response = await fetch(
+  return apiRequest<SubAgentResultPayload[]>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/subagent-results`,
   );
-  return handleResponse<SubAgentResultPayload[]>(response);
 }
 export async function getAgentMesh(issueId: string): Promise<AgentMessage[]> {
-  const response = await fetch(
+  return apiRequest<AgentMessage[]>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/agent-mesh`,
   );
-  return handleResponse<AgentMessage[]>(response);
 }
 export async function appendConductorMessage(
   projectId: string,
   message: string,
 ): Promise<{ status: string }> {
-  const response = await fetch(
+  return apiJsonRequest<{ status: string }>(
     `${API_BASE}/codex/projects/${encodeURIComponent(projectId)}/conductor/message`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    },
+    "POST",
+    { message },
   );
-  return handleResponse<{ status: string }>(response);
 }

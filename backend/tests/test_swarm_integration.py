@@ -55,6 +55,12 @@ def _git(*args: str, cwd: Path) -> str:
     ).stdout
 
 
+def _worktree_has_agent_key(wt: str, agent_key: str) -> bool:
+    """Return whether a swarm worktree path carries the given logical agent key."""
+    name = Path(wt).name
+    return name.endswith(f"-{agent_key}") or f"-{agent_key}-batch-" in name
+
+
 # --------------------------------------------------------------------------- #
 # Fixtures: real git repo, real sqlite store, real worktree manager.
 # --------------------------------------------------------------------------- #
@@ -141,6 +147,12 @@ async def _seed_project_and_issue(
     return project, issue
 
 
+def _prepared_issue_git(issue: CodexIssue) -> tuple[str, Path]:
+    assert issue.git_branch is not None
+    assert issue.git_worktree_path is not None
+    return issue.git_branch, Path(issue.git_worktree_path)
+
+
 def _build_tools(store, manager, project, issue):
     return ct.build_conductor_tools(
         project_id=project.id,
@@ -216,6 +228,7 @@ async def test_dispatch_batch_real_fanout_merges_and_keeps_main_clean(
       - both agent worktrees are cleaned up (no leaks).
     """
     project, issue = await _seed_project_and_issue(store, manager, repo)
+    issue_branch, issue_worktree = _prepared_issue_git(issue)
     reg = _build_tools(store, manager, project, issue)
 
     main_before = _git("rev-parse", "main", cwd=repo).strip()
@@ -227,7 +240,7 @@ async def test_dispatch_batch_real_fanout_merges_and_keeps_main_clean(
     def write_plan(wt: str):
         # Derive a per-agent file name from the worktree path so the two agents
         # never touch the same file.
-        name = "a.txt" if wt.endswith("engineer") else "b.txt"
+        name = "a.txt" if _worktree_has_agent_key(wt, "engineer") else "b.txt"
         file_for[wt] = name
 
         def _do(p: Path):
@@ -253,7 +266,7 @@ async def test_dispatch_batch_real_fanout_merges_and_keeps_main_clean(
     assert len(out["merged"]) == 2
 
     # Both files landed on the issue branch (verify via real git tree listing).
-    issue_tree = _git("ls-tree", "-r", "--name-only", issue.git_branch, cwd=repo)
+    issue_tree = _git("ls-tree", "-r", "--name-only", issue_branch, cwd=repo)
     assert "a.txt" in issue_tree
     assert "b.txt" in issue_tree
 
@@ -274,10 +287,10 @@ async def test_dispatch_batch_real_fanout_merges_and_keeps_main_clean(
 
     # The shared issue worktree is consistent with the moved ref (no stale index
     # reporting phantom deletions) and has both files on disk.
-    status = _git("status", "--porcelain", cwd=Path(issue.git_worktree_path))
+    status = _git("status", "--porcelain", cwd=issue_worktree)
     assert status.strip() == ""
-    assert (Path(issue.git_worktree_path) / "a.txt").exists()
-    assert (Path(issue.git_worktree_path) / "b.txt").exists()
+    assert (issue_worktree / "a.txt").exists()
+    assert (issue_worktree / "b.txt").exists()
 
 
 @pytest.mark.asyncio
@@ -292,6 +305,7 @@ async def test_dispatch_batch_three_same_role_engineers_merge_modules(
     no mergeable diff.
     """
     project, issue = await _seed_project_and_issue(store, manager, repo)
+    issue_branch, issue_worktree = _prepared_issue_git(issue)
     reg = _build_tools(store, manager, project, issue)
     main_before = _git("rev-parse", "main", cwd=repo).strip()
 
@@ -301,7 +315,7 @@ async def test_dispatch_batch_three_same_role_engineers_merge_modules(
             "engineer-2": ("module_b.py", "def mul(a, b):\n    return a * b\n"),
             "engineer-3": ("module_c.py", "def sub(a, b):\n    return a - b\n"),
         }
-        agent_key = next(key for key in module_by_suffix if Path(wt).name.endswith(f"-{key}"))
+        agent_key = next(key for key in module_by_suffix if _worktree_has_agent_key(wt, key))
         name, content = module_by_suffix[agent_key]
 
         def _do(p: Path):
@@ -327,14 +341,13 @@ async def test_dispatch_batch_three_same_role_engineers_merge_modules(
     assert out["merge_status"] == "merged"
     assert len(out["merged"]) == 3
 
-    issue_tree = _git("ls-tree", "-r", "--name-only", issue.git_branch, cwd=repo)
+    issue_tree = _git("ls-tree", "-r", "--name-only", issue_branch, cwd=repo)
     assert "module_a.py" in issue_tree
     assert "module_b.py" in issue_tree
     assert "module_c.py" in issue_tree
-    issue_wt = Path(issue.git_worktree_path)
-    assert (issue_wt / "module_a.py").read_text() == "def add(a, b):\n    return a + b\n"
-    assert (issue_wt / "module_b.py").read_text() == "def mul(a, b):\n    return a * b\n"
-    assert (issue_wt / "module_c.py").read_text() == "def sub(a, b):\n    return a - b\n"
+    assert (issue_worktree / "module_a.py").read_text() == "def add(a, b):\n    return a + b\n"
+    assert (issue_worktree / "module_b.py").read_text() == "def mul(a, b):\n    return a * b\n"
+    assert (issue_worktree / "module_c.py").read_text() == "def sub(a, b):\n    return a - b\n"
 
     assert _git("rev-parse", "main", cwd=repo).strip() == main_before
     main_tree = _git("ls-tree", "-r", "--name-only", "main", cwd=repo)
@@ -357,12 +370,13 @@ async def test_dispatch_batch_real_conflict_surfaces_structured(monkeypatch, sto
       - the conflicting agent's worktree is KEPT for reconcile.
     """
     project, issue = await _seed_project_and_issue(store, manager, repo)
+    issue_branch, _issue_worktree = _prepared_issue_git(issue)
     reg = _build_tools(store, manager, project, issue)
 
     def write_plan(wt: str):
         # Both agents write DIFFERENT content to the SAME file -> real conflict
         # on the second merge.
-        tag = "A" if wt.endswith("engineer") else "B"
+        tag = "A" if _worktree_has_agent_key(wt, "engineer") else "B"
 
         def _do(p: Path):
             (p / "shared.txt").write_text(f"from {tag}\n")
@@ -393,7 +407,7 @@ async def test_dispatch_batch_real_conflict_surfaces_structured(monkeypatch, sto
     assert merged_key != conflict_key
 
     # The already-merged agent's commit was NOT rolled back.
-    issue_log = _git("log", "--oneline", issue.git_branch, cwd=repo)
+    issue_log = _git("log", "--oneline", issue_branch, cwd=repo)
     assert f"merge swarm agent {merged_key}" in issue_log
     assert f"merge swarm agent {conflict_key}" not in issue_log
 
@@ -422,11 +436,12 @@ async def test_dispatch_batch_noop_agent_is_clean_not_conflict(monkeypatch, stor
     stopped). Drives the full dispatch_batch path through real git.
     """
     project, issue = await _seed_project_and_issue(store, manager, repo)
+    issue_branch, _issue_worktree = _prepared_issue_git(issue)
     reg = _build_tools(store, manager, project, issue)
 
     def write_plan(wt: str):
         # First agent writes a real file; second agent writes nothing (no-op).
-        if wt.endswith("engineer"):
+        if _worktree_has_agent_key(wt, "engineer"):
 
             def _do(p: Path):
                 (p / "a.txt").write_text("content of a.txt\n")
@@ -454,7 +469,7 @@ async def test_dispatch_batch_noop_agent_is_clean_not_conflict(monkeypatch, stor
     assert len(out["noop_merges"]) == 1
 
     # The real agent's file landed; the no-op agent contributed nothing.
-    issue_tree = _git("ls-tree", "-r", "--name-only", issue.git_branch, cwd=repo)
+    issue_tree = _git("ls-tree", "-r", "--name-only", issue_branch, cwd=repo)
     assert "a.txt" in issue_tree
 
     # No swarm worktrees leaked (neither the merged nor the no-op agent).
@@ -480,10 +495,11 @@ async def test_dispatch_batch_flushes_upstream_so_agents_see_it(monkeypatch, sto
     forks a tree that includes it (PR1 finding). Driven through the real
     dispatch_batch path."""
     project, issue = await _seed_project_and_issue(store, manager, repo)
+    _issue_branch, issue_worktree = _prepared_issue_git(issue)
     reg = _build_tools(store, manager, project, issue)
 
     # Upstream (PM/architect) leaves an artifact UNCOMMITTED in the issue worktree.
-    (Path(issue.git_worktree_path) / "prd.md").write_text("upstream PM output\n")
+    (issue_worktree / "prd.md").write_text("upstream PM output\n")
 
     seen_upstream: dict[str, bool] = {}
 
@@ -675,15 +691,14 @@ async def test_dispatch_batch_unlimited_budget_keeps_full_concurrency(
 
 
 # --------------------------------------------------------------------------- #
-# Scenario 5: soft budget semantics — over-budget does NOT hard-kill the batch.
+# Scenario 5: hard budget gate — over-budget does not create new agent worktrees.
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
-async def test_dispatch_batch_over_budget_is_soft_not_killed(monkeypatch, store, manager, repo):
-    """Over-budget must NOT abort/raise in dispatch_batch: it squeezes concurrency
-    to 1 (soft) but still runs the agents and merges their work. (Soft-semantics
-    contract from the budget spec.)"""
+async def test_dispatch_batch_over_budget_rejects_before_worktrees(monkeypatch, store, manager, repo):
+    """Over-budget dispatch_batch returns a machine-readable budget gate result
+    before creating tasks or per-agent worktrees."""
     monkeypatch.setenv("MAX_PARALLEL_DISPATCH_PER_BATCH", "3")
     monkeypatch.setenv("EST_COST_PER_AGENT_USD", "0.50")
     project, issue = await _seed_project_and_issue(store, manager, repo, budget_usd=1.0)
@@ -703,13 +718,7 @@ async def test_dispatch_batch_over_budget_is_soft_not_killed(monkeypatch, store,
 
     monkeypatch.setattr(ctmod, "_emit", capture_emit)
 
-    def write_plan(wt: str):
-        def _do(p: Path):
-            (p / f"{Path(wt).name}.txt").write_text("x\n")
-
-        return _do
-
-    _patch_subagent_execution(monkeypatch, write_plan=write_plan)
+    paths = _patch_subagent_execution(monkeypatch, write_plan=lambda wt: None)
 
     out = await reg.tools["dispatch_batch"](
         {
@@ -720,13 +729,16 @@ async def test_dispatch_batch_over_budget_is_soft_not_killed(monkeypatch, store,
         }
     )
 
-    # NOT hard-killed: the batch ran to completion and merged.
-    assert out["status"] == "batch_complete"
-    assert out["succeeded_count"] == 2
-    assert out["merge_status"] == "merged"
-    # Over budget squeezed concurrency to the floor of 1 (soft, not 0).
-    started = next(e for e in events if e.get("status") == "batch_started")
-    assert started["concurrency_cap"] == 1, started
+    assert out["status"] == "budget_exceeded"
+    assert out["budget"]["spent_usd"] == 2.0
+    assert out["budget"]["budget_usd"] == 1.0
+    assert paths == {}
+    assert not [e for e in events if e.get("status") == "batch_started"]
+    assert [e for e in events if e.get("status") == "budget_exceeded"]
+    leaked = [
+        p for p in await manager.git.list_worktree_paths(str(repo)) if "swarm-" in Path(p).name
+    ]
+    assert leaked == []
 
 
 # --------------------------------------------------------------------------- #
@@ -784,7 +796,8 @@ async def test_cleanup_issue_swarm_worktrees_removes_residue_main_clean(store, m
     assert "a.txt" not in main_tree and "b.txt" not in main_tree
 
     # The issue branch is also untouched (no merge happened — cleanup never merges).
-    assert "a.txt" not in _git("ls-tree", "-r", "--name-only", issue.git_branch, cwd=repo)
+    issue_branch, _issue_worktree = _prepared_issue_git(issue)
+    assert "a.txt" not in _git("ls-tree", "-r", "--name-only", issue_branch, cwd=repo)
 
     # 4) idempotent: second call is a no-op, no raise.
     await manager.cleanup_issue_swarm_worktrees(project, issue)

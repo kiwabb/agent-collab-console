@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from statistics import StatisticsError, quantiles
-from typing import Any
+from typing import Protocol, runtime_checkable
+
+from app.domain.models import ConductorStateLog
 
 
 @dataclass(frozen=True)
@@ -15,10 +18,21 @@ class EstimateResult:
         return asdict(self)
 
 
+@runtime_checkable
+class PhaseDurationStore(Protocol):
+    async def list_conductor_state_logs(
+        self,
+        issue_id: str | None = None,
+        *,
+        limit: int = 200,
+        descending: bool = False,
+    ) -> Sequence[ConductorStateLog]: ...
+
+
 class PhaseDurationEstimator:
     """Caches conductor phase duration percentiles derived from transition logs."""
 
-    def __init__(self, store: Any) -> None:
+    def __init__(self, store: object) -> None:
         self._store = store
         self._cache: dict[str, EstimateResult] | None = None
 
@@ -29,11 +43,10 @@ class PhaseDurationEstimator:
     async def all_estimates(self) -> dict[str, EstimateResult]:
         if self._cache is not None:
             return self._cache
-        list_logs = getattr(self._store, "list_conductor_state_logs", None)
-        if not callable(list_logs):
+        if not isinstance(self._store, PhaseDurationStore):
             self._cache = {}
             return self._cache
-        rows = await list_logs(None, limit=0, descending=False)
+        rows = await self._store.list_conductor_state_logs(None, limit=0, descending=False)
         buckets: dict[str, list[int]] = {}
         for index, row in enumerate(rows or []):
             next_row = rows[index + 1] if index + 1 < len(rows) else None
@@ -60,7 +73,7 @@ class PhaseDurationEstimator:
 _ESTIMATORS: dict[int, PhaseDurationEstimator] = {}
 
 
-def get_phase_duration_estimator(store: Any) -> PhaseDurationEstimator:
+def get_phase_duration_estimator(store: object) -> PhaseDurationEstimator:
     key = id(store)
     estimator = _ESTIMATORS.get(key)
     if estimator is None:

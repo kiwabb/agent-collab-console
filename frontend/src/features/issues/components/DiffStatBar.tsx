@@ -25,10 +25,7 @@ export function DiffStatBar({ add, rm, cells = 20 }: Props) {
     ...Array<"n">(neutralCells).fill("n"),
   ];
   return (
-    <span
-      className="inline-flex gap-px items-center"
-      title={`+${add} / −${rm}`}
-    >
+    <span className="inline-flex gap-px items-center" title={`+${add} / −${rm}`}>
       {slots.map((kind, i) => (
         <i
           key={i}

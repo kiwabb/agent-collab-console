@@ -1,17 +1,13 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, WS_BASE, handleResponse } from "./fetch";
+import { API_BASE, WS_BASE, apiJsonRequest, apiRequest } from "./fetch";
 import type { CreateWorkspaceRequest, Workspace } from "../types";
 
 export async function getWorkspaces(projectId: string | null = null): Promise<Workspace[]> {
   const url = projectId
     ? `${API_BASE}/codex/workspaces?project_id=${encodeURIComponent(projectId)}`
     : `${API_BASE}/codex/workspaces`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to load workspaces: HTTP ${response.status}`);
-  }
-  return response.json();
+  return apiRequest<Workspace[]>(url);
 }
 export async function createWorkspace(
   title: string,
@@ -19,53 +15,36 @@ export async function createWorkspace(
   cwd = "",
 ): Promise<Workspace> {
   const body: CreateWorkspaceRequest = { title, project_id: projectId, cwd };
-  const response = await fetch(`${API_BASE}/codex/workspaces`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<Workspace>(response);
+  return apiJsonRequest<Workspace>(`${API_BASE}/codex/workspaces`, "POST", body);
 }
 export async function updateWorkspace(
   workspaceId: string,
   patch: { title?: string; cwd?: string; plan_first_pm?: boolean },
 ): Promise<Workspace> {
-  const response = await fetch(`${API_BASE}/codex/workspaces/${workspaceId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  return handleResponse<Workspace>(response);
+  return apiJsonRequest<Workspace>(`${API_BASE}/codex/workspaces/${workspaceId}`, "PATCH", patch);
 }
 export async function getWorkspace(workspaceId: string): Promise<Workspace> {
-  const response = await fetch(`${API_BASE}/codex/workspaces/${workspaceId}`);
-  return handleResponse<Workspace>(response);
+  return apiRequest<Workspace>(`${API_BASE}/codex/workspaces/${workspaceId}`);
 }
 export async function deleteWorkspace(workspaceId: string): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/codex/workspaces/${workspaceId}`, {
+  return apiRequest<unknown>(`${API_BASE}/codex/workspaces/${workspaceId}`, {
     method: "DELETE",
   });
-  return handleResponse(response);
 }
 export async function deleteAllWorkspaces(): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/codex/workspaces`, {
+  return apiRequest<unknown>(`${API_BASE}/codex/workspaces`, {
     method: "DELETE",
   });
-  return handleResponse(response);
 }
 export async function sendWorkspaceInput(workspaceId: string, input: string): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/codex/workspaces/${workspaceId}/input`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ input }),
+  return apiJsonRequest<unknown>(`${API_BASE}/codex/workspaces/${workspaceId}/input`, "POST", {
+    input,
   });
-  return handleResponse(response);
 }
 export async function terminateWorkspace(workspaceId: string): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/codex/workspaces/${workspaceId}/terminate`, {
+  return apiRequest<unknown>(`${API_BASE}/codex/workspaces/${workspaceId}/terminate`, {
     method: "POST",
   });
-  return handleResponse(response);
 }
 export const getCodexSessions = getWorkspaces;
 export const createCodexSession = createWorkspace;

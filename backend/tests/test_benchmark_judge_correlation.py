@@ -16,6 +16,7 @@ from __future__ import annotations  # noqa: I001
 
 import math  # noqa: F401
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -97,7 +98,9 @@ def test_judge_scorer_passes_when_calibrated_and_score_high():
     assert s.value == 0.95
     assert s.passed is True
     assert s.metadata["is_calibrated"] is True
-    assert "high quality" in s.metadata["explanation"]
+    explanation = s.metadata["explanation"]
+    assert isinstance(explanation, str)
+    assert "high quality" in explanation
 
 
 def test_judge_scorer_passes_false_when_below_threshold():
@@ -125,7 +128,9 @@ def test_judge_scorer_unparseable_response_is_zero():
     assert s.value == 0.0
     assert s.passed is False
     assert s.metadata["reason"] == "unparseable_judge_response"
-    assert "not a number" in s.metadata["raw_first_line"]
+    raw_first_line = s.metadata["raw_first_line"]
+    assert isinstance(raw_first_line, str)
+    assert "not a number" in raw_first_line
 
 
 def test_judge_scorer_prompt_includes_rubric():
@@ -184,7 +189,7 @@ def test_pearson_no_correlation():
         1.0,
         2.0,
     ]
-    r = pearson(xs, ys)
+    r = pearson(cast(list[float], xs), ys)
     assert abs(r) < 0.3  # not strict — random walk; just bounded
 
 
@@ -334,9 +339,13 @@ def test_calibration_set_round_trip(tmp_path: Path):
     cs.to_dir(tmp_path)
     loaded = CalibrationSet.from_dir(tmp_path)
     assert len(loaded) == 2
-    assert loaded.get("a").human_score == 0.5
-    assert loaded.get("a").note == "note"
-    assert loaded.get("b").human_score == 0.8
+    item_a = loaded.get("a")
+    item_b = loaded.get("b")
+    assert item_a is not None
+    assert item_b is not None
+    assert item_a.human_score == 0.5
+    assert item_a.note == "note"
+    assert item_b.human_score == 0.8
 
 
 def test_calibration_set_from_empty_dir(tmp_path: Path):

@@ -14,13 +14,15 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable  # noqa: UP035
+from typing import AsyncIterator, Awaitable, Callable, Protocol  # noqa: UP035
+from uuid import uuid4
 
 import httpx
 
 from app.application import timeouts
 from app.application.runtime_catalog_service import RuntimeCatalogService
-from app.domain.models import RuntimeExecutorConfig
+from app.domain.models import AgentCallTrace, RuntimeCatalog, RuntimeExecutorConfig
+from app.json_safety import JsonObject, object_dict, parse_json_object, string_value
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,13 @@ logger = logging.getLogger(__name__)
 # user edited it.
 LLM_RUNNER_TYPE = Callable[[str], Awaitable[str | None]]
 DeltaCallback = Callable[[int, str, str], Awaitable[None] | None]
+TRACE_PAYLOAD_LIMIT = 50_000
+TRACE_PREVIEW_LIMIT = 4_000
+SENSITIVE_TRACE_KEYS = frozenset({"api_key", "authorization", "token", "password", "secret"})
+
+
+class AgentCallTraceStore(Protocol):
+    async def save_agent_call_trace(self, trace: AgentCallTrace) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -37,6 +46,13 @@ class WorkflowOrchestratorLLMConfig:
     preferred_model_id: str | None
     timeout_s: float
     max_tokens: int
+
+
+@dataclass(frozen=True)
+class ResolvedRuntimeExecutor:
+    config: RuntimeExecutorConfig
+    api_endpoint: str
+    api_key: str
 
 
 def _workflow_orchestrator_llm_config() -> WorkflowOrchestratorLLMConfig:
@@ -53,10 +69,13 @@ def _audit_autoplan(
     *,
     executor_id: str | None,
     model: str | None,
-    payload: dict[str, Any] | None = None,
+    payload: JsonObject | None = None,
     status: str | None = None,
     started: float | None = None,
     error: str | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
 ) -> None:
     """Record an auto-plan LLM call/return into the unified audit_log (PR2).
 
@@ -75,7 +94,87 @@ def _audit_autoplan(
         status=status,
         started=started,
         error=error,
+        trace_id=trace_id,
+        span_id=span_id,
+        parent_span_id=parent_span_id,
     )
+
+
+def _redact_trace_value(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            lowered = key_text.lower()
+            if any(secret_key in lowered for secret_key in SENSITIVE_TRACE_KEYS):
+                redacted[key_text] = "[REDACTED]"
+            else:
+                redacted[key_text] = _redact_trace_value(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_trace_value(item) for item in value]
+    return value
+
+
+def _trace_json_and_preview(value: object) -> tuple[str, str, bool]:
+    redacted = _redact_trace_value(value)
+    raw = json.dumps(redacted, ensure_ascii=False, default=str)
+    preview = raw[:TRACE_PREVIEW_LIMIT]
+    if len(raw) <= TRACE_PAYLOAD_LIMIT:
+        return raw, preview, False
+    truncated = {
+        "__truncated__": True,
+        "preview": raw[:TRACE_PAYLOAD_LIMIT],
+        "original_length": len(raw),
+    }
+    return json.dumps(truncated, ensure_ascii=False), preview, True
+
+
+async def _save_autoplan_trace(
+    trace_store: AgentCallTraceStore | None,
+    *,
+    trace_id: str,
+    executor_id: str,
+    model: str,
+    request_payload: object,
+    response_payload: object | None,
+    status: str,
+    started: float,
+    error: str | None = None,
+) -> None:
+    if trace_store is None:
+        return
+    try:
+        request_json, request_preview, request_truncated = _trace_json_and_preview(request_payload)
+        response_json = None
+        response_preview = None
+        response_truncated = False
+        if response_payload is not None:
+            response_json, response_preview, response_truncated = _trace_json_and_preview(response_payload)
+        metadata = {
+            "executor_id": executor_id,
+            "model": model,
+            "status": status,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "error": error,
+        }
+        await trace_store.save_agent_call_trace(
+            AgentCallTrace(
+                id=f"trace-{uuid4().hex}",
+                trace_id=trace_id,
+                kind="llm",
+                title=f"System Planner · {model}",
+                request_json=request_json,
+                response_json=response_json,
+                request_preview=request_preview,
+                response_preview=response_preview,
+                metadata_json=json.dumps(metadata, ensure_ascii=False, default=str),
+                is_truncated=request_truncated or response_truncated,
+                created_at=None,
+            )
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Auto-plan trace recording failed", exc_info=True)
 
 
 def _sanitize_http_error(status_code: int, body: str) -> str:
@@ -91,14 +190,15 @@ def _llm_http_client(timeout_s: float) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout_s, trust_env=False)
 
 
-def extract_tool_use_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
+def _object_items(value: object) -> list[JsonObject]:
+    return [object_dict(item) for item in value] if isinstance(value, list) else []
+
+
+def extract_tool_use_blocks(message: JsonObject) -> list[JsonObject]:
     """Return valid Anthropic `tool_use` content blocks from a message."""
-    blocks = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(blocks, list):
-        return []
-    tool_uses: list[dict[str, Any]] = []
-    for block in blocks:
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
+    tool_uses: list[JsonObject] = []
+    for block in _object_items(message.get("content")):
+        if block.get("type") != "tool_use":
             continue
         if not block.get("id") or not block.get("name"):
             continue
@@ -116,10 +216,20 @@ def extract_tool_use_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
     return tool_uses
 
 
+def _resolved_executor(executor: RuntimeExecutorConfig) -> ResolvedRuntimeExecutor | None:
+    if not executor.api_endpoint or not executor.api_key:
+        return None
+    return ResolvedRuntimeExecutor(
+        config=executor,
+        api_endpoint=executor.api_endpoint,
+        api_key=executor.api_key,
+    )
+
+
 def _pick_executor(
-    catalog,
+    catalog: RuntimeCatalog,
     preferred_id: str | None,
-) -> RuntimeExecutorConfig | None:
+) -> ResolvedRuntimeExecutor | None:
     """Pick a usable executor.
 
     Order of preference:
@@ -130,8 +240,11 @@ def _pick_executor(
     """
     if preferred_id:
         for e in catalog.executors:
-            if e.id == preferred_id and e.api_endpoint and e.api_key:
-                return e
+            if e.id == preferred_id:
+                resolved = _resolved_executor(e)
+                if resolved is not None:
+                    return resolved
+                break
     for e in catalog.executors:
         if (
             e.enabled
@@ -139,10 +252,10 @@ def _pick_executor(
             and e.api_endpoint
             and e.api_key
         ):
-            return e
+            return _resolved_executor(e)
     for e in catalog.executors:
         if e.enabled and e.api_endpoint and e.api_key:
-            return e
+            return _resolved_executor(e)
     return None
 
 
@@ -167,7 +280,28 @@ def _resolve_model(executor: RuntimeExecutorConfig, preferred_model: str | None)
     return None
 
 
-def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
+async def _maybe_await_delta(result: Awaitable[None] | None) -> None:
+    if result is not None:
+        await result
+
+
+def _int_value(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def build_llm_runner(
+    catalog_service: RuntimeCatalogService,
+    trace_store: AgentCallTraceStore | None = None,
+) -> LLM_RUNNER_TYPE:
     """Return an async callable that turns a prompt into assistant text."""
     config = _workflow_orchestrator_llm_config()
 
@@ -178,10 +312,11 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
             if executor is None:
                 logger.info("Auto-plan: no usable executor configured; falling back to heuristic")
                 return None
-            model = _resolve_model(executor, config.preferred_model_id)
+            model = _resolve_model(executor.config, config.preferred_model_id)
             if not model:
                 logger.info(
-                    "Auto-plan: executor %s has no resolvable model; falling back", executor.id
+                    "Auto-plan: executor %s has no resolvable model; falling back",
+                    executor.config.id,
                 )
                 return None
 
@@ -197,13 +332,15 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                     {"role": "assistant", "content": "{"},
                 ],
             }
+            trace_id = f"autoplan-{uuid4().hex}"
             # Audit the auto-plan LLM call (PR2): previously this path only
             # emitted WARNING-level stderr and never entered conductor_turns.
             _audit_autoplan(
                 "llm_call",
-                executor_id=executor.id,
+                executor_id=executor.config.id,
                 model=model,
                 payload={"prompt_chars": len(prompt), "max_tokens": config.max_tokens},
+                trace_id=trace_id,
             )
             _call_started = time.monotonic()
             async with _llm_http_client(config.timeout_s) as client:
@@ -224,18 +361,30 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                 )
                 _audit_autoplan(
                     "llm_return",
-                    executor_id=executor.id,
+                    executor_id=executor.config.id,
                     model=model,
                     status="error",
                     started=_call_started,
                     payload={"http_status": response.status_code},
                     error=f"HTTP {response.status_code}",
+                    trace_id=trace_id,
+                )
+                await _save_autoplan_trace(
+                    trace_store,
+                    trace_id=trace_id,
+                    executor_id=executor.config.id,
+                    model=model,
+                    request_payload=payload,
+                    response_payload={"http_status": response.status_code, "body": response.text},
+                    status="error",
+                    started=_call_started,
+                    error=f"HTTP {response.status_code}",
                 )
                 return None
-            data = response.json()
+            data = object_dict(response.json())
             _audit_autoplan(
                 "llm_return",
-                executor_id=executor.id,
+                executor_id=executor.config.id,
                 model=model,
                 status="ok",
                 started=_call_started,
@@ -244,12 +393,28 @@ def build_llm_runner(catalog_service: RuntimeCatalogService) -> LLM_RUNNER_TYPE:
                     "usage": data.get("usage") if isinstance(data.get("usage"), dict) else {},
                     "stop_reason": data.get("stop_reason"),
                 },
+                trace_id=trace_id,
+            )
+            await _save_autoplan_trace(
+                trace_store,
+                trace_id=trace_id,
+                executor_id=executor.config.id,
+                model=model,
+                request_payload=payload,
+                response_payload=data,
+                status="ok",
+                started=_call_started,
             )
             # Anthropic shape: { "content": [ { "type": "text", "text": "..." }, ... ], ... }
-            parts = data.get("content") or []
-            text = "".join(
-                p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text"
-            )
+            raw_parts = data.get("content")
+            parts = raw_parts if isinstance(raw_parts, list) else []
+            text_parts: list[str] = []
+            for raw_part in parts:
+                part = object_dict(raw_part)
+                part_text = part.get("text")
+                if part.get("type") == "text" and isinstance(part_text, str):
+                    text_parts.append(part_text)
+            text = "".join(text_parts)
             if not text:
                 return None
             # Prepend the prefilled "{" only when the model continued AFTER it
@@ -303,7 +468,7 @@ def llm_api_url(endpoint: str, api_path: str) -> str:
     return f"{base}{path}"
 
 
-def resolve_streaming_context(catalog) -> StreamingPlanContext | None:
+def resolve_streaming_context(catalog: RuntimeCatalog) -> StreamingPlanContext | None:
     """Mirror of the picks build_llm_runner makes, but exposed so the SSE
     endpoint can announce which model is about to be called before the first
     token arrives."""
@@ -311,12 +476,12 @@ def resolve_streaming_context(catalog) -> StreamingPlanContext | None:
     executor = _pick_executor(catalog, config.preferred_executor_id)
     if executor is None:
         return None
-    model = _resolve_model(executor, config.preferred_model_id)
+    model = _resolve_model(executor.config, config.preferred_model_id)
     if not model:
         return None
     return StreamingPlanContext(
-        executor_id=executor.id,
-        executor_label=executor.label or executor.id,
+        executor_id=executor.config.id,
+        executor_label=executor.config.label or executor.config.id,
         model=model,
         endpoint=executor.api_endpoint.rstrip("/"),
         api_key=executor.api_key,
@@ -377,15 +542,14 @@ async def stream_llm(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[st
                 raw = line[5:].strip()
                 if raw in ("", "[DONE]"):
                     continue
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
+                event = parse_json_object(raw)
+                if event is None:
                     continue
                 etype = event.get("type")
                 if etype == "content_block_delta":
-                    delta = event.get("delta") or {}
+                    delta = object_dict(event.get("delta"))
                     if delta.get("type") == "text_delta":
-                        text = delta.get("text") or ""
+                        text = string_value(delta.get("text"))
                         if text:
                             yield text
                 elif etype == "message_stop":
@@ -394,13 +558,13 @@ async def stream_llm(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[st
 
 async def call_llm_with_tools(
     *,
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
+    messages: list[JsonObject],
+    tools: list[JsonObject],
     ctx: StreamingPlanContext,
-) -> dict[str, Any]:
+) -> JsonObject:
     """Call an Anthropic-compatible messages endpoint with tool definitions."""
     url = llm_api_url(ctx.endpoint, "/v1/messages")
-    payload: dict[str, Any] = {
+    payload: JsonObject = {
         "model": ctx.model,
         "max_tokens": ctx.max_tokens,
         "messages": messages,
@@ -419,7 +583,7 @@ async def call_llm_with_tools(
         )
     if response.status_code != 200:
         raise RuntimeError(f"LLM tools {_sanitize_http_error(response.status_code, response.text)}")
-    data = response.json()
+    data = object_dict(response.json())
     if extract_tool_use_blocks(data):
         return data
     if not isinstance(data.get("content"), list):
@@ -429,19 +593,19 @@ async def call_llm_with_tools(
 
 async def call_llm_with_tools_streaming(
     *,
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
+    messages: list[JsonObject],
+    tools: list[JsonObject],
     ctx: StreamingPlanContext,
     on_delta: DeltaCallback | None = None,
     batch_window_ms: int = 100,
-) -> dict[str, Any]:
+) -> JsonObject:
     """Stream an Anthropic-compatible messages response and reconstruct the final message.
 
     Emits batched `text` and `tool_input_json` deltas through `on_delta`, while
     returning a complete assistant message payload at the end.
     """
     url = llm_api_url(ctx.endpoint, "/v1/messages")
-    payload: dict[str, Any] = {
+    payload: JsonObject = {
         "model": ctx.model,
         "max_tokens": ctx.max_tokens,
         "messages": messages,
@@ -457,18 +621,17 @@ async def call_llm_with_tools_streaming(
         "accept": "text/event-stream",
     }
     block_order: list[int] = []
-    blocks: dict[int, dict[str, Any]] = {}
+    blocks: dict[int, JsonObject] = {}
     pending_chunks: dict[tuple[int, str], str] = {}
     last_flush = time.monotonic()
     stop_reason: str | None = None
-    usage: dict[str, Any] | None = None
+    usage: JsonObject | None = None
 
     async def emit_delta(index: int, kind: str, chunk: str) -> None:
         if not chunk or on_delta is None:
             return
         result = on_delta(index, kind, chunk)
-        if hasattr(result, "__await__"):
-            await result
+        await _maybe_await_delta(result)
 
     async def flush_pending(force: bool = False) -> None:
         nonlocal last_flush
@@ -499,43 +662,45 @@ async def call_llm_with_tools_streaming(
                 raw = line[5:].strip()
                 if raw in ("", "[DONE]"):
                     continue
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
+                event = parse_json_object(raw)
+                if event is None:
                     continue
 
                 etype = event.get("type")
                 if etype == "message_start":
-                    message = event.get("message") or {}
+                    message = object_dict(event.get("message"))
+                    usage_payload = event.get("usage")
                     if isinstance(message.get("usage"), dict):
-                        usage = dict(message["usage"])
+                        usage = object_dict(message.get("usage"))
+                    elif isinstance(usage_payload, dict):
+                        usage = object_dict(usage_payload)
                 elif etype == "content_block_start":
-                    index = int(event.get("index") or 0)
-                    content_block = event.get("content_block") or {}
-                    block_type = str(content_block.get("type") or "text")
+                    index = _int_value(event.get("index"))
+                    content_block = object_dict(event.get("content_block"))
+                    block_type = string_value(content_block.get("type"), "text")
                     if index not in blocks:
                         block_order.append(index)
                     if block_type == "tool_use":
                         blocks[index] = {
                             "type": "tool_use",
-                            "id": str(content_block.get("id") or ""),
-                            "name": str(content_block.get("name") or ""),
+                            "id": string_value(content_block.get("id")),
+                            "name": string_value(content_block.get("name")),
                             "input_json": "",
                         }
                     else:
                         blocks[index] = {
                             "type": "text",
-                            "text": str(content_block.get("text") or ""),
+                            "text": string_value(content_block.get("text")),
                         }
                 elif etype == "content_block_delta":
-                    index = int(event.get("index") or 0)
-                    delta = event.get("delta") or {}
+                    index = _int_value(event.get("index"))
+                    delta = object_dict(event.get("delta"))
                     delta_type = delta.get("type")
                     block = blocks.setdefault(index, {"type": "text", "text": ""})
                     if index not in block_order:
                         block_order.append(index)
                     if delta_type == "text_delta":
-                        chunk = str(delta.get("text") or "")
+                        chunk = string_value(delta.get("text"))
                         if chunk:
                             block["type"] = "text"
                             block["text"] = str(block.get("text") or "") + chunk
@@ -543,7 +708,7 @@ async def call_llm_with_tools_streaming(
                                 pending_chunks.get((index, "text"), "") + chunk
                             )
                     elif delta_type == "input_json_delta":
-                        chunk = str(delta.get("partial_json") or "")
+                        chunk = string_value(delta.get("partial_json"))
                         if chunk:
                             block["type"] = "tool_use"
                             block["input_json"] = str(block.get("input_json") or "") + chunk
@@ -552,32 +717,30 @@ async def call_llm_with_tools_streaming(
                             )
                     await flush_pending()
                 elif etype == "message_delta":
-                    delta = event.get("delta") or {}
+                    delta = object_dict(event.get("delta"))
                     if delta.get("stop_reason") is not None:
                         stop_reason = str(delta.get("stop_reason"))
-                    if isinstance(event.get("usage"), dict):
-                        usage = dict(event["usage"])
+                    usage_payload = event.get("usage")
+                    if isinstance(usage_payload, dict):
+                        usage = object_dict(usage_payload)
                 elif etype == "content_block_stop":
                     await flush_pending(force=True)
                 elif etype == "message_stop":
                     await flush_pending(force=True)
                     break
 
-    content: list[dict[str, Any]] = []
+    content: list[JsonObject] = []
     for index in sorted(block_order):
         block = blocks.get(index) or {}
         if block.get("type") == "tool_use":
             input_json = str(block.get("input_json") or "").strip()
-            try:
-                tool_input = json.loads(input_json) if input_json else {}
-            except json.JSONDecodeError:
-                tool_input = {}
+            tool_input = parse_json_object(input_json) if input_json else {}
             content.append(
                 {
                     "type": "tool_use",
                     "id": str(block.get("id") or ""),
                     "name": str(block.get("name") or ""),
-                    "input": tool_input if isinstance(tool_input, dict) else {},
+                    "input": tool_input or {},
                 }
             )
             continue
@@ -603,17 +766,18 @@ async def call_llm_with_tools_streaming(
 # ---------------------------------------------------------------------------
 
 
-def _anthropic_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for tool in tools or []:
-        if not isinstance(tool, dict) or not tool.get("name"):
+def _anthropic_tools_to_openai(tools: list[JsonObject]) -> list[JsonObject]:
+    out: list[JsonObject] = []
+    for tool in tools:
+        name = string_value(tool.get("name"))
+        if not name:
             continue
         out.append(
             {
                 "type": "function",
                 "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description") or "",
+                    "name": name,
+                    "description": string_value(tool.get("description")),
                     "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
                 },
             }
@@ -621,11 +785,11 @@ def _anthropic_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, An
     return out
 
 
-def _anthropic_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _anthropic_messages_to_openai(messages: list[JsonObject]) -> list[JsonObject]:
     """Translate the conductor's Anthropic message list to OpenAI chat messages."""
-    out: list[dict[str, Any]] = []
+    out: list[JsonObject] = []
     for msg in messages:
-        role = msg.get("role")
+        role = string_value(msg.get("role"))
         content = msg.get("content")
         if isinstance(content, str):
             out.append({"role": role, "content": content})
@@ -635,10 +799,8 @@ def _anthropic_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[s
             continue
         if role == "assistant":
             text_parts: list[str] = []
-            tool_calls: list[dict[str, Any]] = []
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
+            tool_calls: list[JsonObject] = []
+            for block in _object_items(content):
                 if block.get("type") == "text":
                     text_parts.append(str(block.get("text") or ""))
                 elif block.get("type") == "tool_use":
@@ -654,7 +816,7 @@ def _anthropic_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[s
                             },
                         }
                     )
-            assistant_msg: dict[str, Any] = {"role": "assistant"}
+            assistant_msg: JsonObject = {"role": "assistant"}
             assistant_msg["content"] = "".join(text_parts) or None
             if tool_calls:
                 assistant_msg["tool_calls"] = tool_calls
@@ -662,7 +824,7 @@ def _anthropic_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[s
         else:
             # user turn: may carry tool_result blocks -> one OpenAI "tool" msg each.
             tool_results = [
-                b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"
+                b for b in _object_items(content) if b.get("type") == "tool_result"
             ]
             if tool_results:
                 for block in tool_results:
@@ -682,38 +844,35 @@ def _anthropic_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[s
             else:
                 text_parts = [
                     str(b.get("text") or "")
-                    for b in content
-                    if isinstance(b, dict) and b.get("type") == "text"
+                    for b in _object_items(content)
+                    if b.get("type") == "text"
                 ]
                 out.append({"role": "user", "content": "".join(text_parts)})
     return out
 
 
 def _openai_choice_to_anthropic(
-    message: dict[str, Any], finish_reason: str | None, usage: dict[str, Any] | None
-) -> dict[str, Any]:
-    content: list[dict[str, Any]] = []
+    message: JsonObject, finish_reason: str | None, usage: JsonObject | None
+) -> JsonObject:
+    content: list[JsonObject] = []
     text = message.get("content")
     if isinstance(text, str) and text:
         content.append({"type": "text", "text": text})
-    for tc in message.get("tool_calls") or []:
-        fn = (tc or {}).get("function") or {}
+    for tool_call in _object_items(message.get("tool_calls")):
+        fn = object_dict(tool_call.get("function"))
         args_raw = fn.get("arguments") or "{}"
-        try:
-            tool_input = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
-        except json.JSONDecodeError:
-            tool_input = {}
+        tool_input = parse_json_object(args_raw) if isinstance(args_raw, str) else object_dict(args_raw)
         content.append(
             {
                 "type": "tool_use",
-                "id": str(tc.get("id") or ""),
-                "name": str(fn.get("name") or ""),
-                "input": tool_input if isinstance(tool_input, dict) else {},
+                "id": string_value(tool_call.get("id")),
+                "name": string_value(fn.get("name")),
+                "input": tool_input or {},
             }
         )
     stop_reason = "tool_use" if finish_reason == "tool_calls" else "end_turn"
-    anthropic_usage: dict[str, Any] = {}
-    if isinstance(usage, dict):
+    anthropic_usage: JsonObject = {}
+    if usage is not None:
         anthropic_usage = {
             "input_tokens": usage.get("prompt_tokens", 0),
             "output_tokens": usage.get("completion_tokens", 0),
@@ -728,13 +887,13 @@ def _openai_choice_to_anthropic(
 
 async def call_openai_with_tools(
     *,
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
+    messages: list[JsonObject],
+    tools: list[JsonObject],
     ctx: StreamingPlanContext,
-) -> dict[str, Any]:
+) -> JsonObject:
     """Call an OpenAI-compatible /v1/chat/completions endpoint; return Anthropic shape."""
     url = llm_api_url(ctx.endpoint, "/v1/chat/completions")
-    payload: dict[str, Any] = {
+    payload: JsonObject = {
         "model": ctx.model,
         "max_tokens": ctx.max_tokens,
         "messages": _anthropic_messages_to_openai(messages),
@@ -755,22 +914,24 @@ async def call_openai_with_tools(
         raise RuntimeError(
             f"OpenAI tools {_sanitize_http_error(response.status_code, response.text)}"
         )
-    data = response.json()
-    choice = (data.get("choices") or [{}])[0]
+    data = object_dict(response.json())
+    raw_choices = data.get("choices")
+    choices = raw_choices if isinstance(raw_choices, list) else []
+    choice = object_dict(choices[0]) if choices else {}
     return _openai_choice_to_anthropic(
-        choice.get("message") or {},
-        choice.get("finish_reason"),
-        data.get("usage"),
+        object_dict(choice.get("message")),
+        string_value(choice.get("finish_reason")) or None,
+        object_dict(data.get("usage")),
     )
 
 
 async def call_openai_with_tools_streaming(
     *,
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
+    messages: list[JsonObject],
+    tools: list[JsonObject],
     ctx: StreamingPlanContext,
     on_delta: DeltaCallback | None = None,
-) -> dict[str, Any]:
+) -> JsonObject:
     """Stream an OpenAI-compatible chat completion, reconstructing an Anthropic message.
 
     Emits the same `on_delta(content_block_index, kind, chunk)` contract as the
@@ -778,7 +939,7 @@ async def call_openai_with_tools_streaming(
     kind "tool_input_json" at block (openai_index + 1).
     """
     url = llm_api_url(ctx.endpoint, "/v1/chat/completions")
-    payload: dict[str, Any] = {
+    payload: JsonObject = {
         "model": ctx.model,
         "max_tokens": ctx.max_tokens,
         "messages": _anthropic_messages_to_openai(messages),
@@ -798,14 +959,13 @@ async def call_openai_with_tools_streaming(
     # tool_calls accumulated by OpenAI delta index -> {id, name, args}
     tool_acc: dict[int, dict[str, str]] = {}
     finish_reason: str | None = None
-    usage: dict[str, Any] | None = None
+    usage: JsonObject | None = None
 
     async def emit(block_index: int, kind: str, chunk: str) -> None:
         if not chunk or on_delta is None:
             return
         result = on_delta(block_index, kind, chunk)
-        if hasattr(result, "__await__"):
-            await result
+        await _maybe_await_delta(result)
 
     async with _llm_http_client(ctx.timeout_s) as client:  # noqa: SIM117
         async with client.stream("POST", url, headers=headers, json=payload) as response:
@@ -822,29 +982,33 @@ async def call_openai_with_tools_streaming(
                     if raw == "[DONE]":
                         break
                     continue
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
+                event = parse_json_object(raw)
+                if event is None:
                     continue
-                if isinstance(event.get("usage"), dict):
-                    usage = dict(event["usage"])
-                choices = event.get("choices") or []
+                usage_payload = event.get("usage")
+                if isinstance(usage_payload, dict):
+                    usage = object_dict(usage_payload)
+                raw_choices = event.get("choices")
+                choices = raw_choices if isinstance(raw_choices, list) else []
                 if not choices:
                     continue
-                choice = choices[0]
-                delta = choice.get("delta") or {}
+                choice = object_dict(choices[0])
+                delta = object_dict(choice.get("delta"))
                 if choice.get("finish_reason"):
                     finish_reason = str(choice.get("finish_reason"))
                 content_chunk = delta.get("content")
                 if isinstance(content_chunk, str) and content_chunk:
                     text_acc += content_chunk
                     await emit(0, "text", content_chunk)
-                for tc in delta.get("tool_calls") or []:
-                    idx = int(tc.get("index") or 0)
+                raw_tool_calls = delta.get("tool_calls")
+                tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else []
+                for raw_tool_call in tool_calls:
+                    tc = object_dict(raw_tool_call)
+                    idx = _int_value(tc.get("index"))
                     slot = tool_acc.setdefault(idx, {"id": "", "name": "", "args": ""})
                     if tc.get("id"):
                         slot["id"] = str(tc["id"])
-                    fn = tc.get("function") or {}
+                    fn = object_dict(tc.get("function"))
                     if fn.get("name"):
                         slot["name"] = str(fn["name"])
                     arg_chunk = fn.get("arguments")
@@ -852,26 +1016,23 @@ async def call_openai_with_tools_streaming(
                         slot["args"] += arg_chunk
                         await emit(idx + 1, "tool_input_json", arg_chunk)
 
-    content: list[dict[str, Any]] = []
+    content: list[JsonObject] = []
     if text_acc:
         content.append({"type": "text", "text": text_acc})
     for idx in sorted(tool_acc.keys()):
         slot = tool_acc[idx]
         args_str = slot["args"].strip()
-        try:
-            tool_input = json.loads(args_str) if args_str else {}
-        except json.JSONDecodeError:
-            tool_input = {}
+        tool_input = parse_json_object(args_str) if args_str else {}
         content.append(
             {
                 "type": "tool_use",
                 "id": slot["id"],
                 "name": slot["name"],
-                "input": tool_input if isinstance(tool_input, dict) else {},
+                "input": tool_input or {},
             }
         )
-    anthropic_usage: dict[str, Any] = {}
-    if isinstance(usage, dict):
+    anthropic_usage: JsonObject = {}
+    if usage is not None:
         anthropic_usage = {
             "input_tokens": usage.get("prompt_tokens", 0),
             "output_tokens": usage.get("completion_tokens", 0),

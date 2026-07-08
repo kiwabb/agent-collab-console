@@ -1,0 +1,38 @@
+{
+  "candidate_count": 3,
+  "preview": [
+    {
+      "candidate_id": "next-app-router--agents",
+      "route": "/agents",
+      "generation_status": "done",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "f9ca5b88-784b-40cd-9bde-8b32796fab85",
+      "version_no": 2,
+      "html_complete": true,
+      "html_chars": 7651,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--approvals",
+      "route": "/approvals",
+      "generation_status": "done",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "11f309c4-1ecf-446b-b55d-90fe0d1729c9",
+      "version_no": 2,
+      "html_complete": true,
+      "html_chars": 6205,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--projects-id-prototypes",
+      "route": "/projects/:id/prototypes",
+      "generation_status": "done",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "142c71cf-317c-450f-a9f2-9bfe1388c322",
+      "version_no": 2,
+      "html_complete": true,
+      "html_chars": 5099,
+      "error": null
+    }
+  ]
+}

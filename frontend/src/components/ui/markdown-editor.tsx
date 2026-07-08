@@ -33,7 +33,8 @@ export function MarkdownEditor({
   autoSave = true,
 }: MarkdownEditorProps) {
   const { t } = useI18n();
-  const resolvedPlaceholder = placeholder === "Click to edit..." ? t("ui.clickToEdit") : placeholder;
+  const resolvedPlaceholder =
+    placeholder === "Click to edit..." ? t("ui.clickToEdit") : placeholder;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(value);
   const [isSaving, setIsSaving] = useState(false);
@@ -141,7 +142,8 @@ export function MarkdownEditor({
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const selectedText = editValue.substring(start, end);
-    const newText = editValue.substring(0, start) + before + selectedText + after + editValue.substring(end);
+    const newText =
+      editValue.substring(0, start) + before + selectedText + after + editValue.substring(end);
     setEditValue(newText);
     setTimeout(() => {
       textarea.focus();
@@ -203,20 +205,33 @@ export function MarkdownEditor({
             <div className="w-px h-4 bg-border-subtle mx-1" />
             <button
               type="button"
-              onClick={() => setShowPreview(p => !p)}
-              className={cn("p-1.5 rounded hover:bg-surface-hover transition-colors", showPreview && "bg-surface-hover")}
+              onClick={() => setShowPreview((p) => !p)}
+              className={cn(
+                "p-1.5 rounded hover:bg-surface-hover transition-colors",
+                showPreview && "bg-surface-hover",
+              )}
               title={t("ui.preview")}
             >
-              {showPreview ? <Edit3 size={14} className="text-brand" /> : <Eye size={14} className="text-text-muted" />}
+              {showPreview ? (
+                <Edit3 size={14} className="text-brand" />
+              ) : (
+                <Eye size={14} className="text-text-muted" />
+              )}
             </button>
             <div ref={emojiPickerRef} className="relative">
               <button
                 type="button"
-                onClick={() => setShowEmojiPicker(p => !p)}
-                className={cn("p-1.5 rounded hover:bg-surface-hover transition-colors", showEmojiPicker && "bg-surface-hover")}
+                onClick={() => setShowEmojiPicker((p) => !p)}
+                className={cn(
+                  "p-1.5 rounded hover:bg-surface-hover transition-colors",
+                  showEmojiPicker && "bg-surface-hover",
+                )}
                 title={t("ui.emoji")}
               >
-                <Smile size={14} className={cn("text-text-muted", showEmojiPicker && "text-brand")} />
+                <Smile
+                  size={14}
+                  className={cn("text-text-muted", showEmojiPicker && "text-brand")}
+                />
               </button>
               {showEmojiPicker && (
                 <div className="absolute top-full right-0 mt-1 z-50">
@@ -234,7 +249,9 @@ export function MarkdownEditor({
         )}
         {showPreview ? (
           <div className="p-4 rounded-lg bg-surface-input border border-brand/50 min-h-[100px] prose prose-sm dark:prose-invert max-w-none [&_pre]:bg-background [&_code]:bg-background [&_code]:px-1 [&_code]:rounded">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{editValue}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+              {editValue}
+            </ReactMarkdown>
           </div>
         ) : (
           <textarea
@@ -252,7 +269,10 @@ export function MarkdownEditor({
             onClick={handleSave}
             disabled={isSaving}
             data-density={isSaving ? "markdown-editor-save-tool" : "markdown-editor-save"}
-            className={cn("inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50 text-xs font-bold", isSaving && "motion-essential")}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50 text-xs font-bold",
+              isSaving && "motion-essential",
+            )}
             title={t("ui.saveShortcut")}
           >
             {isSaving ? <AgentThinkingIndicator phase="tool" size={12} /> : <Check size={12} />}
@@ -268,7 +288,9 @@ export function MarkdownEditor({
             {t("ui.cancel")}
           </button>
           {showSaved && (
-            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">{t("ui.saved")}</span>
+            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">
+              {t("ui.saved")}
+            </span>
           )}
         </div>
       </div>
@@ -280,16 +302,20 @@ export function MarkdownEditor({
       className={cn(
         "group relative flex items-center gap-2",
         !disabled && "cursor-pointer",
-        className
+        className,
       )}
       onClick={() => !disabled && setIsEditing(true)}
     >
       {value ? (
-        <div className={cn(
-          "text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none [&_pre]:bg-background [&_code]:bg-background/80 [&_code]:px-1 [&_code]:rounded",
-          textClassName
-        )}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{value}</ReactMarkdown>
+        <div
+          className={cn(
+            "text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none [&_pre]:bg-background [&_code]:bg-background/80 [&_code]:px-1 [&_code]:rounded",
+            textClassName,
+          )}
+        >
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+            {value}
+          </ReactMarkdown>
         </div>
       ) : (
         <span className={cn("italic text-text-muted", textClassName)}>{resolvedPlaceholder}</span>
@@ -297,7 +323,9 @@ export function MarkdownEditor({
       {!disabled && (
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
           {showSaved && (
-            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">{t("ui.saved")}</span>
+            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">
+              {t("ui.saved")}
+            </span>
           )}
           <Pencil size={12} className="text-text-muted" />
         </div>

@@ -3,7 +3,8 @@ from __future__ import annotations  # noqa: I001
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+from app.json_safety import JsonObject, object_dict, string_value
 
 
 SPECIALIST_PREFIX = "specialist:"
@@ -15,7 +16,7 @@ class AgentDefinition:
     role_key: str
     display_name: str
     prompt_template: str
-    output_schema: dict[str, Any]
+    output_schema: JsonObject
     default_max_retries: int = 1
     agent_tier: str = "specialist"
 
@@ -47,7 +48,7 @@ class AgentCatalog:
         *,
         name: str,
         prompt: str,
-        schema: dict[str, Any] | None = None,
+        schema: JsonObject | None = None,
     ) -> AgentDefinition:
         slug = self._slug(name)
         role_key = f"{CUSTOM_PREFIX}{slug}"
@@ -55,7 +56,7 @@ class AgentCatalog:
             role_key=role_key,
             display_name=name,
             prompt_template=prompt,
-            output_schema=schema or {"type": "object"},
+            output_schema=schema or _default_output_schema(),
             default_max_retries=1,
             agent_tier="custom",
         )
@@ -71,13 +72,13 @@ class AgentCatalog:
     def _load_specialists(self) -> dict[str, AgentDefinition]:
         definitions: dict[str, AgentDefinition] = {}
         for path in sorted(self._specialists_dir.glob("*.yaml")):
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = object_dict(json.loads(path.read_text(encoding="utf-8")))
             definition = AgentDefinition(
-                role_key=payload["role_key"],
-                display_name=payload["display_name"],
-                prompt_template=payload["prompt_template"],
-                output_schema=payload.get("output_schema") or {"type": "object"},
-                default_max_retries=int(payload.get("default_max_retries") or 1),
+                role_key=_required_string(payload, "role_key", path),
+                display_name=_required_string(payload, "display_name", path),
+                prompt_template=_required_string(payload, "prompt_template", path),
+                output_schema=_schema_payload(payload.get("output_schema")),
+                default_max_retries=_positive_int(payload.get("default_max_retries"), default=1),
             )
             definitions[definition.role_key] = definition
         return definitions
@@ -85,3 +86,34 @@ class AgentCatalog:
     @staticmethod
     def _slug(value: str) -> str:
         return "_".join(value.strip().lower().replace("-", "_").split())
+
+
+def _default_output_schema() -> JsonObject:
+    return {"type": "object"}
+
+
+def _schema_payload(value: object) -> JsonObject:
+    schema = object_dict(value)
+    return schema or _default_output_schema()
+
+
+def _required_string(payload: JsonObject, key: str, path: Path) -> str:
+    value = string_value(payload.get(key))
+    if value:
+        return value
+    raise ValueError(f"Specialist catalog file {path} is missing string field {key!r}")
+
+
+def _positive_int(value: object, *, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return default
+    else:
+        return default
+    return parsed if parsed > 0 else default

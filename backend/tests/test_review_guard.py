@@ -73,6 +73,12 @@ def _write_plan(repo: Path, tasks: list[dict]) -> None:
     path.write_text(json.dumps(tasks, ensure_ascii=False), encoding="utf-8")
 
 
+def _write_plan_text(repo: Path, text: str) -> None:
+    docs = IssueArtifactDocuments()
+    path = docs.architect_implementation_plan_path(str(repo), ISSUE_ID)
+    path.write_text(text, encoding="utf-8")
+
+
 def _make_real_change(repo: Path, rel: str) -> None:
     """Create + commit a real file change so git diff vs main is non-empty."""
     fp = repo / rel
@@ -234,6 +240,36 @@ def test_empty_expected_files_skips_soft_layer(tmp_path):
     )
     guard2 = compute_review_guard(str(repo2), ISSUE_ID)
     assert guard2.verdict == "hard_mismatch"
+
+
+def test_non_list_plan_payload_skips_soft_layer(tmp_path):
+    repo = tmp_path
+    _init_repo(repo)
+    _make_real_change(repo, "app/x.py")
+    _write_engineer_report(repo, status="completed", changed_files=["app/x.py"])
+    _write_plan_text(repo, '{"expected_files":["app/expected.py"]}')
+
+    guard = compute_review_guard(str(repo), ISSUE_ID)
+
+    assert guard.verdict == "ok"
+    assert guard.expected_files == []
+    assert guard.missing == []
+    assert guard.extra == []
+
+
+def test_malformed_plan_payload_skips_soft_layer(tmp_path):
+    repo = tmp_path
+    _init_repo(repo)
+    _make_real_change(repo, "app/x.py")
+    _write_engineer_report(repo, status="completed", changed_files=["app/x.py"])
+    _write_plan_text(repo, "{not-json")
+
+    guard = compute_review_guard(str(repo), ISSUE_ID)
+
+    assert guard.verdict == "ok"
+    assert guard.expected_files == []
+    assert guard.missing == []
+    assert guard.extra == []
 
 
 def test_no_workspace_path_returns_ok():

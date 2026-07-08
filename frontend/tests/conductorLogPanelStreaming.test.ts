@@ -1,15 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readCompactSource as readSource } from "./sourceTestUtils";
 
 import { getDictionaryValue } from "../src/lib/i18n";
-
-const SRC_ROOT = join(process.cwd(), "src");
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
 
 test("ConductorLogPanel subscribes to streaming delta and phase/detail state", () => {
   const source = readSource("features/workflow/ConductorLogPanel.tsx");

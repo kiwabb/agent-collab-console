@@ -17,6 +17,7 @@ import logging  # noqa: E402
 import os  # noqa: E402
 import signal  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
+from typing import TypedDict  # noqa: E402
 
 from app.application.command_safety import refuse_reason  # noqa: E402
 
@@ -34,6 +35,28 @@ _STOP_GRACE_S = 5.0
 # worktree_manager._run_setup's drop list (plus CODEX_* prefix).
 _ENV_DROP_EXACT = {"SQLITE_DB_PATH"}
 _ENV_DROP_PREFIXES = ("CODEX_",)
+
+
+class RunLogLine(TypedDict):
+    seq: int
+    stream: str
+    line: str
+    ts: str
+
+
+class RunStatus(TypedDict):
+    running: bool
+    command: str | None
+    pid: int | None
+    started_at: str | None
+    exit_code: int | None
+
+
+class RunLogs(TypedDict):
+    lines: list[RunLogLine]
+    last_seq: int
+    running: bool
+    exit_code: int | None
 
 
 def _now_iso() -> str:
@@ -55,23 +78,23 @@ class ProjectRunError(RuntimeError):
     For `refused`, `pattern` carries the matching safety pattern.
     """
 
-    def __init__(self, reason: str, *, pattern: str | None = None):
+    def __init__(self, reason: str, *, pattern: str | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
         self.pattern = pattern
 
 
 class _RunEntry:
-    def __init__(self, command: str, cwd: str, proc: asyncio.subprocess.Process):
+    def __init__(self, command: str, cwd: str, proc: asyncio.subprocess.Process) -> None:
         self.command = command
         self.cwd = cwd
         self.proc = proc
         self.pid = proc.pid
         self.started_at = _now_iso()
         self.exit_code: int | None = None
-        self.logs: collections.deque = collections.deque(maxlen=_LOG_RING_MAXLEN)
+        self.logs: collections.deque[RunLogLine] = collections.deque(maxlen=_LOG_RING_MAXLEN)
         self._seq = 0
-        self.readers: list[asyncio.Task] = []
+        self.readers: list[asyncio.Task[None]] = []
 
     def append_log(self, stream: str, line: str) -> None:
         self._seq += 1
@@ -92,7 +115,7 @@ class _RunEntry:
     def running(self) -> bool:
         return self.exit_code is None and self.proc.returncode is None
 
-    def status_dict(self) -> dict:
+    def status_dict(self) -> RunStatus:
         # Reconcile in case the process exited but the waiter hasn't fired yet.
         if self.exit_code is None and self.proc.returncode is not None:
             self.exit_code = self.proc.returncode
@@ -107,11 +130,11 @@ class _RunEntry:
 
 
 class ProjectRunManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self._entries: dict[str, _RunEntry] = {}
         self._lock = asyncio.Lock()
 
-    async def start(self, project_id: str, command: str, cwd: str) -> dict:
+    async def start(self, project_id: str, command: str, cwd: str) -> RunStatus:
         command = (command or "").strip()
         if not command:
             raise ProjectRunError("no_run_command")
@@ -141,7 +164,9 @@ class ProjectRunManager:
             self._entries[project_id] = entry
             return entry.status_dict()
 
-    async def _drain(self, entry: _RunEntry, stream, tag: str) -> None:
+    async def _drain(
+        self, entry: _RunEntry, stream: asyncio.StreamReader | None, tag: str
+    ) -> None:
         if stream is None:
             return
         try:
@@ -162,7 +187,7 @@ class ProjectRunManager:
         except Exception:  # noqa: BLE001, RUF100
             logger.debug("project run waiter error pid=%s", entry.pid, exc_info=True)
 
-    async def stop(self, project_id: str) -> dict:
+    async def stop(self, project_id: str) -> RunStatus:
         async with self._lock:
             entry = self._entries.get(project_id)
             if entry is None:
@@ -239,7 +264,7 @@ class ProjectRunManager:
             await asyncio.sleep(0.05)
         return entry.proc.returncode is not None or entry.exit_code is not None
 
-    def status(self, project_id: str) -> dict:
+    def status(self, project_id: str) -> RunStatus:
         entry = self._entries.get(project_id)
         if entry is None:
             return {
@@ -251,12 +276,12 @@ class ProjectRunManager:
             }
         return entry.status_dict()
 
-    def get_logs(self, project_id: str, after: int = 0) -> dict:
+    def get_logs(self, project_id: str, after: int = 0) -> RunLogs:
         entry = self._entries.get(project_id)
         if entry is None:
             return {"lines": [], "last_seq": 0, "running": False, "exit_code": None}
         status = entry.status_dict()
-        lines = [dict(item) for item in entry.logs if item["seq"] > after]
+        lines = [item for item in entry.logs if item["seq"] > after]
         return {
             "lines": lines,
             "last_seq": entry.last_seq,

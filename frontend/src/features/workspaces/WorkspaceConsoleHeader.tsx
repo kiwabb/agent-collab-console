@@ -66,7 +66,9 @@ export function WorkspaceConsoleHeader({
               {workspace?.title ?? t("workspace.console.emptyTitle")}
             </h1>
             <p
-              data-density={isQueueScheduling ? "workspace-console-active-summary" : "workspace-console-summary"}
+              data-density={
+                isQueueScheduling ? "workspace-console-active-summary" : "workspace-console-summary"
+              }
               className={cn(
                 "relative inline-flex items-center gap-1.5 overflow-hidden rounded-md px-1.5 py-0.5 text-sm text-text-muted",
                 isQueueScheduling && "motion-essential",
@@ -79,7 +81,9 @@ export function WorkspaceConsoleHeader({
                   className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
                 />
               )}
-              {isQueueScheduling && <AgentThinkingIndicator phase="dispatching" size={12} className="shrink-0" />}
+              {isQueueScheduling && (
+                <AgentThinkingIndicator phase="dispatching" size={12} className="shrink-0" />
+              )}
               {counts.running} running · {counts.awaiting} awaiting · {counts.total} total
             </p>
           </div>
@@ -105,7 +109,11 @@ export function WorkspaceConsoleHeader({
               <button
                 key={filter}
                 type="button"
-                data-density={isRunningFilterLive ? "workspace-console-running-filter" : "workspace-console-filter"}
+                data-density={
+                  isRunningFilterLive
+                    ? "workspace-console-running-filter"
+                    : "workspace-console-filter"
+                }
                 onClick={() => onStatusFilterChange(filter)}
                 className={cn(
                   "relative inline-flex items-center gap-1.5 overflow-hidden rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors",
@@ -121,9 +129,12 @@ export function WorkspaceConsoleHeader({
                     className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
                   />
                 )}
-                {isRunningFilterLive && <AgentThinkingIndicator phase="dispatching" size={10} className="shrink-0" />}
+                {isRunningFilterLive && (
+                  <AgentThinkingIndicator phase="dispatching" size={10} className="shrink-0" />
+                )}
                 <span>
-                  {t(`workspace.console.filter.${filter}`)} · {filter === "all" ? counts.total : counts[filter]}
+                  {t(`workspace.console.filter.${filter}`)} ·{" "}
+                  {filter === "all" ? counts.total : counts[filter]}
                 </span>
               </button>
             );

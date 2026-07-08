@@ -8,8 +8,11 @@ grep + targeted Read with offset instead.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
+
+from app.json_safety import object_dict
 
 _HOOK_SCRIPT = '''\
 #!/usr/bin/env python3
@@ -85,22 +88,38 @@ async def inject_worktree_claude_hooks(worktree_path: Path | str) -> None:
     hook_file.chmod(0o755)
 
     settings_file = root / ".claude" / "settings.json"
-    existing: dict = {}
+    existing: dict[str, object] = {}
     if settings_file.exists():
-        try:
-            existing = json.loads(settings_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            existing = object_dict(json.loads(settings_file.read_text()))
 
-    hooks = existing.setdefault("hooks", {})
-    pre_tool: list = hooks.setdefault("PreToolUse", [])
+    hooks = object_dict(existing.get("hooks"))
+    existing["hooks"] = hooks
+    raw_pre_tool = hooks.get("PreToolUse")
+    pre_tool = raw_pre_tool if isinstance(raw_pre_tool, list) else []
+    hooks["PreToolUse"] = pre_tool
     our_cmd = "python3 .claude/hooks/limit_read.py"
-    already = any(
-        any(h.get("command") == our_cmd for h in entry.get("hooks", []))
-        for entry in pre_tool
-        if isinstance(entry, dict) and entry.get("matcher") == "Read"
-    )
+    already = False
+    for raw_entry in pre_tool:
+        entry = object_dict(raw_entry)
+        if entry.get("matcher") != "Read":
+            continue
+        raw_hooks = entry.get("hooks")
+        hook_entries = raw_hooks if isinstance(raw_hooks, list) else []
+        if any(object_dict(hook).get("command") == our_cmd for hook in hook_entries):
+            already = True
+            break
     if not already:
         pre_tool.append(_SETTINGS["hooks"]["PreToolUse"][0])
 
     settings_file.write_text(json.dumps(existing, indent=2))
+
+    exclude_file = root / ".git" / "info" / "exclude"
+    if exclude_file.exists():
+        try:
+            current = exclude_file.read_text()
+        except OSError:
+            current = ""
+        if ".claude/" not in current.splitlines():
+            suffix = "" if current.endswith("\n") or not current else "\n"
+            exclude_file.write_text(f"{current}{suffix}.claude/\n")

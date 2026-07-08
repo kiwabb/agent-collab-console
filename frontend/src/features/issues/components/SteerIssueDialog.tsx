@@ -53,7 +53,10 @@ export function SteerIssueDialog({
             onClick={onSubmit}
             disabled={sending || !draft.trim()}
             data-density={sending ? "steer-issue-send-thinking" : "steer-issue-send"}
-            className={cn("bg-brand text-black hover:bg-brand-strong", sending && "motion-essential")}
+            className={cn(
+              "bg-brand text-black hover:bg-brand-strong",
+              sending && "motion-essential",
+            )}
           >
             {sending ? (
               <span className="flex items-center gap-1.5">

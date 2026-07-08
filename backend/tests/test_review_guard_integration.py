@@ -209,6 +209,7 @@ async def test_serial_hard_mismatch_skips_llm_and_reworks_parent(monkeypatch, st
 
     project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
     wt = issue.git_worktree_path
+    assert wt is not None
 
     # Report claims a file landed; no actual code file is committed/created.
     _write_engineer_report(wt, status="completed", changed_files=["app/foo.py"])
@@ -278,6 +279,7 @@ async def test_serial_legal_empty_diff_dispatches_llm(monkeypatch, store, manage
 
     project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
     wt = issue.git_worktree_path
+    assert wt is not None
 
     _write_engineer_report(
         wt,
@@ -338,6 +340,7 @@ async def test_serial_plan_drift_is_soft_with_real_diff(store, manager, repo):
     + a real diff summary, and does NOT short-circuit.
     """
     project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
+    assert issue.git_worktree_path is not None
     wt = Path(issue.git_worktree_path)
 
     _commit_code_change(wt, "app/actual.py")
@@ -377,6 +380,7 @@ async def test_serial_plan_drift_is_soft_with_real_diff(store, manager, repo):
 async def test_serial_ok_when_actual_matches_expected(store, manager, repo):
     """Actual changed file == expected_files -> ok; no drift, no short-circuit."""
     project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
+    assert issue.git_worktree_path is not None
     wt = Path(issue.git_worktree_path)
 
     _commit_code_change(wt, "app/feature.py")
@@ -498,6 +502,7 @@ async def test_untracked_new_file_counts_as_change_no_false_mismatch(store, mana
     NOT false-positive hard_mismatch on a legitimately-new-file implementation.
     """
     project, issue = await _seed_project_and_issue(store, manager, repo)  # noqa: RUF059
+    assert issue.git_worktree_path is not None
     wt = Path(issue.git_worktree_path)
 
     # The `app/` package already exists & is tracked (commit it first), so an

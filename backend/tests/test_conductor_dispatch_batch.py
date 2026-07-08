@@ -121,7 +121,7 @@ class _WorktreeManagerStub:
                 }
             else:
                 merged.append({**spec, "sha": f"sha-{spec['agent_key']}"})
-                self.cleaned.append(spec["agent_key"])
+                self.cleaned.append(spec.get("worktree_key") or spec["agent_key"])
         return {"merged": merged, "conflict": conflict, "skipped": skipped}
 
 
@@ -215,7 +215,7 @@ async def test_dispatch_batch_fans_out_with_isolated_worktrees(monkeypatch):
     # PR3 join: all succeeded agents were handed to merge-back, then cleaned.
     assert out["merge_status"] == "merged"
     assert len(out["merged"]) == 3
-    assert sorted(wm.cleaned) == ["engineer", "engineer-2", "qa"]
+    assert sorted(wm.cleaned) == sorted(wm.prepared)
     # Branch lineage is carried in-memory to the merge step.
     assert all("branch" in c for c in wm.merged_candidates[0])
 
@@ -325,7 +325,8 @@ async def test_dispatch_batch_partial_join_on_failure(monkeypatch):
     assert "agent_key" in failed[0] and "role" in failed[0]
     # The failed agent's worktree is cleaned up immediately (no leak); the two
     # succeeded agents are merged back then cleaned by merge_agent_worktrees.
-    assert failed[0]["agent_key"] in wm.cleaned
+    assert failed[0]["agent_key"] not in wm.cleaned
+    assert failed[0]["worktree_key"] in wm.cleaned
     assert out["merge_status"] == "merged"
     assert len(out["merged"]) == 2
     # Only the two succeeded agents were merge candidates.
@@ -365,7 +366,8 @@ async def test_dispatch_batch_does_not_merge_partial_agent(monkeypatch):
     assert out["failed_count"] == 1
     failed = [r for r in out["results"] if r.get("status") == "partial"]
     assert len(failed) == 1
-    assert failed[0]["agent_key"] in wm.cleaned
+    assert failed[0]["agent_key"] not in wm.cleaned
+    assert failed[0]["worktree_key"] in wm.cleaned
     assert {c["agent_key"] for c in wm.merged_candidates[0]} == {"engineer", "architect"}
 
 

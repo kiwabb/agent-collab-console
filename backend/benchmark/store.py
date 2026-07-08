@@ -24,15 +24,18 @@ Two implementations:
     unaffected.
 """
 
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from dataclasses import asdict, dataclass, field  # noqa: F401
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Protocol, runtime_checkable  # noqa: F401, UP035
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -352,10 +355,10 @@ class SqliteStore:
         self._conn.commit()
 
     def close(self) -> None:
-        try:  # noqa: SIM105
+        try:
             self._conn.close()
         except Exception:
-            pass
+            logger.debug("benchmark sqlite close failed", exc_info=True)
 
     def __enter__(self) -> "SqliteStore":  # noqa: UP037
         return self
@@ -363,7 +366,7 @@ class SqliteStore:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _run_params(self, r: BenchmarkRun) -> tuple:
+    def _run_params(self, r: BenchmarkRun) -> tuple[object, ...]:
         return (
             r.id,
             r.created_at,

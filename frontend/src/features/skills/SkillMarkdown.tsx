@@ -13,38 +13,19 @@ import { cn } from "@/lib/utils";
 // support for docs ergonomics, but sanitize it before syntax highlighting.
 const markdownSanitizeSchema = {
   ...defaultSchema,
-  tagNames: [
-    ...(defaultSchema.tagNames || []),
-    "details",
-    "summary",
-  ],
+  tagNames: [...(defaultSchema.tagNames || []), "details", "summary"],
   attributes: {
     ...defaultSchema.attributes,
-    "*": [
-      ...(defaultSchema.attributes?.["*"] || []),
-      "className",
-      "title",
-      "aria-label",
-    ],
+    "*": [...(defaultSchema.attributes?.["*"] || []), "className", "title", "aria-label"],
     a: [
-      ...(defaultSchema.attributes?.a || []),
+      ...(defaultSchema.attributes?.["a"] || []),
       ["href", /^https?:\/\//i, /^mailto:/i, /^#/],
       "target",
       "rel",
     ],
-    code: [
-      ...(defaultSchema.attributes?.code || []),
-      ["className", /^language-/, /^hljs/],
-    ],
+    code: [...(defaultSchema.attributes?.["code"] || []), ["className", /^language-/, /^hljs/]],
     details: ["open"],
-    img: [
-      ...(defaultSchema.attributes?.img || []),
-      "alt",
-      "src",
-      "title",
-      "width",
-      "height",
-    ],
+    img: [...(defaultSchema.attributes?.["img"] || []), "alt", "src", "title", "width", "height"],
   },
 };
 
@@ -89,7 +70,11 @@ const components: Components = {
   img: ({ node, ...props }) => (
     // Skill markdown can reference arbitrary local/remote images outside the Next Image allowlist.
     // eslint-disable-next-line @next/next/no-img-element
-    <img {...props} className="my-2 max-w-full rounded-md border border-border-subtle" alt={props.alt ?? ""} />
+    <img
+      {...props}
+      className="my-2 max-w-full rounded-md border border-border-subtle"
+      alt={props.alt ?? ""}
+    />
   ),
   table: ({ node, ...props }) => (
     <div className="my-2 overflow-auto rounded-lg border border-border-subtle">
@@ -98,7 +83,10 @@ const components: Components = {
   ),
   thead: ({ node, ...props }) => <thead {...props} className="bg-surface-raised/60" />,
   th: ({ node, ...props }) => (
-    <th {...props} className="px-3 py-1.5 text-left font-bold uppercase tracking-widest text-[10px]" />
+    <th
+      {...props}
+      className="px-3 py-1.5 text-left font-bold uppercase tracking-widest text-[10px]"
+    />
   ),
   td: ({ node, ...props }) => (
     <td {...props} className="px-3 py-1.5 border-t border-border-subtle align-top" />
@@ -128,10 +116,16 @@ const components: Components = {
     />
   ),
   details: ({ node, ...props }) => (
-    <details {...props} className="my-2 rounded-md border border-border-subtle bg-surface-raised/40 px-3 py-2 [&[open]>summary]:mb-2" />
+    <details
+      {...props}
+      className="my-2 rounded-md border border-border-subtle bg-surface-raised/40 px-3 py-2 [&[open]>summary]:mb-2"
+    />
   ),
   summary: ({ node, ...props }) => (
-    <summary {...props} className="cursor-pointer select-none text-[13px] font-semibold marker:text-text-muted" />
+    <summary
+      {...props}
+      className="cursor-pointer select-none text-[13px] font-semibold marker:text-text-muted"
+    />
   ),
 };
 

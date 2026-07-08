@@ -2,7 +2,16 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Inbox, FileBox, FileText, GitBranch, Library, Search, ShieldCheck, Users } from "lucide-react";
+import {
+  Inbox,
+  FileBox,
+  FileText,
+  GitBranch,
+  Library,
+  Search,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { getCodexIssues } from "@/lib/api/issues";
 import { listProjects } from "@/lib/api/projects";
@@ -14,30 +23,65 @@ import { useI18n } from "@/providers/I18nProvider";
 
 interface Hit {
   id: string;
-  kind:
-    | "issue"
-    | "workspace"
-    | "project"
-    | "nav"
-    | "artifact"
-    | "knowledge-link"
-    | "action";
+  kind: "issue" | "workspace" | "project" | "nav" | "artifact" | "knowledge-link" | "action";
   label: string;
-  hint?: string;
+  hint?: string | undefined;
   href: string;
-  snippet?: string;
-  actionLabel?: string;
-  actionTone?: "primary" | "warning" | "danger" | "neutral";
+  snippet?: string | undefined;
+  actionLabel?: string | undefined;
+  actionTone?: "primary" | "warning" | "danger" | "neutral" | undefined;
 }
 
 const NAV_ITEMS = [
-  { id: "nav-inbox", kind: "nav" as const, labelKey: "cmd.inbox", hintKey: "cmd.inboxHint", href: "/" },
-  { id: "nav-projects", kind: "nav" as const, labelKey: "nav.workspace", hintKey: "cmd.projectsHint", href: "/projects" },
-  { id: "nav-approvals", kind: "nav" as const, labelKey: "cmd.approvals", hintKey: "cmd.approvalsHint", href: "/approvals" },
-  { id: "nav-artifacts", kind: "nav" as const, labelKey: "cmd.artifacts", hintKey: "cmd.artifactsHint", href: "/artifacts" },
-  { id: "nav-knowledge", kind: "nav" as const, labelKey: "sidebar.knowledge", hintKey: "knowledge.subtitle", href: "/knowledge" },
-  { id: "nav-agents", kind: "nav" as const, labelKey: "cmd.agents", hintKey: "cmd.agentsHint", href: "/agents" },
-  { id: "nav-settings", kind: "nav" as const, labelKey: "cmd.settings", hintKey: "cmd.settingsHint", href: "/settings" },
+  {
+    id: "nav-inbox",
+    kind: "nav" as const,
+    labelKey: "cmd.inbox",
+    hintKey: "cmd.inboxHint",
+    href: "/",
+  },
+  {
+    id: "nav-projects",
+    kind: "nav" as const,
+    labelKey: "nav.workspace",
+    hintKey: "cmd.projectsHint",
+    href: "/projects",
+  },
+  {
+    id: "nav-approvals",
+    kind: "nav" as const,
+    labelKey: "cmd.approvals",
+    hintKey: "cmd.approvalsHint",
+    href: "/approvals",
+  },
+  {
+    id: "nav-artifacts",
+    kind: "nav" as const,
+    labelKey: "cmd.artifacts",
+    hintKey: "cmd.artifactsHint",
+    href: "/artifacts",
+  },
+  {
+    id: "nav-knowledge",
+    kind: "nav" as const,
+    labelKey: "sidebar.knowledge",
+    hintKey: "knowledge.subtitle",
+    href: "/knowledge",
+  },
+  {
+    id: "nav-agents",
+    kind: "nav" as const,
+    labelKey: "cmd.agents",
+    hintKey: "cmd.agentsHint",
+    href: "/agents",
+  },
+  {
+    id: "nav-settings",
+    kind: "nav" as const,
+    labelKey: "cmd.settings",
+    hintKey: "cmd.settingsHint",
+    href: "/settings",
+  },
 ];
 
 /**
@@ -65,20 +109,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const ftsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!open) return;
-    restoreFocusRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
+    if (!open) return undefined;
+    restoreFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery("");
     setSelectedIdx(0);
-    if (fetchedRef.current) return;
+    if (fetchedRef.current) return undefined;
     fetchedRef.current = true;
     setLoading(true);
-    void Promise.all([
-      getCodexIssues(null, null),
-      getWorkspaces(null),
-      listProjects(),
-    ])
+    void Promise.all([getCodexIssues(null, null), getWorkspaces(null), listProjects()])
       .then(([iss, ws, pr]) => {
         setIssues(iss);
         setWorkspaces(ws);
@@ -103,6 +142,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       const id = window.setTimeout(() => inputRef.current?.focus(), 50);
       return () => window.clearTimeout(id);
     }
+    return undefined;
   }, [open]);
 
   useEffect(() => {
@@ -111,7 +151,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     if (!open || q.length < 2) {
       setFtsIssueHits([]);
       setFtsArtifactHits([]);
-      return;
+      return undefined;
     }
     ftsDebounceRef.current = setTimeout(() => {
       void searchKnowledge({ q, scope: "all", mode: "fts", limit: 10 })
@@ -164,10 +204,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       .flatMap((i) => {
         const label = i.title || i.id.slice(0, 8);
         const rows: Hit[] = [];
-        if (
-          i.status === "awaiting_approval" ||
-          i.status === "awaiting_review"
-        ) {
+        if (i.status === "awaiting_approval" || i.status === "awaiting_review") {
           rows.push({
             id: `action-review-${i.id}`,
             kind: "action",
@@ -222,12 +259,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
     const seen = new Set<string>();
     const merged: Hit[] = [];
-    for (const h of [
-      ...issueActionHits,
-      ...ftsIssueHits,
-      ...issueHits,
-      ...ftsArtifactHits,
-    ]) {
+    for (const h of [...issueActionHits, ...ftsIssueHits, ...issueHits, ...ftsArtifactHits]) {
       const key = h.kind + ":" + h.href;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -337,9 +369,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               <div className="min-w-0 flex-1">
                 <div className="truncate">{hit.label}</div>
                 {hit.hint && (
-                  <div className="text-[10px] text-text-muted font-mono truncate">
-                    {hit.hint}
-                  </div>
+                  <div className="text-[10px] text-text-muted font-mono truncate">{hit.hint}</div>
                 )}
               </div>
               <span className="text-[10px] uppercase tracking-wider text-text-muted shrink-0">

@@ -39,9 +39,7 @@ export function SimilarIssuesCard({ issueId }: { issueId: string }) {
       {loading ? (
         <div className="px-4 py-3 text-[12px] text-text-muted">…</div>
       ) : items.length === 0 ? (
-        <div className="px-4 py-3 text-[12px] text-text-muted">
-          {t("issue.similarEmpty")}
-        </div>
+        <div className="px-4 py-3 text-[12px] text-text-muted">{t("issue.similarEmpty")}</div>
       ) : (
         <ul className="px-2 pb-2">
           {items.map((it) => (

@@ -29,7 +29,7 @@ export function ExpandableTaskCard({
           "rounded-2xl border transition-all duration-300 cursor-pointer",
           isExpanded
             ? "border-brand/40 bg-surface-raised shadow-lg shadow-brand/5"
-            : "border-border-subtle bg-surface/20 hover:border-border-strong hover:bg-surface/40"
+            : "border-border-subtle bg-surface/20 hover:border-border-strong hover:bg-surface/40",
         )}
         onClick={onToggle}
       >
@@ -92,7 +92,7 @@ export function SwipeToDelete({
       <div
         className={cn(
           "absolute inset-0 flex items-center justify-end pr-6 rounded-2xl transition-opacity",
-          offset < 0 ? "bg-error/20 opacity-100" : "opacity-0"
+          offset < 0 ? "bg-error/20 opacity-100" : "opacity-0",
         )}
       >
         <motion.div

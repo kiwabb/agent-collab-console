@@ -17,11 +17,7 @@ import { Maximize2, Minus, Plus } from "lucide-react";
 import type { WorkflowGraph } from "@/lib/types";
 import type { GraphStatsResponse } from "@/lib/api/issues";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import {
-  AgentDagNode,
-  type AgentDagNodeData,
-  type AgentDagNodeStats,
-} from "./AgentDagNode";
+import { AgentDagNode, type AgentDagNodeData, type AgentDagNodeStats } from "./AgentDagNode";
 import type { RoleId } from "@/features/agents/dock/personas";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
@@ -47,7 +43,7 @@ const EDGE_COLOR: Record<string, string> = {
   "refine-loop": "#f59e0b",
   "retry-on-fail": "#ef4444",
   conditional: "#60a5fa",
-  specialist_call: "#3b82f6",  // Blue for specialist mesh calls
+  specialist_call: "#3b82f6", // Blue for specialist mesh calls
 };
 const EDGE_START_COLOR = "#a8d56b"; // Conductor → root: brand-tinted green
 
@@ -139,6 +135,7 @@ function toReactFlow(
   let i = 0;
   while (i < pending.length) {
     const k = pending[i++];
+    if (!k) continue;
     const d = depthByKey.get(k) ?? 0;
     edgesWithConductor.forEach((e) => {
       if (e.edge_type === "refine-loop") return;
@@ -174,8 +171,8 @@ function toReactFlow(
         ? baseKey
         : "engineer"; // graceful fallback for unknown roles
     const stat: AgentDagNodeStats | null = isConductor
-      ? stats?.conductor ?? null
-      : stats?.nodes?.[n.node_key] ?? null;
+      ? (stats?.conductor ?? null)
+      : (stats?.nodes?.[n.node_key] ?? null);
     const x = depth * colWidth;
     const y = seen * rowHeight + 60;
     nodeBox.set(n.node_key, { x, y, batchKey: n.batch_key ?? null, status: n.status ?? "pending" });
@@ -241,9 +238,7 @@ function toReactFlow(
 
   const rfEdges: Edge[] = edgesWithConductor.map((e, idx) => {
     const isStart = e.from_node_key === CONDUCTOR_KEY;
-    const color = isStart
-      ? EDGE_START_COLOR
-      : EDGE_COLOR[e.edge_type] || "#4ade80";
+    const color = isStart ? EDGE_START_COLOR : EDGE_COLOR[e.edge_type] || "#4ade80";
     const isSpecialistCall = e.edge_type === "specialist_call";
     return {
       id: `e${idx}`,
@@ -253,12 +248,11 @@ function toReactFlow(
       // handoff's horizontal SVG rail with arrowheads.
       type: "straight",
       label: e.edge_type === "sequence" ? undefined : e.edge_type,
-      animated:
-        e.edge_type === "refine-loop" || e.edge_type === "retry-on-fail",
+      animated: e.edge_type === "refine-loop" || e.edge_type === "retry-on-fail",
       style: {
         stroke: color,
         strokeWidth: 3.4,
-        strokeDasharray: isSpecialistCall ? "8 4" : undefined,  // Dashed line for specialist calls
+        strokeDasharray: isSpecialistCall ? "8 4" : undefined, // Dashed line for specialist calls
         filter: `drop-shadow(0 0 6px ${color}66)`,
       },
       markerEnd: { type: MarkerType.ArrowClosed, color },
@@ -276,12 +270,7 @@ interface Props {
   stats?: GraphStatsResponse | null;
 }
 
-export function WorkflowGraphView({
-  graph,
-  className,
-  onNodeClick,
-  stats,
-}: Props) {
+export function WorkflowGraphView({ graph, className, onNodeClick, stats }: Props) {
   const { t } = useI18n();
   const flow = useMemo(
     () =>
@@ -296,7 +285,7 @@ export function WorkflowGraphView({
             role_key: n.node_key,
             status: n.status,
             task_id: n.task_id,
-            batch_key: n.batch_key,
+            batch_key: n.batch_key ?? null,
           })),
           edges: graph.edges.map((e) => ({
             from_node_key: e.from_node_key,
@@ -329,10 +318,7 @@ export function WorkflowGraphView({
 
   return (
     <div
-      className={cn(
-        "relative w-full flex-1 min-h-[460px] overflow-hidden",
-        className,
-      )}
+      className={cn("relative w-full flex-1 min-h-[460px] overflow-hidden", className)}
       style={{
         background: `
           radial-gradient(800px 400px at 50% 60%, var(--color-brand-bg), transparent 60%),
@@ -358,10 +344,7 @@ export function WorkflowGraphView({
       {/* Top-left legend chip */}
       <div className="absolute left-3.5 top-3.5 z-[2] flex items-center gap-3 px-2.5 py-1.5 rounded-lg bg-background/80 backdrop-blur-sm border border-border-subtle font-mono text-[11px] text-text-muted">
         <span className="inline-flex items-center gap-1.5">
-          <span
-            className="size-2 rounded-full"
-            style={{ background: "var(--color-brand)" }}
-          />
+          <span className="size-2 rounded-full" style={{ background: "var(--color-brand)" }} />
           {t("issue.dag.legendStart")}
         </span>
         <span className="inline-flex items-center gap-1.5">
@@ -372,10 +355,7 @@ export function WorkflowGraphView({
           {t("issue.dag.legendDone")}
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span
-            className="size-2 rounded-full"
-            style={{ background: "var(--color-text-muted)" }}
-          />
+          <span className="size-2 rounded-full" style={{ background: "var(--color-text-muted)" }} />
           {t("issue.dag.legendQueued")}
         </span>
         <span className="text-text-faint">·</span>
@@ -395,14 +375,9 @@ export function WorkflowGraphView({
           elementsSelectable
           onNodeClick={onNodeClick ? handleNodeClick : undefined}
         >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={20}
-          size={0}
-          color="transparent"
-        />
-        <DagFab />
-      </ReactFlow>
+          <Background variant={BackgroundVariant.Dots} gap={20} size={0} color="transparent" />
+          <DagFab />
+        </ReactFlow>
       </div>
     </div>
   );
@@ -414,16 +389,10 @@ function DagFab() {
   const { t } = useI18n();
   return (
     <div className="absolute right-3.5 bottom-3.5 flex flex-col gap-1.5 z-[2]">
-      <FabButton
-        title={t("issue.dag.zoomIn")}
-        onClick={() => zoomIn({ duration: 200 })}
-      >
+      <FabButton title={t("issue.dag.zoomIn")} onClick={() => zoomIn({ duration: 200 })}>
         <Plus size={12} strokeWidth={2.4} />
       </FabButton>
-      <FabButton
-        title={t("issue.dag.zoomOut")}
-        onClick={() => zoomOut({ duration: 200 })}
-      >
+      <FabButton title={t("issue.dag.zoomOut")} onClick={() => zoomOut({ duration: 200 })}>
         <Minus size={12} strokeWidth={2.4} />
       </FabButton>
       <FabButton
@@ -475,7 +444,8 @@ function BatchGroupNode({ data }: NodeProps<BatchGroupNodeData>) {
       data-density="parallel-dispatch-lane"
       className={cn(
         "pointer-events-none relative overflow-hidden rounded-2xl border border-dashed transition-colors",
-        data.isActive && "motion-essential border-brand/60 bg-brand-muted/10 shadow-[0_0_28px_-18px_var(--color-brand)]",
+        data.isActive &&
+          "motion-essential border-brand/60 bg-brand-muted/10 shadow-[0_0_28px_-18px_var(--color-brand)]",
       )}
       style={{
         width: data.width,
@@ -498,10 +468,7 @@ function BatchGroupNode({ data }: NodeProps<BatchGroupNodeData>) {
         {data.isActive ? (
           <AgentThinkingIndicator phase="dispatching" size={10} />
         ) : (
-          <span
-            className="size-1.5 rounded-full"
-            style={{ background: "var(--color-brand)" }}
-          />
+          <span className="size-1.5 rounded-full" style={{ background: "var(--color-brand)" }} />
         )}
         {data.label} · {data.count}
       </div>

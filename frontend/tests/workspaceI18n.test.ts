@@ -1,15 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readCompactSource as readSource } from "./sourceTestUtils";
 
 import { getDictionaryValue } from "../src/lib/i18n";
-
-const SRC_ROOT = join(process.cwd(), "src");
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
 
 test("project workspace table strings come from i18n keys", () => {
   const source = readSource("features/projects/ProjectWorkspacesPage.tsx");
@@ -63,10 +56,7 @@ test("workspace sidebar and board actions come from i18n keys", () => {
     assert.match(sidebar, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 
-  [
-    't("workspace.export")',
-    't("workspace.import")',
-  ].forEach((needle) => {
+  ['t("workspace.export")', 't("workspace.import")'].forEach((needle) => {
     assert.match(board, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 });
@@ -76,7 +66,10 @@ test("workspace translation keys are available in English", () => {
   assert.equal(getDictionaryValue("en-US", "workspace.table.workingDir"), "Working dir");
   assert.equal(getDictionaryValue("en-US", "workspace.dialog.deleteTitle"), "Delete workspace?");
   assert.equal(getDictionaryValue("en-US", "workspace.deleteAllData"), "Clean all data");
-  assert.equal(getDictionaryValue("en-US", "workspace.console.createAndStart"), "Create and start ↵");
+  assert.equal(
+    getDictionaryValue("en-US", "workspace.console.createAndStart"),
+    "Create and start ↵",
+  );
   assert.equal(getDictionaryValue("en-US", "workspace.dialog.planFirstPm"), "Pause after PM");
   assert.equal(getDictionaryValue("en-US", "project.nav.workspaces"), "Workspaces");
   assert.equal(getDictionaryValue("en-US", "project.nav.conductor"), "Conductor");
@@ -89,9 +82,7 @@ test("workspace console strings come from i18n keys", () => {
   const row = readSource("features/workspaces/IssueRow.tsx");
   const modal = readSource("features/workspaces/NewIssueDialog.tsx");
 
-  [
-    'NewIssueDialog',
-  ].forEach((needle) => {
+  ["NewIssueDialog"].forEach((needle) => {
     assert.match(source, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 
@@ -100,8 +91,8 @@ test("workspace console strings come from i18n keys", () => {
     't("workspace.console.filter")',
     't("workspace.console.sort")',
     't("workspace.console.newIssue")',
-    'workspace.console.filter.',
-    'workspace.console.sort.',
+    "workspace.console.filter.",
+    "workspace.console.sort.",
   ].forEach((needle) => {
     assert.match(header, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
@@ -154,26 +145,19 @@ test("issue command center is wired to the conductor-first surfaces", () => {
   const phaseHook = readSource("features/issues/hooks/useConductorPhase.ts");
   const chatBar = readSource("features/issues/components/CommandCenterChatBar.tsx");
 
-  [
-    'useConductorPhase',
-    'CommandCenterChatBar',
-    'DecisionTimeline',
-    'LatestFailureAlert',
-  ].forEach((needle) => {
-    assert.match(page, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
-  });
+  ["useConductorPhase", "CommandCenterChatBar", "DecisionTimeline", "LatestFailureAlert"].forEach(
+    (needle) => {
+      assert.match(page, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
+    },
+  );
 
-  [
-    '"conductor.toastStateViolation"',
-    '"conductor.toastStateViolationMessage"',
-  ].forEach((needle) => {
-    assert.match(phaseHook, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
-  });
+  ['"conductor.toastStateViolation"', '"conductor.toastStateViolationMessage"'].forEach(
+    (needle) => {
+      assert.match(phaseHook, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
+    },
+  );
 
-  [
-    'sendConductorMessage',
-    '[CLARIFY]',
-  ].forEach((needle) => {
+  ["sendConductorMessage", "[CLARIFY]"].forEach((needle) => {
     assert.match(chatBar, new RegExp(needle.replace(/[.*?^${}()|[\]\\]/g, "\\$&")));
   });
 });
@@ -190,8 +174,8 @@ test("diff merge copy is wired through i18n keys", () => {
     't("task.review.approved")',
     't("task.diffMerge.refreshPrHint")',
     't("task.diffMerge.openGitHubPr")',
-    'task.diffMerge.mergeConfirmBody',
-    'task.diffMerge.abandonedUndoMessage',
+    "task.diffMerge.mergeConfirmBody",
+    "task.diffMerge.abandonedUndoMessage",
     't("task.review.rejectConfirmTitle")',
     't("task.diffMerge.timeAgo.justNow")',
   ].forEach((needle) => {
@@ -214,7 +198,7 @@ test("diff merge copy is wired through i18n keys", () => {
 
   [
     't("task.diffMerge.changesBy")',
-    'task.diffMerge.runLabel',
+    "task.diffMerge.runLabel",
     't("task.base")',
     't("task.branch")',
   ].forEach((needle) => {
@@ -225,10 +209,7 @@ test("diff merge copy is wired through i18n keys", () => {
     }
   });
 
-  [
-    't("task.diffMerge.undo")',
-    't("task.diffMerge.dismiss")',
-  ].forEach((needle) => {
+  ['t("task.diffMerge.undo")', 't("task.diffMerge.dismiss")'].forEach((needle) => {
     assert.match(undoBar, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 });

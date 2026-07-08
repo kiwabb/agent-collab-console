@@ -87,7 +87,7 @@ test("buildAuditRoleGroups falls back to conductor when no target role exists", 
   assert.equal(groups[0]?.entries[0]?.summary, "LLM request");
 });
 
-test("buildAuditRoleGroups routes taskless rows to system instead of agent or unassigned", () => {
+test("buildAuditRoleGroups hides taskless system rows from the role chain", () => {
   const groups = buildAuditRoleGroups([
     row({
       id: "git",
@@ -108,14 +108,5 @@ test("buildAuditRoleGroups routes taskless rows to system instead of agent or un
     }),
   ]);
 
-  const system = groups.find((group) => group.role === "system");
-  const git = system?.entries.find((entry) => entry.entry.id === "git");
-  assert.equal(system?.roleLabel, "System");
-  assert.deepEqual(git?.entry.call_output, { exit_code: 0, stdout: "ok", stderr: "" });
-  assert.deepEqual(
-    system?.entries.map((entry) => entry.entry.id).sort(),
-    ["event", "git"],
-  );
-  assert.equal(groups.some((group) => group.role === "agent"), false);
-  assert.equal(groups.some((group) => group.role === "unassigned"), false);
+  assert.equal(groups.length, 0);
 });

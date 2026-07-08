@@ -18,17 +18,279 @@ Every change must pass, locally, in this order:
 
 ```bash
 cd backend
-.venv/bin/python -m pytest -v   # default fast lane; @pytest.mark.slow is skipped
-.venv/bin/python -m pytest tests/test_foo.py -v   # pointed test, never skipped
-.venv/bin/python -m ruff check .                  # if ruff is wired in
+.venv/bin/python -m ruff check .                  # lint, 0 findings
+.venv/bin/python -m mypy app benchmark tests --show-error-codes --no-pretty
 .venv/bin/python -c "from app.main import app"    # import smoke
+.venv/bin/python -m pytest -q --tb=short --disable-warnings
+.venv/bin/python -m pytest tests/test_foo.py -v   # pointed test, never skipped
 ```
 
-A PR that hasn't run the relevant tests is not ready for
+A PR that hasn't run the relevant checks is not ready for
 review. A change that touches a public Pydantic model gets a
 serializer round-trip test; a change that touches the
 conductor gets a state-machine test; a change that touches the
 store gets a real-async-store migration test.
+
+### Scenario: CI Workflow Quality Gate Contract
+
+#### 1. Scope / Trigger
+
+- Trigger: changing `.github/workflows/ci.yml`, README quality gates, or the
+  local backend/frontend gate commands.
+- CI is a release boundary. A workflow that soft-fails lint/type/test/build can
+  let regressions merge even when local specs say the gate is mandatory.
+
+#### 2. Signatures
+
+- Workflow: `.github/workflows/ci.yml`.
+- Documentation: `README.md` quality gates section.
+- Regression test: `backend/tests/test_ci_quality_gates.py`.
+- Backend CI commands:
+  `ruff check .`,
+  `mypy app benchmark tests --show-error-codes --no-pretty`,
+  `python -c "from app.main import app"`,
+  `pytest -q --tb=short --disable-warnings`.
+- Python version contract: backend `requires-python >=3.12`, mypy
+  `python_version = "3.12"`, Ruff `target-version = "py312"`, CI
+  `python-version: "3.12"`, and backend spec `Python 3.12+`.
+- Frontend CI commands:
+  `npm audit --registry=https://registry.npmjs.org`, `npm run typecheck`,
+  `npm test`, `npm run lint`, `npm run build`, `npm run format:check`.
+
+#### 3. Contracts
+
+- CI quality gates must be hard gates. Do not use `|| true` or
+  `continue-on-error: true` on lint/type/test/build checks.
+- README quality gates and CI gate commands stay aligned.
+- Backend CI mypy covers `app`, `benchmark`, and backend `tests`.
+- Backend Python runtime metadata, static-analysis target, CI version, and spec
+  version stay aligned on Python 3.12.
+- Frontend CI runs the production build, not just typecheck/test/lint.
+- CI should use project scripts (`npm run ...`) for frontend gates so package
+  script changes stay centralized.
+- Frontend dependency audit uses the official npm registry because alternate
+  mirrors may not implement the audit endpoint.
+
+#### 4. Validation & Error Matrix
+
+- Missing documented command -> `test_ci_quality_gates.py` fails with the
+  missing command list.
+- Missing README gate command -> `test_ci_quality_gates.py` fails with the
+  missing command list.
+- `|| true` or `continue-on-error: true` in the workflow -> test fails.
+- Workflow YAML syntax still needs an external parser/actionlint when available;
+  the regression test only enforces gate presence and hard-fail semantics.
+- Python version drift between CI, `pyproject.toml`, and backend spec ->
+  `test_ci_quality_gates.py` fails.
+- Missing frontend npm audit gate -> `test_ci_quality_gates.py` fails with the
+  missing command list.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: hard backend and frontend gates, including dependency audit, match
+  README/spec commands.
+- Base: adding an extra hard gate is allowed when it is documented.
+- Bad: `mypy app || true`, `npx prettier ... || true`, or omitting
+  `npm run build`.
+
+#### 6. Tests Required
+
+- `cd backend && .venv/bin/python -m pytest tests/test_ci_quality_gates.py -q`.
+- Backend full pytest after changing the test or workflow source contract.
+- YAML/actionlint validation when the tool is available locally or in CI.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```yaml
+- name: Mypy (baseline)
+  run: mypy app || true
+```
+
+Correct:
+
+```yaml
+- name: Mypy
+  run: mypy app benchmark tests --show-error-codes --no-pretty
+```
+
+---
+
+### Scenario: Backend App Logging Source Hygiene
+
+#### 1. Scope / Trigger
+
+- Trigger: changing code under `backend/app/` that emits diagnostics, handles
+  best-effort cleanup, mirrors audit/event data, or bridges external processes.
+- The backend logging contract is executable: application code uses stdlib
+  `logger`, not `print(...)`, so output routes through the configured app log
+  instead of ad hoc stdout/stderr writes.
+
+#### 2. Signatures
+
+- Source boundary: `backend/app/**/*.py`.
+- Regression test: `backend/tests/test_backend_source_hygiene.py`.
+- Logging API: module-level `logger = logging.getLogger(__name__)`.
+- Bare `except/pass` allowlist:
+  `EXPECTED_BARE_EXCEPT_PASS` in `test_backend_source_hygiene.py`.
+
+#### 3. Contracts
+
+- No real AST `print(...)` call is allowed under `backend/app`.
+- Generated script text may contain `print(...)` when it is written as data for
+  an external hook; the AST test intentionally does not inspect string bodies.
+- Existing bare `except ...: pass` sites are frozen in the source-hygiene
+  allowlist. New silent exception swallowing under `backend/app` or
+  `backend/benchmark` must either log with context, use a clearer
+  `contextlib.suppress(...)` for intentionally ignored control flow, or update
+  the allowlist with a reason in review.
+- Best-effort cleanup / audit / event mirroring paths may swallow exceptions
+  only after logging at `DEBUG` or higher with useful identifiers and
+  `exc_info=True` / `logger.exception(...)` when a traceback is needed.
+- User-facing process logs still go through the existing `LogEvent` /
+  EventBus paths, not direct terminal writes.
+
+#### 4. Validation & Error Matrix
+
+- `print(...)` call under `backend/app` -> `test_backend_source_hygiene.py`
+  fails with `<path>:<line>: print(...)`.
+- New bare `except/pass` site or a changed allowlisted scope ->
+  `test_backend_source_hygiene.py` fails with the actual site list.
+- Cleanup path uses `except Exception: pass` with no logging -> Bandit reports
+  low `B110` / `B112`; either add debug logging or document why a
+  `contextlib.suppress(...)` block is more precise.
+- Logging without an identifier on cross-process / cross-task boundaries ->
+  review failure; include `task_id`, `workspace_id`, `issue_id`, or the nearest
+  equivalent.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `logger.exception("event bus broadcast failed: event_type=%s", event_type)`.
+- Base: `logger.debug("process cleanup failed: workspace_id=%s", workspace_id, exc_info=True)`.
+- Bad: `print(f"[EventBus] Error: {exc}", file=sys.stderr)` or bare
+  `except Exception: pass`.
+
+#### 6. Tests Required
+
+- `cd backend && .venv/bin/python -m pytest -q tests/test_backend_source_hygiene.py`.
+- For touched runtime boundaries, run the relevant unit/integration tests
+  (`test_event_bus_ws.py`, `test_audit_logger.py`, process runtime tests, etc.).
+- When replacing `except/pass`, run targeted Bandit for the touched files to
+  confirm `B110`/`B112` noise does not increase.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+try:
+    await event_bus.append(payload)
+except Exception:
+    pass
+```
+
+Correct:
+
+```python
+try:
+    await event_bus.append(payload)
+except Exception:
+    logger.debug("event append failed: task_id=%s", task_id, exc_info=True)
+```
+
+---
+
+### Scenario: Trusted Local Subprocess Boundary
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing synchronous local CLI calls for trusted developer
+  tools such as `git`, `osascript`, `codex`, `claude`, benchmark helpers, or QA
+  command execution.
+- Static security scanners cannot tell local-first CLI integration from unsafe
+  command execution when `subprocess.run(...)` is scattered through services.
+  Keep suppressions at a small I/O boundary so application code stays
+  reviewable.
+
+#### 2. Signatures
+
+- Boundary module: `backend/app/adapters/local_process.py`.
+- Regression test: `backend/tests/test_backend_source_hygiene.py`.
+- Runner:
+  `run_trusted_local(args: Sequence[str], *, cwd=None, capture_output=True, text=True, check=False, timeout=None, env=None) -> subprocess.CompletedProcess[str]`.
+- Re-exported exceptions/types:
+  `CalledProcessError`, `CompletedProcess`, `TimeoutExpired`.
+- Static analyzer suppressions live only at the boundary import/call sites:
+  `# nosec B404` and `# nosec B603`.
+
+#### 3. Contracts
+
+- Callers pass an argv sequence; the helper converts it to `list(args)`.
+- `shell=False` is mandatory inside the helper and is not caller-configurable.
+- User content may appear only as an argv value. It must not be interpolated into
+  a shell string.
+- Feature/application/interface code that needs a one-shot trusted local CLI
+  call imports `run_trusted_local(...)` instead of calling `subprocess.run(...)`
+  directly.
+- Long-lived async runtimes may still use `asyncio.create_subprocess_exec(...)`
+  or existing command-safety reviewed async process boundaries when they need
+  streaming stdio, cancellation, and process-group cleanup.
+- New modules under `backend/app/` or `backend/benchmark/` remain covered by the
+  strict mypy override list in `backend/pyproject.toml`.
+
+#### 4. Validation & Error Matrix
+
+- Direct `subprocess.run(...)` outside `local_process.py` -> review failure and
+  `test_backend_source_hygiene.py` failure; move the call behind
+  `run_trusted_local(...)`.
+- Direct synchronous `subprocess.Popen(...)`, `subprocess.call(...)`,
+  `subprocess.check_call(...)`, or `subprocess.check_output(...)` under
+  `app` / `benchmark` outside `local_process.py` -> source-hygiene failure.
+- Adding a `shell` parameter to `run_trusted_local(...)` -> review failure; the
+  boundary loses its security contract.
+- Building a command as a string from user input -> review failure; pass argv
+  values separately or use an existing command-safety parser.
+- Adding a new backend module without strict mypy coverage ->
+  `tests/test_mypy_strict_coverage.py` fails.
+- Bandit reports high/medium findings in `app` or `benchmark` -> the batch is
+  not green until fixed or documented with a narrow suppression.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `run_trusted_local(["git", "status", "--short"], cwd=repo)`.
+- Base: `run_trusted_local(["osascript", "-e", script], timeout=5)`, where
+  `script` is fixed application text plus normal argv-safe values.
+- Bad: `subprocess.run(f"git -C {repo} status", shell=True)`.
+
+#### 6. Tests Required
+
+- `cd backend && .venv/bin/python -m ruff check .`.
+- `cd backend && .venv/bin/python -m mypy app benchmark tests --show-error-codes --no-pretty`.
+- `cd backend && .venv/bin/python -m pytest -q tests/test_backend_source_hygiene.py`.
+- `cd backend && .venv/bin/python -m pytest -q tests/test_mypy_strict_coverage.py`.
+- Run the targeted tests for the changed caller, especially process runtime,
+  QA workflow, benchmark, API, or git/status tests.
+- `cd backend && pipx run bandit -r app benchmark -f json -q` must report an
+  empty `results` list for high/medium/low findings introduced by the change.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+import subprocess
+
+result = subprocess.run(["git", "diff", "--name-only"], capture_output=True, text=True)
+```
+
+Correct:
+
+```python
+from app.adapters.local_process import run_trusted_local
+
+result = run_trusted_local(["git", "diff", "--name-only"])
+```
 
 ---
 
@@ -93,6 +355,609 @@ store gets a real-async-store migration test.
 ## Required Patterns
 
 <!-- Patterns that must always be used -->
+
+### Convention: Type Singleton Instance Attributes At Class Scope
+
+**What**: When a process-singleton initializes mutable instance attributes in
+`__new__`, declare those instance attributes on the class before assigning them
+on the newly-created object.
+
+**Why**: The runtime pattern is safe, but mypy cannot infer attributes that are
+introduced only through annotated assignments on a temporary `obj` inside
+`__new__`. Class-scope annotations keep the singleton pattern explicit and avoid
+large false-positive `attr-defined` cascades.
+
+Wrong:
+
+```python
+class Registry:
+    _instance: Registry | None = None
+
+    def __new__(cls) -> Registry:
+        if cls._instance is None:
+            obj = super().__new__(cls)
+            obj._events: dict[str, asyncio.Event] = {}
+            cls._instance = obj
+        return cls._instance
+```
+
+Correct:
+
+```python
+class Registry:
+    _instance: Registry | None = None
+    _events: dict[str, asyncio.Event]
+
+    def __new__(cls) -> Registry:
+        if cls._instance is None:
+            obj = super().__new__(cls)
+            obj._events = {}
+            cls._instance = obj
+        return cls._instance
+```
+
+### Convention: Declare Runtime Entry Scratch State On The Dataclass
+
+**What**: When a process runtime stores per-process scratch state on
+`AsyncProcessEntry`, add the field to the dataclass in
+`application/process_runtime_common.py`. Do not attach ad hoc attributes from a
+specific runtime such as `CodexAppServerRuntime`.
+
+**Why**: Codex and Claude runtimes share the same process-entry object. Hidden
+runtime-only attributes make timeout/watchdog behavior hard to audit and create
+false `attr-defined` workarounds during type tightening.
+
+Wrong:
+
+```python
+entry._timeout_reason = "idle_timeout"
+entry.turn_watchdog_task = asyncio.create_task(watchdog())
+```
+
+Correct:
+
+```python
+@dataclass
+class AsyncProcessEntry:
+    timeout_reason: str | None = None
+    turn_watchdog_task: asyncio.Task[None] | None = None
+```
+
+### Convention: Preserve Optional Store Capabilities In API Tests
+
+**What**: When tightening `interfaces/api.py` store typing with a structural
+Protocol, keep any existing endpoint fallback for narrower test stores or
+optional store capabilities. If a method is intentionally optional for a
+specific endpoint, check it with `getattr(..., None)` / `callable(...)`, then
+cast to a narrow callable Protocol at the call boundary.
+
+**Why**: Some endpoint tests monkeypatch `api.codex_store` with a focused stub
+that only implements the methods the scenario needs. Replacing a documented
+fallback with a direct Protocol method call can make production typing cleaner
+while breaking those executable transport contracts.
+
+Wrong:
+
+```python
+store = _require_codex_store()
+existing_workspace = await store.load_codex_workspace(project.id)
+```
+
+Correct:
+
+```python
+load_workspace_raw = getattr(store, "load_codex_workspace", None)
+save_workspace_raw = getattr(store, "save_codex_workspace", None)
+if not callable(load_workspace_raw) or not callable(save_workspace_raw):
+    return project.id
+load_workspace = cast(LoadCodexWorkspaceFn, load_workspace_raw)
+existing_workspace = await load_workspace(project.id)
+```
+
+### Convention: Type-Narrow Test Fixtures Instead Of Ignoring Mypy
+
+**What**: Backend tests that prove fixture state should narrow the value with a
+real assertion before indexing, comparing, or passing it into a typed helper.
+Focused test doubles should either match the production Protocol signature or be
+cast at the call site where the test intentionally supplies a partial stub.
+
+**Why**: Test code is executable documentation for edge cases. A broad
+`# type: ignore`, an unannotated async fixture, or indexing a `Row | None` hides
+whether the fixture actually established the state the test depends on.
+Assertions make both the runtime failure and the mypy contract point at the
+missing setup.
+
+Wrong:
+
+```python
+row = await cursor.fetchone()
+assert row[0] == 1
+
+assert classify_intent(None) == "chat"  # type: ignore[arg-type]
+
+class Store:
+    async def update_execution_process_status(self, process_id: str, status: str, **kwargs):
+        ...
+```
+
+Correct:
+
+```python
+row = await cursor.fetchone()
+assert row is not None
+assert row[0] == 1
+
+assert classify_intent(None) == "chat"
+
+class Store:
+    async def update_execution_process_status(
+        self,
+        process_id: str,
+        status: str,
+        completed_at: datetime | None = None,
+    ) -> None:
+        ...
+```
+
+### Convention: Type Service Constructor Dependencies By Capability
+
+**What**: When an application service only needs a subset of another service's
+methods or attributes, define a small structural `Protocol` for that dependency
+instead of typing the constructor parameter as the concrete implementation.
+
+**Why**: Concrete service annotations make tests reach for broad casts even
+when the production code only needs two methods. A capability Protocol keeps the
+boundary honest, lets focused fakes type-check, and documents hidden
+requirements such as an in-memory `sessions` index.
+
+Wrong:
+
+```python
+class OrchestrationService:
+    def __init__(self, session_service: SessionService) -> None:
+        self.session_service = session_service
+```
+
+Correct:
+
+```python
+class OrchestrationSessionService(Protocol):
+    sessions: dict[str, Session]
+
+    async def get_session(self, session_id: str) -> Session: ...
+
+    async def update_session(self, session: Session) -> None: ...
+
+
+class OrchestrationService:
+    def __init__(self, session_service: OrchestrationSessionService) -> None:
+        self.session_service = session_service
+```
+
+### Convention: Type Transport/Runtime Fakes By Capability
+
+**What**: When a backend transport helper or process-runtime helper only uses a
+small capability surface, expose that surface as a structural `Protocol` and
+make tests implement the Protocol directly. Keep casts at the deliberate fake
+boundary, such as a fake subprocess standing in for `asyncio.subprocess.Process`.
+
+**Why**: Tests should not need to inherit concrete framework classes such as
+FastAPI `WebSocket`, nor pass `None` into runtime entries, just to exercise a
+small sender or lifecycle behavior. Capability Protocols document what the
+production code really needs and keep focused fakes type-checkable without
+pulling in framework internals.
+
+Wrong:
+
+```python
+class WsSubscriber:
+    def __init__(self, ws: WebSocket, maxsize: int) -> None:
+        self.ws = ws
+
+
+sub = WsSubscriber(FakeWebSocket(), maxsize=16)  # fake is not a WebSocket
+```
+
+Correct:
+
+```python
+class WsSendChannel(Protocol):
+    async def send_json(self, data: object) -> None: ...
+    async def send_text(self, data: str) -> None: ...
+    async def close(self, code: int = 1000, reason: str = "") -> None: ...
+
+
+class WsSubscriber:
+    def __init__(self, ws: WsSendChannel, maxsize: int) -> None:
+        self.ws = ws
+```
+
+### Convention: Keep Protocol Signatures Domain-Typed
+
+**What**: A structural `Protocol` should name the actual domain types it loads,
+saves, or emits. Do not widen method parameters to `object` to make a Protocol
+feel more permissive when every real implementation expects a concrete model.
+
+**Why**: Method parameters are checked contravariantly. A Protocol method such
+as `save_codex_task(task: object)` is stricter for implementers than
+`save_codex_task(task: CodexTask)`: a real store that only accepts `CodexTask`
+will not satisfy the `object` signature. This creates false test-mypy failures
+and tempts broad casts around otherwise correct stores.
+
+Wrong:
+
+```python
+class FollowupStore(Protocol):
+    async def load_codex_task(self, task_id: str) -> object | None: ...
+
+    async def save_codex_task(self, task: object) -> None: ...
+```
+
+Correct:
+
+```python
+class FollowupStore(Protocol):
+    async def load_codex_task(self, task_id: str) -> CodexTask | None: ...
+
+    async def save_codex_task(self, task: CodexTask) -> None: ...
+```
+
+### Convention: Narrow External JSON Before Typed Payloads
+
+**What**: Values parsed from CLI, LLM, JSON-RPC, or other external JSON
+boundaries start as `object`. Convert them through a small guard/coercion helper
+before returning a `TypedDict` or domain model. Do not annotate raw parsed JSON
+as a trusted `dict[str, object]` without checking that it is actually a mapping.
+
+**Why**: `json.loads()` and third-party protocol payloads can be lists, scalars,
+or dicts with wrong field types. Treating those values as typed dicts makes
+mypy quiet while moving the failure to a later consumer. Guarding at the boundary
+keeps adapter/service return shapes honest and lets modules graduate to strict
+mypy without hiding runtime drift.
+
+Wrong:
+
+```python
+data = json.loads(stdout)
+return {
+    "summary": data.get("summary", fallback),
+    "artifacts": data.get("artifacts", []),
+}
+```
+
+Correct:
+
+```python
+from app.json_safety import object_dict
+
+data = object_dict(json.loads(stdout))
+summary = data.get("summary")
+return {
+    "summary": summary if isinstance(summary, str) else fallback,
+    "artifacts": artifact_list(data.get("artifacts"), fallback_artifacts),
+}
+```
+
+### Scenario: Shared JSON Shape Guard Boundary
+
+#### 1. Scope / Trigger
+
+- Trigger: parsing JSON or mapping-like payloads from CLI stdout, LLM/tool
+  results, JSON-RPC frames, HTTP provider responses, persisted JSON blobs, or
+  project/worktree config files.
+- Shape guards are a backend-wide primitive. Duplicating small
+  `_object_dict(...)` helpers across services makes fallback behavior drift
+  and hides raw `json.loads()` trust-boundary mistakes from review.
+
+#### 2. Signatures
+
+- Boundary module: `backend/app/json_safety.py`.
+- Type aliases: `JsonObject = dict[str, object]`,
+  `JsonList = list[object]`.
+- Guard helpers:
+  `object_dict(value: object) -> JsonObject`,
+  `object_dict_or_none(value: object) -> JsonObject | None`,
+  `object_list(value: object) -> JsonList`,
+  `object_dict_list(value: object) -> list[JsonObject]`,
+  `string_value(value: object, default: str = "") -> str`,
+  `string_list_value(value: object, fallback: Sequence[str] | None = None) -> list[str]`.
+- Safe JSON text helpers:
+  `parse_json_object(raw) -> JsonObject | None`,
+  `parse_json_value(raw, *, default: object = None) -> object`,
+  `parse_json_list(raw) -> JsonList`,
+  `parse_json_object_list(raw) -> list[JsonObject]`.
+- Regression tests:
+  `backend/tests/test_json_safety.py` and
+  `backend/tests/test_backend_source_hygiene.py`.
+  The source-hygiene test also rejects direct `json.loads(...)` calls in
+  LLM/prototype streaming boundary modules; those parse untrusted SSE frames
+  through `parse_json_object(...)`. Tolerant safe-read boundaries such as
+  conductor turn policy, review-plan expected files, and knowledge-index JSON
+  artifact flattening are also source-hygiene protected so they keep using the
+  shared `parse_json_*` helpers.
+
+#### 3. Contracts
+
+- Application, adapter, and interface code uses `app.json_safety` for generic
+  mapping/list/string shape coercion instead of defining local `_object_dict`,
+  `_object_mapping`, or `object_dict` helpers.
+- Choose the helper by branch semantics: use `object_dict(...)` when invalid
+  payloads should degrade to `{}`, and `object_dict_or_none(...)` when
+  downstream code distinguishes "missing/non-object" from an empty object.
+- SQLite store wrappers may keep private `_json_object(...)` helpers when they
+  intentionally preserve `json.loads()` exceptions for malformed persisted DB
+  data, but the shape coercion inside those wrappers still delegates to
+  `json_safety`.
+- `parse_json_*` helpers are for tolerant "safe read" boundaries that should
+  degrade on malformed text. Do not use them where malformed stored JSON should
+  fail loudly.
+- Use `parse_json_value(..., default=sentinel)` when the boundary accepts any
+  JSON shape and must distinguish malformed text from a valid JSON `null`.
+
+#### 4. Validation & Error Matrix
+
+- New `_object_dict`, `_object_mapping`, or `object_dict` function under
+  `backend/app` outside `app/json_safety.py` ->
+  `test_backend_source_hygiene.py` fails with the file and line.
+- Direct `json.loads(...)` in the LLM/prototype streaming boundary files ->
+  `test_backend_source_hygiene.py` fails with the file and line.
+- A new backend module under `backend/app` that imports `app.json_safety` but is
+  missing from the strict mypy override list ->
+  `tests/test_mypy_strict_coverage.py` fails.
+- Raw `json.loads()` value indexed as a dict/list without a guard -> mypy should
+  force `object` narrowing; review should require a `json_safety` helper.
+- Using `parse_json_object(...) or {}` where `None` has business meaning ->
+  review failure; keep `object_dict_or_none(...)` / explicit `None` handling.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: JSON-RPC `params` and Codex app-server `item` payloads use
+  `object_dict(...)` before `.get(...)`.
+- Base: SQLite store `_json_object(raw)` uses `json.loads(raw)` and then
+  `object_dict_or_none(parsed)` so malformed DB JSON still raises.
+- Bad: a service adds a new local `_object_mapping(value)` that copies the same
+  `isinstance(value, Mapping)` logic.
+
+#### 6. Tests Required
+
+- `cd backend && .venv/bin/python -m pytest -q tests/test_json_safety.py`.
+- `cd backend && .venv/bin/python -m pytest -q tests/test_backend_source_hygiene.py`.
+- For touched runtime or protocol boundaries, run the relevant tests
+  (`test_json_rpc_client.py`, process runtime tests, API tests, or provider
+  streaming tests).
+- Run `ruff check .`, strict mypy, and import smoke when the helper signature or
+  a broad call surface changes.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+def _object_mapping(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): item for key, item in value.items()}
+```
+
+Correct:
+
+```python
+from app.json_safety import object_dict
+
+payload = object_dict(raw_payload)
+```
+
+### Scenario: FastAPI No-Content Route Type Annotations
+
+#### 1. Scope / Trigger
+
+- Trigger: adding return annotations to FastAPI routes, especially during strict
+  mypy graduation of `interfaces/api.py`.
+- No-content routes are a transport contract: FastAPI rejects `204` route
+  declarations that imply a response body.
+
+#### 2. Signatures
+
+- Route decorator: `@router.delete(..., status_code=204)`.
+- Implementation return annotation: `-> Response`.
+- Return value: `Response(status_code=204)`.
+
+#### 3. Contracts
+
+- A `204` endpoint must not declare or infer a response body model.
+- Do not annotate a `204` route as `-> object`, `-> dict[str, object]`, or a
+  Pydantic model. FastAPI treats those annotations as response body shapes.
+- If the route returns JSON, it is not a `204`; use a `200`/`202` status instead.
+
+#### 4. Validation & Error Matrix
+
+- `status_code=204` plus `-> object` / dict / model annotation -> FastAPI raises
+  at import/route registration: status code 204 must not have a response body.
+- `status_code=204` plus `-> Response` and `return Response(status_code=204)` ->
+  import succeeds and the client receives an empty body.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `DELETE /api/agents/{id}` returns `Response(status_code=204)` after a
+  successful delete.
+- Base: failed deletes still raise `HTTPException` with `404`/`400` and a normal
+  FastAPI error body.
+- Bad: mechanically adding `-> object` to every route during strict typing; this
+  can make a previously valid `204` endpoint fail at app import time.
+
+#### 6. Tests Required
+
+- Import smoke: `from app.main import app` must succeed after route annotation
+  changes.
+- Endpoint test: successful `204` route has status `204` and no response body.
+- Regression test or targeted route test for the affected endpoint, not just
+  static mypy.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+@router.delete("/agents/{agent_id}", status_code=204)
+async def delete_agent(agent_id: str) -> object:
+    return Response(status_code=204)
+```
+
+Correct:
+
+```python
+@router.delete("/agents/{agent_id}", status_code=204)
+async def delete_agent(agent_id: str) -> Response:
+    return Response(status_code=204)
+```
+
+### Scenario: Benchmark Handler Typed JSON Responses
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing handlers in `backend/benchmark/api.py`, or the
+  `/codex/benchmark/*` forwarding routes in `app/interfaces/api.py`.
+- Benchmark handlers are HTTP JSON contracts even though the route decorators
+  live in `interfaces/api.py`; do not hide those payloads behind
+  `dict[str, Any]` or `-> object`.
+
+#### 2. Signatures
+
+- Request body: `TriggerRunRequest` validates the FastAPI body.
+- Handler payload: `TriggerRunPayload` is the internal `TypedDict` passed from
+  the route to `trigger_run()`.
+- Handler responses: `TriggerRunResponse`, `SerializedRun`,
+  `ListRunsResponse`, `BaselineResponse`, `SetBaselineResponse`,
+  `RunDiffResponse`, `CalibrationReportResponse`, and `JobResponse`.
+- Router annotations mirror handler responses, for example
+  `def get_benchmark_run(...) -> benchmark_handlers.SerializedRun`.
+- Job registry callback: `start_job[ResultT](..., coro:
+  Callable[[], Awaitable[ResultT]], on_complete:
+  CompletionCallback[ResultT] | None = None)`.
+- Real benchmark executor store boundary: `BenchmarkRuntimeStore` Protocol with
+  async `list_codex_tasks(...) -> list[dict[str, object]]` and
+  `list_execution_processes(...) -> list[ExecutionProcess]`.
+
+#### 3. Contracts
+
+- Response `TypedDict`s list every JSON field returned by the handler.
+- Optional JSON fields are represented with `| None` when the key is always
+  present, or `NotRequired[...]` when the key is conditionally omitted.
+- The FastAPI forwarding route builds a `TriggerRunPayload` explicitly from the
+  Pydantic request fields instead of passing raw `request.model_dump()`.
+- `Job.meta` is `dict[str, object]`. Code that reads from metadata must narrow
+  the value before assigning it to a typed field such as `result_ref`.
+- `RealConductorExecutor` must verify it received an async runtime store before
+  awaiting store methods. Use a `TypeGuard` such as
+  `_is_benchmark_runtime_store()` instead of annotating the store as `Any`.
+- `Score.metadata` is `dict[str, object]`; scorer debug payloads must remain
+  JSON-ish and cannot use `Any` as an escape hatch.
+- `Any` is reserved for true third-party or callback bridges; benchmark handler
+  request/response/job shapes use `object`, `TypedDict`, generics, or
+  dataclasses.
+
+#### 4. Validation & Error Matrix
+
+- Invalid trigger body -> Pydantic validation raises `HTTPException(422)` before
+  touching the store or job registry.
+- Unknown run/job -> `HTTPException(404)`.
+- No baseline -> `RunDiffResponse` includes `baseline=None`, `diff=None`, and a
+  `note`.
+- Candidate is the baseline -> same response shape with an explanatory `note`.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `get_run()` returns `SerializedRun` and `_serialize_run()` is the only
+  place that constructs the run payload.
+- Base: `get_run_diff()` returns the same top-level shape whether a diff exists
+  or a note explains why it does not.
+- Bad: `async def trigger_run(body: dict[str, Any]) -> dict[str, Any]` plus a
+  router that forwards `request.model_dump()` directly.
+- Bad: `on_complete: Callable[[Job, Any | None, BaseException | None], Any]`
+  because it loses the coroutine result type at the callback boundary.
+- Bad: `codex_store: Any` in `RealConductorExecutor` because a sync store or
+  `None` can be awaited accidentally.
+- Bad: `Score.metadata: dict[str, Any]` because tests can still assert runtime
+  metadata without letting scorer code smuggle untyped values through the
+  benchmark package.
+
+#### 6. Tests Required
+
+- Targeted API tests for benchmark trigger/list/get/diff/baseline/job routes.
+- Strict mypy over `benchmark/api.py` and `app/interfaces/api.py`.
+- Strict mypy over `benchmark/job.py` when changing job lifecycle callbacks or
+  metadata.
+- Benchmark runner tests when changing `RealConductorExecutor` store contracts,
+  plus full `mypy app benchmark tests`.
+- Source scan for benchmark type escapes:
+  `rg -n "\bAny\b|dict\[str, Any\]|Awaitable\[Any\]|Callable\[.*Any" backend/benchmark`
+  should return no matches unless a new documented external bridge is added.
+- Regression test:
+  `cd backend && .venv/bin/python -m pytest tests/test_benchmark_type_hygiene.py -q`.
+- Full backend mypy command:
+  `.venv/bin/python -m mypy app benchmark tests --show-error-codes --no-pretty`.
+- Project-wide source-hygiene regression:
+  `cd backend && .venv/bin/python -m pytest tests/test_backend_source_hygiene.py -q`
+  rejects explicit type escape hatches in `backend/app`, `backend/benchmark`,
+  and backend tests. Do not add `type: ignore`, `from typing import Any`,
+  `dict[str, Any]`, `list[dict[str, Any]]`, `Awaitable[Any]`, or `cast(Any...)`
+  unless the source-hygiene contract is intentionally changed with a documented
+  boundary reason.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+async def trigger_benchmark_run(request: TriggerRunRequest) -> object:
+    return await benchmark_handlers.trigger_run(request.model_dump())
+```
+
+Correct:
+
+```python
+async def trigger_benchmark_run(
+    request: TriggerRunRequest,
+) -> benchmark_handlers.TriggerRunResponse:
+    payload: benchmark_handlers.TriggerRunPayload = {
+        "label": request.label,
+        "epochs": request.epochs,
+        "fixture_ids": request.fixture_ids,
+        "is_baseline": request.is_baseline,
+        "max_budget_usd": request.max_budget_usd,
+        "project_id": request.project_id,
+        "workspace_id": request.workspace_id,
+        "dry_run": request.dry_run,
+    }
+    return await benchmark_handlers.trigger_run(payload)
+```
+
+### Convention: Keep Conductor Turn Kinds In The Domain Literal
+
+**What**: When adding or discovering a persisted `conductor_turns.kind` value,
+update `ConductorTurnKind` in `domain/models.py` instead of loosening conductor
+call sites back to plain `str`.
+
+**Why**: The Conductor loop, recovery tools, audit mirroring, and tests all
+share the same persisted timeline. If a kind such as `policy_decision` is saved
+but missing from the domain literal, later type tightening creates false local
+workarounds and can hide real persistence/audit drift.
+
+Wrong:
+
+```python
+async def persist_turn(*, kind: str, payload: dict[str, Any]) -> None:
+    turn = ConductorTurn(kind=kind, payload_json=json.dumps(payload))
+```
+
+Correct:
+
+```python
+ConductorTurnKind = Literal["llm_request", "policy_decision", "tool_result", ...]
+
+async def persist_turn(*, kind: ConductorTurnKind, payload: dict[str, Any]) -> None:
+    turn = ConductorTurn(kind=kind, payload_json=json.dumps(payload))
+```
 
 ### Scenario: Unified Audit Log Role-Chain Read Contract
 
@@ -1884,6 +2749,139 @@ await event_bus.append(
 )
 ```
 
+### Scenario: Non-Security Deterministic Hashes
+
+#### 1. Scope / Trigger
+
+- Trigger: adding or changing a hash used for deterministic IDs, cache keys,
+  dedupe keys, prompt/content fingerprints, or audit references.
+- Hashes that are not protecting secrets still look security-sensitive to
+  scanners; the code must make the non-security intent executable.
+
+#### 2. Signatures
+
+- Python hash call: `hashlib.sha1(data, usedforsecurity=False)`.
+- Targeted static scan:
+  `pipx run bandit backend/app/application/team_notes_service.py -f json`
+  (substitute the touched file).
+
+#### 3. Contracts
+
+- If a weak digest such as SHA-1 is used only for deterministic identity, pass
+  `usedforsecurity=False` and add a nearby comment or docstring phrase such as
+  "non-security digest".
+- Do not use weak digests for authentication, signatures, secret comparison,
+  permission decisions, or integrity checks across trust boundaries.
+- Preserve existing deterministic ID formats when migrating a legacy key
+  unless a migration/backfill plan exists.
+
+#### 4. Validation & Error Matrix
+
+- Weak digest without `usedforsecurity=False` -> Bandit `B324` high finding.
+- Weak digest used for a security decision -> replace with an appropriate
+  modern primitive; do not suppress the scanner.
+- Changing the output prefix/length of an existing persisted ID -> requires a
+  compatibility test or migration plan.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `hashlib.sha1(heading.encode("utf-8"), usedforsecurity=False)` for a
+  legacy team-note block ID whose prefix and length stay unchanged.
+- Base: `hashlib.sha256(...)` for a non-secret content fingerprint when output
+  compatibility is not constrained.
+- Bad: `hashlib.sha1(token.encode()).hexdigest()` for auth, signatures, or any
+  user trust decision.
+
+#### 6. Tests Required
+
+- Run the focused unit tests for the owner of the ID/fingerprint behavior.
+- Run a targeted Bandit scan for the touched file.
+- If the digest output is persisted or user-visible, test that the previous ID
+  shape is preserved.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+block_id = "h:" + hashlib.sha1(heading.encode("utf-8")).hexdigest()[:16]
+```
+
+Correct:
+
+```python
+block_id = (
+    "h:" + hashlib.sha1(heading.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+)
+```
+
+### Scenario: Dynamic SQL Identifier Boundaries
+
+#### 1. Scope / Trigger
+
+- Trigger: building SQL that contains dynamic table names, column names,
+  `ORDER BY` directions, optional `WHERE` fragments, or `SET` clauses.
+- SQLite parameter binding only protects values. Identifiers and SQL keywords
+  must be constrained separately.
+
+#### 2. Signatures
+
+- Identifier validator:
+  `SQLITE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")`.
+- Identifier quote helper: `_quote_sqlite_identifier(name: object) -> str`.
+- Static scan: `pipx run bandit backend/app/adapters/sqlite_store.py -f json`
+  or the touched store file.
+
+#### 3. Contracts
+
+- User-provided values always use `?` parameters.
+- Dynamic identifiers must come from a hard-coded allowlist or pass a strict
+  identifier validator before being quoted.
+- Dynamic SQL fragments such as `ASC`/`DESC`, `WHERE`, or `SET` clauses must be
+  built from internal enums/booleans/known field lists, not request strings.
+- A `# nosec B608` suppression is allowed only on the exact execute line after
+  the dynamic identifier/fragment has been validated nearby.
+
+#### 4. Validation & Error Matrix
+
+- Raw user value interpolated into SQL -> reject; use a bound parameter.
+- Table/column name from sqlite metadata or config -> validate with the helper
+  before interpolation.
+- `ORDER BY {request.query}` -> reject; map request values to hard-coded
+  literals first.
+- `# nosec B608` without a nearby validation comment/helper -> review failure.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: reset code validates a sqlite table name with `_quote_sqlite_identifier`
+  before `DELETE FROM "<table>"`.
+- Base: optional filters append fixed strings such as `"project_id = ?"` while
+  user values remain in the parameter tuple.
+- Bad: `f"DELETE FROM {name}"` where `name` has not been validated and quoted.
+
+#### 6. Tests Required
+
+- Run the store tests that exercise the touched query path.
+- Run Ruff, mypy for the touched store file, and a targeted Bandit scan.
+- Add a unit test for new public query-shaping helpers or any request-driven
+  sort/filter mapping.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+conn.execute(f"DELETE FROM {name}")
+```
+
+Correct:
+
+```python
+quoted_name = _quote_sqlite_identifier(name)
+# Identifier is validated by _quote_sqlite_identifier.
+conn.execute(f"DELETE FROM {quoted_name}")  # nosec B608
+```
+
 ---
 
 ## Testing Requirements
@@ -2061,6 +3059,9 @@ following before approving:
 - Budget test: batch per-agent budget gate rejects before worktree preparation when budget changes after preflight.
 - Budget test: with `MAX_PARALLEL_DISPATCH_PER_BATCH > 1`, a second agent that
   becomes over-budget after the first agent starts does not prepare a worktree.
+- Worktree lineage test: a `dispatch_batch` result keeps the user-facing
+  `agent_key`, but failed/no-op/merged cleanup uses `worktree_key` when the
+  physical swarm worktree key includes the batch suffix.
 - Alias test: `eng` and `dev` share the canonical `engineer` dispatch budget.
 
 #### 7. Wrong vs Correct
@@ -2123,9 +3124,9 @@ await stream_manager.publish_execution_process(task.session_id, task_id=task.id)
 
 ### 2. Signatures
 
-- Loop helper: `run_conductor_loop(..., tools: dict[str, ToolCallable], tool_definitions: list[dict[str, Any]]) -> ConductorLoopResult`.
-- Tool executor: `_execute_tool_uses(tool_uses, tools) -> list[dict[str, Any]]`.
-- Protocol-error helper: `_tool_protocol_error(tool_use, error) -> dict[str, Any]`.
+- Loop helper: `run_conductor_loop(..., tools: Mapping[str, ToolCallable], tool_definitions: list[JsonObject]) -> ConductorLoopResult`.
+- Tool executor: `_execute_tool_uses(tool_uses: list[JsonObject], tools: Mapping[str, ToolCallable]) -> list[JsonObject]`.
+- Protocol-error helper: `_tool_protocol_error(tool_use: JsonObject, error: str) -> JsonObject`.
 - Terminal tool: `finalize_task({ status, answer })`.
 - Pause tool: `request_user_clarification({ question })`.
 
@@ -2459,6 +3460,115 @@ except Exception:
 
 ---
 
+## Scenario: Project Git Lifecycle API Contract
+
+### 1. Scope / Trigger
+
+- Trigger: changing project git sync endpoints, issue abandon/reset endpoints,
+  issue diff behavior, `ProjectService.remote_status()`,
+  `ProjectService.fast_forward_pull()`, or issue worktree cleanup in
+  `WorktreeManager`.
+- These APIs are recovery and trust-boundary operations. They touch the primary
+  repo, issue worktrees, task rows, and frontend sync controls, so they must be
+  deterministic and non-destructive on failure.
+
+### 2. Signatures
+
+- `GET /api/projects/{project_id}/remote-status?fetch=true|false`.
+- `POST /api/projects/{project_id}/pull`.
+- `GET /api/codex/issues/{issue_id}/diff?stat_only=false`.
+- `POST /api/codex/issues/{issue_id}/abandon`.
+- `POST /api/codex/issues/{issue_id}/abandon/finalize`.
+- `POST /api/codex/issues/{issue_id}/reset`.
+- `POST /api/codex/issues/{issue_id}/conductor/restart`.
+
+### 3. Contracts
+
+- Remote status is read-only except for optional `git fetch`; it returns
+  `branch`, `current_branch`, `has_origin`, `dirty`, `behind`, `ahead`,
+  `can_fast_forward`, `fetched`, and `error`.
+- Pull is fast-forward only. It returns success only after the primary repo has
+  advanced with `behind_before` and `new_sha`; refusal returns HTTP `409` with
+  a machine-readable detail dict containing `success=false`, `reason`, and
+  `branch`.
+- Issue diff must detect a missing `git_worktree_path` before invoking git,
+  clear stale issue git fields, save the issue, and return an empty diff payload
+  with `worktree_missing=true`.
+- Abandon is soft by default: it marks `git_merge_status="abandoned"` but keeps
+  `git_worktree_path` and the on-disk worktree so the user can inspect or undo.
+- Abandon finalize is the destructive cleanup step: it removes the issue
+  worktree best-effort and then clears `git_worktree_path`.
+- Issue reset must check that the project repo path exists before deleting
+  tasks, branches, or worktrees. On success it deletes issue tasks, removes the
+  old issue worktree/branch via `cleanup_issue_worktree_for_reset()`, recreates
+  the deterministic issue worktree, and resets the issue to open requirements
+  state.
+- Conductor restart must perform the same missing-repo guard before creating a
+  workflow graph or starting the loop.
+
+### 4. Validation & Error Matrix
+
+- Store unavailable -> HTTP `503`, detail `SQLite store not available`.
+- Unknown project or issue -> HTTP `404`.
+- Project repo path missing during issue reset/restart -> HTTP `409`, no DB
+  mutation and no workflow graph creation.
+- Pull with no origin, fetch failure, no remote branch, not on default branch,
+  dirty worktree, diverged history, or already up to date -> HTTP `409` with
+  `detail.reason`.
+- Pull fast-forward command failure after preflight -> HTTP `500`.
+- Abandoning an already merged issue -> HTTP `409`.
+- Finalizing an issue that is not abandoned -> HTTP `409`.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a behind, clean default branch reports `can_fast_forward=true`; pull
+  fast-forwards and then remote status reports `behind=0`.
+- Good: a deleted issue worktree makes diff return empty data and marks the
+  issue stale git fields as `null` instead of crashing with `FileNotFoundError`.
+- Base: soft abandon keeps the worktree path and directory; finalize removes
+  them.
+- Bad: reset deletes tasks before confirming the project repo exists.
+- Bad: pull stashes or merges dirty/diverged local work instead of refusing.
+
+### 6. Tests Required
+
+- API tests for remote status: up to date, behind/can fast-forward, no origin,
+  and unknown project.
+- API tests for pull: success, already up to date, dirty repo, and diverged
+  repo.
+- API test: missing issue worktree diff returns `worktree_missing=true` and
+  clears stale issue git fields.
+- API test: soft abandon keeps `git_worktree_path` and the directory; finalize
+  clears the path and removes the directory.
+- API test: reset with missing project repo returns `409` and leaves issue/task
+  state unchanged.
+- API test: reset recreates the issue worktree from the deterministic branch and
+  removes old generated files.
+- API test: conductor restart with missing project repo returns `409` and does
+  not create a graph.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+await worktree_manager.cleanup_issue_worktree(project, issue)
+issue.git_merge_status = "abandoned"
+issue.git_worktree_path = None
+```
+
+Correct:
+
+```python
+issue.git_merge_status = "abandoned"
+await store.save_codex_issue(issue)
+# Later, only on explicit finalize:
+await worktree_manager.cleanup_issue_worktree(project, issue)
+issue.git_worktree_path = None
+```
+
+---
+
 ## Scenario: Operations Engineer Startup-Script Task Contract
 
 ### 1. Scope / Trigger
@@ -2608,12 +3718,16 @@ await event_bus.append(
 > `batch_key` so concurrent `dispatch_batch` calls for the same issue and role
 > never share a swarm worktree. Subagent completion results must not override
 > backend-recorded lineage fields (`agent_key`, `branch`, `worktree_path`) used
-> for merge candidates. If `merge_agent_worktrees()` raises, the tool result
-> must report `merge_status="error"` and include `merge_error`; never collapse a
-> merge infrastructure failure into `noop` or copy that claims merge success.
-> If a batch coroutine is cancelled after preparing a per-agent worktree, it
-> must preserve cancellation semantics while still cleaning that prepared
-> worktree in `finally`.
+> for merge candidates. Cleanup is physical, not display-oriented: failed
+> dispatches, no-op merges, and successful merges must call
+> `cleanup_agent_worktree()` with `worktree_key` when present, while returned
+> tool payloads and conflict reports keep the user-facing `agent_key`. If
+> `merge_agent_worktrees()` raises, the tool result must report
+> `merge_status="error"` and include `merge_error`; never collapse a merge
+> infrastructure failure into `noop` or copy that claims merge success. If a
+> batch coroutine is cancelled after preparing a per-agent worktree, it must
+> preserve cancellation semantics while still cleaning that prepared worktree in
+> `finally` using the physical worktree key.
 
 > Specialist child completion addendum: `workflow_scheduler.on_task_completed()` must route every terminal `specialist_child` status through `SpecialistOrchestrator.complete_specialist_request()`. Scheduler-local specialist resume logic is forbidden because it bypasses the parent `blocked_by_help_id == specialist:<child_id>` stale-child guard. Failed, error, cancelled/canceled, and killed specialist children must clear the current parent lock and move the parent to `ready_to_resume` rather than auto-retrying the specialist node.
 

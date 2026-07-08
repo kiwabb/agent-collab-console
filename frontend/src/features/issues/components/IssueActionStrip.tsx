@@ -18,16 +18,10 @@ export function IssueActionStrip({
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-start gap-3">
           <span className="flex size-9 items-center justify-center rounded-2xl bg-brand/10 text-brand">
-            {action.id === "review_qa" ? (
-              <ShieldCheck size={17} />
-            ) : (
-              <Play size={17} />
-            )}
+            {action.id === "review_qa" ? <ShieldCheck size={17} /> : <Play size={17} />}
           </span>
           <div>
-            <div className="text-sm font-semibold text-foreground">
-              {action.label}
-            </div>
+            <div className="text-sm font-semibold text-foreground">{action.label}</div>
             <div className="mt-0.5 text-xs text-text-muted">
               {action.disabledReason || action.detail}
             </div>

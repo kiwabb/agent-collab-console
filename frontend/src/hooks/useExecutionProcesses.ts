@@ -1,6 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from "react";
 import { applyExecutionProcessPatch } from "@/lib/applyExecutionProcessPatch";
 import { getGlobalEventsStreamUrl } from "@/lib/api/health";
 import { getExecutionProcesses } from "@/lib/api/tasks";
@@ -8,6 +17,11 @@ import { getWorkspaceStreamUrl } from "@/lib/api/workspaces";
 import type { ExecutionProcessesState, ExecutionProcess, LogEvent } from "@/lib/types";
 import type { BusEvent } from "@/contexts/ExecutionProcessesContext";
 import { useWorkbenchStore } from "@/store/workbenchStore";
+
+import {
+  parseGlobalEventsFrame,
+  parseWorkspaceEventsFrame,
+} from "./executionProcessesStreamFrames";
 
 function createEmptyExecutionProcesses(): ExecutionProcessesState {
   return { execution_processes: {} };
@@ -26,7 +40,10 @@ interface UseExecutionProcessesResult {
 
 const LAST_EVENT_ID_KEY = "execution-processes:last-event-id";
 
-export function useExecutionProcesses(workspaceId: string | null, onEvent?: (event: LogEvent) => void): UseExecutionProcessesResult {
+export function useExecutionProcesses(
+  workspaceId: string | null,
+  onEvent?: (event: LogEvent) => void,
+): UseExecutionProcessesResult {
   const [data, setData] = useState<ExecutionProcessesState>(createEmptyExecutionProcesses);
   const [lastEvent, setLastEvent] = useState<BusEvent | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -52,21 +69,24 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
     onEventRef.current = onEvent;
   }, [onEvent]);
 
-  const scheduleReconnect = useCallback((
-    attemptRef: MutableRefObject<number>,
-    timerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
-    bump: Dispatch<SetStateAction<number>>,
-  ) => {
-    if (timerRef.current) return;
-    const attempt = attemptRef.current;
-    const baseDelay = Math.min(8000, 200 * Math.pow(2, attempt));
-    const jitter = Math.floor(Math.random() * 250);
-    const delay = baseDelay + jitter;
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      bump((n) => n + 1);
-    }, delay);
-  }, []);
+  const scheduleReconnect = useCallback(
+    (
+      attemptRef: MutableRefObject<number>,
+      timerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
+      bump: Dispatch<SetStateAction<number>>,
+    ) => {
+      if (timerRef.current) return;
+      const attempt = attemptRef.current;
+      const baseDelay = Math.min(8000, 200 * Math.pow(2, attempt));
+      const jitter = Math.floor(Math.random() * 250);
+      const delay = baseDelay + jitter;
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        bump((n) => n + 1);
+      }, delay);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -96,33 +116,28 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
         };
 
         ws.onmessage = (event) => {
-          try {
-            const envelope = JSON.parse(String(event.data)) as {
-              v: number;
-              ts: string;
-              event_id: string;
-              type: string;
-              payload: Record<string, unknown>;
-            };
-            if (envelope.type === "ping") {
-              ws.send("pong");
-              return;
-            }
-            const nextEvent = { ...(envelope.payload ?? {}), type: envelope.type } as BusEvent;
-            if (envelope.type === "resume_gap") {
-              lastSeenEventIdRef.current = null;
-              window.sessionStorage.removeItem(LAST_EVENT_ID_KEY);
-              setResumeGapCount((count) => count + 1);
-            } else if (envelope.event_id) {
-              lastSeenEventIdRef.current = envelope.event_id;
-              window.sessionStorage.setItem(LAST_EVENT_ID_KEY, envelope.event_id);
-            }
-            setLastEvent(nextEvent);
-            useWorkbenchStore.getState().setLastEvent(nextEvent);
-          } catch (err) {
-            console.error("Failed to process global event stream message:", err);
-            setError("Failed to process event stream update");
+          const frame = parseGlobalEventsFrame(event.data);
+          if (frame.kind === "ping") {
+            ws.send("pong");
+            return;
           }
+          if (frame.kind === "malformed") {
+            console.error("Failed to process global event stream message:", event.data);
+            setError("Failed to process event stream update");
+            return;
+          }
+
+          const nextEvent = frame.event;
+          if (nextEvent.type === "resume_gap") {
+            lastSeenEventIdRef.current = null;
+            window.sessionStorage.removeItem(LAST_EVENT_ID_KEY);
+            setResumeGapCount((count) => count + 1);
+          } else if (frame.eventId) {
+            lastSeenEventIdRef.current = frame.eventId;
+            window.sessionStorage.setItem(LAST_EVENT_ID_KEY, frame.eventId);
+          }
+          setLastEvent(nextEvent);
+          useWorkbenchStore.getState().setLastEvent(nextEvent);
         };
 
         ws.onclose = (evt) => {
@@ -238,45 +253,38 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
         };
 
         ws.onmessage = (event) => {
-          try {
-            // Server pings the socket with the literal string "pong" as a
-            // keep-alive — not JSON. Skip those before attempting parse so
-            // we don't spam the console with SyntaxError every 30s.
-            const raw = event.data as string;
-            if (typeof raw === "string" && (raw === "pong" || raw === "ping")) {
-              return;
-            }
-            const msg = JSON.parse(raw) as {
-              JsonPatch?: unknown[];
-              Events?: LogEvent[];
-              Ready?: boolean;
-              finished?: boolean
-            };
+          const frame = parseWorkspaceEventsFrame(event.data);
+          if (frame.kind === "control") return;
+          if (frame.kind === "malformed") {
+            console.error("Failed to process WebSocket message:", event.data);
+            setError("Failed to process stream update");
+            return;
+          }
 
-            if (msg.JsonPatch) {
-              const patches = msg.JsonPatch;
+          try {
+            if (frame.patches) {
               const current = dataRef.current;
 
-              if (!patches.length || !current) return;
+              if (!frame.patches.length || !current) return;
 
-              const next = applyExecutionProcessPatch(current, patches as Parameters<typeof applyExecutionProcessPatch>[1]);
+              const next = applyExecutionProcessPatch(current, frame.patches);
               dataRef.current = next;
               setData(next);
               useWorkbenchStore.getState().setExecutionProcesses(next.execution_processes);
             }
 
-            if (msg.Events) {
-              msg.Events.forEach((evt) => {
+            if (frame.events) {
+              frame.events.forEach((evt) => {
                 if (onEventRef.current) onEventRef.current(evt);
               });
             }
 
-            if (msg.Ready) {
+            if (frame.ready) {
               setIsInitialized(true);
               setError(null);
             }
 
-            if (msg.finished) {
+            if (frame.finished) {
               finishedRef.current = true;
               ws.close(1000, "finished");
               workspaceWsRef.current = null;
@@ -294,11 +302,7 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
         ws.onclose = (evt) => {
           workspaceWsRef.current = null;
 
-          if (
-            cancelled ||
-            finishedRef.current ||
-            (evt?.code === 1000 && evt?.wasClean)
-          ) {
+          if (cancelled || finishedRef.current || (evt?.code === 1000 && evt?.wasClean)) {
             return;
           }
 
@@ -306,7 +310,11 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
           if (!dataRef.current && workspaceRetryAttemptsRef.current > 6) {
             setError("Connection failed");
           }
-          scheduleReconnect(workspaceRetryAttemptsRef, workspaceRetryTimerRef, setWorkspaceRetryNonce);
+          scheduleReconnect(
+            workspaceRetryAttemptsRef,
+            workspaceRetryTimerRef,
+            setWorkspaceRetryNonce,
+          );
         };
 
         workspaceWsRef.current = ws;
@@ -316,7 +324,11 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
         }
         console.error("Failed to open WebSocket stream:", error);
         workspaceRetryAttemptsRef.current += 1;
-        scheduleReconnect(workspaceRetryAttemptsRef, workspaceRetryTimerRef, setWorkspaceRetryNonce);
+        scheduleReconnect(
+          workspaceRetryAttemptsRef,
+          workspaceRetryTimerRef,
+          setWorkspaceRetryNonce,
+        );
       }
     }
 
@@ -360,8 +372,20 @@ export function useExecutionProcesses(workspaceId: string | null, onEvent?: (eve
   const executionProcesses = useMemo(() => {
     const executionProcessesById = data.execution_processes || {};
     return Object.values(executionProcessesById).sort((a, b) => {
-      const aTime = Date.parse((a as ExecutionProcess).created_at || (a as ExecutionProcess).started_at || (a as ExecutionProcess).updated_at || "") || 0;
-      const bTime = Date.parse((b as ExecutionProcess).created_at || (b as ExecutionProcess).started_at || (b as ExecutionProcess).updated_at || "") || 0;
+      const aTime =
+        Date.parse(
+          (a as ExecutionProcess).created_at ||
+            (a as ExecutionProcess).started_at ||
+            (a as ExecutionProcess).updated_at ||
+            "",
+        ) || 0;
+      const bTime =
+        Date.parse(
+          (b as ExecutionProcess).created_at ||
+            (b as ExecutionProcess).started_at ||
+            (b as ExecutionProcess).updated_at ||
+            "",
+        ) || 0;
       return bTime - aTime;
     });
   }, [data.execution_processes]);

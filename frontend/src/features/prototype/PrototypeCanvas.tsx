@@ -2,11 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import {
-  deletePrototype,
-  getPrototypeStreamUrl,
-  getPrototypeVersion,
-} from "@/lib/api/prototypes";
+import { deletePrototype, getPrototypeStreamUrl, getPrototypeVersion } from "@/lib/api/prototypes";
 import type { Prototype, PrototypeVersion } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { useToast } from "@/components/ui/toast";
@@ -17,6 +13,7 @@ import { Loader } from "@/components/ui/loader";
 import { cn } from "@/lib/utils";
 
 import { PreviewFrame } from "./PreviewFrame";
+import { parseSseRecord, readSseNumber, readSseString } from "./prototypeStreamEvents";
 
 interface Props {
   projectId: string;
@@ -72,9 +69,7 @@ export function PrototypeCanvas({
 
   const [iteration, setIteration] = useState("");
   const [stream, setStream] = useState<StreamState>(INITIAL_STREAM);
-  const [activeVersion, setActiveVersion] = useState<number>(
-    prototype.current_version,
-  );
+  const [activeVersion, setActiveVersion] = useState<number>(prototype.current_version);
   const [historicalHtml, setHistoricalHtml] = useState<string | null>(null);
   const [historicalLoading, setHistoricalLoading] = useState(false);
 
@@ -152,57 +147,41 @@ export function PrototypeCanvas({
       const source = new EventSource(url);
       sourceRef.current = source;
       source.addEventListener("meta", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data) as { model?: string };
-          setStream((s) => ({ ...s, model: data.model ?? s.model }));
-        } catch {
-          // Tolerate malformed meta — model stays null, otherwise harmless.
-        }
+        const data = parseSseRecord(ev);
+        if (!data) return;
+        const model = readSseString(data, "model");
+        setStream((s) => ({ ...s, model: model ?? s.model }));
       });
       source.addEventListener("delta", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data) as { chunk?: string };
-          if (data.chunk) {
-            setStream((s) => ({ ...s, streamingHtml: s.streamingHtml + data.chunk }));
-          }
-        } catch {
-          // Drop malformed chunk; stream continues.
+        const data = parseSseRecord(ev);
+        if (!data) return;
+        const chunk = readSseString(data, "chunk");
+        if (chunk) {
+          setStream((s) => ({ ...s, streamingHtml: s.streamingHtml + chunk }));
         }
       });
       source.addEventListener("done", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data) as { version_no: number };
-          source.close();
-          if (sourceRef.current === source) sourceRef.current = null;
-          setStream((s) => ({ ...s, streaming: false }));
-          setActiveVersion(data.version_no);
-          setHistoricalHtml(null); // clear stale view; useEffect reloads
-          onVersionsChanged();
-        } catch {
-          source.close();
-          if (sourceRef.current === source) sourceRef.current = null;
-          setStream((s) => ({ ...s, streaming: false }));
-        }
+        const data = parseSseRecord(ev);
+        const versionNo = data ? readSseNumber(data, "version_no") : null;
+        source.close();
+        if (sourceRef.current === source) sourceRef.current = null;
+        setStream((s) => ({ ...s, streaming: false }));
+        if (versionNo === null) return;
+        setActiveVersion(versionNo);
+        setHistoricalHtml(null); // clear stale view; useEffect reloads
+        onVersionsChanged();
       });
       source.addEventListener("error", (ev) => {
         // EventSource fires `error` both on transport failures and on
         // custom server-side `event: error` messages. We try to parse
         // `data`; if there's no payload we assume transport and just stop.
-        try {
-          const messageEvent = ev as MessageEvent;
-          if (messageEvent && typeof messageEvent.data === "string" && messageEvent.data) {
-            const data = JSON.parse(messageEvent.data) as { message?: string };
-            setStream((s) => ({
-              ...s,
-              streaming: false,
-              errorMessage: data.message ?? "stream error",
-            }));
-          } else {
-            setStream((s) => ({ ...s, streaming: false, errorMessage: null }));
-          }
-        } catch {
-          setStream((s) => ({ ...s, streaming: false, errorMessage: null }));
-        }
+        const data = parseSseRecord(ev);
+        const message = data ? readSseString(data, "message") : null;
+        setStream((s) => ({
+          ...s,
+          streaming: false,
+          errorMessage: data ? (message ?? "stream error") : null,
+        }));
         source.close();
         if (sourceRef.current === source) sourceRef.current = null;
       });
@@ -236,9 +215,7 @@ export function PrototypeCanvas({
     }
   }, [prototype.id, onPrototypeDeleted, addToast, t]);
 
-  const displayHtml = stream.streaming
-    ? stream.streamingHtml
-    : historicalHtml ?? "";
+  const displayHtml = stream.streaming ? stream.streamingHtml : (historicalHtml ?? "");
   const previewKey = stream.streaming ? "streaming" : `v${activeVersion}`;
 
   return (
@@ -328,10 +305,7 @@ export function PrototypeCanvas({
       </footer>
 
       {orderedVersions.length > 0 && (
-        <nav
-          aria-label={t("prototype.versionsLabel")}
-          className="flex flex-wrap gap-2"
-        >
+        <nav aria-label={t("prototype.versionsLabel")} className="flex flex-wrap gap-2">
           {orderedVersions.map((v) => (
             <button
               key={v.id}

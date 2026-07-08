@@ -42,9 +42,7 @@ export function AttentionRail({ items }: { items: AttentionItem[] }) {
                 <span className="block truncate text-[12px] font-semibold text-foreground">
                   {item.title}
                 </span>
-                <span className="block truncate text-[10px] text-text-muted">
-                  {item.detail}
-                </span>
+                <span className="block truncate text-[10px] text-text-muted">{item.detail}</span>
               </span>
             </Link>
           );

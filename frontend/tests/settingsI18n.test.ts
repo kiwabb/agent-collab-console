@@ -1,15 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readCompactSource as readSource } from "./sourceTestUtils";
 
 import { getDictionaryValue } from "../src/lib/i18n";
-
-const SRC_ROOT = join(process.cwd(), "src");
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
 
 test("settings views use i18n keys for newly added settings copy", () => {
   const page = readSource("features/settings/SettingsPage.tsx");
@@ -68,8 +61,14 @@ test("settings views use i18n keys for newly added settings copy", () => {
 
 test("settings translation keys are available in English", () => {
   assert.equal(getDictionaryValue("en-US", "settings.agents"), "Agent Catalog");
-  assert.equal(getDictionaryValue("en-US", "settings.agentsDesc"), "Browse managed workflow roles, predefined specialists, and custom agents available to Conductor.");
-  assert.equal(getDictionaryValue("en-US", "settings.runtimeLoadFailed"), "Failed to load runtime catalog");
+  assert.equal(
+    getDictionaryValue("en-US", "settings.agentsDesc"),
+    "Browse managed workflow roles, predefined specialists, and custom agents available to Conductor.",
+  );
+  assert.equal(
+    getDictionaryValue("en-US", "settings.runtimeLoadFailed"),
+    "Failed to load runtime catalog",
+  );
   assert.equal(getDictionaryValue("en-US", "settings.saveFailed"), "Save failed");
   assert.equal(getDictionaryValue("en-US", "settings.state.on"), "ON");
   assert.equal(getDictionaryValue("en-US", "settings.refresh"), "Refresh");
@@ -78,8 +77,14 @@ test("settings translation keys are available in English", () => {
   assert.equal(getDictionaryValue("en-US", "settings.agentTier.specialist.title"), "Specialists");
   assert.equal(getDictionaryValue("en-US", "settings.agentTier.custom.title"), "Custom agents");
   assert.equal(getDictionaryValue("en-US", "settings.builtIn"), "built-in");
-  assert.equal(getDictionaryValue("en-US", "settings.agentRole.managed.architect.name"), "Architect");
-  assert.equal(getDictionaryValue("en-US", "settings.agentRole.specialist.code_reviewer.name"), "Code Reviewer");
+  assert.equal(
+    getDictionaryValue("en-US", "settings.agentRole.managed.architect.name"),
+    "Architect",
+  );
+  assert.equal(
+    getDictionaryValue("en-US", "settings.agentRole.specialist.code_reviewer.name"),
+    "Code Reviewer",
+  );
   assert.equal(getDictionaryValue("en-US", "runtime.catalog.validate"), "Validate");
   assert.equal(getDictionaryValue("en-US", "runtime.catalog.test"), "Test");
 });
@@ -87,7 +92,10 @@ test("settings translation keys are available in English", () => {
 test("agent catalog loading state uses dispatch semantic motion", () => {
   const agents = readSource("features/workflow/AgentCatalogPanel.tsx");
 
-  assert.match(agents, /data-density=\{loading \? "agent-catalog-refresh-dispatch" : "agent-catalog-refresh"\}/);
+  assert.match(
+    agents,
+    /data-density=\{loading \? "agent-catalog-refresh-dispatch" : "agent-catalog-refresh"\}/,
+  );
   assert.match(agents, /loading && "motion-essential"/);
   assert.match(agents, /data-density="agent-catalog-dispatch-loading"/);
   assert.match(agents, /<AgentThinkingIndicator phase="dispatching" size=\{18\}/);

@@ -312,6 +312,8 @@ def test_architect_persists_expected_files_in_implementation_plan(architect_work
         "backend/app/cart_service.py",
     ]
 
+    assert task.workspace_path is not None
+    assert task.issue_id is not None
     issue_root = Path(task.workspace_path) / "issues" / task.issue_id
     impl_plan_path = issue_root / "architect" / "implementation_plan.json"
     assert impl_plan_path.exists()
@@ -372,6 +374,8 @@ def test_architect_implementation_plan_defaults_expected_files_to_empty(
 
     assert design.implementation_tasks[0].expected_files == []
 
+    assert task.workspace_path is not None
+    assert task.issue_id is not None
     issue_root = Path(task.workspace_path) / "issues" / task.issue_id
     impl_plan_path = issue_root / "architect" / "implementation_plan.json"
     plan = json.loads(impl_plan_path.read_text(encoding="utf-8"))

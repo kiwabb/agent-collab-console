@@ -138,6 +138,7 @@ def test_delete_custom_agent(client):
     created = client.post("/api/agents", json=payload).json()
     resp = client.delete(f"/api/agents/{created['id']}")
     assert resp.status_code == 204
+    assert resp.content == b""
     assert client.get(f"/api/agents/{created['id']}").status_code == 404
 
 

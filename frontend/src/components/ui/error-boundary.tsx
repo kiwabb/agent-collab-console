@@ -75,9 +75,13 @@ export class ErrorBoundary extends Component<Props, State> {
               {this.state.showStack && (
                 <div className="text-left">
                   <div className="font-mono text-[10px] text-error/80 bg-surface-raised rounded-lg p-3 overflow-x-auto border border-error/20">
-                    <div className="font-bold mb-1">{errorToShow.name}: {errorToShow.message}</div>
+                    <div className="font-bold mb-1">
+                      {errorToShow.name}: {errorToShow.message}
+                    </div>
                     {errorToShow.stack && (
-                      <pre className="whitespace-pre-wrap text-[9px] opacity-70 leading-relaxed max-h-48 overflow-y-auto">{errorToShow.stack}</pre>
+                      <pre className="whitespace-pre-wrap text-[9px] opacity-70 leading-relaxed max-h-48 overflow-y-auto">
+                        {errorToShow.stack}
+                      </pre>
                     )}
                   </div>
                 </div>
@@ -89,7 +93,7 @@ export class ErrorBoundary extends Component<Props, State> {
               onClick={this.handleRetry}
               className={cn(
                 "flex items-center gap-2 px-4 py-2 rounded-lg bg-error/10 text-error text-xs font-bold",
-                "border border-error/20 hover:bg-error/20 transition-all active:scale-[0.98]"
+                "border border-error/20 hover:bg-error/20 transition-all active:scale-[0.98]",
               )}
             >
               <RotateCcw size={14} />
@@ -163,7 +167,7 @@ export function AsyncBoundary({
             onClick={onRetry}
             className={cn(
               "flex items-center gap-2 px-4 py-2 rounded-lg bg-error/10 text-error text-xs font-bold",
-              "border border-error/20 hover:bg-error/20 transition-all active:scale-[0.98]"
+              "border border-error/20 hover:bg-error/20 transition-all active:scale-[0.98]",
             )}
           >
             <RotateCcw size={12} />

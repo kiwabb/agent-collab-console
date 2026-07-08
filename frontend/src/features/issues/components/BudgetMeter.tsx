@@ -106,12 +106,7 @@ export function BudgetMeter({ status, loading }: Props) {
           {t("issue.side.budget")} · {meterBadge(derived, t)}
         </span>
         {status && status.has_ceiling && derived.percent != null && (
-          <span
-            className={cn(
-              "font-mono text-[11px] font-black tabular-nums",
-              derived.toneClass,
-            )}
-          >
+          <span className={cn("font-mono text-[11px] font-black tabular-nums", derived.toneClass)}>
             {derived.percent}%
           </span>
         )}

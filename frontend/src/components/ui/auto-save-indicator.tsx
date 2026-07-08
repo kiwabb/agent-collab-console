@@ -1,36 +1,37 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { Check, AlertCircle } from "lucide-react"
-import { cn } from "@/lib/utils"
-import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator"
-import { useI18n } from "@/providers/I18nProvider"
+import { useEffect, useState } from "react";
+import { Check, AlertCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
+import { useI18n } from "@/providers/I18nProvider";
 
-type SaveStatus = "idle" | "saving" | "saved" | "error"
+type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 interface AutoSaveIndicatorProps {
-  status: SaveStatus
-  error?: string | null
-  className?: string
+  status: SaveStatus;
+  error?: string | null;
+  className?: string;
 }
 
 export function AutoSaveIndicator({ status, error, className }: AutoSaveIndicatorProps) {
-  const { t } = useI18n()
-  const [visible, setVisible] = useState(false)
+  const { t } = useI18n();
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     if (status === "saving") {
-      setVisible(true)
+      setVisible(true);
     } else if (status === "saved") {
-      setVisible(true)
-      const timer = setTimeout(() => setVisible(false), 2000)
-      return () => clearTimeout(timer)
+      setVisible(true);
+      const timer = setTimeout(() => setVisible(false), 2000);
+      return () => clearTimeout(timer);
     } else if (status === "error") {
-      setVisible(true)
+      setVisible(true);
     }
-  }, [status])
+    return undefined;
+  }, [status]);
 
-  if (!visible && status === "idle") return null
+  if (!visible && status === "idle") return null;
 
   return (
     <div
@@ -41,7 +42,7 @@ export function AutoSaveIndicator({ status, error, className }: AutoSaveIndicato
         status === "saved" && "text-success",
         status === "error" && "text-error",
         visible ? "opacity-100" : "opacity-0",
-        className
+        className,
       )}
     >
       {status === "saving" && (
@@ -63,5 +64,5 @@ export function AutoSaveIndicator({ status, error, className }: AutoSaveIndicato
         </>
       )}
     </div>
-  )
+  );
 }

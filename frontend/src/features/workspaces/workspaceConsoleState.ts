@@ -18,9 +18,10 @@ const ROLE_LABELS: Record<string, string> = {
   qa: "QA",
 };
 
-export function deriveWorkspaceConsoleDefaultRuntime(
-  catalog: RuntimeCatalog | null,
-): { executor: string; model: string | null } {
+export function deriveWorkspaceConsoleDefaultRuntime(catalog: RuntimeCatalog | null): {
+  executor: string;
+  model: string | null;
+} {
   const executor = catalog?.executors.find((candidate) => candidate.enabled) ?? null;
   return {
     executor: executor?.id ?? "codex",
@@ -46,8 +47,7 @@ export function pickActiveIssueTask(
 ): CodexTask | null {
   if (!issue || tasks.length === 0) return null;
 
-  const expectedRole =
-    PHASE_CONFIG[(issue.current_phase || "requirements") as Phase]?.role ?? null;
+  const expectedRole = PHASE_CONFIG[(issue.current_phase || "requirements") as Phase]?.role ?? null;
 
   let best: CodexTask | null = null;
   let bestRank: [number, number, number] = [-1, -1, -1];
@@ -62,9 +62,9 @@ export function pickActiveIssueTask(
       ),
     ];
     if (
-      rank[0] > bestRank[0]
-      || (rank[0] === bestRank[0] && rank[1] > bestRank[1])
-      || (rank[0] === bestRank[0] && rank[1] === bestRank[1] && rank[2] >= bestRank[2])
+      rank[0] > bestRank[0] ||
+      (rank[0] === bestRank[0] && rank[1] > bestRank[1]) ||
+      (rank[0] === bestRank[0] && rank[1] === bestRank[1] && rank[2] >= bestRank[2])
     ) {
       best = task;
       bestRank = rank;

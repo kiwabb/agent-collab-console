@@ -23,9 +23,10 @@ background task via :mod:`benchmark.job`.
 
 from __future__ import annotations  # noqa: I001
 
-from typing import Any
+from typing import NotRequired, TypedDict
 
 from fastapi import HTTPException
+from pydantic import BaseModel, Field
 
 from .aggregations import diff
 from .correlation import CalibrationSet, calibration_report
@@ -43,11 +44,12 @@ from .job import (
 from .runner import (
     BenchmarkRunner,
     FakeExecutor,
+    IssueExecutor,
     RealConductorExecutor,
     RunOptions,
 )
 from .scorers_impl import default_registry
-from .store import BenchmarkStore, SqliteStore
+from .store import BenchmarkEpoch, BenchmarkRun, BenchmarkStore, SqliteStore
 
 
 DEFAULT_DB_PATH = "benchmark.db"
@@ -68,11 +70,9 @@ def get_store() -> BenchmarkStore:
     anyway, so explicit close is not strictly needed).
     """
     global _store
-    try:
-        return _store  # type: ignore[name-defined]
-    except NameError:
+    if _store is None:
         _store = SqliteStore(DEFAULT_DB_PATH)
-        return _store
+    return _store
 
 
 # --- store + job registry (module-singletons) ----------------------------
@@ -129,17 +129,7 @@ class TriggerRunBody:
     dry_run: bool = False
 
 
-# A second, properly-Pydantic version for the FastAPI body.
-# Defined here so the route in app/interfaces/api.py can
-# reference it via import.
-try:
-    from pydantic import BaseModel as _BaseModel, Field as _Field  # noqa: I001
-except ImportError:  # pragma: no cover — pydantic is a hard dep
-    _BaseModel = object  # type: ignore[assignment,misc]
-    _Field = lambda default=None, **_: default  # type: ignore[assignment]  # noqa: E731
-
-
-class TriggerRunRequest(_BaseModel):  # type: ignore[misc]
+class TriggerRunRequest(BaseModel):
     """Pydantic request body for POST /codex/benchmark/runs.
 
     ``epochs`` is gated at the Pydantic layer (``ge=1``) so the
@@ -149,7 +139,7 @@ class TriggerRunRequest(_BaseModel):  # type: ignore[misc]
     """
 
     label: str | None = None
-    epochs: int = _Field(3, ge=1)
+    epochs: int = Field(3, ge=1)
     fixture_ids: list[str] | None = None
     is_baseline: bool = False
     max_budget_usd: float | None = None
@@ -158,12 +148,119 @@ class TriggerRunRequest(_BaseModel):  # type: ignore[misc]
     dry_run: bool = False
 
 
+class TriggerRunPayload(TypedDict, total=False):
+    label: str | None
+    epochs: int
+    fixture_ids: list[str] | None
+    is_baseline: bool
+    max_budget_usd: float | None
+    project_id: str | None
+    workspace_id: str | None
+    dry_run: bool
+
+
+class TriggerRunResponse(TypedDict):
+    job_id: str
+    status: str
+    status_url: str
+
+
+class SerializedRun(TypedDict):
+    id: str
+    created_at: str
+    label: str | None
+    orchestrator_version: str | None
+    epoch_count: int
+    fixture_ids: list[str]
+    is_baseline: bool
+    status: str
+    notes: str | None
+    aggregate_pass_at_1: float | None
+    aggregate_pass_at_1_stderr: float | None
+    cost_total_usd: float | None
+    cost_per_issue_usd: float | None
+    total_input_tokens: int | None
+    total_output_tokens: int | None
+    total_duration_s: float | None
+    n_epochs: int | None
+
+
+class ListRunsResponse(TypedDict):
+    runs: list[SerializedRun]
+
+
+class BaselineResponse(TypedDict):
+    baseline: SerializedRun | None
+
+
+class SetBaselineResponse(TypedDict):
+    ok: bool
+    run_id: str
+
+
+class FixtureDiffPayload(TypedDict):
+    fixture_id: str
+    candidate_pass_at_1: float
+    baseline_pass_at_1: float
+    delta: float
+    status: str
+
+
+class BenchmarkDiffPayload(TypedDict):
+    aggregate_delta: float
+    aggregate_status: str
+    candidate_stderr: float
+    baseline_stderr: float
+    regressed_fixtures: list[str]
+    improved_fixtures: list[str]
+    per_fixture: list[FixtureDiffPayload]
+
+
+class RunDiffResponse(TypedDict):
+    candidate: SerializedRun
+    baseline: SerializedRun | None
+    diff: BenchmarkDiffPayload | None
+    note: NotRequired[str]
+
+
+class CalibrationItemResponse(TypedDict):
+    id: str
+    fixture_id: str | None
+    human_score: float
+    judge_score: float | None
+    note: str | None
+
+
+class CalibrationReportResponse(TypedDict):
+    n: int
+    pearson: float | None
+    spearman: float | None
+    floor: float
+    is_calibrated: bool
+    weakest_item: str | None
+    summary: str
+    items: list[CalibrationItemResponse]
+
+
+class JobResponse(TypedDict):
+    id: str
+    kind: str
+    status: str
+    created_at: str
+    started_at: str | None
+    completed_at: str | None
+    result_ref: str | None
+    error: str | None
+    progress: float
+    meta: dict[str, object]
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
 
 
-async def trigger_run(body: dict[str, Any]) -> dict[str, Any]:
+async def trigger_run(body: TriggerRunPayload) -> TriggerRunResponse:
     """POST /codex/benchmark/runs handler.
 
     Returns 202 with the job id. The actual run proceeds in the
@@ -179,12 +276,6 @@ async def trigger_run(body: dict[str, Any]) -> dict[str, Any]:
     # the module-singleton pattern working.
     from pydantic import ValidationError as _ValidationError
 
-    TriggerRunRequest = globals().get("TriggerRunRequest")
-    if TriggerRunRequest is None:
-        # Defensive — the module-level import failed earlier.
-        from benchmark.api import TriggerRunRequest as _R  # type: ignore
-
-        TriggerRunRequest = _R
     try:
         req = TriggerRunRequest.model_validate(body)
     except _ValidationError as exc:
@@ -211,10 +302,11 @@ async def trigger_run(body: dict[str, Any]) -> dict[str, Any]:
         },
     )
 
-    async def _coro():
+    async def _coro() -> str:
         # Build the executor. Dry-run uses FakeExecutor so
         # the API can be exercised in a dev env without
         # spending on real CLI cycles.
+        executor: IssueExecutor
         if dry_run or not (project_id and workspace_id):
             executor = FakeExecutor()
         else:
@@ -235,7 +327,9 @@ async def trigger_run(body: dict[str, Any]) -> dict[str, Any]:
         )
         return run_row.id
 
-    async def _on_complete(j: Job, _result, _exc) -> None:
+    async def _on_complete(
+        j: Job, _result: object | None, _exc: BaseException | None
+    ) -> None:
         # Re-fetch the latest job from the registry (it may
         # have been mutated by progress callbacks).
         latest = registry.get(j.id) or j
@@ -244,7 +338,9 @@ async def trigger_run(body: dict[str, Any]) -> dict[str, Any]:
             # branch is for cases where the coroutine returned
             # before the wrapper could set it. Unreachable in
             # the current implementation, kept defensive.
-            latest.result_ref = (latest.meta or {}).get("run_id")
+            run_id = latest.meta.get("run_id")
+            if isinstance(run_id, str):
+                latest.result_ref = run_id
 
     # Wrap so we can stamp the run id on the job.
     async def _wrapped() -> str:
@@ -261,7 +357,9 @@ async def trigger_run(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _serialize_run(run, epochs: list | None = None) -> dict[str, Any]:
+def _serialize_run(
+    run: BenchmarkRun, epochs: list[BenchmarkEpoch] | None = None
+) -> SerializedRun:
     return {
         "id": run.id,
         "created_at": run.created_at,
@@ -283,7 +381,7 @@ def _serialize_run(run, epochs: list | None = None) -> dict[str, Any]:
     }
 
 
-def get_run(run_id: str) -> dict[str, Any]:
+def get_run(run_id: str) -> SerializedRun:
     store = get_store()
     run = store.get_run(run_id)
     if run is None:
@@ -292,7 +390,7 @@ def get_run(run_id: str) -> dict[str, Any]:
     return _serialize_run(run, epochs=epochs)
 
 
-def get_run_diff(run_id: str) -> dict[str, Any]:
+def get_run_diff(run_id: str) -> RunDiffResponse:
     store = get_store()
     run = store.get_run(run_id)
     if run is None:
@@ -344,13 +442,13 @@ def get_run_diff(run_id: str) -> dict[str, Any]:
     }
 
 
-def list_runs(*, limit: int = 50) -> dict[str, Any]:
+def list_runs(*, limit: int = 50) -> ListRunsResponse:
     store = get_store()
     runs = store.list_runs()[:limit]
     return {"runs": [_serialize_run(r) for r in runs]}
 
 
-def get_baseline() -> dict[str, Any]:
+def get_baseline() -> BaselineResponse:
     store = get_store()
     baseline = store.get_baseline()
     if baseline is None:
@@ -358,7 +456,7 @@ def get_baseline() -> dict[str, Any]:
     return {"baseline": _serialize_run(baseline, epochs=store.list_epochs(baseline.id))}
 
 
-def set_baseline(run_id: str) -> dict[str, Any]:
+def set_baseline(run_id: str) -> SetBaselineResponse:
     store = get_store()
     run = store.get_run(run_id)
     if run is None:
@@ -372,7 +470,7 @@ def set_baseline(run_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def get_calibration_report(*, floor: float = 0.7) -> dict[str, Any]:
+def get_calibration_report(*, floor: float = 0.7) -> CalibrationReportResponse:
     """GET /codex/benchmark/calibration.
 
     Loads the on-disk calibration set, fills the judge scores
@@ -415,7 +513,7 @@ def get_calibration_report(*, floor: float = 0.7) -> dict[str, Any]:
     }
 
 
-def get_job(job_id: str) -> dict[str, Any]:
+def get_job(job_id: str) -> JobResponse:
     registry = get_registry()
     job = registry.get(job_id)
     if job is None:

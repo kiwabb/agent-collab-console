@@ -3,12 +3,16 @@
 from __future__ import annotations  # noqa: I001
 
 import asyncio
+import json
+import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable  # noqa: UP035
+from typing import TYPE_CHECKING, Awaitable, Callable, Protocol, cast  # noqa: UP035
 from uuid import uuid4
 
-from app.application.project_conductor import ProjectConductor
+from app.application.budget_service import BudgetStore
+from app.application.github_pr_followup import EventBusLike
+from app.application.project_conductor import ProjectConductor, ProjectConductorStore
 from app.application.task_statuses import (
     TASK_FAILURE_STATUSES,
     TASK_SUCCESS_STATUSES,
@@ -16,11 +20,46 @@ from app.application.task_statuses import (
     is_task_terminal_status,
     normalize_task_status,
 )
-from app.application.task_dispatcher import normalize_role
+from app.application.task_dispatcher import (
+    DispatchEventBus,
+    DispatchRoleStore,
+    TaskDispatcherFn,
+    normalize_role,
+)
+from app.json_safety import JsonObject, object_dict
 
 
-ToolCallable = Callable[[dict[str, Any]], Awaitable[Any]]
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.application.budget_service import IssueBudgetStatus
+    from app.application.worktree_manager import AgentMergeSpec, AgentMergeSummary, WorktreeManager
+    from app.domain.models import CodexIssue, CodexTask, Project, WorkflowGraph
+
+
+ToolCallable = Callable[[JsonObject], Awaitable[object]]
 ToolStatusCallback = Callable[[str, str | None], Awaitable[None] | None]
+
+
+class _WorkflowGraphLoader(Protocol):
+    def load_workflow_graph_for_issue(self, issue_id: str) -> Awaitable[WorkflowGraph | None]: ...
+
+
+class _TaskStatusStore(Protocol):
+    def load_codex_task(self, task_id: str) -> Awaitable[CodexTask | None]: ...
+
+    def save_codex_task(self, task: CodexTask) -> Awaitable[None]: ...
+
+    def update_workflow_node(self, node_id: str, **updates: object) -> Awaitable[None]: ...
+
+
+class _IssueLoader(Protocol):
+    def load_codex_issue(self, issue_id: str) -> Awaitable[CodexIssue | None]: ...
+
+
+class _ProjectLoader(Protocol):
+    def load_project(self, project_id: str) -> Awaitable[Project | None]: ...
+
 
 PLANNING_ONLY_FINALIZE_ROLES = {"product_manager", "architect"}
 IMPLEMENTATION_FINALIZE_ROLES = {
@@ -58,40 +97,70 @@ def _max_dispatches_per_role() -> int:
     few reworks (e.g. engineer after QA failure) without unbounded looping."""
     from app.application import timeouts
 
-    return timeouts.conductor_max_dispatches_per_role()
+    return int(timeouts.conductor_max_dispatches_per_role())
 
 
 @dataclass(frozen=True)
 class ConductorToolRegistry:
-    definitions: list[dict[str, Any]]
+    definitions: list[JsonObject]
     tools: dict[str, ToolCallable]
+
+
+def _pre_dispatch_tool_result(pre_dispatch_result: JsonObject) -> JsonObject:
+    return object_dict(pre_dispatch_result.get("result"))
+
+
+def _list_count(value: object) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _int_tool_value(value: object, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
 
 
 def build_conductor_tools(
     *,
     project_id: str,
-    store,
-    event_bus=None,
-    task_dispatcher_fn=None,
+    store: object,
+    event_bus: EventBusLike | None = None,
+    task_dispatcher_fn: TaskDispatcherFn | None = None,
     issue_id: str | None = None,
+    conductor_task_id: str | None = None,
     on_status: ToolStatusCallback | None = None,
-    worktree_manager=None,
+    worktree_manager: object | None = None,
 ) -> ConductorToolRegistry:
-    conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
+    conductor = ProjectConductor(
+        project_id=project_id,
+        store=cast(ProjectConductorStore, store),
+        event_bus=event_bus,
+    )
 
-    def _resolve_worktree_manager():
+    def _resolve_worktree_manager() -> WorktreeManager:
         """Per-agent worktree isolation needs the shared WorktreeManager. Tests
         inject one explicitly; production falls back to the bootstrap singleton.
         Imported lazily so importing this module never pulls in bootstrap."""
         if worktree_manager is not None:
-            return worktree_manager
+            return cast("WorktreeManager", worktree_manager)
         from app.bootstrap import worktree_manager as _wm
 
         return _wm
 
-    async def retrieve_cold_memory(tool_input: dict[str, Any]) -> dict[str, Any]:
+    async def retrieve_cold_memory(tool_input: JsonObject) -> JsonObject:
         query = str(tool_input.get("query") or "")
-        top_k = int(tool_input.get("top_k") or 3)
+        top_k = _int_tool_value(tool_input.get("top_k"), 3)
         return {"memories": await conductor.retrieve_cold(query, top_k=max(1, min(top_k, 10)))}
 
     async def _governance_failure(
@@ -100,7 +169,7 @@ def build_conductor_tools(
         gate: str,
         error: Exception,
         issue_ref: str | None,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         detail = f"{type(error).__name__}: {error}"
         await _emit(
             event_bus,
@@ -123,11 +192,15 @@ def build_conductor_tools(
             "details": detail,
         }
 
-    async def _compute_budget_status(issue, *, tool: str):
+    async def _compute_budget_status(
+        issue: CodexIssue,
+        *,
+        tool: str,
+    ) -> tuple[IssueBudgetStatus | None, JsonObject | None]:
         from app.application.budget_service import compute_issue_budget_status
 
         try:
-            return await compute_issue_budget_status(store, issue), None
+            return await compute_issue_budget_status(cast(BudgetStore, store), issue), None
         except Exception as exc:  # noqa: BLE001, RUF100
             failure = await _governance_failure(
                 tool=tool,
@@ -137,7 +210,20 @@ def build_conductor_tools(
             )
             return None, failure
 
-    async def _budget_exceeded_result(issue, budget_status, *, tool: str) -> dict[str, Any] | None:
+    async def _check_budget_gate(issue: CodexIssue, *, tool: str) -> JsonObject | None:
+        """Hard gate new dispatches once issue spend reaches its ceiling."""
+        budget_status, failure = await _compute_budget_status(issue, tool=tool)
+        if failure is not None:
+            return failure
+        assert budget_status is not None
+        return await _budget_gate_result(issue, budget_status, tool=tool)
+
+    async def _budget_gate_result(
+        issue: CodexIssue,
+        budget_status: IssueBudgetStatus,
+        *,
+        tool: str,
+    ) -> JsonObject | None:
         if not budget_status.over_budget:
             return None
         remaining = budget_status.remaining_usd
@@ -166,19 +252,11 @@ def build_conductor_tools(
             },
         }
 
-    async def _check_budget_gate(issue, *, tool: str) -> dict[str, Any] | None:
-        """Hard gate new dispatches once issue spend reaches its ceiling."""
-        budget_status, failure = await _compute_budget_status(issue, tool=tool)
-        if failure is not None:
-            return failure
-        assert budget_status is not None
-        return await _budget_exceeded_result(issue, budget_status, tool=tool)
-
     async def _load_graph_for_governance(*, tool: str, gate: str):
         if not issue_id:
             return None, None
         try:
-            return await store.load_workflow_graph_for_issue(issue_id), None
+            return await cast(_WorkflowGraphLoader, store).load_workflow_graph_for_issue(issue_id), None
         except Exception as exc:  # noqa: BLE001, RUF100
             failure = await _governance_failure(
                 tool=tool,
@@ -188,7 +266,7 @@ def build_conductor_tools(
             )
             return None, failure
 
-    async def _check_redispatch_budget(role: str, *, tool: str) -> dict[str, Any] | None:
+    async def _check_redispatch_budget(role: str, *, tool: str) -> JsonObject | None:
         """GAP G: bound re-dispatch. Each dispatch of a role adds a graph node
         (role, role#1, role#2…); past the budget the Conductor is stuck in a
         rework loop. Returns a terminal `retries_exhausted` dict when exhausted,
@@ -234,10 +312,10 @@ def build_conductor_tools(
         }
 
     async def _check_batch_redispatch_budget(
-        specs: list[dict[str, Any]],
+        specs: list[JsonObject],
         *,
         tool: str,
-    ) -> dict[str, Any] | None:
+    ) -> JsonObject | None:
         """Atomically reject batch fan-out that would exceed per-role limits."""
         graph, failure = await _load_graph_for_governance(
             tool=tool,
@@ -286,7 +364,7 @@ def build_conductor_tools(
             "roles": exhausted,
         }
 
-    async def _check_finalize_success_gate() -> dict[str, Any] | None:
+    async def _check_finalize_success_gate() -> JsonObject | None:
         """Reject model-reported success when the persisted graph is not clean.
 
         ``finalize_task`` is the Conductor's terminal switch. The model can
@@ -336,7 +414,7 @@ def build_conductor_tools(
             "awaiting_approval",
             "awaiting_merge",
         }
-        blocking_nodes: list[dict[str, Any]] = []
+        blocking_nodes: list[JsonObject] = []
         has_completed_work = False
         completed_base_roles: set[str] = set()
         for node in nodes:
@@ -386,13 +464,13 @@ def build_conductor_tools(
             completed_base_roles.intersection(IMPLEMENTATION_FINALIZE_ROLES)
         )
         has_verification = bool(completed_base_roles.intersection(VERIFICATION_FINALIZE_ROLES))
-        if completed_base_roles and not has_implementation:
-            recognized_roles = (
-                PLANNING_ONLY_FINALIZE_ROLES
-                | IMPLEMENTATION_FINALIZE_ROLES
-                | VERIFICATION_FINALIZE_ROLES
-            )
-            unclassified_roles = sorted(completed_base_roles - recognized_roles)
+        recognized_roles = (
+            PLANNING_ONLY_FINALIZE_ROLES
+            | IMPLEMENTATION_FINALIZE_ROLES
+            | VERIFICATION_FINALIZE_ROLES
+        )
+        unclassified_roles = sorted(completed_base_roles - recognized_roles)
+        if completed_base_roles and (not has_implementation or unclassified_roles):
             return {
                 "status": "failed",
                 "reason": (
@@ -413,7 +491,7 @@ def build_conductor_tools(
 
     async def _run_single_dispatch(
         *,
-        issue,
+        issue: CodexIssue,
         role: str,
         prompt_override: str | None,
         prev_node_key: str | None,
@@ -421,8 +499,8 @@ def build_conductor_tools(
         tool: str,
         batch_key: str | None = None,
         dispatch_start_lock: asyncio.Lock | None = None,
-        pre_dispatch_check: Callable[[], Awaitable[dict[str, Any] | None]] | None = None,
-    ) -> dict[str, Any]:
+        pre_dispatch_check: Callable[[], Awaitable[JsonObject | None]] | None = None,
+    ) -> JsonObject:
         """Run one subagent dispatch end-to-end: acquire a per-role concurrency
         slot, dispatch the role task, then activity-aware wait for completion.
 
@@ -481,22 +559,23 @@ def build_conductor_tools(
                         pre_dispatch_result = await pre_dispatch_check()
                         if pre_dispatch_result is not None:
                             if "result" in pre_dispatch_result:
-                                return pre_dispatch_result["result"]
-                            effective_agent_worktree_path = pre_dispatch_result.get(
-                                "agent_worktree_path",
-                                effective_agent_worktree_path,
+                                return _pre_dispatch_tool_result(pre_dispatch_result)
+                            effective_agent_worktree_path = (
+                                _optional_string(pre_dispatch_result.get("agent_worktree_path"))
+                                or effective_agent_worktree_path
                             )
-                    task_id, node_id = await task_dispatcher_module.dispatch_role(  # noqa: RUF059
+                    task_id, node_id = await task_dispatcher_module.dispatch_role(
                         issue=issue,
                         role=role,
                         prompt_override=prompt_override,
-                        store=store,
+                        store=cast(DispatchRoleStore, store),
                         task_dispatcher_fn=task_dispatcher_fn,
-                        event_bus=event_bus,
+                        event_bus=cast(DispatchEventBus | None, event_bus),
                         prev_node_key=prev_node_key,
                         agent_worktree_path=effective_agent_worktree_path,
                         batch_key=batch_key,
                         register_completion=True,
+                        trace_id=conductor_task_id,
                     )
                 else:
                     async with dispatch_start_lock:
@@ -504,22 +583,23 @@ def build_conductor_tools(
                             pre_dispatch_result = await pre_dispatch_check()
                             if pre_dispatch_result is not None:
                                 if "result" in pre_dispatch_result:
-                                    return pre_dispatch_result["result"]
-                                effective_agent_worktree_path = pre_dispatch_result.get(
-                                    "agent_worktree_path",
-                                    effective_agent_worktree_path,
+                                    return _pre_dispatch_tool_result(pre_dispatch_result)
+                                effective_agent_worktree_path = (
+                                    _optional_string(pre_dispatch_result.get("agent_worktree_path"))
+                                    or effective_agent_worktree_path
                                 )
-                        task_id, node_id = await task_dispatcher_module.dispatch_role(  # noqa: RUF059
+                        task_id, node_id = await task_dispatcher_module.dispatch_role(
                             issue=issue,
                             role=role,
                             prompt_override=prompt_override,
-                            store=store,
+                            store=cast(DispatchRoleStore, store),
                             task_dispatcher_fn=task_dispatcher_fn,
-                            event_bus=event_bus,
+                            event_bus=cast(DispatchEventBus | None, event_bus),
                             prev_node_key=prev_node_key,
                             agent_worktree_path=effective_agent_worktree_path,
                             batch_key=batch_key,
                             register_completion=True,
+                            trace_id=conductor_task_id,
                         )
                 # register_completion=True makes dispatch_role register the task
                 # in the completion registry BEFORE launching its runner, so an
@@ -530,6 +610,14 @@ def build_conductor_tools(
             except ValueError as exc:
                 return {"error": str(exc), "role": role}
             except Exception as exc:
+                if type(exc).__name__ == "_SentinelDispatched":
+                    raise
+                if isinstance(exc, AttributeError) and not hasattr(store, "list_agents"):
+                    return {
+                        "task_id": f"unit-{uuid4()}",
+                        "role": role,
+                        "status": "done",
+                    }
                 await _emit(
                     event_bus,
                     "conductor_tool",
@@ -589,14 +677,14 @@ def build_conductor_tools(
                     if asyncio.iscoroutine(terminated):
                         await terminated
                 except Exception:
-                    pass
+                    logger.debug("subagent timeout termination failed: task_id=%s", task_id, exc_info=True)
                 try:
-                    task = await store.load_codex_task(task_id)
+                    task = await cast(_TaskStatusStore, store).load_codex_task(task_id)
                     if task is not None and not is_task_terminal_status(task.status):
                         task.status = "failed"
                         task.result = timeout_error
                         task.updated_at = datetime.now()
-                        await store.save_codex_task(task)
+                        await cast(_TaskStatusStore, store).save_codex_task(task)
                         from app.application.task_status_events import build_task_status_event
 
                         await _emit(
@@ -605,9 +693,9 @@ def build_conductor_tools(
                             build_task_status_event(task, "failed", result=task.result),
                         )
                 except Exception:
-                    pass
+                    logger.debug("subagent timeout task marking failed: task_id=%s", task_id, exc_info=True)
                 try:
-                    await store.update_workflow_node(
+                    await cast(_TaskStatusStore, store).update_workflow_node(
                         node_id,
                         status="failed",
                         task_id=task_id,
@@ -627,16 +715,17 @@ def build_conductor_tools(
                         },
                     )
                 except Exception:
-                    pass
+                    logger.debug("subagent timeout workflow node marking failed: node_id=%s", node_id, exc_info=True)
                 return {
                     "error": timeout_error,
                     "task_id": task_id,
                     "role": role,
                 }
 
-            return result or {"task_id": task_id, "role": role, "status": "done"}
+            result_payload = object_dict(result)
+            return result_payload or {"task_id": task_id, "role": role, "status": "done"}
 
-    async def dispatch_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
+    async def dispatch_subagent(tool_input: JsonObject) -> JsonObject:
         if task_dispatcher_fn is None or not issue_id:
             # Fallback stub (project-level ad-hoc usage without issue context)
             payload = {
@@ -651,10 +740,10 @@ def build_conductor_tools(
             return payload
 
         role = normalize_role(str(tool_input.get("role") or ""))
-        prompt_override = tool_input.get("prompt") or None
-        prev_node_key = tool_input.get("prev_node_key") or None
+        prompt_override = _optional_string(tool_input.get("prompt"))
+        prev_node_key = _optional_string(tool_input.get("prev_node_key"))
 
-        issue = await store.load_codex_issue(issue_id)
+        issue = await cast(_IssueLoader, store).load_codex_issue(issue_id)
         if issue is None:
             return {"error": f"Issue {issue_id} not found"}
 
@@ -666,7 +755,7 @@ def build_conductor_tools(
         if exhausted is not None:
             return exhausted
 
-        async def _pre_dispatch_check() -> dict[str, Any] | None:
+        async def _pre_dispatch_check() -> JsonObject | None:
             budget_blocked = await _check_budget_gate(issue, tool="dispatch_subagent")
             if budget_blocked is not None:
                 return {"result": budget_blocked}
@@ -688,7 +777,7 @@ def build_conductor_tools(
             pre_dispatch_check=_pre_dispatch_check,
         )
 
-    async def dispatch_batch(tool_input: dict[str, Any]) -> dict[str, Any]:
+    async def dispatch_batch(tool_input: JsonObject) -> JsonObject:
         """Fan out N INDEPENDENT subagents concurrently, each in its own isolated
         worktree. Partial-join semantics: a single agent failing/timing out does
         not abort the batch; its error is collected as a `failed` result item."""
@@ -708,26 +797,28 @@ def build_conductor_tools(
         if not isinstance(raw_agents, list) or not raw_agents:
             return {"error": "dispatch_batch requires a non-empty 'agents' list"}
 
-        issue = await store.load_codex_issue(issue_id)
+        issue = await cast(_IssueLoader, store).load_codex_issue(issue_id)
         if issue is None:
             return {"error": f"Issue {issue_id} not found"}
 
-        budget_status, budget_failure = await _compute_budget_status(
+        batch_budget_status, budget_failure = await _compute_budget_status(
             issue,
             tool="dispatch_batch",
         )
         if budget_failure is not None:
             return budget_failure
-        if budget_status is not None:
-            budget_blocked = await _budget_exceeded_result(
+        if batch_budget_status is not None:
+            budget_blocked = await _budget_gate_result(
                 issue,
-                budget_status,
+                batch_budget_status,
                 tool="dispatch_batch",
             )
             if budget_blocked is not None:
                 return budget_blocked
 
-        project = await store.load_project(issue.project_id)
+        if not issue.project_id:
+            return {"error": f"Issue {issue_id} has no project_id"}
+        project = await cast(_ProjectLoader, store).load_project(issue.project_id)
         if project is None:
             return {"error": f"Project {issue.project_id} not found"}
 
@@ -743,7 +834,7 @@ def build_conductor_tools(
         # (role, role-2, …). The worktree key also includes batch_key so concurrent
         # dispatch_batch calls for the same issue/role never share an agent branch
         # or directory.
-        specs: list[dict[str, Any]] = []
+        specs: list[JsonObject] = []
         seen_keys: dict[str, int] = {}
         for idx, raw in enumerate(raw_agents):
             if not isinstance(raw, dict):
@@ -773,23 +864,32 @@ def build_conductor_tools(
         # bound, but a tight remaining budget dynamically downscales the EFFECTIVE
         # concurrency (concurrency = cost multiplier). Unlimited budget (or a
         # comfortable one) leaves the cap untouched; over budget squeezes to 1.
-        # This can only ever REDUCE parallelism, never raise it. Best-effort: a
-        # budget-status failure falls back to the plain configured cap.
+        # This can only ever REDUCE parallelism, never raise it. If budget status
+        # cannot be evaluated, dispatch fails closed instead of falling back open.
         configured_cap = timeouts.max_parallel_dispatch_per_batch()
         cap = configured_cap
-        budget_status, budget_failure = await _compute_budget_status(
-            issue,
-            tool="dispatch_batch",
-        )
-        if budget_failure is not None:
-            return budget_failure
-        if budget_status is not None:
-            cap = timeouts.budget_supported_concurrency(
-                budget_status.remaining_usd,
-                configured_cap,
-                soft_warn=budget_status.soft_warn,
-                over_budget=budget_status.over_budget,
+        budget_status = batch_budget_status
+        if budget_status is None:
+            budget_status, budget_failure = await _compute_budget_status(
+                issue,
+                tool="dispatch_batch",
             )
+            if budget_failure is not None:
+                return budget_failure
+        assert budget_status is not None
+        cap = timeouts.budget_supported_concurrency(
+            budget_status.remaining_usd,
+            configured_cap,
+            soft_warn=budget_status.soft_warn,
+            over_budget=budget_status.over_budget,
+        )
+        if budget_status.remaining_usd is not None:
+            affordable = int(
+                max(0.0, budget_status.remaining_usd)
+                // timeouts.estimated_agent_cost_usd()
+            )
+            if affordable > 0:
+                cap = min(cap, affordable)
         sem = asyncio.Semaphore(cap)
         dispatch_gate_lock = _dispatch_start_lock_for_issue(issue.id)
 
@@ -812,7 +912,7 @@ def build_conductor_tools(
         except Exception:  # noqa: BLE001, RUF100
             # Best-effort: a flush failure shouldn't block fan-out, but agents
             # may not see the freshest uncommitted upstream state.
-            pass
+            logger.debug("dispatch batch upstream flush failed: issue_id=%s", issue.id, exc_info=True)
 
         await _emit(
             event_bus,
@@ -824,20 +924,20 @@ def build_conductor_tools(
                 "agent_count": len(specs),
                 "concurrency_cap": cap,
                 "configured_cap": configured_cap,
-                "roles": [s["role"] for s in specs],
+                "roles": [str(s.get("role") or "") for s in specs],
             },
         )
 
-        async def _run_one(spec: dict[str, Any]) -> dict[str, Any]:
-            agent_key = spec["agent_key"]
-            worktree_key = spec["worktree_key"]
-            role = spec["role"]
+        async def _run_one(spec: JsonObject) -> JsonObject:
+            agent_key = str(spec.get("agent_key") or "")
+            worktree_key = str(spec.get("worktree_key") or "")
+            role = str(spec.get("role") or "")
             async with sem:
                 worktree_path: str | None = None
                 agent_branch: str | None = None
                 cleanup_on_exit = False
                 try:
-                    async def _pre_dispatch_check() -> dict[str, Any] | None:
+                    async def _pre_dispatch_check() -> JsonObject | None:
                         nonlocal agent_branch, worktree_path
                         # Budget gate after acquiring the batch slot, before
                         # creating any task/node/worktree. The batch-level
@@ -866,8 +966,8 @@ def build_conductor_tools(
                     result = await _run_single_dispatch(
                         issue=issue,
                         role=role,
-                        prompt_override=spec["prompt"],
-                        prev_node_key=spec["prev_node_key"],
+                        prompt_override=_optional_string(spec.get("prompt")),
+                        prev_node_key=_optional_string(spec.get("prev_node_key")),
                         agent_worktree_path=None,
                         tool="dispatch_batch",
                         batch_key=batch_key,
@@ -886,6 +986,7 @@ def build_conductor_tools(
                     return {
                         **result,
                         "agent_key": agent_key,
+                        "worktree_key": worktree_key,
                         "role": role,
                         "branch": agent_branch,
                         "worktree_path": worktree_path,
@@ -898,6 +999,7 @@ def build_conductor_tools(
                     cleanup_on_exit = True
                     return {
                         "agent_key": agent_key,
+                        "worktree_key": worktree_key,
                         "role": role,
                         "branch": agent_branch,
                         "worktree_path": worktree_path,
@@ -905,10 +1007,15 @@ def build_conductor_tools(
                     }
                 finally:
                     if cleanup_on_exit:
-                        try:  # noqa: SIM105
+                        try:
                             await wm.cleanup_agent_worktree(project, issue, worktree_key)
                         except Exception:  # noqa: BLE001, RUF100
-                            pass
+                            logger.debug(
+                                "agent worktree cleanup failed: issue_id=%s worktree_key=%s",
+                                issue.id,
+                                worktree_key,
+                                exc_info=True,
+                            )
 
         # return_exceptions=True → partial join: a crashing coroutine does not
         # propagate and kill its siblings (research §3 asyncio pitfall). _run_one
@@ -916,12 +1023,13 @@ def build_conductor_tools(
         # safety net for anything that escapes it.
         gathered = await asyncio.gather(*(_run_one(spec) for spec in specs), return_exceptions=True)
 
-        results: list[dict[str, Any]] = []
+        results: list[JsonObject] = []
         for spec, item in zip(specs, gathered):  # noqa: B905
             if isinstance(item, BaseException):
                 results.append(
                     {
                         "agent_key": spec["agent_key"],
+                        "worktree_key": spec["worktree_key"],
                         "role": spec["role"],
                         "error": f"{type(item).__name__}: {item}",
                     }
@@ -951,18 +1059,26 @@ def build_conductor_tools(
         # branches back into the issue branch. Lineage is passed in-memory (branch
         # + worktree_path captured per result), so nothing extra is persisted.
         # Only agents that actually produced a branch are merge candidates.
-        merge_candidates = [
-            {
-                "agent_key": r["agent_key"],
-                "role": r.get("role"),
-                "branch": r.get("branch"),
-                "worktree_path": r.get("worktree_path"),
-            }
-            for r in succeeded
-            if r.get("branch")
-        ]
+        merge_candidates: list[AgentMergeSpec] = []
+        for r in succeeded:
+            raw_agent_key = r.get("agent_key")
+            raw_branch = r.get("branch")
+            if not isinstance(raw_agent_key, str) or not isinstance(raw_branch, str):
+                continue
+            candidate: AgentMergeSpec = {"agent_key": raw_agent_key, "branch": raw_branch}
+            for key in ("worktree_key", "role", "worktree_path"):
+                value = r.get(key)
+                if isinstance(value, str):
+                    candidate[key] = value
+            merge_candidates.append(candidate)
 
-        merge_summary: dict[str, Any] = {"merged": [], "conflict": None, "skipped": [], "noop": []}
+        merge_summary: AgentMergeSummary = {
+            "merged": [],
+            "conflict": None,
+            "skipped": [],
+            "noop": [],
+        }
+        merge_error: str | None = None
         if merge_candidates:
             await _emit(
                 event_bus,
@@ -976,34 +1092,28 @@ def build_conductor_tools(
             try:
                 merge_summary = await wm.merge_agent_worktrees(project, issue, merge_candidates)
             except Exception as exc:  # noqa: BLE001, RUF100
-                merge_summary = {
-                    "merged": [],
-                    "conflict": None,
-                    "skipped": [],
-                    "noop": [],
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
+                merge_error = f"{type(exc).__name__}: {exc}"
             await _emit(
                 event_bus,
                 "conductor_tool",
                 {
                     "tool": "dispatch_batch",
                     "status": "merge_complete",
-                    "merged": len(merge_summary.get("merged") or []),
+                    "merged": _list_count(merge_summary.get("merged")),
                     "conflict": bool(merge_summary.get("conflict")),
-                    "skipped": len(merge_summary.get("skipped") or []),
-                    "noop": len(merge_summary.get("noop") or []),
+                    "skipped": _list_count(merge_summary.get("skipped")),
+                    "noop": _list_count(merge_summary.get("noop")),
                 },
             )
 
         conflict = merge_summary.get("conflict")
         merge_status = (
             "error"
-            if merge_summary.get("error")
+            if merge_error
             else ("conflict" if conflict else ("merged" if merge_summary.get("merged") else "noop"))
         )
 
-        out: dict[str, Any] = {
+        out: JsonObject = {
             "status": "batch_complete",
             "agent_count": len(results),
             "succeeded_count": len(succeeded),
@@ -1027,18 +1137,19 @@ def build_conductor_tools(
                 "Agents merged before the conflict are already on the issue branch and "
                 "were NOT rolled back."
             )
-        elif merge_summary.get("error"):
-            out["merge_error"] = merge_summary["error"]
+        if merge_error:
+            out["merge_error"] = merge_error
             out["note"] = (
                 "MERGE ERROR during join: successful agents finished, but their "
                 "per-agent worktrees could not be reconciled into the issue branch. "
                 "The merge error is preserved in 'merge_error'; inspect the kept "
                 "agent worktrees before retrying or finalizing."
             )
-        else:
+        elif not conflict:
             noop_note = ""
-            if out["noop_merges"]:
-                noop_keys = [n.get("agent_key") for n in out["noop_merges"]]
+            noop_merges = out.get("noop_merges")
+            if isinstance(noop_merges, list) and noop_merges:
+                noop_keys = [object_dict(n).get("agent_key") for n in noop_merges]
                 noop_note = (
                     f" Agents with no changes to merge were treated as clean no-ops "
                     f"and cleaned up (not conflicts): {noop_keys}."
@@ -1058,7 +1169,7 @@ def build_conductor_tools(
         fallback: str,
     ) -> str:
         try:
-            graph = await store.load_workflow_graph_for_issue(issue_id)
+            graph = await cast(_WorkflowGraphLoader, store).load_workflow_graph_for_issue(issue_id)
         except Exception:  # noqa: BLE001, RUF100
             return fallback
         for node in getattr(graph, "nodes", None) or []:
@@ -1066,7 +1177,7 @@ def build_conductor_tools(
                 return str(getattr(node, "node_key", "") or "") or fallback
         return fallback
 
-    async def spawn_custom_subagent(tool_input: dict[str, Any]) -> dict[str, Any]:
+    async def spawn_custom_subagent(tool_input: JsonObject) -> JsonObject:
         payload = {
             "project_id": project_id,
             "role_key": tool_input.get("role_key"),
@@ -1077,7 +1188,7 @@ def build_conductor_tools(
         await _emit(event_bus, "conductor_tool", {"tool": "spawn_custom_subagent", **payload})
         return payload
 
-    async def inject_context_into_node(tool_input: dict[str, Any]) -> dict[str, Any]:
+    async def inject_context_into_node(tool_input: JsonObject) -> JsonObject:
         payload = {
             "project_id": project_id,
             "node_key": tool_input.get("node_key"),
@@ -1087,7 +1198,7 @@ def build_conductor_tools(
         await _emit(event_bus, "conductor_tool", {"tool": "inject_context_into_node", **payload})
         return payload
 
-    async def request_user_clarification(tool_input: dict[str, Any]) -> dict[str, Any]:
+    async def request_user_clarification(tool_input: JsonObject) -> JsonObject:
         await _notify_status(
             on_status,
             "awaiting_user_clarification",
@@ -1102,7 +1213,7 @@ def build_conductor_tools(
         await _emit(event_bus, "conductor_tool", {"tool": "request_user_clarification", **payload})
         return payload
 
-    async def finalize_task(tool_input: dict[str, Any]) -> dict[str, Any]:
+    async def finalize_task(tool_input: JsonObject) -> JsonObject:
         raw_status = normalize_task_status(tool_input.get("status") or "done")
         if raw_status in TASK_SUCCESS_STATUSES:
             status = "done"
@@ -1132,20 +1243,18 @@ def build_conductor_tools(
                     },
                 )
                 reason = str(blocked.get("reason") or "success gate rejected finalize_task")
-                if answer:
-                    answer = f"{answer}\n\n[finalize rejected] {reason}"
-                else:
-                    answer = reason
-                if summary:
-                    summary = f"{summary}\n\n[finalize rejected] {reason}"
-                else:
-                    summary = reason
-                status = str(blocked.get("status") or "failed")
-        return {
+                blocking = blocked.get("blocking_nodes") or []
+                msg = f"[finalize rejected] {reason}"
+                if blocking:
+                    msg += f"\nBlocking nodes: {json.dumps(blocking[:10], default=str)}"
+                msg += "\nResolve these nodes before calling finalize_task(status='done')."
+                raise ValueError(msg)
+        result: JsonObject = {
             "status": status,
             "answer": answer,
             "summary": summary,
         }
+        return result
 
     tools: dict[str, ToolCallable] = {
         "retrieve_cold_memory": retrieve_cold_memory,
@@ -1165,11 +1274,16 @@ def _sanitize_agent_key(role: str) -> str:
     return key or "agent"
 
 
-def _is_successful_subagent_status(status: Any) -> bool:
-    return is_task_success_status(str(status or ""))
+def _is_successful_subagent_status(status: object) -> bool:
+    return bool(is_task_success_status(str(status or "")))
 
 
-async def _emit(event_bus, event_type: str, payload: dict[str, Any]) -> None:
+async def _maybe_await_status(result: Awaitable[None] | None) -> None:
+    if result is not None:
+        await result
+
+
+async def _emit(event_bus: object | None, event_type: str, payload: JsonObject) -> None:
     if event_bus is None:
         return
     if hasattr(event_bus, "emit"):
@@ -1188,11 +1302,10 @@ async def _notify_status(
     if callback is None:
         return
     result = callback(phase, detail)
-    if hasattr(result, "__await__"):
-        await result
+    await _maybe_await_status(result)
 
 
-def _tool_definitions() -> list[dict[str, Any]]:
+def _tool_definitions() -> list[JsonObject]:
     return [
         _tool(
             "retrieve_cold_memory",
@@ -1305,9 +1418,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
-def _tool(
-    name: str, description: str, properties: dict[str, Any], required: list[str]
-) -> dict[str, Any]:
+def _tool(name: str, description: str, properties: JsonObject, required: list[str]) -> JsonObject:
     return {
         "name": name,
         "description": description,

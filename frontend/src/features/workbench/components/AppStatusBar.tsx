@@ -50,7 +50,8 @@ export function AppStatusBar() {
     for (const p of executionProcessesAll) {
       const s = (p.status ?? "").toLowerCase();
       if (s === "running" || s === "in_progress") running += 1;
-      else if (s === "awaiting_approval" || s === "awaiting" || s === "pending_review") awaiting += 1;
+      else if (s === "awaiting_approval" || s === "awaiting" || s === "pending_review")
+        awaiting += 1;
     }
     return { running, awaiting };
   }, [executionProcessesAll]);

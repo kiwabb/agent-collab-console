@@ -31,21 +31,19 @@ export interface AgentDagNodeData {
   /** The DAG node title (used as fallback label when status is empty). */
   label: string;
   /** Persisted workflow node status, if this represents a real graph node. */
-  status?: string;
+  status?: string | undefined;
   /** Backing task id, if any. */
-  task_id?: string | null;
+  task_id?: string | null | undefined;
   /** True for the synthetic Conductor virtual root. */
-  isConductor?: boolean;
+  isConductor?: boolean | undefined;
   /** Original DAG node_key for click-through routing. */
   node_key: string;
   /** Per-node telemetry from /graph-stats (tokens / duration / tools). */
-  stats?: AgentDagNodeStats | null;
+  stats?: AgentDagNodeStats | null | undefined;
   /** Optional click handler injected by the graph view. */
-  onClick?: (payload: {
-    node_key: string;
-    task_id: string | null;
-    status: string | null;
-  }) => void;
+  onClick?:
+    | ((payload: { node_key: string; task_id: string | null; status: string | null }) => void)
+    | undefined;
 }
 
 const ROLE_ICON: Record<string, LucideIcon> = {
@@ -136,8 +134,7 @@ function AgentDagNodeImpl({ data }: NodeProps<AgentDagNodeData>) {
       <div
         className="flex items-center gap-2 px-2.5 py-2 border-b border-border-subtle"
         style={{
-          background:
-            "linear-gradient(180deg, rgba(255,255,255,0.02), transparent)",
+          background: "linear-gradient(180deg, rgba(255,255,255,0.02), transparent)",
         }}
       >
         <span
@@ -351,8 +348,7 @@ function resolveTone(data: AgentDagNodeData, isLiveActive: boolean): Tone {
       mode: "failed",
       bg: surfaceGradient,
       border: "var(--color-failed-ring)",
-      shadow:
-        "0 12px 32px -10px rgba(0,0,0,0.7), 0 0 0 1px var(--color-failed-ring) inset",
+      shadow: "0 12px 32px -10px rgba(0,0,0,0.7), 0 0 0 1px var(--color-failed-ring) inset",
       iconBg: "color-mix(in srgb, var(--color-status-failed) 14%, transparent)",
       text: "var(--color-status-failed)",
       footTag: status === "needs_rework" ? "rework" : "failed",
@@ -362,12 +358,10 @@ function resolveTone(data: AgentDagNodeData, isLiveActive: boolean): Tone {
     return {
       mode: "awaiting",
       bg: surfaceGradient,
-      border:
-        "color-mix(in srgb, var(--color-status-awaiting) 35%, transparent)",
+      border: "color-mix(in srgb, var(--color-status-awaiting) 35%, transparent)",
       shadow:
         "0 12px 32px -10px rgba(0,0,0,0.7), 0 0 0 1px color-mix(in srgb, var(--color-status-awaiting) 18%, transparent) inset",
-      iconBg:
-        "color-mix(in srgb, var(--color-status-awaiting) 14%, transparent)",
+      iconBg: "color-mix(in srgb, var(--color-status-awaiting) 14%, transparent)",
       text: "var(--color-status-awaiting)",
       footTag: "awaiting",
     };

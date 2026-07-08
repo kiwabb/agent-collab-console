@@ -9,21 +9,15 @@ import { cn } from "@/lib/utils";
  * The dot pulses when status is "running" / "awaiting".
  */
 
-export type StatusKind =
-  | "done"
-  | "running"
-  | "awaiting"
-  | "queued"
-  | "failed"
-  | "info";
+export type StatusKind = "done" | "running" | "awaiting" | "queued" | "failed" | "info";
 
 const KIND_TO_TOKEN: Record<StatusKind, { dot: string; text: string; bg?: string }> = {
-  done:     { dot: "bg-status-done",     text: "text-status-done" },
-  running:  { dot: "bg-status-running",  text: "text-status-running" },
+  done: { dot: "bg-status-done", text: "text-status-done" },
+  running: { dot: "bg-status-running", text: "text-status-running" },
   awaiting: { dot: "bg-status-awaiting", text: "text-status-awaiting" },
-  queued:   { dot: "bg-status-queued",   text: "text-text-muted" },
-  failed:   { dot: "bg-status-failed",   text: "text-status-failed" },
-  info:     { dot: "bg-status-info",     text: "text-status-info" },
+  queued: { dot: "bg-status-queued", text: "text-text-muted" },
+  failed: { dot: "bg-status-failed", text: "text-status-failed" },
+  info: { dot: "bg-status-info", text: "text-status-info" },
 };
 
 interface Props {
@@ -48,12 +42,7 @@ export function StatusBadge({ kind, label, pulse, className }: Props) {
       <span className="relative inline-flex">
         <span className={cn("size-1.5 rounded-full", t.dot)} />
         {shouldPulse && (
-          <span
-            className={cn(
-              "absolute inset-0 rounded-full animate-ping opacity-60",
-              t.dot,
-            )}
-          />
+          <span className={cn("absolute inset-0 rounded-full animate-ping opacity-60", t.dot)} />
         )}
       </span>
       {label}

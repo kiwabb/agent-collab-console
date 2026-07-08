@@ -28,7 +28,8 @@ export function InlineEdit({
   autoSave = true,
 }: InlineEditProps) {
   const { t } = useI18n();
-  const resolvedPlaceholder = placeholder === "Click to edit..." ? t("ui.clickToEdit") : placeholder;
+  const resolvedPlaceholder =
+    placeholder === "Click to edit..." ? t("ui.clickToEdit") : placeholder;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(value);
   const [isSaving, setIsSaving] = useState(false);
@@ -129,7 +130,10 @@ export function InlineEdit({
           onClick={handleSave}
           disabled={isSaving}
           data-density={isSaving ? "inline-edit-save-tool" : "inline-edit-save"}
-          className={cn("p-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50", isSaving && "motion-essential")}
+          className={cn(
+            "p-1.5 rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors disabled:opacity-50",
+            isSaving && "motion-essential",
+          )}
           title={t("ui.saveShortcut")}
           aria-label={t("ui.save")}
         >
@@ -153,7 +157,7 @@ export function InlineEdit({
       className={cn(
         "group relative flex items-center gap-2",
         !disabled && "cursor-pointer",
-        className
+        className,
       )}
       onClick={() => !disabled && setIsEditing(true)}
     >
@@ -161,7 +165,7 @@ export function InlineEdit({
         className={cn(
           "text-sm font-medium text-foreground/80 hover:text-foreground transition-colors",
           !value && "text-text-muted italic",
-          textClassName
+          textClassName,
         )}
       >
         {value || resolvedPlaceholder}
@@ -169,7 +173,9 @@ export function InlineEdit({
       {!disabled && (
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
           {showSaved && (
-            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">{t("ui.saved")}</span>
+            <span className="text-[9px] font-black text-success uppercase tracking-widest animate-in fade-in duration-200">
+              {t("ui.saved")}
+            </span>
           )}
           <Pencil size={12} className="text-text-muted" />
         </div>

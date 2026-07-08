@@ -1,0 +1,23 @@
+{
+  "settings": {
+    "iframe_count": 1,
+    "iframe": {
+      "srcdocEnd": "dden'); error.classList.remove('hidden'); }\n  }, 900);\n</script>\n</body>\n</html>",
+      "srcdocLength": 20838,
+      "srcdocStart": "<!DOCTYPE html>\n<!-- source: /settings frontend/src/app/settings/page.tsx -->\n<h",
+      "title": "prototype-preview"
+    },
+    "selected": "next-app-router--settings v2"
+  },
+  "issue": {
+    "iframe_count": 1,
+    "iframe": {
+      "includesRuntimeIssue": true,
+      "srcdocEnd": "-zinc-100','border-b-2','border-indigo-500','-mb-px','font-medium');\n  });\n</script>\n</body>\n</html>",
+      "srcdocLength": 14602,
+      "srcdocStart": "<!DOCTYPE html>\n<html lang=\"en\">\n<!-- source: /issues/:id frontend/src/app/issues/[id]/page.tsx -->\n",
+      "title": "prototype-preview"
+    },
+    "selected": "next-app-router--issues-id v2"
+  }
+}

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { at } from "./testAssertions";
 
 import type { CodexIssue } from "../src/lib/types";
 
@@ -71,9 +72,12 @@ test("filterQaPassedIssues returns only issues with status awaiting_review", () 
   const result = filterQaPassedIssues(mockIssues);
 
   assert.equal(result.length, 2, "should return exactly 2 issues");
-  assert.equal(result[0].id, "issue-1", "first result should be issue-1");
-  assert.equal(result[1].id, "issue-4", "second result should be issue-4");
-  assert.ok(result.every((i) => i.status === "awaiting_review"), "all results should have awaiting_review status");
+  assert.equal(at(result, 0, "filtered issue").id, "issue-1", "first result should be issue-1");
+  assert.equal(at(result, 1, "filtered issue").id, "issue-4", "second result should be issue-4");
+  assert.ok(
+    result.every((i) => i.status === "awaiting_review"),
+    "all results should have awaiting_review status",
+  );
 });
 
 test("filterQaPassedIssues returns empty array when no awaiting_review issues exist", () => {

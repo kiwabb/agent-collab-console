@@ -10,6 +10,7 @@ import {
   getRegenerateAllStreamUrl,
   listPrototypeCodeCandidates,
   listPrototypes,
+  MAX_CANDIDATE_QUERY_TEXT_CHARS,
 } from "@/lib/api/prototypes";
 import type { Project, Prototype, PrototypeCodeCandidate, PrototypeDetail } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
@@ -30,7 +31,25 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
+import {
+  buildCodeCandidateBriefOverrides,
+  buildSelectedCodeCandidateInstructions,
+  countModifiedCodeCandidateBriefs,
+  isCodeCandidateBriefModified,
+} from "./codeCandidateBriefs";
 import { PrototypeCanvas } from "./PrototypeCanvas";
+import {
+  parseSseRecord,
+  readCodeCandidateAction,
+  readCodeGenerationSummary,
+  readFailedPrototypeItems,
+  readPrototypeCodeCandidates,
+  readSseErrorMessage,
+  readSseNullableString,
+  readSseNumber,
+  readSseString,
+  readSseStringArray,
+} from "./prototypeStreamEvents";
 
 interface Props {
   projectId: string;
@@ -43,8 +62,8 @@ interface RegenItem {
   prototypeId: string;
   title: string;
   status: RegenItemStatus;
-  versionNo?: number;
-  message?: string;
+  versionNo?: number | undefined;
+  message?: string | undefined;
 }
 
 interface RegenState {
@@ -55,7 +74,15 @@ interface RegenState {
   failedCount: number;
 }
 
-type CodeItemStatus = "pending" | "skipped" | "generating" | "done" | "failed" | "unsupported";
+type CodeItemStatus =
+  | "pending"
+  | "capturing"
+  | "capture_failed"
+  | "skipped"
+  | "generating"
+  | "done"
+  | "failed"
+  | "unsupported";
 
 interface CodeGenItem {
   candidateId: string;
@@ -64,9 +91,9 @@ interface CodeGenItem {
   sourcePath: string;
   action: PrototypeCodeCandidate["action"];
   status: CodeItemStatus;
-  prototypeId?: string | null;
-  versionNo?: number;
-  message?: string;
+  prototypeId?: string | null | undefined;
+  versionNo?: number | undefined;
+  message?: string | undefined;
 }
 
 interface CodeGenState {
@@ -98,7 +125,6 @@ const INITIAL_CODE_GEN: CodeGenState = {
   failed: 0,
   unsupported: 0,
 };
-
 /**
  * Project-level prototype design tool page (PRD 06-23).
  *
@@ -142,6 +168,15 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
   const [codeScanLoading, setCodeScanLoading] = useState(false);
   const [codeProgressOpen, setCodeProgressOpen] = useState(false);
   const [codeGen, setCodeGen] = useState<CodeGenState>(INITIAL_CODE_GEN);
+  const [selectedCodeCandidateIds, setSelectedCodeCandidateIds] = useState<string[]>([]);
+  const [codeInstruction, setCodeInstruction] = useState("");
+  const [codeCandidateInstructions, setCodeCandidateInstructions] = useState<
+    Record<string, string>
+  >({});
+  const [codeCandidateBriefs, setCodeCandidateBriefs] = useState<Record<string, string>>({});
+  const [expandedCodeBriefIds, setExpandedCodeBriefIds] = useState<string[]>([]);
+  const [useRuntimeEvidence, setUseRuntimeEvidence] = useState(false);
+  const [runtimeBaseUrl, setRuntimeBaseUrl] = useState("http://localhost:4000");
   const codeSourceRef = useRef<EventSource | null>(null);
 
   const refetchList = useCallback(async () => {
@@ -165,8 +200,9 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
     (async () => {
       const list = await refetchList();
       if (cancelled) return;
-      if (list.length > 0 && !activeId) {
-        setActiveId(list[0].id);
+      const firstPrototype = list[0];
+      if (firstPrototype && !activeId) {
+        setActiveId(firstPrototype.id);
       }
     })();
     return () => {
@@ -243,7 +279,8 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
 
   const handlePrototypeDeleted = useCallback(async () => {
     const list = await refetchList();
-    if (list.length > 0) setActiveId(list[0].id);
+    const firstPrototype = list[0];
+    if (firstPrototype) setActiveId(firstPrototype.id);
     else setActiveId(null);
     setDetail(null);
   }, [refetchList]);
@@ -285,6 +322,18 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
     try {
       const result = await listPrototypeCodeCandidates(projectId);
       setCodeCandidates(result.candidates);
+      setSelectedCodeCandidateIds(
+        result.candidates
+          .filter((candidate) => candidate.action === "create" || candidate.action === "regenerate")
+          .map((candidate) => candidate.id),
+      );
+      setCodeCandidateInstructions({});
+      setCodeCandidateBriefs(
+        Object.fromEntries(
+          result.candidates.map((candidate) => [candidate.id, candidate.editable_brief]),
+        ),
+      );
+      setExpandedCodeBriefIds([]);
     } catch (err) {
       addToast({
         type: "error",
@@ -292,6 +341,10 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
         message: err instanceof Error ? err.message : String(err),
       });
       setCodeCandidates([]);
+      setSelectedCodeCandidateIds([]);
+      setCodeCandidateInstructions({});
+      setCodeCandidateBriefs({});
+      setExpandedCodeBriefIds([]);
     } finally {
       setCodeScanLoading(false);
     }
@@ -306,194 +359,250 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
       codeSourceRef.current.close();
       codeSourceRef.current = null;
     }
-    const source = new EventSource(getGenerateFromCodeStreamUrl(projectId));
+    const candidateBriefOverrides = buildCodeCandidateBriefOverrides(
+      codeCandidates ?? [],
+      selectedCodeCandidateIds,
+      codeCandidateBriefs,
+    );
+    const selectedCandidateInstructions = buildSelectedCodeCandidateInstructions(
+      selectedCodeCandidateIds,
+      codeCandidateInstructions,
+    );
+    const source = new EventSource(
+      getGenerateFromCodeStreamUrl(projectId, {
+        candidateIds: selectedCodeCandidateIds,
+        instruction: codeInstruction,
+        candidateInstructions: selectedCandidateInstructions,
+        candidateBriefOverrides,
+        useRuntimeEvidence,
+        runtimeBaseUrl,
+      }),
+    );
     codeSourceRef.current = source;
 
     source.addEventListener("scan_meta", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          count: number;
-          candidates: PrototypeCodeCandidate[];
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const count = readSseNumber(data, "count");
+      const candidates = readPrototypeCodeCandidates(data, "candidates");
+      if (count === null || !candidates) return;
+      const items: Record<string, CodeGenItem> = {};
+      for (const candidate of candidates) {
+        items[candidate.id] = {
+          candidateId: candidate.id,
+          title: candidate.title,
+          route: candidate.route,
+          sourcePath: candidate.primary_source_path,
+          action: candidate.action,
+          status: candidate.action === "unsupported" ? "unsupported" : "pending",
+          prototypeId: candidate.prototype_id,
+          message: candidate.unsupported_reason ?? undefined,
         };
-        const items: Record<string, CodeGenItem> = {};
-        for (const candidate of data.candidates) {
-          items[candidate.id] = {
-            candidateId: candidate.id,
-            title: candidate.title,
-            route: candidate.route,
-            sourcePath: candidate.primary_source_path,
-            action: candidate.action,
-            status: candidate.action === "unsupported" ? "unsupported" : "pending",
-            prototypeId: candidate.prototype_id,
-            message: candidate.unsupported_reason ?? undefined,
-          };
-        }
-        setCodeGen((s) => ({ ...s, total: data.count, items }));
-      } catch {
-        // Ignore malformed scanner metadata.
       }
+      setCodeGen((s) => ({ ...s, total: count, items }));
     });
 
     source.addEventListener("candidate_start", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          candidate_id: string;
-          title: string;
-          route: string;
-          action: PrototypeCodeCandidate["action"];
-        };
-        setCodeGen((s) => {
-          const cur = s.items[data.candidate_id];
-          return {
-            ...s,
-            items: {
-              ...s.items,
-              [data.candidate_id]: {
-                candidateId: data.candidate_id,
-                title: cur?.title ?? data.title,
-                route: cur?.route ?? data.route,
-                sourcePath: cur?.sourcePath ?? "",
-                action: data.action,
-                status: data.action === "unsupported" ? "unsupported" : "generating",
-                prototypeId: cur?.prototypeId,
-                message: cur?.message,
-              },
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const candidateId = readSseString(data, "candidate_id");
+      const title = readSseString(data, "title");
+      const route = readSseString(data, "route");
+      const action = readCodeCandidateAction(data, "action");
+      if (!candidateId || !title || !route || !action) return;
+      setCodeGen((s) => {
+        const cur = s.items[candidateId];
+        return {
+          ...s,
+          items: {
+            ...s.items,
+            [candidateId]: {
+              candidateId,
+              title: cur?.title ?? title,
+              route: cur?.route ?? route,
+              sourcePath: cur?.sourcePath ?? "",
+              action,
+              status: action === "unsupported" ? "unsupported" : "generating",
+              prototypeId: cur?.prototypeId,
+              message: cur?.message,
             },
-          };
-        });
-      } catch {
-        // Drop malformed frame.
-      }
+          },
+        };
+      });
+    });
+
+    source.addEventListener("candidate_capture", (ev) => {
+      const data = parseSseRecord(ev);
+      const candidateId = data ? readSseString(data, "candidate_id") : null;
+      if (!candidateId) return;
+      setCodeGen((s) => {
+        const cur = s.items[candidateId];
+        if (!cur) return s;
+        return {
+          ...s,
+          items: {
+            ...s.items,
+            [candidateId]: { ...cur, status: "capturing" },
+          },
+        };
+      });
+    });
+
+    source.addEventListener("candidate_capture_done", (ev) => {
+      const data = parseSseRecord(ev);
+      const candidateId = data ? readSseString(data, "candidate_id") : null;
+      if (!candidateId) return;
+      setCodeGen((s) => {
+        const cur = s.items[candidateId];
+        if (!cur) return s;
+        return {
+          ...s,
+          items: {
+            ...s.items,
+            [candidateId]: { ...cur, status: "generating" },
+          },
+        };
+      });
+    });
+
+    source.addEventListener("candidate_capture_failed", (ev) => {
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const candidateId = readSseString(data, "candidate_id");
+      const message = readSseString(data, "message");
+      if (!candidateId || !message) return;
+      setCodeGen((s) => {
+        const cur = s.items[candidateId];
+        if (!cur) return s;
+        return {
+          ...s,
+          items: {
+            ...s.items,
+            [candidateId]: {
+              ...cur,
+              status: "capture_failed",
+              message,
+            },
+          },
+        };
+      });
     });
 
     source.addEventListener("candidate_skip", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          candidate_id: string;
-          prototype_id: string | null;
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const candidateId = readSseString(data, "candidate_id");
+      const prototypeId = readSseNullableString(data, "prototype_id");
+      if (!candidateId || prototypeId === undefined) return;
+      setCodeGen((s) => {
+        const cur = s.items[candidateId];
+        if (!cur) return s;
+        return {
+          ...s,
+          skipped: s.skipped + 1,
+          items: {
+            ...s.items,
+            [candidateId]: { ...cur, status: "skipped", prototypeId },
+          },
         };
-        setCodeGen((s) => {
-          const cur = s.items[data.candidate_id];
-          if (!cur) return s;
-          return {
-            ...s,
-            skipped: s.skipped + 1,
-            items: {
-              ...s.items,
-              [data.candidate_id]: { ...cur, status: "skipped", prototypeId: data.prototype_id },
-            },
-          };
-        });
-      } catch {
-        // Drop malformed frame.
-      }
+      });
     });
 
     source.addEventListener("prototype_created", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          candidate_id: string;
-          prototype_id: string;
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const candidateId = readSseString(data, "candidate_id");
+      const prototypeId = readSseString(data, "prototype_id");
+      if (!candidateId || !prototypeId) return;
+      setCodeGen((s) => {
+        const cur = s.items[candidateId];
+        if (!cur) return s;
+        return {
+          ...s,
+          items: {
+            ...s.items,
+            [candidateId]: { ...cur, prototypeId },
+          },
         };
-        setCodeGen((s) => {
-          const cur = s.items[data.candidate_id];
-          if (!cur) return s;
-          return {
-            ...s,
-            items: {
-              ...s.items,
-              [data.candidate_id]: { ...cur, prototypeId: data.prototype_id },
-            },
-          };
-        });
-      } catch {
-        // Drop malformed frame.
-      }
+      });
     });
 
     source.addEventListener("prototype_done", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          candidate_id: string;
-          prototype_id: string;
-          version_no: number;
-        };
-        setCodeGen((s) => {
-          const cur = s.items[data.candidate_id];
-          if (!cur) return s;
-          return {
-            ...s,
-            items: {
-              ...s.items,
-              [data.candidate_id]: {
-                ...cur,
-                status: "done",
-                prototypeId: data.prototype_id,
-                versionNo: data.version_no,
-              },
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const candidateId = readSseString(data, "candidate_id");
+      const prototypeId = readSseString(data, "prototype_id");
+      const versionNo = readSseNumber(data, "version_no");
+      if (!candidateId || !prototypeId || versionNo === null) return;
+      setCodeGen((s) => {
+        const cur = s.items[candidateId];
+        if (!cur) return s;
+        return {
+          ...s,
+          items: {
+            ...s.items,
+            [candidateId]: {
+              ...cur,
+              status: "done",
+              prototypeId,
+              versionNo,
             },
-          };
-        });
-      } catch {
-        // Drop malformed frame.
-      }
+          },
+        };
+      });
     });
 
     source.addEventListener("prototype_error", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          candidate_id: string;
-          prototype_id?: string | null;
-          message: string;
-        };
-        setCodeGen((s) => {
-          const cur = s.items[data.candidate_id];
-          if (!cur) return s;
-          return {
-            ...s,
-            items: {
-              ...s.items,
-              [data.candidate_id]: {
-                ...cur,
-                status: cur.status === "unsupported" ? "unsupported" : "failed",
-                prototypeId: data.prototype_id ?? cur.prototypeId,
-                message: data.message,
-              },
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const candidateId = readSseString(data, "candidate_id");
+      const prototypeId = readSseNullableString(data, "prototype_id");
+      const message = readSseString(data, "message");
+      if (!candidateId || prototypeId === undefined || !message) return;
+      setCodeGen((s) => {
+        const cur = s.items[candidateId];
+        if (!cur) return s;
+        return {
+          ...s,
+          items: {
+            ...s.items,
+            [candidateId]: {
+              ...cur,
+              status: cur.status === "unsupported" ? "unsupported" : "failed",
+              prototypeId: prototypeId ?? cur.prototypeId,
+              message,
             },
-          };
-        });
-      } catch {
-        // Drop malformed frame.
-      }
+          },
+        };
+      });
     });
 
     source.addEventListener("all_done", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          created: number;
-          regenerated: number;
-          skipped: number;
-          failed: number;
-          unsupported: number;
-        };
-        setCodeGen((s) => ({ ...s, ...data, done: true }));
+      const data = parseSseRecord(ev);
+      const summary = data ? readCodeGenerationSummary(data) : null;
+      if (summary) {
+        setCodeGen((s) => ({ ...s, ...summary, done: true }));
         source.close();
         if (codeSourceRef.current === source) codeSourceRef.current = null;
         addToast({
-          type: data.failed > 0 ? "warning" : "success",
+          type: summary.failed > 0 ? "warning" : "success",
           title: t("prototype.generateFromCode.dialogTitle"),
           message: t("prototype.generateFromCode.summary", {
-            created: data.created,
-            regenerated: data.regenerated,
-            skipped: data.skipped,
-            failed: data.failed,
+            created: summary.created,
+            regenerated: summary.regenerated,
+            skipped: summary.skipped,
+            failed: summary.failed,
           }),
         });
         void refetchList().then((list) => {
-          if (!activeId && list.length > 0) setActiveId(list[0].id);
-          if (activeId) void getPrototype(activeId).then(setDetail).catch(() => {});
+          const firstPrototype = list[0];
+          if (!activeId && firstPrototype) setActiveId(firstPrototype.id);
+          if (activeId)
+            void getPrototype(activeId)
+              .then(setDetail)
+              .catch(() => {});
         });
-      } catch {
+      } else {
         source.close();
         if (codeSourceRef.current === source) codeSourceRef.current = null;
         setCodeGen((s) => ({ ...s, done: true }));
@@ -511,7 +620,20 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
         message: t("prototype.toast.iterateFailed"),
       });
     });
-  }, [projectId, addToast, t, refetchList, activeId]);
+  }, [
+    projectId,
+    selectedCodeCandidateIds,
+    codeInstruction,
+    codeCandidateInstructions,
+    codeCandidateBriefs,
+    codeCandidates,
+    useRuntimeEvidence,
+    runtimeBaseUrl,
+    addToast,
+    t,
+    refetchList,
+    activeId,
+  ]);
 
   const startBatch = useCallback(() => {
     setConfirmRegenOpen(false);
@@ -528,94 +650,82 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
     sourceRef.current = source;
 
     source.addEventListener("batch_meta", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as { count: number };
-        setRegen((s) => ({ ...s, total: data.count }));
-      } catch {
-        // Malformed meta — keep going.
-      }
+      const data = parseSseRecord(ev);
+      const count = data ? readSseNumber(data, "count") : null;
+      if (count === null) return;
+      setRegen((s) => ({ ...s, total: count }));
     });
 
     source.addEventListener("prototype_start", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          prototype_id: string;
-          title: string;
-        };
-        setRegen((s) => ({
-          ...s,
-          items: {
-            ...s.items,
-            [data.prototype_id]: {
-              prototypeId: data.prototype_id,
-              title: data.title,
-              status: "streaming",
-            },
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const prototypeId = readSseString(data, "prototype_id");
+      const title = readSseString(data, "title");
+      if (!prototypeId || !title) return;
+      setRegen((s) => ({
+        ...s,
+        items: {
+          ...s.items,
+          [prototypeId]: {
+            prototypeId,
+            title,
+            status: "streaming",
           },
-        }));
-      } catch {
-        // Drop malformed frame.
-      }
+        },
+      }));
     });
 
     source.addEventListener("prototype_done", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          prototype_id: string;
-          version_no: number;
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const prototypeId = readSseString(data, "prototype_id");
+      const versionNo = readSseNumber(data, "version_no");
+      if (!prototypeId || versionNo === null) return;
+      setRegen((s) => {
+        const cur = s.items[prototypeId];
+        if (!cur) return s;
+        return {
+          ...s,
+          okCount: s.okCount + 1,
+          items: {
+            ...s.items,
+            [prototypeId]: { ...cur, status: "done", versionNo },
+          },
         };
-        setRegen((s) => {
-          const cur = s.items[data.prototype_id];
-          if (!cur) return s;
-          return {
-            ...s,
-            okCount: s.okCount + 1,
-            items: {
-              ...s.items,
-              [data.prototype_id]: { ...cur, status: "done", versionNo: data.version_no },
-            },
-          };
-        });
-      } catch {
-        // Drop malformed frame.
-      }
+      });
     });
 
     source.addEventListener("prototype_error", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          prototype_id: string;
-          message: string;
+      const data = parseSseRecord(ev);
+      if (!data) return;
+      const prototypeId = readSseString(data, "prototype_id");
+      const message = readSseString(data, "message");
+      if (!prototypeId || !message) return;
+      setRegen((s) => {
+        const cur = s.items[prototypeId];
+        if (!cur) return s;
+        return {
+          ...s,
+          failedCount: s.failedCount + 1,
+          items: {
+            ...s.items,
+            [prototypeId]: { ...cur, status: "error", message },
+          },
         };
-        setRegen((s) => {
-          const cur = s.items[data.prototype_id];
-          if (!cur) return s;
-          return {
-            ...s,
-            failedCount: s.failedCount + 1,
-            items: {
-              ...s.items,
-              [data.prototype_id]: { ...cur, status: "error", message: data.message },
-            },
-          };
-        });
-      } catch {
-        // Drop malformed frame.
-      }
+      });
     });
 
     source.addEventListener("all_done", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          ok: string[];
-          failed: Array<{ prototype_id: string; message: string }>;
-        };
+      const data = parseSseRecord(ev);
+      const ok = data ? readSseStringArray(data, "ok") : null;
+      const failed = data ? readFailedPrototypeItems(data, "failed") : null;
+      if (ok && failed) {
         // Reconcile any prototypes the server reported but that we
         // somehow missed `prototype_start` for (defensive — shouldn't
         // happen, but the server is the source of truth).
         setRegen((s) => {
           const items = { ...s.items };
-          for (const id of data.ok) {
+          for (const id of ok) {
             if (!items[id]) {
               items[id] = {
                 prototypeId: id,
@@ -625,7 +735,7 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
               };
             }
           }
-          for (const f of data.failed) {
+          for (const f of failed) {
             if (!items[f.prototype_id]) {
               items[f.prototype_id] = {
                 prototypeId: f.prototype_id,
@@ -639,30 +749,30 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
             ...s,
             items,
             done: true,
-            okCount: data.ok.length,
-            failedCount: data.failed.length,
+            okCount: ok.length,
+            failedCount: failed.length,
           };
         });
         source.close();
         if (sourceRef.current === source) sourceRef.current = null;
         addToast({
-          type: data.failed.length > 0 ? "warning" : "success",
+          type: failed.length > 0 ? "warning" : "success",
           title: t("prototype.regenerateAll.dialogTitle"),
           message:
-            data.failed.length > 0
+            failed.length > 0
               ? t("prototype.regenerateAll.summaryWithFailures", {
-                  ok: data.ok.length,
-                  failed: data.failed.length,
+                  ok: ok.length,
+                  failed: failed.length,
                 })
               : t("prototype.regenerateAll.summary", {
-                  ok: data.ok.length,
-                  failed: data.failed.length,
+                  ok: ok.length,
+                  failed: failed.length,
                 }),
         });
         // Refresh list so the version chip and per-prototype details
         // pick up the new versions.
         refetchList();
-      } catch {
+      } else {
         // If we can't parse all_done we still want to stop the stream.
         source.close();
         if (sourceRef.current === source) sourceRef.current = null;
@@ -676,21 +786,15 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
       // surface it; otherwise let the browser handle reconnection (but
       // we still want to abort on close since this endpoint is one-shot).
       try {
-        const mev = ev as MessageEvent;
-        if (mev && typeof mev.data === "string" && mev.data) {
-          let parsed: { message?: string } | null = null;
-          try {
-            parsed = JSON.parse(mev.data) as { message?: string };
-          } catch {
-            parsed = null;
-          }
+        const message = readSseErrorMessage(ev);
+        if (message) {
           source.close();
           if (sourceRef.current === source) sourceRef.current = null;
           setRegen((s) => ({ ...s, done: true }));
           addToast({
             type: "error",
             title: t("prototype.regenerateAll.dialogTitle"),
-            message: parsed?.message ?? t("prototype.toast.iterateFailed"),
+            message,
           });
         } else if (!regen.done) {
           // Transport-level disconnect before all_done: treat as fatal
@@ -725,14 +829,11 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
     [regen.done],
   );
 
-  const hasPrototypes =
-    prototypes !== null && prototypes.length > 0;
+  const hasPrototypes = prototypes !== null && prototypes.length > 0;
   const batchRunning = progressOpen && !regen.done;
   const codeRunning = codeProgressOpen && !codeGen.done;
   const sortedItems = useMemo(() => {
-    return Object.values(regen.items).sort((a, b) =>
-      a.title.localeCompare(b.title),
-    );
+    return Object.values(regen.items).sort((a, b) => a.title.localeCompare(b.title));
   }, [regen.items]);
   const sortedCodeItems = useMemo(() => {
     return Object.values(codeGen.items).sort((a, b) => a.route.localeCompare(b.route));
@@ -742,19 +843,34 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
     for (const candidate of codeCandidates ?? []) counts[candidate.action] += 1;
     return counts;
   }, [codeCandidates]);
+  const selectedCodeCandidateSet = useMemo(
+    () => new Set(selectedCodeCandidateIds),
+    [selectedCodeCandidateIds],
+  );
+  const selectedCodeCandidateCount = selectedCodeCandidateIds.length;
+  const selectableCodeCandidateIds = useMemo(
+    () =>
+      (codeCandidates ?? [])
+        .filter((candidate) => candidate.action !== "unsupported")
+        .map((candidate) => candidate.id),
+    [codeCandidates],
+  );
+  const modifiedCodeCandidateBriefCount = useMemo(() => {
+    return countModifiedCodeCandidateBriefs(
+      codeCandidates ?? [],
+      selectedCodeCandidateIds,
+      codeCandidateBriefs,
+    );
+  }, [codeCandidates, codeCandidateBriefs, selectedCodeCandidateIds]);
 
   return (
     <section className="flex h-full flex-col gap-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight">
-            {t("prototype.title")}
-          </h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t("prototype.title")}</h1>
           <p className="text-sm text-text-muted">{t("prototype.subtitle")}</p>
           {project?.repo_path && (
-            <p className="font-mono text-[11px] text-text-muted/70">
-              {project.repo_path}
-            </p>
+            <p className="font-mono text-[11px] text-text-muted/70">{project.repo_path}</p>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -772,11 +888,7 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
             size="sm"
             onClick={() => setConfirmRegenOpen(true)}
             disabled={!hasPrototypes || batchRunning || codeRunning}
-            title={
-              !hasPrototypes
-                ? t("prototype.regenerateAll.disabledHint")
-                : undefined
-            }
+            title={!hasPrototypes ? t("prototype.regenerateAll.disabledHint") : undefined}
           >
             <RefreshCw size={14} className={cn(batchRunning && "animate-spin")} />
             {t("prototype.regenerateAll.button")}
@@ -790,11 +902,7 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
             <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">
               {t("prototype.title")}
             </span>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => setCreating((v) => !v)}
-            >
+            <Button size="sm" variant="secondary" onClick={() => setCreating((v) => !v)}>
               <Plus size={14} />
               {t("prototype.newTitle")}
             </Button>
@@ -936,13 +1044,39 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
             ) : (
               <ul className="divide-y divide-border-subtle">
                 {codeCandidates.map((candidate) => (
-                  <li key={candidate.id} className="grid grid-cols-[1fr_auto] gap-3 p-3 text-sm">
+                  <li
+                    key={candidate.id}
+                    className="grid grid-cols-[auto_1fr_auto] gap-3 p-3 text-sm"
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1 size-4 rounded border-border-subtle bg-surface-input accent-brand"
+                      checked={selectedCodeCandidateSet.has(candidate.id)}
+                      disabled={candidate.action === "unsupported"}
+                      aria-label={candidate.title}
+                      onChange={(event) => {
+                        setSelectedCodeCandidateIds((current) =>
+                          event.target.checked
+                            ? Array.from(new Set([...current, candidate.id]))
+                            : current.filter((id) => id !== candidate.id),
+                        );
+                      }}
+                    />
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-2">
                         <span className="truncate font-medium">{candidate.title}</span>
                         <span className="rounded-full border border-border-subtle px-2 py-0.5 text-[10px] uppercase text-text-muted">
                           {t(`prototype.generateFromCode.action.${candidate.action}`)}
                         </span>
+                        {isCodeCandidateBriefModified(candidate, codeCandidateBriefs) && (
+                          <span
+                            className="rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[10px] uppercase text-brand"
+                            title={t("prototype.generateFromCode.briefModified")}
+                            aria-label={t("prototype.generateFromCode.briefModified")}
+                          >
+                            {t("prototype.generateFromCode.briefModified")}
+                          </span>
+                        )}
                       </div>
                       <div className="mt-1 font-mono text-xs text-text-muted">
                         {candidate.route}
@@ -954,25 +1088,211 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
                     <div className="font-mono text-[10px] text-text-muted/70">
                       {candidate.source_hash.slice(0, 18)}
                     </div>
+                    <div className="col-span-3">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[11px] text-text-muted/70">
+                          {t("prototype.generateFromCode.editBriefHint")}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            disabled={candidate.action === "unsupported"}
+                            onClick={() => {
+                              setExpandedCodeBriefIds((current) =>
+                                current.includes(candidate.id)
+                                  ? current.filter((id) => id !== candidate.id)
+                                  : [...current, candidate.id],
+                              );
+                            }}
+                          >
+                            {expandedCodeBriefIds.includes(candidate.id)
+                              ? t("prototype.generateFromCode.hideBrief")
+                              : t("prototype.generateFromCode.editBrief")}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            disabled={
+                              candidate.action === "unsupported" ||
+                              (codeCandidateBriefs[candidate.id] ?? "") === candidate.editable_brief
+                            }
+                            onClick={() => {
+                              setCodeCandidateBriefs((current) => ({
+                                ...current,
+                                [candidate.id]: candidate.editable_brief,
+                              }));
+                            }}
+                          >
+                            {t("prototype.generateFromCode.resetBrief")}
+                          </Button>
+                        </div>
+                      </div>
+                      {expandedCodeBriefIds.includes(candidate.id) && (
+                        <div className="mb-2 space-y-1">
+                          <Textarea
+                            rows={6}
+                            className="font-mono text-xs"
+                            maxLength={MAX_CANDIDATE_QUERY_TEXT_CHARS}
+                            value={codeCandidateBriefs[candidate.id] ?? candidate.editable_brief}
+                            aria-label={t("prototype.generateFromCode.editBriefAriaLabel")}
+                            disabled={
+                              candidate.action === "unsupported" ||
+                              !selectedCodeCandidateSet.has(candidate.id)
+                            }
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setCodeCandidateBriefs((current) => ({
+                                ...current,
+                                [candidate.id]: value,
+                              }));
+                            }}
+                            onInput={(event) => {
+                              const value = event.currentTarget.value;
+                              setCodeCandidateBriefs((current) => ({
+                                ...current,
+                                [candidate.id]: value,
+                              }));
+                            }}
+                            placeholder={t("prototype.generateFromCode.editBriefPlaceholder")}
+                          />
+                          <p className="text-right font-mono text-[10px] text-text-muted/60">
+                            {isCodeCandidateBriefModified(candidate, codeCandidateBriefs) && (
+                              <span
+                                className="mr-2 text-brand"
+                                title={t("prototype.generateFromCode.briefModified")}
+                                aria-label={t("prototype.generateFromCode.briefModified")}
+                              >
+                                {t("prototype.generateFromCode.briefModified")}
+                              </span>
+                            )}
+                            {t("prototype.generateFromCode.editBriefLimit", {
+                              current: (
+                                codeCandidateBriefs[candidate.id] ?? candidate.editable_brief
+                              ).length,
+                              max: MAX_CANDIDATE_QUERY_TEXT_CHARS,
+                            })}
+                          </p>
+                        </div>
+                      )}
+                      <div className="space-y-1">
+                        <Textarea
+                          rows={2}
+                          maxLength={MAX_CANDIDATE_QUERY_TEXT_CHARS}
+                          value={codeCandidateInstructions[candidate.id] ?? ""}
+                          aria-label={t("prototype.generateFromCode.candidateInstructionAriaLabel")}
+                          disabled={
+                            candidate.action === "unsupported" ||
+                            !selectedCodeCandidateSet.has(candidate.id)
+                          }
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setCodeCandidateInstructions((current) => ({
+                              ...current,
+                              [candidate.id]: value,
+                            }));
+                          }}
+                          placeholder={t(
+                            "prototype.generateFromCode.candidateInstructionPlaceholder",
+                          )}
+                        />
+                        <p className="text-right font-mono text-[10px] text-text-muted/60">
+                          {t("prototype.generateFromCode.candidateInstructionLimit", {
+                            current: (codeCandidateInstructions[candidate.id] ?? "").length,
+                            max: MAX_CANDIDATE_QUERY_TEXT_CHARS,
+                          })}
+                        </p>
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
           </div>
+          {codeCandidates && codeCandidates.length > 0 && (
+            <div className="space-y-2 rounded-lg border border-border-subtle bg-surface-base/70 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-text-muted">
+                  {t("prototype.generateFromCode.selectedCount", {
+                    selected: selectedCodeCandidateCount,
+                    total: selectableCodeCandidateIds.length,
+                  })}
+                </span>
+                {modifiedCodeCandidateBriefCount > 0 && (
+                  <span
+                    className="rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[10px] uppercase text-brand"
+                    title={t("prototype.generateFromCode.modifiedBriefCount", {
+                      count: modifiedCodeCandidateBriefCount,
+                    })}
+                    aria-label={t("prototype.generateFromCode.modifiedBriefCount", {
+                      count: modifiedCodeCandidateBriefCount,
+                    })}
+                  >
+                    {t("prototype.generateFromCode.modifiedBriefCount", {
+                      count: modifiedCodeCandidateBriefCount,
+                    })}
+                  </span>
+                )}
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSelectedCodeCandidateIds(selectableCodeCandidateIds)}
+                  >
+                    {t("prototype.generateFromCode.selectAll")}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSelectedCodeCandidateIds([])}
+                  >
+                    {t("prototype.generateFromCode.clearSelection")}
+                  </Button>
+                </div>
+              </div>
+              <Textarea
+                rows={3}
+                value={codeInstruction}
+                onChange={(event) => setCodeInstruction(event.target.value)}
+                placeholder={t("prototype.generateFromCode.instructionPlaceholder")}
+              />
+              <p className="text-[11px] text-text-muted/70">
+                {t("prototype.generateFromCode.instructionHint")}
+              </p>
+              <label className="flex items-start gap-2 rounded-md border border-border-subtle bg-surface-raised/50 p-2 text-xs text-text-muted">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 rounded border-border-subtle bg-surface-input accent-brand"
+                  checked={useRuntimeEvidence}
+                  onChange={(event) => setUseRuntimeEvidence(event.target.checked)}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium text-foreground">
+                    {t("prototype.generateFromCode.runtimeToggle")}
+                  </span>
+                  <span>{t("prototype.generateFromCode.runtimeHint")}</span>
+                </span>
+              </label>
+              {useRuntimeEvidence && (
+                <Input
+                  value={runtimeBaseUrl}
+                  onChange={(event) => setRuntimeBaseUrl(event.target.value)}
+                  placeholder={t("prototype.generateFromCode.runtimeBaseUrlPlaceholder")}
+                />
+              )}
+            </div>
+          )}
           <DialogFooter showCloseButton>
-            <Button
-              variant="secondary"
-              onClick={() => setCodeScanOpen(false)}
-            >
+            <Button variant="secondary" onClick={() => setCodeScanOpen(false)}>
               {t("prototype.createCancel")}
             </Button>
             <Button
               onClick={startCodeGeneration}
-              disabled={
-                codeScanLoading ||
-                !codeCandidates ||
-                codeCandidates.filter((c) => c.action === "create" || c.action === "regenerate").length === 0
-              }
+              disabled={codeScanLoading || !codeCandidates || selectedCodeCandidateCount === 0}
             >
               {t("prototype.generateFromCode.startButton")}
             </Button>
@@ -980,14 +1300,22 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={codeProgressOpen} onOpenChange={(open) => codeGen.done && setCodeProgressOpen(open)}>
+      <Dialog
+        open={codeProgressOpen}
+        onOpenChange={(open) => codeGen.done && setCodeProgressOpen(open)}
+      >
         <DialogContent className="sm:max-w-2xl" showCloseButton={codeGen.done}>
           <DialogHeader>
             <DialogTitle>{t("prototype.generateFromCode.dialogTitle")}</DialogTitle>
             <DialogDescription>
               {codeGen.total > 0
                 ? t("prototype.generateFromCode.progressSummary", {
-                    done: codeGen.created + codeGen.regenerated + codeGen.skipped + codeGen.failed + codeGen.unsupported,
+                    done:
+                      codeGen.created +
+                      codeGen.regenerated +
+                      codeGen.skipped +
+                      codeGen.failed +
+                      codeGen.unsupported,
                     total: codeGen.total,
                   })
                 : t("prototype.generateFromCode.scanLoading")}
@@ -1002,7 +1330,10 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
             ) : (
               <ul className="flex flex-col divide-y divide-border-subtle">
                 {sortedCodeItems.map((item) => (
-                  <li key={item.candidateId} className="grid grid-cols-[auto_1fr] gap-3 py-2 text-sm">
+                  <li
+                    key={item.candidateId}
+                    className="grid grid-cols-[auto_1fr] gap-3 py-2 text-sm"
+                  >
                     <CodeStatusGlyph status={item.status} />
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-2">
@@ -1023,25 +1354,18 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
           </div>
           <DialogFooter showCloseButton={codeGen.done}>
             {codeGen.done && (
-              <Button onClick={() => setCodeProgressOpen(false)}>
-                {t("issue.close")}
-              </Button>
+              <Button onClick={() => setCodeProgressOpen(false)}>{t("issue.close")}</Button>
             )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={progressOpen} onOpenChange={handleProgressOpenChange}>
-        <DialogContent
-          className="sm:max-w-lg"
-          showCloseButton={regen.done}
-        >
+        <DialogContent className="sm:max-w-lg" showCloseButton={regen.done}>
           <DialogHeader>
             <DialogTitle>{t("prototype.regenerateAll.dialogTitle")}</DialogTitle>
             <DialogDescription>
-              {regen.total > 0
-                ? `${regen.okCount + regen.failedCount}/${regen.total}`
-                : ""}
+              {regen.total > 0 ? `${regen.okCount + regen.failedCount}/${regen.total}` : ""}
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-[60vh] overflow-auto">
@@ -1053,18 +1377,11 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
             ) : (
               <ul className="flex flex-col divide-y divide-border-subtle">
                 {sortedItems.map((item) => (
-                  <li
-                    key={item.prototypeId}
-                    className="flex items-center gap-3 py-2 text-sm"
-                  >
+                  <li key={item.prototypeId} className="flex items-center gap-3 py-2 text-sm">
                     <StatusGlyph status={item.status} />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">
-                        {item.title || item.prototypeId}
-                      </div>
-                      <div className="text-xs text-text-muted">
-                        {statusLabel(item, t)}
-                      </div>
+                      <div className="truncate font-medium">{item.title || item.prototypeId}</div>
+                      <div className="text-xs text-text-muted">{statusLabel(item, t)}</div>
                     </div>
                   </li>
                 ))}
@@ -1073,9 +1390,7 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
           </div>
           <DialogFooter showCloseButton={regen.done}>
             {regen.done && (
-              <Button onClick={() => setProgressOpen(false)}>
-                {t("issue.close")}
-              </Button>
+              <Button onClick={() => setProgressOpen(false)}>{t("issue.close")}</Button>
             )}
           </DialogFooter>
         </DialogContent>
@@ -1150,10 +1465,17 @@ function CodeStatusGlyph({ status }: { status: CodeItemStatus }) {
       </span>
     );
   }
-  if (status === "generating") {
+  if (status === "generating" || status === "capturing") {
     return (
       <span className="mt-0.5 flex size-5 items-center justify-center text-brand">
         <Loader2 size={14} className="animate-spin" />
+      </span>
+    );
+  }
+  if (status === "capture_failed") {
+    return (
+      <span className="mt-0.5 flex size-5 items-center justify-center rounded-full border border-status-awaiting/40 text-status-awaiting">
+        <span className="size-1.5 rounded-full bg-current" />
       </span>
     );
   }
@@ -1164,7 +1486,10 @@ function CodeStatusGlyph({ status }: { status: CodeItemStatus }) {
   );
 }
 
-function statusLabel(item: RegenItem, t: (key: string, params?: Record<string, string | number>) => string): string {
+function statusLabel(
+  item: RegenItem,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
   if (item.status === "done" && item.versionNo !== undefined) {
     return t("prototype.regenerateAll.statusDone", { version: item.versionNo });
   }
@@ -1194,6 +1519,12 @@ function codeStatusLabel(
   }
   if (item.status === "unsupported") {
     return t("prototype.generateFromCode.status.unsupported");
+  }
+  if (item.status === "capturing") return t("prototype.generateFromCode.status.capturing");
+  if (item.status === "capture_failed") {
+    return t("prototype.generateFromCode.status.captureFailed", {
+      message: item.message ?? "",
+    });
   }
   if (item.status === "generating") return t("prototype.generateFromCode.status.generating");
   return t("prototype.generateFromCode.status.pending");

@@ -23,7 +23,10 @@ const ROLE_LABEL: Record<string, string> = {
   "specialist:log_summarizer": "Log Summarizer",
 };
 
-const STATUS_CONFIG: Record<string, { icon: typeof CheckCircle2; color: string; bg: string; border: string }> = {
+const STATUS_CONFIG: Record<
+  string,
+  { icon: typeof CheckCircle2; color: string; bg: string; border: string }
+> = {
   done: {
     icon: CheckCircle2,
     color: "var(--color-status-done)",
@@ -66,9 +69,7 @@ export function SubAgentResultCard({ result }: Props) {
   const [artifactShowAll, setArtifactShowAll] = useState(false);
 
   const roleLabel = ROLE_LABEL[result.role] ?? result.role;
-  const artifactText = result.artifact_json
-    ? JSON.stringify(result.artifact_json, null, 2)
-    : null;
+  const artifactText = result.artifact_json ? JSON.stringify(result.artifact_json, null, 2) : null;
   const artifactPreview = artifactText
     ? artifactShowAll
       ? artifactText
@@ -186,7 +187,10 @@ export function SubAgentResultCard({ result }: Props) {
               onClick={() => setArtifactExpanded((v) => !v)}
               className="flex items-center gap-2 text-[12px] font-semibold text-text-muted hover:text-foreground transition-colors group"
             >
-              <FileJson2 size={13} className="text-text-faint group-hover:text-brand transition-colors" />
+              <FileJson2
+                size={13}
+                className="text-text-faint group-hover:text-brand transition-colors"
+              />
               {artifactExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
               <span>Artifact JSON</span>
             </button>
@@ -202,7 +206,9 @@ export function SubAgentResultCard({ result }: Props) {
                     onClick={() => setArtifactShowAll((v) => !v)}
                     className="mt-2 text-[12px] font-semibold text-brand hover:text-brand-strong transition-colors"
                   >
-                    {artifactShowAll ? "Show less" : `Show all (${Math.round(artifactText.length / 1024)}KB)`}
+                    {artifactShowAll
+                      ? "Show less"
+                      : `Show all (${Math.round(artifactText.length / 1024)}KB)`}
                   </button>
                 )}
               </div>

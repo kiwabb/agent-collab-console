@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 import asyncio  # noqa: F401
+from collections.abc import Awaitable, Callable
 
 import pytest
 
 from app.application.embedding_service import EmbeddingConfig, EmbeddingService
+
+EmbeddingProvider = Callable[[list[str]], Awaitable[list[list[float]]]]
+
+
+class _ProviderEmbeddingService(EmbeddingService):
+    def __init__(self, provider: EmbeddingProvider) -> None:
+        super().__init__(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
+        self._provider = provider
+
+    async def _call_provider(self, texts: list[str]) -> list[list[float]]:
+        return await self._provider(texts)
 
 
 def test_disabled_when_endpoint_missing():
@@ -61,26 +73,23 @@ async def test_embed_one_returns_none_when_disabled():
 
 @pytest.mark.asyncio
 async def test_embed_one_returns_none_for_empty_text():
-    svc = EmbeddingService(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
-
     async def fake_call(texts):
         return [[1.0, 0.0]]
 
-    svc._call_provider = fake_call  # type: ignore[assignment]
+    svc = _ProviderEmbeddingService(fake_call)
     assert await svc.embed_one("") is None
     assert await svc.embed_one("   ") is None
 
 
 @pytest.mark.asyncio
 async def test_embed_one_uses_cache(monkeypatch):
-    svc = EmbeddingService(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
     calls = {"n": 0}
 
     async def fake_call(texts):
         calls["n"] += 1
         return [[float(len(t))] for t in texts]
 
-    svc._call_provider = fake_call  # type: ignore[assignment]
+    svc = _ProviderEmbeddingService(fake_call)
     a = await svc.embed_one("hello")
     b = await svc.embed_one("hello")
     assert a == b
@@ -89,12 +98,10 @@ async def test_embed_one_uses_cache(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_embed_one_swallows_provider_errors():
-    svc = EmbeddingService(EmbeddingConfig(endpoint="http://x", api_key="k", model="m"))
-
     async def boom(texts):
         raise RuntimeError("provider exploded")
 
-    svc._call_provider = boom  # type: ignore[assignment]
+    svc = _ProviderEmbeddingService(boom)
     assert await svc.embed_one("anything") is None
 
 

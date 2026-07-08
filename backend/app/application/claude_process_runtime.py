@@ -3,13 +3,18 @@ from __future__ import annotations
 import asyncio  # noqa: I001, RUF100
 import json
 import os
-import subprocess
 from datetime import datetime
 
+from app.adapters.local_process import run_trusted_local
 from app.application import timeouts
 from app.application.process_runtime_common import (
     AsyncProcessEntry,
     BaseProcessRuntime,
+    RefreshTaskResult,
+    RuntimeCodexStore,
+    RuntimeEventBus,
+    RuntimeHelpOrchestrator,
+    RuntimeLogStore,
     is_workspace_console_task,
 )
 
@@ -17,14 +22,14 @@ from app.application.process_runtime_common import (
 class ClaudeProcessRuntime(BaseProcessRuntime):
     def __init__(
         self,
-        codex_store,
-        log_store,
-        data_dir=None,
-        event_bus=None,
-        processes=None,
-        help_orchestrator=None,
-        refresh_task_result=None,
-    ):
+        codex_store: RuntimeCodexStore,
+        log_store: RuntimeLogStore,
+        data_dir: str | None = None,
+        event_bus: RuntimeEventBus | None = None,
+        processes: dict[str, AsyncProcessEntry] | None = None,
+        help_orchestrator: RuntimeHelpOrchestrator | None = None,
+        refresh_task_result: RefreshTaskResult | None = None,
+    ) -> None:
         super().__init__(
             codex_store,
             log_store,
@@ -39,7 +44,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
     def check_availability(self) -> bool:
         try:
             return (
-                subprocess.run(
+                run_trusted_local(
                     [self._claude_cmd[0], "--version"],
                     capture_output=True,
                 ).returncode
@@ -64,7 +69,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         env_overrides: dict[str, str] | None = None,
         command_args: list[str] | None = None,
         force_new_session: bool = False,
-        **legacy_kwargs,
+        **legacy_kwargs: object,
     ) -> str:
         """Write input using asyncio subprocess."""
         workspace_id = self._resolve_workspace_id(workspace_id, **legacy_kwargs)
@@ -96,8 +101,11 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         await self._append_log(workspace_id, "stdin", input_text, task_id)
         try:
             input_payload = self._encode_claude_input(input_text).encode("utf-8")
-            entry.proc.stdin.write(input_payload)
-            await entry.proc.stdin.drain()
+            stdin = entry.proc.stdin
+            if stdin is None:
+                raise BrokenPipeError("Claude subprocess stdin is closed")
+            stdin.write(input_payload)
+            await stdin.drain()
         except (BrokenPipeError, OSError, AttributeError):
             # Process died, retry once by respawning
             self._processes.pop(process_key, None)
@@ -125,7 +133,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
 
         return "responding"
 
-    def _owns_entry(self, entry) -> bool:
+    def _owns_entry(self, entry: AsyncProcessEntry) -> bool:
         return getattr(entry, "executor", None) == "claude"
 
     async def _spawn_process_async(
@@ -169,10 +177,10 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         # Issue tasks must run in their isolated worktree, never fall back to
         # workspace.cwd (= main project repo). Falling back would let the agent
         # modify the main project instead of the issue branch.
-        is_issue_task = task is not None and getattr(task, "issue_id", None)
-        if is_issue_task and not cwd:
+        task_issue_id = getattr(task, "issue_id", None) if task is not None else None
+        if task_issue_id and not cwd:
             raise ValueError(
-                f"Issue task {task_id} (issue={task.issue_id}) has no worktree cwd. "
+                f"Issue task {task_id} (issue={task_issue_id}) has no worktree cwd. "
                 "Refusing to run in main project directory."
             )
         effective_cwd = cwd or getattr(workspace, "cwd", None) or self._data_dir
@@ -182,10 +190,15 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         effective_resume_id = (
             resume_session_id if force_new_session else (resume_session_id or ws_fallback_id)
         )
+        runtime_catalog_controls_api = bool(
+            env_overrides
+            and ("ANTHROPIC_BASE_URL" in env_overrides or "ANTHROPIC_API_KEY" in env_overrides)
+        )
         cmd = self._build_claude_command(
             effective_resume_id,
             resume_message_id=resume_message_id,
             model=model,
+            setting_sources="project,local" if runtime_catalog_controls_api else None,
         )
 
         env = os.environ.copy()
@@ -239,11 +252,15 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             cmd=cmd,
             cwd=effective_cwd,
             task_id=task_id,
+            execution_process_id=getattr(task, "last_execution_process_id", None),
             workspace_id=workspace_id,
             provider=provider,
             model=model,
             resume_session_id=effective_resume_id,
             pid=getattr(proc, "pid", None),
+            trace_id=getattr(task, "trace_id", None),
+            span_id=getattr(task, "span_id", None),
+            parent_span_id=getattr(task, "parent_span_id", None),
         )
 
         entry = AsyncProcessEntry(
@@ -274,6 +291,10 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         model: str | None,
         resume_session_id: str | None,
         pid: int | None,
+        execution_process_id: str | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+        parent_span_id: str | None = None,
     ) -> None:
         """Record a CLI subprocess launch into the unified audit_log.
 
@@ -287,11 +308,15 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             cmd=cmd,
             cwd=cwd,
             task_id=task_id,
+            execution_process_id=execution_process_id,
             workspace_id=workspace_id,
             provider=provider,
             model=model,
             resume_session_id=resume_session_id,
             pid=pid,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
         )
 
     def _build_claude_command(
@@ -303,6 +328,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         effort: str | None = None,
         agent: str | None = None,
         approval_mode: bool = False,
+        setting_sources: str | None = None,
     ) -> list[str]:
         base = list(self._claude_cmd)
 
@@ -324,6 +350,17 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             base.extend(["--effort", effort])
         if agent and f"--agent={agent}" not in joined and "--agent" not in joined:
             base.extend(["--agent", agent])
+        if (
+            setting_sources
+            and "--setting-sources" not in base
+            and not any(arg.startswith("--setting-sources=") for arg in base)
+        ):
+            # Runtime-catalog API credentials must not be overwritten by
+            # ~/.claude/settings.json env entries (for example a personal
+            # ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL for another gateway).
+            # Keep project/local settings, but exclude user settings only when
+            # the catalog explicitly owns the API endpoint/key.
+            base.extend(["--setting-sources", setting_sources])
 
         # Clean up any existing permission flags to avoid duplicates/conflicts
         base = [arg for arg in base if not arg.startswith("--permission-mode=")]

@@ -50,15 +50,12 @@ export function ArtifactsSplitView({ artifacts }: Props) {
         .map(normalize)
         .sort(
           (a, b) =>
-            (a.created_at ?? "").localeCompare(b.created_at ?? "") ||
-            a.name.localeCompare(b.name),
+            (a.created_at ?? "").localeCompare(b.created_at ?? "") || a.name.localeCompare(b.name),
         ),
     [artifacts],
   );
 
-  const [activeId, setActiveId] = useState<string | null>(
-    sorted[0]?.id ?? null,
-  );
+  const [activeId, setActiveId] = useState<string | null>(sorted[0]?.id ?? null);
 
   // Keep selection alive across refreshes; if the previously selected
   // artifact is no longer in the list (rare), pick the first.
@@ -68,7 +65,7 @@ export function ArtifactsSplitView({ artifacts }: Props) {
       return;
     }
     if (!activeId || !sorted.some((a) => a.id === activeId)) {
-      setActiveId(sorted[0].id);
+      setActiveId(sorted[0]?.id ?? null);
     }
   }, [sorted, activeId]);
 
@@ -92,9 +89,7 @@ export function ArtifactsSplitView({ artifacts }: Props) {
                 className={cn(
                   "w-full grid grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2.5 px-3.5 py-2 text-left",
                   "border-l-2 transition-colors hover:bg-surface-hover",
-                  a.id === active?.id
-                    ? "bg-surface-hover border-brand"
-                    : "border-transparent",
+                  a.id === active?.id ? "bg-surface-hover border-brand" : "border-transparent",
                 )}
               >
                 <KindIcon kind={kind} />
@@ -177,9 +172,7 @@ function PreviewBody({
 }) {
   if (!artifact) {
     return (
-      <div className="flex-1 grid place-items-center text-[12px] text-text-muted">
-        {emptyText}
-      </div>
+      <div className="flex-1 grid place-items-center text-[12px] text-text-muted">{emptyText}</div>
     );
   }
   const content = artifact.content;
@@ -226,9 +219,7 @@ function PreviewBody({
                 </h4>
               ),
               p: ({ children }) => (
-                <p className="my-2.5 text-[13px] leading-relaxed text-text-secondary">
-                  {children}
-                </p>
+                <p className="my-2.5 text-[13px] leading-relaxed text-text-secondary">{children}</p>
               ),
               ul: ({ children }) => (
                 <ul className="pl-6 my-3 list-disc space-y-1.5 text-[13px] text-text-secondary">
@@ -240,11 +231,7 @@ function PreviewBody({
                   {children}
                 </ol>
               ),
-              li: ({ children }) => (
-                <li className="leading-relaxed pl-0.5">
-                  {children}
-                </li>
-              ),
+              li: ({ children }) => <li className="leading-relaxed pl-0.5">{children}</li>,
               blockquote: ({ children }) => (
                 <blockquote className="pl-4 py-2 my-4 border-l-4 border-brand bg-brand-muted/10 rounded-r-xl text-text-secondary italic text-[13px] leading-relaxed">
                   {children}
@@ -263,28 +250,20 @@ function PreviewBody({
                 </thead>
               ),
               tbody: ({ children }) => (
-                <tbody className="divide-y divide-border-subtle bg-transparent">
-                  {children}
-                </tbody>
+                <tbody className="divide-y divide-border-subtle bg-transparent">{children}</tbody>
               ),
               tr: ({ children }) => (
-                <tr className="hover:bg-surface-hover/30 transition-colors">
-                  {children}
-                </tr>
+                <tr className="hover:bg-surface-hover/30 transition-colors">{children}</tr>
               ),
               th: ({ children }) => (
-                <th className="px-4 py-3 font-semibold text-foreground">
-                  {children}
-                </th>
+                <th className="px-4 py-3 font-semibold text-foreground">{children}</th>
               ),
               td: ({ children }) => (
                 <td className="px-4 py-2.5 text-text-secondary font-medium font-sans">
                   {children}
                 </td>
               ),
-              hr: () => (
-                <hr className="my-6 border-t border-border-subtle" />
-              ),
+              hr: () => <hr className="my-6 border-t border-border-subtle" />,
               a: ({ href, children }) => (
                 <a
                   href={href}
@@ -308,9 +287,7 @@ function PreviewBody({
                 );
               },
               strong: ({ children }) => (
-                <strong className="text-foreground font-black">
-                  {children}
-                </strong>
+                <strong className="text-foreground font-black">{children}</strong>
               ),
             }}
           >
@@ -348,21 +325,13 @@ function ArtifactMetaGrid({ artifact }: { artifact: NormalArtifact }) {
       <span className="text-text-faint">size</span>
       <span className="text-text-secondary">
         {fmtSize(artifact.content)}
-        {artifact.content
-          ? ` · ${artifact.content.split("\n").length} lines`
-          : ""}
+        {artifact.content ? ` · ${artifact.content.split("\n").length} lines` : ""}
       </span>
     </div>
   );
 }
 
-function HeaderAction({
-  label,
-  onClick,
-}: {
-  label: string;
-  onClick?: () => void;
-}) {
+function HeaderAction({ label, onClick }: { label: string; onClick?: () => void }) {
   return (
     <button
       type="button"
@@ -382,8 +351,7 @@ function inferKind(name: string): Kind {
   if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
   if (lower.endsWith(".json")) return "json";
   if (lower.endsWith(".py")) return "py";
-  if (/\.(ts|tsx|js|jsx|css|html|sql|sh|go|rs|java|c|cpp)$/.test(lower))
-    return "code";
+  if (/\.(ts|tsx|js|jsx|css|html|sql|sh|go|rs|java|c|cpp)$/.test(lower)) return "code";
   return "other";
 }
 

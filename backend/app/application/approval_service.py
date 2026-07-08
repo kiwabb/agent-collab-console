@@ -3,16 +3,19 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from app.domain.models import Approval, ApprovalEvent
+from app.application.session_service import SessionService
+from app.domain.models import Approval, ApprovalEvent, Session
 from app.domain.states import SessionState
 
 
 class ApprovalService:
-    def __init__(self, session_service):
+    def __init__(self, session_service: SessionService) -> None:
         self.session_service = session_service
         self.approvals: dict[str, Approval] = {}
 
-    def _create_event(self, session, approval, event_type: str) -> ApprovalEvent:
+    def _create_event(
+        self, session: Session, approval: Approval, event_type: str
+    ) -> ApprovalEvent:
         event = ApprovalEvent(
             id=str(uuid4()),
             session_id=session.id,

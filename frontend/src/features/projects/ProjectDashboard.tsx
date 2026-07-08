@@ -40,7 +40,11 @@ export function ProjectDashboard({ projectId }: Props) {
       setStats(s);
       setBranches(b);
     } catch (err) {
-      addToast({ type: "error", title: t("project.dashboard.loadFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("project.dashboard.loadFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }, [projectId, addToast, t]);
 
@@ -59,7 +63,11 @@ export function ProjectDashboard({ projectId }: Props) {
       addToast({ type: "success", title: t("project.dashboard.workspaceCreated") });
       router.push(`/workspaces/${ws.id}`);
     } catch (err) {
-      addToast({ type: "error", title: t("project.dashboard.workspaceCreateFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("project.dashboard.workspaceCreateFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }, [newTitle, projectId, router, addToast, t]);
 
@@ -78,7 +86,6 @@ export function ProjectDashboard({ projectId }: Props) {
       </div>
     );
   }
-
 
   return (
     <div className="px-8 py-6 max-w-6xl mx-auto">
@@ -111,14 +118,22 @@ export function ProjectDashboard({ projectId }: Props) {
           <Button onClick={() => void handleCreate()} disabled={!newTitle.trim()}>
             {t("project.dashboard.create")}
           </Button>
-          <Button variant="outline" onClick={() => { setCreating(false); setNewTitle(""); }}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setCreating(false);
+              setNewTitle("");
+            }}
+          >
             {t("project.dashboard.cancel")}
           </Button>
         </div>
       )}
 
       <section className="mb-6">
-        <h2 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">{t("project.dashboard.workspaces")}</h2>
+        <h2 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">
+          {t("project.dashboard.workspaces")}
+        </h2>
         {workspaces.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border-subtle p-8 text-center text-sm text-text-muted">
             {t("project.dashboard.noWorkspaces")}
@@ -143,7 +158,9 @@ export function ProjectDashboard({ projectId }: Props) {
       <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {stats && (
           <div className="rounded-lg border border-border-subtle p-4">
-            <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-2">{t("project.dashboard.issues")}</h3>
+            <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-2">
+              {t("project.dashboard.issues")}
+            </h3>
             <div className="grid grid-cols-4 gap-3 text-center">
               <Stat label={t("project.dashboard.total")} value={stats.issues_total ?? 0} />
               <Stat label={t("project.dashboard.open")} value={stats.issues_open ?? 0} />
@@ -163,7 +180,11 @@ export function ProjectDashboard({ projectId }: Props) {
               {branches.slice(0, 8).map((b) => (
                 <li key={b.name} className="flex justify-between items-center">
                   <span className="font-mono text-xs">{b.name}</span>
-                  {b.is_current && <span className="text-[10px] font-bold text-brand">{t("project.dashboard.current")}</span>}
+                  {b.is_current && (
+                    <span className="text-[10px] font-bold text-brand">
+                      {t("project.dashboard.current")}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

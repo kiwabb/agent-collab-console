@@ -78,7 +78,7 @@ export function WorkspaceBoard({ workspaceId }: Props) {
         });
       }
     },
-    [workspaceId, addToast, t]
+    [workspaceId, addToast, t],
   );
 
   const handleDelete = useCallback(
@@ -95,7 +95,7 @@ export function WorkspaceBoard({ workspaceId }: Props) {
         });
       }
     },
-    [addToast, t]
+    [addToast, t],
   );
 
   const handleExport = useCallback(async () => {
@@ -147,7 +147,9 @@ export function WorkspaceBoard({ workspaceId }: Props) {
     <div className="px-8 py-6">
       <div className="mb-6 flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">{workspace?.title ?? t("workspace.title")}</h1>
+          <h1 className="text-2xl font-black tracking-tight">
+            {workspace?.title ?? t("workspace.title")}
+          </h1>
           {project && (
             <p className="text-xs text-text-muted mt-1">
               {project.name} · {project.repo_path}

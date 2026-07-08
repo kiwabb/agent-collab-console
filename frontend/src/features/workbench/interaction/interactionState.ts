@@ -1,10 +1,4 @@
-import type {
-  Approval,
-  Artifact,
-  CodexIssue,
-  CodexTask,
-  ExecutionProcess,
-} from "@/lib/types";
+import type { Approval, Artifact, CodexIssue, CodexTask, ExecutionProcess } from "@/lib/types";
 
 export type AttentionKind = "approval" | "failure" | "running" | "question";
 
@@ -33,12 +27,7 @@ export interface IssueNextAction {
 }
 
 export interface RecoveryAction {
-  id:
-    | "open_logs"
-    | "rerun_same"
-    | "change_executor"
-    | "submit_review"
-    | "stop_run";
+  id: "open_logs" | "rerun_same" | "change_executor" | "submit_review" | "stop_run";
   label: string;
   detail: string;
   tone: "neutral" | "primary" | "warning" | "danger";
@@ -54,10 +43,7 @@ export function deriveAttentionItems(input: {
 
   for (const issue of input.issues) {
     const title = issue.title || issue.id.slice(0, 8);
-    if (
-      issue.status === "awaiting_approval" ||
-      issue.status === "awaiting_review"
-    ) {
+    if (issue.status === "awaiting_approval" || issue.status === "awaiting_review") {
       items.push({
         id: issue.id,
         kind: "approval",
@@ -94,9 +80,7 @@ export function deriveAttentionItems(input: {
         kind: "question",
         title: task.title || task.id.slice(0, 8),
         detail: "Agent question waiting for answer",
-        href: task.issue_id
-          ? `/issues/${task.issue_id}?tab=tasks&taskId=${task.id}`
-          : "/approvals",
+        href: task.issue_id ? `/issues/${task.issue_id}?tab=tasks&taskId=${task.id}` : "/approvals",
         priority: 9,
       });
     }
@@ -122,15 +106,11 @@ export function deriveIssueNextAction(input: {
 
   const issueTasks = input.tasks.filter((task) => task.issue_id === issue.id);
   const hasActiveTask = issueTasks.some((task) =>
-    ["running", "responding"].includes(
-      String(task.status || "").toLowerCase(),
-    ),
+    ["running", "responding"].includes(String(task.status || "").toLowerCase()),
   );
   const hasFailure =
     issue.status === "failed" ||
-    issueTasks.some(
-      (task) => String(task.status || "").toLowerCase() === "failed",
-    );
+    issueTasks.some((task) => String(task.status || "").toLowerCase() === "failed");
 
   if (hasFailure) {
     return {
@@ -163,8 +143,7 @@ export function deriveIssueNextAction(input: {
       label: "Agent running",
       detail: "Live work is in progress.",
       enabled: false,
-      disabledReason:
-        "A task is currently running. Wait for completion or open the live run.",
+      disabledReason: "A task is currently running. Wait for completion or open the live run.",
     };
   }
   return {
@@ -179,9 +158,7 @@ export function deriveRunRecoveryActions(input: {
   task: CodexTask | null;
   process: ExecutionProcess | null;
 }): RecoveryAction[] {
-  const status = String(
-    input.process?.status || input.task?.status || "",
-  ).toLowerCase();
+  const status = String(input.process?.status || input.task?.status || "").toLowerCase();
 
   if (status === "failed") {
     return [

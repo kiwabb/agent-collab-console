@@ -1,18 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readCompactSource as readSource } from "./sourceTestUtils";
 
 import { buildDecisionTimeline } from "../src/features/issues/hooks/useDecisionTimeline";
 import { deriveLatestFailure } from "../src/features/issues/hooks/useLatestFailure";
 import { deriveTimelineExecutionSummary } from "../src/features/issues/components/deriveTimelineExecutionSummary";
 import type { CodexTask } from "../src/lib/types";
-
-const SRC_ROOT = join(process.cwd(), "src");
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
 
 function makeTask(overrides: Partial<CodexTask>): CodexTask {
   return {
@@ -89,31 +82,49 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(statusSource, /isConductorActive/);
   assert.match(statusSource, /<AgentThinkingIndicator/);
   assert.match(pageSource, /data-density="issue-workbench"/);
-  assert.match(pageSource, /data-density=\{isWorkbenchSchedulingMotion \? "workbench-scheduling-tabs" : "workbench-tabs"\}/);
+  assert.match(
+    pageSource,
+    /data-density=\{isWorkbenchSchedulingMotion \? "workbench-scheduling-tabs" : "workbench-tabs"\}/,
+  );
   assert.doesNotMatch(pageSource, /\?\? tasks\[0\]/);
   assert.match(sideStackSource, /data-density="insight-rail"/);
   assert.match(gitSource, /data-density="git-ops"/);
   assert.match(pageSource, /overflow-y-auto/);
   assert.match(pageSource, /2xl:grid-cols-\[minmax\(0,1fr\)_minmax\(320px,360px\)\]/);
   assert.doesNotMatch(pageSource, /hidden xl:flex/);
-  assert.doesNotMatch(timelineSource, /overflow-y-auto|h-full|min-h-0|rounded-\[28px\]|rounded-2xl|shadow-\[/);
+  assert.doesNotMatch(
+    timelineSource,
+    /overflow-y-auto|h-full|min-h-0|rounded-\[28px\]|rounded-2xl|shadow-\[/,
+  );
   assert.match(timelineSource, /data-timeline-execution-summary/);
   assert.match(timelineSource, /deriveTimelineExecutionSummary/);
   assert.doesNotMatch(rowSource, /truncate|line-clamp|max-h-36|rounded-2xl/);
   assert.match(rowSource, /isSchedulingMotion/);
   assert.match(rowSource, /item\.kind === "finalize"/);
   assert.match(rowSource, /item\.kind === "memory"/);
-  assert.match(rowSource, /item\.kind === "memory" \|\|\s*item\.kind === "clarification" \|\|\s*item\.kind === "finalize"/);
+  assert.match(
+    rowSource,
+    /item\.kind === "memory" \|\|\s*item\.kind === "clarification" \|\|\s*item\.kind === "finalize"/,
+  );
   assert.match(rowSource, /timelineMotionPhase/);
-  assert.match(rowSource, /data-density=\{isSchedulingMotion \? "decision-timeline-scheduling-row" : "decision-timeline-row"\}/);
+  assert.match(
+    rowSource,
+    /data-density=\{isSchedulingMotion \? "decision-timeline-scheduling-row" : "decision-timeline-row"\}/,
+  );
   assert.match(rowSource, /isSchedulingMotion && "motion-essential"/);
   assert.match(rowSource, /animate-shimmer-sweep/);
   assert.match(rowSource, /item\.kind === "memory" \? "tool"/);
   assert.match(rowSource, /: "thinking"/);
   assert.match(rowSource, /phase=\{timelineMotionPhase\}/);
-  assert.match(rowSource, /data-density=\{isTimelineRunning \? "decision-timeline-running-status" : "decision-timeline-status"\}/);
+  assert.match(
+    rowSource,
+    /data-density=\{isTimelineRunning \? "decision-timeline-running-status" : "decision-timeline-status"\}/,
+  );
   assert.match(rowSource, /isTimelineRunning && "motion-essential"/);
-  assert.match(rowSource, /isTimelineRunning \? \(\s*<AgentThinkingIndicator phase=\{timelineMotionPhase\} size=\{14\} \/>/);
+  assert.match(
+    rowSource,
+    /isTimelineRunning \? \(\s*<AgentThinkingIndicator phase=\{timelineMotionPhase\} size=\{14\} \/>/,
+  );
   assert.doesNotMatch(rowSource, /Loader2/);
   assert.doesNotMatch(rowSource, /item\.status === "running" \? "animate-spin" : undefined/);
   assert.match(drawerSource, /isSchedulingDrawerMotion/);
@@ -124,8 +135,14 @@ test("issue detail page uses compact operations command-center chrome", () => {
   assert.match(drawerSource, /phase=\{drawerMotionPhase\}/);
 
   assert.doesNotMatch(pageSource, /radial-gradient|rounded-\[24px\]|rounded-2xl/);
-  assert.doesNotMatch(statusSource, /xl:grid-cols-\[minmax\(0,1\.2fr\)_minmax\(320px,0\.72fr\)_auto\]/);
-  assert.doesNotMatch(statusSource, /line-clamp|agent-mesh-grid|Decorative ambient background glows|rounded-\[28px\]|blur-\[|animate-ping/);
+  assert.doesNotMatch(
+    statusSource,
+    /xl:grid-cols-\[minmax\(0,1\.2fr\)_minmax\(320px,0\.72fr\)_auto\]/,
+  );
+  assert.doesNotMatch(
+    statusSource,
+    /line-clamp|agent-mesh-grid|Decorative ambient background glows|rounded-\[28px\]|blur-\[|animate-ping/,
+  );
   assert.doesNotMatch(sideStackSource, /rounded-\[24px\]|shadow-xl|animate-pulse|backdrop-blur-xl/);
   assert.doesNotMatch(gitSource, /rounded-\[24px\]|shadow-xl|animate-pulse|backdrop-blur-xl/);
   assert.doesNotMatch(chatSource, /rounded-2xl|rounded-xl/);
@@ -137,8 +154,14 @@ test("issue detail page uses compact operations command-center chrome", () => {
 test("status strip marks active conductor phase with semantic motion", () => {
   const statusSource = readSource("features/issues/components/StatusStrip.tsx");
 
-  assert.match(statusSource, /const conductorMotionPhase = isConductorActive \? phase\.phase \?\? "dispatching" : isPaused \? "paused" : "idle"/);
-  assert.match(statusSource, /data-density=\{isConductorActive \? "command-conductor-active-strip" : "conductor-strip"\}/);
+  assert.match(
+    statusSource,
+    /const conductorMotionPhase = isConductorActive \? \(?phase\.phase \?\? "dispatching"\)? : isPaused \? "paused" : "idle"/,
+  );
+  assert.match(
+    statusSource,
+    /data-density=\{isConductorActive \? "command-conductor-active-strip" : "conductor-strip"\}/,
+  );
   assert.match(statusSource, /isConductorActive && "motion-essential/);
   assert.match(statusSource, /<AgentThinkingIndicator phase=\{conductorMotionPhase\} size=\{14\}/);
   assert.match(statusSource, /animate-shimmer-sweep/);
@@ -161,9 +184,15 @@ test("workflow graph marks active dispatch batch lanes with scheduling motion", 
 test("git info diff loading uses tool motion while syncing diff state", () => {
   const gitSource = readSource("features/issues/components/GitInfoCard.tsx");
 
-  assert.match(gitSource, /import \{ AgentThinkingIndicator \} from "@\/components\/ui\/AgentThinkingIndicator";/);
+  assert.match(
+    gitSource,
+    /import \{ AgentThinkingIndicator \} from "@\/components\/ui\/AgentThinkingIndicator";/,
+  );
   assert.match(gitSource, /data-density="git-ops-diff-tool-loading"/);
-  assert.match(gitSource, /className="motion-essential inline-flex items-center gap-2 p-4 text-sm font-semibold text-text-secondary"/);
+  assert.match(
+    gitSource,
+    /className="motion-essential inline-flex items-center gap-2 p-4 text-sm font-semibold text-text-secondary"/,
+  );
   assert.match(gitSource, /<AgentThinkingIndicator phase="tool" size=\{14\} \/>/);
   assert.doesNotMatch(gitSource, /<Loader2 className="animate-spin text-brand" size=\{14\} \/>/);
 });
@@ -202,9 +231,15 @@ test("conductor monitor refresh cta uses tool motion while syncing", () => {
   const monitorSource = readSource("features/conductors/ConductorMonitorPage.tsx");
 
   assert.match(monitorSource, /const \[refreshing, setRefreshing\] = useState\(false\)/);
-  assert.match(monitorSource, /data-density=\{refreshing \? "conductor-monitor-refresh-tool" : "conductor-monitor-refresh"\}/);
+  assert.match(
+    monitorSource,
+    /data-density=\{refreshing \? "conductor-monitor-refresh-tool" : "conductor-monitor-refresh"\}/,
+  );
   assert.match(monitorSource, /className=\{cn\("gap-2", refreshing && "motion-essential"\)\}/);
-  assert.match(monitorSource, /refreshing \? <AgentThinkingIndicator phase="tool" size=\{14\} \/> : <RefreshCw size=\{14\} \/>/);
+  assert.match(
+    monitorSource,
+    /refreshing \? <AgentThinkingIndicator phase="tool" size=\{14\} \/> : <RefreshCw size=\{14\} \/>/,
+  );
   assert.doesNotMatch(monitorSource, /RefreshCw size=\{14\} className=\{[^}]*animate-spin/);
 });
 
@@ -212,7 +247,10 @@ test("issue side activity marks running pipeline stages with scheduling motion",
   const sideStackSource = readSource("features/issues/components/IssueSideStack.tsx");
 
   assert.match(sideStackSource, /isScheduling/);
-  assert.match(sideStackSource, /data-density=\{evt\.isScheduling \? "insight-activity-scheduling" : "insight-activity-event"\}/);
+  assert.match(
+    sideStackSource,
+    /data-density=\{evt\.isScheduling \? "insight-activity-scheduling" : "insight-activity-event"\}/,
+  );
   assert.match(sideStackSource, /<AgentThinkingIndicator/);
   assert.match(sideStackSource, /animate-shimmer-sweep/);
   assert.match(sideStackSource, /phase="dispatching"/);
@@ -233,7 +271,10 @@ test("command chat bar marks conductor clarification with scheduling motion", ()
 test("command chat bar send cta uses thinking motion while sending", () => {
   const chatSource = readSource("features/issues/components/CommandCenterChatBar.tsx");
 
-  assert.match(chatSource, /data-density=\{sending \? "command-chat-send-thinking" : "command-chat-send"\}/);
+  assert.match(
+    chatSource,
+    /data-density=\{sending \? "command-chat-send-thinking" : "command-chat-send"\}/,
+  );
   assert.match(chatSource, /sending && "motion-essential"/);
   assert.match(chatSource, /<AgentThinkingIndicator phase="thinking" size=\{14\}/);
   assert.doesNotMatch(chatSource, /sending \? <Loader2 size=\{14\} className="animate-spin"/);
@@ -249,7 +290,10 @@ test("conductor chat bar uses thinking motion while sending", () => {
 test("steer issue dialog send cta uses thinking motion while sending", () => {
   const dialogSource = readSource("features/issues/components/SteerIssueDialog.tsx");
 
-  assert.match(dialogSource, /data-density=\{sending \? "steer-issue-send-thinking" : "steer-issue-send"\}/);
+  assert.match(
+    dialogSource,
+    /data-density=\{sending \? "steer-issue-send-thinking" : "steer-issue-send"\}/,
+  );
   assert.match(dialogSource, /sending && "motion-essential"/);
   assert.match(dialogSource, /<AgentThinkingIndicator phase="thinking" size=\{12\}/);
   assert.doesNotMatch(dialogSource, /<Loader2 size=\{12\} className="animate-spin"/);
@@ -270,7 +314,10 @@ test("issue workbench tabs surface active conductor scheduling motion", () => {
 
   assert.match(pageSource, /isWorkbenchSchedulingMotion/);
   assert.match(pageSource, /workbenchMotionPhase/);
-  assert.match(pageSource, /data-density=\{isWorkbenchSchedulingMotion \? "workbench-scheduling-tabs" : "workbench-tabs"\}/);
+  assert.match(
+    pageSource,
+    /data-density=\{isWorkbenchSchedulingMotion \? "workbench-scheduling-tabs" : "workbench-tabs"\}/,
+  );
   assert.match(pageSource, /data-density="workbench-scheduling-tab"/);
   assert.match(pageSource, /<AgentThinkingIndicator/);
   assert.match(pageSource, /animate-shimmer-sweep/);
@@ -282,7 +329,10 @@ test("mesh feed marks active specialist calls with dispatch motion", () => {
   const feedSource = readSource("features/issues/tabs/CollabFeedTab.tsx");
 
   assert.match(feedSource, /isActiveSpecialistDispatch/);
-  assert.match(feedSource, /data-density=\{isActiveSpecialistDispatch \? "mesh-specialist-dispatch" : "mesh-agent-message"\}/);
+  assert.match(
+    feedSource,
+    /data-density=\{isActiveSpecialistDispatch \? "mesh-specialist-dispatch" : "mesh-agent-message"\}/,
+  );
   assert.match(feedSource, /<AgentThinkingIndicator/);
   assert.match(feedSource, /animate-shimmer-sweep/);
   assert.match(feedSource, /phase="dispatching"/);
@@ -293,19 +343,40 @@ test("mesh feed marks active specialist calls with dispatch motion", () => {
 test("mesh feed refresh cta uses tool motion while syncing agent messages", () => {
   const feedSource = readSource("features/issues/tabs/CollabFeedTab.tsx");
 
-  assert.match(feedSource, /data-density=\{loading \? "mesh-feed-refresh-tool" : "mesh-feed-refresh"\}/);
+  assert.match(
+    feedSource,
+    /data-density=\{loading \? "mesh-feed-refresh-tool" : "mesh-feed-refresh"\}/,
+  );
   assert.match(feedSource, /loading && "motion-essential"/);
-  assert.match(feedSource, /loading \? <AgentThinkingIndicator phase="tool" size=\{12\} \/> : <RefreshCw size=\{12\}/);
-  assert.doesNotMatch(feedSource, /<RefreshCw size=\{12\} className=\{loading \? "animate-spin" : ""\} \/>/);
+  assert.match(
+    feedSource,
+    /loading \? <AgentThinkingIndicator phase="tool" size=\{12\} \/> : <RefreshCw size=\{12\}/,
+  );
+  assert.doesNotMatch(
+    feedSource,
+    /<RefreshCw size=\{12\} className=\{loading \? "animate-spin" : ""\} \/>/,
+  );
 });
 
 test("dispatch drawer action buttons use semantic motion while busy", () => {
   const drawerSource = readSource("features/issues/components/DispatchDrawer.tsx");
 
-  assert.match(drawerSource, /busyAction === "chat" \? \(\s*<AgentThinkingIndicator phase="thinking" size=\{13\}/);
-  assert.match(drawerSource, /busyAction === "refine" \? \(\s*<AgentThinkingIndicator phase="thinking" size=\{13\}/);
-  assert.match(drawerSource, /busyAction === "rerun" \? \(\s*<AgentThinkingIndicator phase="dispatching" size=\{13\}/);
-  assert.doesNotMatch(drawerSource, /busyAction === "(chat|refine|rerun)" \? \(\s*<Loader2 size=\{13\} className="animate-spin"/);
+  assert.match(
+    drawerSource,
+    /busyAction === "chat" \? \(\s*<AgentThinkingIndicator phase="thinking" size=\{13\}/,
+  );
+  assert.match(
+    drawerSource,
+    /busyAction === "refine" \? \(\s*<AgentThinkingIndicator phase="thinking" size=\{13\}/,
+  );
+  assert.match(
+    drawerSource,
+    /busyAction === "rerun" \? \(\s*<AgentThinkingIndicator phase="dispatching" size=\{13\}/,
+  );
+  assert.doesNotMatch(
+    drawerSource,
+    /busyAction === "(chat|refine|rerun)" \? \(\s*<Loader2 size=\{13\} className="animate-spin"/,
+  );
 });
 
 test("dispatch drawer running summary uses semantic motion without spinner fallback", () => {
@@ -315,7 +386,10 @@ test("dispatch drawer running summary uses semantic motion without spinner fallb
   assert.match(drawerSource, /<AgentThinkingIndicator phase=\{drawerMotionPhase\} size=\{16\}/);
   assert.match(drawerSource, /animate-shimmer-sweep/);
   assert.match(drawerSource, /motion-essential/);
-  assert.doesNotMatch(drawerSource, /<Loader2 size=\{16\} className="animate-spin text-brand shrink-0"/);
+  assert.doesNotMatch(
+    drawerSource,
+    /<Loader2 size=\{16\} className="animate-spin text-brand shrink-0"/,
+  );
 });
 
 test("decision timeline builds dispatch rows and latest failure clears after later success", () => {
@@ -338,7 +412,10 @@ test("decision timeline builds dispatch rows and latest failure clears after lat
         turn_index: 1,
         sub_index: 1,
         kind: "tool_result",
-        payload: { tool_use_id: "tool-1", output: { task_id: "task-1", status: "failed", error: "pytest failed" } },
+        payload: {
+          tool_use_id: "tool-1",
+          output: { task_id: "task-1", status: "failed", error: "pytest failed" },
+        },
         created_at: "2026-05-23T10:01:00Z",
       },
     ],
@@ -392,11 +469,7 @@ test("decision timeline labels dispatch_batch as a parallel execution plan", () 
           name: "dispatch_batch",
           id: "tool-1",
           input: {
-            agents: [
-              { role: "engineer" },
-              { role: "engineer" },
-              { role: "engineer" },
-            ],
+            agents: [{ role: "engineer" }, { role: "engineer" }, { role: "engineer" }],
           },
         },
         created_at: "2026-05-23T10:00:01Z",
@@ -440,11 +513,7 @@ test("decision timeline expands dispatch_batch engineer tasks into visible rows"
           name: "dispatch_batch",
           id: "tool-1",
           input: {
-            agents: [
-              { role: "engineer" },
-              { role: "engineer" },
-              { role: "engineer" },
-            ],
+            agents: [{ role: "engineer" }, { role: "engineer" }, { role: "engineer" }],
           },
         },
         created_at: "2026-05-23T10:00:01Z",
@@ -461,9 +530,27 @@ test("decision timeline expands dispatch_batch engineer tasks into visible rows"
       },
     ],
     [
-      makeTask({ id: "eng-a", role: "engineer", status: "done", result: "created module_a.py", created_at: "2026-05-23T10:00:03Z" }),
-      makeTask({ id: "eng-b", role: "engineer", status: "pending", result: null, created_at: "2026-05-23T10:00:04Z" }),
-      makeTask({ id: "eng-c", role: "engineer", status: "running", result: null, created_at: "2026-05-23T10:00:05Z" }),
+      makeTask({
+        id: "eng-a",
+        role: "engineer",
+        status: "done",
+        result: "created module_a.py",
+        created_at: "2026-05-23T10:00:03Z",
+      }),
+      makeTask({
+        id: "eng-b",
+        role: "engineer",
+        status: "pending",
+        result: null,
+        created_at: "2026-05-23T10:00:04Z",
+      }),
+      makeTask({
+        id: "eng-c",
+        role: "engineer",
+        status: "running",
+        result: null,
+        created_at: "2026-05-23T10:00:05Z",
+      }),
     ],
     [
       {
@@ -473,7 +560,7 @@ test("decision timeline expands dispatch_batch engineer tasks into visible rows"
         status: "done",
         task_kind: "normal",
         parent_task_id: null,
-        summary: "{\"status\":\"completed\",\"summary\":\"Created module_a.py\"}",
+        summary: '{"status":"completed","summary":"Created module_a.py"}',
         artifact_json: null,
         updated_at: "2026-05-23T10:00:10Z",
       },
@@ -483,14 +570,26 @@ test("decision timeline expands dispatch_batch engineer tasks into visible rows"
   const engineerRows = timeline.filter((item) => item.role === "engineer");
 
   assert.equal(engineerRows.length, 3);
-  assert.deepEqual(engineerRows.map((item) => item.taskId), ["eng-a", "eng-b", "eng-c"]);
-  assert.deepEqual(engineerRows.map((item) => item.titleKey), [
-    "issue.command.title.developmentTask",
-    "issue.command.title.developmentTask",
-    "issue.command.title.developmentTask",
-  ]);
-  assert.deepEqual(engineerRows.map((item) => item.titleParams), [{ index: 1 }, { index: 2 }, { index: 3 }]);
-  assert.deepEqual(engineerRows.map((item) => item.status), ["done", "waiting", "running"]);
+  assert.deepEqual(
+    engineerRows.map((item) => item.taskId),
+    ["eng-a", "eng-b", "eng-c"],
+  );
+  assert.deepEqual(
+    engineerRows.map((item) => item.titleKey),
+    [
+      "issue.command.title.developmentTask",
+      "issue.command.title.developmentTask",
+      "issue.command.title.developmentTask",
+    ],
+  );
+  assert.deepEqual(
+    engineerRows.map((item) => item.titleParams),
+    [{ index: 1 }, { index: 2 }, { index: 3 }],
+  );
+  assert.deepEqual(
+    engineerRows.map((item) => item.status),
+    ["done", "waiting", "running"],
+  );
   assert.equal(engineerRows[0]?.summary, "Created module_a.py");
   assert.equal(engineerRows[1]?.summaryKey, "issue.command.summary.developmentTaskWaiting");
   assert.equal(engineerRows[2]?.summaryKey, "issue.command.summary.developmentTaskRunning");
@@ -510,10 +609,7 @@ test("decision timeline treats queued batch tasks as waiting work", () => {
           name: "dispatch_batch",
           id: "tool-1",
           input: {
-            agents: [
-              { role: "engineer" },
-              { role: "qa" },
-            ],
+            agents: [{ role: "engineer" }, { role: "qa" }],
           },
         },
         created_at: "2026-05-23T10:00:01Z",
@@ -530,19 +626,34 @@ test("decision timeline treats queued batch tasks as waiting work", () => {
       },
     ],
     [
-      makeTask({ id: "eng-queued", role: "engineer", status: "queued", result: null, created_at: "2026-05-23T10:00:03Z" }),
-      makeTask({ id: "qa-created", role: "qa", status: "created", result: null, created_at: "2026-05-23T10:00:04Z" }),
+      makeTask({
+        id: "eng-queued",
+        role: "engineer",
+        status: "queued",
+        result: null,
+        created_at: "2026-05-23T10:00:03Z",
+      }),
+      makeTask({
+        id: "qa-created",
+        role: "qa",
+        status: "created",
+        result: null,
+        created_at: "2026-05-23T10:00:04Z",
+      }),
     ],
     [],
   );
 
   const queuedRows = timeline.filter((item) => item.id.startsWith("task:"));
 
-  assert.deepEqual(queuedRows.map((item) => item.status), ["waiting", "waiting"]);
-  assert.deepEqual(queuedRows.map((item) => item.summaryKey), [
-    "issue.command.summary.developmentTaskWaiting",
-    "issue.command.summary.batchTaskWaiting",
-  ]);
+  assert.deepEqual(
+    queuedRows.map((item) => item.status),
+    ["waiting", "waiting"],
+  );
+  assert.deepEqual(
+    queuedRows.map((item) => item.summaryKey),
+    ["issue.command.summary.developmentTaskWaiting", "issue.command.summary.batchTaskWaiting"],
+  );
 });
 
 test("decision timeline execution summary surfaces dispatched development, QA, and finalize", () => {

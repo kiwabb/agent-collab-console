@@ -6,7 +6,7 @@
 
 ## Overview
 
-The frontend is a Next.js 14 App Router project using **Tailwind v4** and
+The frontend is a Next.js 15 App Router project using **Tailwind v4** and
 **@base-ui/react** (NOT shadcn, NOT radix directly). Components live under
 `frontend/src/` and are organized by **feature**, not by type:
 

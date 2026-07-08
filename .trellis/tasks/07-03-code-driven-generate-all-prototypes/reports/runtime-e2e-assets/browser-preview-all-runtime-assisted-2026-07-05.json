@@ -1,0 +1,304 @@
+{
+  "candidate_count": 19,
+  "clicked": 19,
+  "iframe_complete": 19,
+  "failures": [],
+  "nth_retry_results": [
+    {
+      "candidate_id": "next-app-router--issues-id",
+      "count": 2,
+      "matching_texts": [
+        "Page代码v3next-app-router--issues-id",
+        "Page代码v2next-app-router--issues-id-workflow"
+      ],
+      "chosen_index": 0,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 13733,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--projects",
+      "count": 4,
+      "matching_texts": [
+        "Page代码v2next-app-router--projects-id-prototypes",
+        "Page代码v2next-app-router--projects",
+        "Page代码v2next-app-router--projects-id",
+        "Page代码v2next-app-router--projects-id-conductor"
+      ],
+      "chosen_index": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 12306,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--projects-id",
+      "count": 3,
+      "matching_texts": [
+        "Page代码v2next-app-router--projects-id-prototypes",
+        "Page代码v2next-app-router--projects-id",
+        "Page代码v2next-app-router--projects-id-conductor"
+      ],
+      "chosen_index": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 9826,
+      "error": null
+    }
+  ],
+  "results": [
+    {
+      "candidate_id": "next-app-router--projects-id-prototypes",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 5099,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--approvals",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 6205,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--agents",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 7651,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--workspaces-wsid",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 8555,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--skills",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 9219,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--knowledge",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 11743,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--issues-id",
+      "count": 2,
+      "matching_texts": [
+        "Page代码v3next-app-router--issues-id",
+        "Page代码v2next-app-router--issues-id-workflow"
+      ],
+      "chosen_index": 0,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 13733,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--audit",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 12139,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--settings",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 9826,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--resume",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 12574,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--projects",
+      "count": 4,
+      "matching_texts": [
+        "Page代码v2next-app-router--projects-id-prototypes",
+        "Page代码v2next-app-router--projects",
+        "Page代码v2next-app-router--projects-id",
+        "Page代码v2next-app-router--projects-id-conductor"
+      ],
+      "chosen_index": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 12306,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--projects-id",
+      "count": 3,
+      "matching_texts": [
+        "Page代码v2next-app-router--projects-id-prototypes",
+        "Page代码v2next-app-router--projects-id",
+        "Page代码v2next-app-router--projects-id-conductor"
+      ],
+      "chosen_index": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 9826,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--projects-id-conductor",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 9889,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--home",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 8209,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--issues-id-workflow",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 10965,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--help",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 15326,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--conductor",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 12560,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--benchmarks",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 14726,
+      "visible_text_in_page": true,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--artifacts",
+      "button_count": 1,
+      "clicked": true,
+      "iframe_count": 1,
+      "iframe_title": "prototype-preview",
+      "srcdoc_starts_doctype": true,
+      "srcdoc_ends_html": true,
+      "srcdoc_length": 14619,
+      "visible_text_in_page": true,
+      "error": null
+    }
+  ]
+}

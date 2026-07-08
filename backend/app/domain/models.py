@@ -23,7 +23,7 @@ class AgentRun(BaseModel):
     role: str
     status: str = "running"
     summary: str | None = None
-    payload: dict | None = None
+    payload: dict[str, object] | None = None
     created_at: datetime | None = None
 
 
@@ -264,6 +264,9 @@ class CodexTask(BaseModel):
     resume_session_id: str | None = None  # Agent-native conversation/thread id for follow-up (passed to agent)
     resume_message_id: str | None = None  # Optional last assistant message id for targeted resume
     last_execution_process_id: str | None = None  # FK → ExecutionProcess.id of most recent run
+    trace_id: str | None = None  # Trace root; runtime executions use ExecutionProcess.id.
+    span_id: str | None = None  # This task's span within the trace
+    parent_span_id: str | None = None  # Parent span (conductor span, or upstream node's span)
     sequence_index: int | None = None  # Position in development task sequence (0-based)
     sequence_group: str | None = None  # Group identifier for sequencing (typically issue_id)
     review_comment: str | None = None  # Architect's review feedback
@@ -286,13 +289,13 @@ class SubAgentResult:
     agent_id: str
     status: str
     summary: str
-    artifact_json: dict | None
+    artifact_json: dict[str, object] | None
     artifact_markdown: str | None
     artifact_paths: list[str]
     files_changed: list[str]
-    qa_commands: list[dict] | None
+    qa_commands: list[dict[str, object]] | None
     clarification_question: str | None
-    critique: dict | None
+    critique: dict[str, object] | None
     duration_s: float
     retry_count: int
     max_retries: int
@@ -324,11 +327,48 @@ class LogEvent(BaseModel):
     content: str
     task_id: str | None = None  # The task run that produced this log (if any)
     execution_process_id: str | None = None
+    # Distributed-tracing identity (approach C). Stamped at the execution source
+    # (the task's span) so one agent execution's internal steps join the audit
+    # trail without a read-time reconstruction. Nullable: legacy rows and
+    # non-traced sessions leave these None.
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
     created_at: datetime | None = None
 
     @property
     def workspace_id(self) -> str:
         return self.session_id
+
+
+class AgentCallTrace(BaseModel):
+    """Full, on-demand trace detail for an audited agent/LLM/tool operation.
+
+    `audit_log` stays a lightweight index row and may truncate payload_json.
+    This model stores the larger request/response/detail payload that the UI
+    loads only when the user expands an individual call-chain event.
+    """
+
+    id: str
+    audit_log_id: str | None = None
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
+    issue_id: str | None = None
+    task_id: str | None = None
+    execution_process_id: str | None = None
+    kind: str
+    title: str | None = None
+    request_json: str | None = None
+    response_json: str | None = None
+    request_preview: str | None = None
+    response_preview: str | None = None
+    metadata_json: str = "{}"
+    is_truncated: bool = False
+    created_at: datetime | None = None
+
+
+ExecutionProcessKind = Literal["initial", "rerun", "refine", "chat"]
 
 
 class ExecutionProcess(BaseModel):
@@ -353,7 +393,7 @@ class ExecutionProcess(BaseModel):
     #   initial / rerun → role workflow prompt + persist artifact
     #   refine          → "current artifact + user changes" prompt + persist (merge)
     #   chat            → minimal prompt + CLI session resume; no artifact persist
-    kind: Literal["initial", "rerun", "refine", "chat"] = "initial"
+    kind: ExecutionProcessKind = "initial"
     # For chat / refine: pointer back to the CodexTaskMessage that triggered this run.
     triggering_message_id: str | None = None
     started_at: datetime | None = None
@@ -378,7 +418,7 @@ class HelpRequest(BaseModel):
     context_summary: str | None = None
     status: str = "pending"
     error_message: str | None = None
-    continuation_payload: dict | None = None
+    continuation_payload: dict[str, object] | None = None
     created_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -497,11 +537,11 @@ class Agent(BaseModel):
     name: str
     role_key: str  # Stable key for backward compat (product_manager/architect/...)
     description: str | None = None
-    system_prompt_template: str
+    system_prompt_template: str = ""
     # Declares which upstream artifacts to inject: list of {node_key|role_key, required, artifact_glob}
-    input_schema: list[dict] = Field(default_factory=list)
+    input_schema: list[dict[str, object]] = Field(default_factory=list)
     # Declares produced artifacts: {artifacts: [{name, kind, path_template}]}
-    output_schema: dict = Field(default_factory=dict)
+    output_schema: dict[str, object] = Field(default_factory=dict)
     default_executor: str | None = None
     default_provider: str | None = None
     default_model: str | None = None
@@ -622,7 +662,16 @@ class ProjectConductorState:
 
 
 ConductorTaskKind = Literal["issue", "qa_question", "scheduled_review", "ad_hoc"]
-ConductorTurnKind = Literal["llm_request", "llm_response", "tool_use", "tool_result", "user_message", "error", "finalize"]
+ConductorTurnKind = Literal[
+    "llm_request",
+    "llm_response",
+    "tool_use",
+    "tool_result",
+    "user_message",
+    "policy_decision",
+    "error",
+    "finalize",
+]
 
 
 @dataclass
@@ -632,7 +681,7 @@ class ConductorTask:
     id: str
     project_id: str
     task_kind: ConductorTaskKind
-    payload: dict
+    payload: dict[str, object]
     issue_id: str | None = None
     status: str = "pending"
     result_json: str | None = None
@@ -694,10 +743,19 @@ class AuditLog:
     conductor_task_id: str | None = None
     execution_process_id: str | None = None
     correlation_id: str | None = None
-    status: str | None = None  # "ok" | "error" | None
+    status: str | None = None  # Command result or task/span state such as ok/error/running/done.
     duration_ms: int | None = None
     payload_json: str = "{}"
     error: str | None = None
+    # Distributed-tracing identity (approach C). Runtime task executions use
+    # execution_process_id as the trace root; conductor-level rows can still use
+    # the conductor task id. span_id identifies the emitting unit, and
+    # parent_span_id links it to its upstream span/root. Nullable: legacy rows
+    # and untraced choke points leave these None. `correlation_id` above is the
+    # transitional coarse key kept for backward-compatible filtering.
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
 
 
 @dataclass
@@ -730,6 +788,24 @@ class SelfImprovementProposal:
     fingerprint: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+@dataclass
+class SelfImprovementApplicationEvent:
+    """Auditable record for reviewed self-improvement apply/rollback actions."""
+
+    id: str
+    proposal_id: str
+    project_id: str
+    issue_id: str
+    target_kind: str
+    action: str
+    status: str
+    path: str | None = None
+    content_sha256: str | None = None
+    result_json: str = "{}"
+    error: str | None = None
+    created_at: datetime | None = None
 
 
 AgentMessageType = Literal["handoff", "critique", "clarification", "answer", "specialist_call", "specialist_result"]

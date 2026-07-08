@@ -17,6 +17,7 @@ import pytest
 from app.adapters.async_sqlite_store import AsyncSQLiteStore  # noqa: F401
 from app.application.prototype_service import PrototypeService  # noqa: F401
 from app.domain.models import Project, RuntimeExecutorConfig  # noqa: F401
+from app.interfaces.sse import MAX_CANDIDATE_QUERY_TEXT_CHARS, _parse_runtime_evidence
 
 
 def _make_git_repo(path: Path) -> Path:
@@ -131,6 +132,21 @@ def test_create_rejects_empty_brief(client, seeded_project):
     assert resp.status_code == 400
 
 
+def test_parse_runtime_evidence_ignores_non_object_json_payloads():
+    evidence = _parse_runtime_evidence(
+        [
+            'candidate-a\t{"success":true,"title":"Loaded"}',
+            'candidate-b\t[]',
+            'candidate-c\t"bad"',
+            "candidate-d\t{bad",
+        ]
+    )
+
+    assert list(evidence.keys()) == ["candidate-a"]
+    assert evidence["candidate-a"].success is True
+    assert evidence["candidate-a"].title == "Loaded"
+
+
 def test_get_prototype_hides_seed_v0(client, seeded_project):
     pid = seeded_project
     created = client.post(
@@ -204,8 +220,7 @@ def test_stream_generates_v1_with_meta_delta_done(client, seeded_project, monkey
         text = body.decode("utf-8")
     events = _consume_sse_response(text)
     if events and events[0]["event"] == "error":
-        print("DEBUG SSE body:", text[:1000])
-        print("DEBUG SSE events:", events)
+        pytest.fail(f"SSE returned error event: body={text[:1000]!r} events={events!r}")
     types = [e["event"] for e in events]
     assert types[0] == "meta"
     assert "delta" in types
@@ -353,8 +368,9 @@ def test_regenerate_all_stream_with_no_prototypes_emits_zero_summary(
 
 
 def _write_page_for_api(project_id: str, rel: str, body: str) -> None:
-    import app.bootstrap as bootstrap_module
     import sqlite3
+
+    import app.bootstrap as bootstrap_module
 
     store = bootstrap_module.async_store
     assert store is not None
@@ -409,3 +425,355 @@ def test_generate_from_code_stream_creates_then_skips(client, seeded_project, mo
 def test_generate_from_code_stream_returns_404_for_unknown_project(client):
     resp = client.get("/api/projects/no-such-project/prototypes/generate-from-code/stream")
     assert resp.status_code == 404
+
+
+def test_generate_from_code_stream_accepts_selected_candidate_and_instruction(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/a/page.tsx",
+        "export default function APage() { return <main>A</main> }",
+    )
+    _write_page_for_api(
+        pid,
+        "src/app/b/page.tsx",
+        "export default function BPage() { return <main>B</main> }",
+    )
+
+    with client.stream(
+        "GET",
+        (
+            f"/api/projects/{pid}/prototypes/generate-from-code/stream"
+            "?candidate_id=next-app-router--a&instruction=mobile-first"
+        ),
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    assert events[0]["data"]["count"] == 1
+    assert events[0]["data"]["requested_count"] == 1
+    assert events[-1]["data"]["created"] == 1
+
+
+def test_generate_from_code_stream_accepts_candidate_specific_instruction(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/a/page.tsx",
+        "export default function APage() { return <main>A</main> }",
+    )
+
+    with client.stream(
+        "GET",
+        (
+            f"/api/projects/{pid}/prototypes/generate-from-code/stream"
+            "?candidate_id=next-app-router--a"
+            "&candidate_instruction=next-app-router--a%09emphasize%20error%20states"
+        ),
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    assert events[0]["data"]["requested_count"] == 1
+    assert events[-1]["data"]["created"] == 1
+
+
+def test_generate_from_code_stream_accepts_candidate_brief_override(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/a/page.tsx",
+        "export default function APage() { return <main>A</main> }",
+    )
+
+    seen: dict[str, str] = {}
+
+    async def capture_prompt(prompt, ctx):
+        seen["prompt"] = prompt
+        yield "<!DOCTYPE html><html><body><h1>Override</h1></body></html>"
+
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        capture_prompt,
+    )
+
+    with client.stream(
+        "GET",
+        (
+            f"/api/projects/{pid}/prototypes/generate-from-code/stream"
+            "?candidate_id=next-app-router--a"
+            "&candidate_brief_override=next-app-router--a%09Focus%20on%20custom%20queue"
+        ),
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    assert events[0]["data"]["requested_count"] == 1
+    assert events[-1]["data"]["created"] == 1
+    assert "User-edited candidate brief override" in seen["prompt"]
+    assert "custom queue" in seen["prompt"]
+
+
+def test_generate_from_code_stream_trims_candidate_brief_override(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/a/page.tsx",
+        "export default function APage() { return <main>A</main> }",
+    )
+
+    from urllib.parse import quote
+
+    seen: dict[str, str] = {}
+    long_override = "x" * 1300
+
+    async def capture_prompt(prompt, ctx):
+        seen["prompt"] = prompt
+        yield "<!DOCTYPE html><html><body><h1>Trimmed</h1></body></html>"
+
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        capture_prompt,
+    )
+
+    encoded_override = quote(f"next-app-router--a\t{long_override}")
+    with client.stream(
+        "GET",
+        (
+            f"/api/projects/{pid}/prototypes/generate-from-code/stream"
+            "?candidate_id=next-app-router--a"
+            f"&candidate_brief_override={encoded_override}"
+        ),
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    assert events[-1]["data"]["created"] == 1
+    assert "x" * MAX_CANDIDATE_QUERY_TEXT_CHARS in seen["prompt"]
+    assert "x" * (MAX_CANDIDATE_QUERY_TEXT_CHARS + 1) not in seen["prompt"]
+
+
+def test_generate_from_code_stream_ignores_blank_candidate_brief_override(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/a/page.tsx",
+        "export default function APage() { return <main>A</main> }",
+    )
+
+    from urllib.parse import quote
+
+    seen: dict[str, str] = {}
+
+    async def capture_prompt(prompt, ctx):
+        seen["prompt"] = prompt
+        yield "<!DOCTYPE html><html><body><h1>No blank override</h1></body></html>"
+
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        capture_prompt,
+    )
+
+    encoded_override = quote("next-app-router--a\t   ")
+    with client.stream(
+        "GET",
+        (
+            f"/api/projects/{pid}/prototypes/generate-from-code/stream"
+            "?candidate_id=next-app-router--a"
+            f"&candidate_brief_override={encoded_override}"
+        ),
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    assert events[-1]["data"]["created"] == 1
+    assert "User-edited candidate brief override" not in seen["prompt"]
+
+
+def test_generate_from_code_stream_trims_candidate_instruction(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/a/page.tsx",
+        "export default function APage() { return <main>A</main> }",
+    )
+
+    from urllib.parse import quote
+
+    seen: dict[str, str] = {}
+    long_instruction = "y" * 1300
+
+    async def capture_prompt(prompt, ctx):
+        seen["prompt"] = prompt
+        yield "<!DOCTYPE html><html><body><h1>Trimmed instruction</h1></body></html>"
+
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        capture_prompt,
+    )
+
+    encoded_instruction = quote(f"next-app-router--a\t{long_instruction}")
+    with client.stream(
+        "GET",
+        (
+            f"/api/projects/{pid}/prototypes/generate-from-code/stream"
+            "?candidate_id=next-app-router--a"
+            f"&candidate_instruction={encoded_instruction}"
+        ),
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    assert events[-1]["data"]["created"] == 1
+    assert "y" * MAX_CANDIDATE_QUERY_TEXT_CHARS in seen["prompt"]
+    assert "y" * (MAX_CANDIDATE_QUERY_TEXT_CHARS + 1) not in seen["prompt"]
+
+
+def test_generate_from_code_stream_ignores_blank_candidate_instruction(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/a/page.tsx",
+        "export default function APage() { return <main>A</main> }",
+    )
+
+    from urllib.parse import quote
+
+    seen: dict[str, str] = {}
+
+    async def capture_prompt(prompt, ctx):
+        seen["prompt"] = prompt
+        yield "<!DOCTYPE html><html><body><h1>No blank instruction</h1></body></html>"
+
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        capture_prompt,
+    )
+
+    encoded_instruction = quote("next-app-router--a\t   ")
+    with client.stream(
+        "GET",
+        (
+            f"/api/projects/{pid}/prototypes/generate-from-code/stream"
+            "?candidate_id=next-app-router--a"
+            f"&candidate_instruction={encoded_instruction}"
+        ),
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+    events = _consume_sse_response(text)
+    assert events[-1]["data"]["created"] == 1
+    assert "Additional user guidance for this selected generation run" not in seen["prompt"]
+
+
+def test_generate_from_code_stream_accepts_runtime_evidence_and_ignores_malformed(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/help/page.tsx",
+        "export default function HelpPage() { return <main>Help</main> }",
+    )
+
+    import json as _json
+    from urllib.parse import quote
+
+    evidence = quote(
+        "next-app-router--help\t"
+        + _json.dumps(
+            {
+                "attempted_url": "http://127.0.0.1:3000/help",
+                "final_url": "http://127.0.0.1:3000/help",
+                "success": True,
+                "title": "Runtime Help",
+                "visible_text_excerpt": "Runtime Help\nLive docs",
+                "structure_summary": "headings: Runtime Help; buttons: Search",
+                "cookies": "must-not-pass-through",
+            }
+        )
+    )
+
+    with client.stream(
+        "GET",
+        (
+            f"/api/projects/{pid}/prototypes/generate-from-code/stream"
+            f"?candidate_id=next-app-router--help&runtime_evidence=not-json"
+            f"&runtime_evidence={evidence}"
+        ),
+    ) as response:
+        text = b"".join(response.iter_bytes()).decode("utf-8")
+
+    events = _consume_sse_response(text)
+    assert events[0]["data"]["requested_count"] == 1
+    assert events[-1]["data"]["created"] == 1
+
+    listing = client.get(f"/api/projects/{pid}/prototypes")
+    assert listing.status_code == 200
+    source_meta = listing.json()[0]["source_meta_json"]
+    assert "Runtime Help" in source_meta
+    assert "must-not-pass-through" not in source_meta
+
+
+def test_generate_from_code_stream_can_request_runtime_capture(
+    client, seeded_project, monkeypatch
+):
+    _patch_stream(monkeypatch)
+    pid = seeded_project
+    _write_page_for_api(
+        pid,
+        "src/app/issues/[id]/page.tsx",
+        "export default function IssuePage() { return <main>Issue</main> }",
+    )
+
+    import app.bootstrap as bootstrap_module
+    from app.application.prototype_service import RuntimePrototypeEvidence
+
+    assert bootstrap_module.prototype_service is not None
+    original_capture_service = bootstrap_module.prototype_service.runtime_capture_service
+
+    class _FakeCapture:
+        async def capture_candidate(self, project, candidate, base_url):
+            return RuntimePrototypeEvidence(
+                attempted_url="http://localhost:4000/issues/demo-id",
+                final_url="http://localhost:4000/issues/demo-id",
+                success=True,
+                title="Runtime Issue",
+                visible_text_excerpt="Runtime Issue Detail",
+                structure_summary="headings: Runtime Issue",
+            )
+
+    bootstrap_module.prototype_service.runtime_capture_service = _FakeCapture()
+    try:
+        with client.stream(
+            "GET",
+            (
+                f"/api/projects/{pid}/prototypes/generate-from-code/stream"
+                "?candidate_id=next-app-router--issues-id"
+                "&use_runtime_evidence=true"
+                "&runtime_base_url=http%3A%2F%2Flocalhost%3A4000"
+            ),
+        ) as response:
+            text = b"".join(response.iter_bytes()).decode("utf-8")
+    finally:
+        bootstrap_module.prototype_service.runtime_capture_service = original_capture_service
+
+    events = _consume_sse_response(text)
+    assert "candidate_capture" in [event["event"] for event in events]
+    assert "candidate_capture_done" in [event["event"] for event in events]
+    assert events[-1]["data"]["created"] == 1

@@ -1,8 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { User } from "lucide-react";
 
 interface PresenceUser {
   id: string;
@@ -50,18 +48,22 @@ export function PresenceIndicator({ users = [], maxVisible = 4 }: PresenceIndica
             key={user.id}
             className={cn(
               "size-7 rounded-full border-2 border-background flex items-center justify-center text-[9px] font-black text-background shadow-md",
-              user.color || PRESENCE_COLORS[i % PRESENCE_COLORS.length]
-        )}
-        title={user.name}
-        style={{ zIndex: maxVisible - i }}
-      >
-        {user.avatar ? (
-          // Arbitrary local/profile avatar URLs are not guaranteed to fit Next Image remote allowlists.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={user.avatar} alt={user.name} className="size-full rounded-full object-cover" />
-        ) : (
-          getInitials(user.name)
-        )}
+              user.color || PRESENCE_COLORS[i % PRESENCE_COLORS.length],
+            )}
+            title={user.name}
+            style={{ zIndex: maxVisible - i }}
+          >
+            {user.avatar ? (
+              // Arbitrary local/profile avatar URLs are not guaranteed to fit Next Image remote allowlists.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={user.avatar}
+                alt={user.name}
+                className="size-full rounded-full object-cover"
+              />
+            ) : (
+              getInitials(user.name)
+            )}
           </div>
         ))}
         {overflow > 0 && (
@@ -75,9 +77,7 @@ export function PresenceIndicator({ users = [], maxVisible = 4 }: PresenceIndica
       </div>
       <div className="flex items-center gap-1.5">
         <div className="size-1.5 rounded-full bg-success animate-pulse" />
-        <span className="text-[10px] font-bold text-text-secondary">
-          {users.length} online
-        </span>
+        <span className="text-[10px] font-bold text-text-secondary">{users.length} online</span>
       </div>
     </div>
   );
@@ -102,7 +102,7 @@ export function PresenceAvatar({ user, showStatus = true, size = "md" }: Presenc
         className={cn(
           "rounded-full flex items-center justify-center font-black text-background shadow-sm",
           user.color || "bg-brand",
-          sizeClasses[size]
+          sizeClasses[size],
         )}
         title={user.name}
       >

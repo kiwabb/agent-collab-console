@@ -78,7 +78,12 @@ def _rank(values: list[float]) -> list[float]:
         for k in range(i, j + 1):
             ranks[indexed[k][0]] = avg_rank
         i = j + 1
-    return [r for r in ranks]  # type: ignore[misc]
+    complete: list[float] = []
+    for rank in ranks:
+        if rank is None:
+            raise RuntimeError("rank assignment did not cover all values")
+        complete.append(rank)
+    return complete
 
 
 def spearman(xs: list[float], ys: list[float]) -> float:
@@ -109,7 +114,7 @@ class CalibrationItem:
     judge_score: float | None = None  # filled in after a judge run
     note: str | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
             "fixture_id": self.fixture_id,
@@ -173,7 +178,7 @@ def calibration_report(
             weakest_item=with_scores[0].id if with_scores else None,
         )
     humans = [i.human_score for i in with_scores]
-    judges = [i.judge_score for i in with_scores]
+    judges = [float(i.judge_score) for i in with_scores if i.judge_score is not None]
     p = pearson(humans, judges)
     s = spearman(humans, judges)
     residuals = [(i.id, abs(i.human_score - (i.judge_score or 0.0))) for i in with_scores]

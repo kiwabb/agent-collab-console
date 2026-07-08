@@ -67,7 +67,10 @@ export function Loader({ className, variant = "card", label }: LoaderProps) {
               <span className="absolute left-1/2 top-0 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-brand shadow-[0_0_8px_var(--color-brand)]" />
             </div>
             {/* Inner particle, reversed */}
-            <div className="absolute inset-2.5 animate-orbit" style={{ animationDirection: "reverse" }}>
+            <div
+              className="absolute inset-2.5 animate-orbit"
+              style={{ animationDirection: "reverse" }}
+            >
               <span className="absolute left-1/2 top-0 h-1 w-1 -translate-x-1/2 rounded-full bg-brand/70" />
             </div>
           </div>

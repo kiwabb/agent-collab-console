@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from app.application.conductor_llm import resolve_conductor_llm_context
 from app.application.llm_runner import (
@@ -15,10 +16,15 @@ from app.domain.models import (
     RuntimeCatalog,
     RuntimeExecutorConfig,
 )
+from app.json_safety import JsonObject, object_dict
+
+
+def _object_list(value: object) -> list[JsonObject]:
+    return [object_dict(item) for item in value] if isinstance(value, list) else []
 
 
 def test_tools_anthropic_to_openai_shape():
-    tools = [
+    tools: list[JsonObject] = [
         {
             "name": "dispatch_subagent",
             "description": "d",
@@ -39,7 +45,7 @@ def test_tools_anthropic_to_openai_shape():
 
 
 def test_messages_anthropic_to_openai_handles_tool_use_and_tool_result():
-    messages = [
+    messages: list[JsonObject] = [
         {"role": "user", "content": "do the thing"},
         {
             "role": "assistant",
@@ -70,15 +76,17 @@ def test_messages_anthropic_to_openai_handles_tool_use_and_tool_result():
     # assistant -> content + tool_calls
     assert out[1]["role"] == "assistant"
     assert out[1]["content"] == "I'll dispatch engineer"
-    assert out[1]["tool_calls"][0]["id"] == "call_1"
-    assert out[1]["tool_calls"][0]["function"]["name"] == "dispatch_subagent"
-    assert json.loads(out[1]["tool_calls"][0]["function"]["arguments"]) == {"role": "engineer"}
+    tool_call = object_dict(_object_list(out[1].get("tool_calls"))[0])
+    function = object_dict(tool_call.get("function"))
+    assert tool_call.get("id") == "call_1"
+    assert function.get("name") == "dispatch_subagent"
+    assert json.loads(str(function.get("arguments") or "")) == {"role": "engineer"}
     # tool_result -> role "tool"
     assert out[2] == {"role": "tool", "tool_call_id": "call_1", "content": '{"status": "done"}'}
 
 
 def test_openai_choice_back_to_anthropic():
-    message = {
+    message: JsonObject = {
         "role": "assistant",
         "content": "going to engineer",
         "tool_calls": [
@@ -93,8 +101,9 @@ def test_openai_choice_back_to_anthropic():
         message, "tool_calls", {"prompt_tokens": 10, "completion_tokens": 5}
     )
     assert out["stop_reason"] == "tool_use"
-    assert out["content"][0] == {"type": "text", "text": "going to engineer"}
-    assert out["content"][1] == {
+    content = _object_list(out.get("content"))
+    assert content[0] == {"type": "text", "text": "going to engineer"}
+    assert content[1] == {
         "type": "tool_use",
         "id": "call_9",
         "name": "dispatch_subagent",
@@ -103,7 +112,7 @@ def test_openai_choice_back_to_anthropic():
     assert out["usage"] == {"input_tokens": 10, "output_tokens": 5}
 
 
-def _catalog(protocol: str) -> RuntimeCatalog:
+def _catalog(protocol: Literal["anthropic", "openai"]) -> RuntimeCatalog:
     return RuntimeCatalog(
         executors=[
             RuntimeExecutorConfig(

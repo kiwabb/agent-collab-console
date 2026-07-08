@@ -43,7 +43,9 @@ export function ApprovalDialog({ approval, onResolve, onClose }: ApprovalDialogP
             <p className="text-sm text-foreground">{approval.action}</p>
           </div>
           <div className="mb-4">
-            <label className="text-xs text-muted-foreground mb-1 block">{t("approval.feedback")}</label>
+            <label className="text-xs text-muted-foreground mb-1 block">
+              {t("approval.feedback")}
+            </label>
             <textarea
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}

@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { parseUnifiedDiff } from "../src/lib/diffParser";
+import { at } from "./testAssertions";
 
 const MODIFIED_DIFF = `diff --git a/src/components/Foo.tsx b/src/components/Foo.tsx
 index abc123..def456 100644
@@ -51,7 +52,7 @@ describe("parseUnifiedDiff", () => {
   it("parses a modified file correctly", () => {
     const files = parseUnifiedDiff(MODIFIED_DIFF);
     assert.equal(files.length, 1);
-    const f = files[0];
+    const f = at(files, 0, "diff file");
     assert.equal(f.oldPath, "src/components/Foo.tsx");
     assert.equal(f.newPath, "src/components/Foo.tsx");
     assert.equal(f.isNew, false);
@@ -67,7 +68,7 @@ describe("parseUnifiedDiff", () => {
   it("parses untracked (synthesized new file) patch", () => {
     const files = parseUnifiedDiff(UNTRACKED_DIFF);
     assert.equal(files.length, 1);
-    const f = files[0];
+    const f = at(files, 0, "diff file");
     assert.equal(f.isNew, true);
     assert.equal(f.isDeleted, false);
     assert.equal(f.additions, 3);
@@ -77,7 +78,7 @@ describe("parseUnifiedDiff", () => {
   it("parses deleted file", () => {
     const files = parseUnifiedDiff(DELETED_DIFF);
     assert.equal(files.length, 1);
-    const f = files[0];
+    const f = at(files, 0, "diff file");
     assert.equal(f.isDeleted, true);
     assert.equal(f.isNew, false);
     assert.equal(f.deletions, 2);
@@ -87,7 +88,7 @@ describe("parseUnifiedDiff", () => {
   it("parses binary file", () => {
     const files = parseUnifiedDiff(BINARY_DIFF);
     assert.equal(files.length, 1);
-    const f = files[0];
+    const f = at(files, 0, "diff file");
     assert.equal(f.isBinary, true);
     assert.equal(f.lines.length, 0);
   });
@@ -95,20 +96,20 @@ describe("parseUnifiedDiff", () => {
   it("splits multi-file diff correctly", () => {
     const files = parseUnifiedDiff(MULTI_FILE);
     assert.equal(files.length, 4);
-    assert.equal(files[0].newPath, "src/components/Foo.tsx");
-    assert.equal(files[1].isNew, true);
-    assert.equal(files[2].isDeleted, true);
-    assert.equal(files[3].isBinary, true);
+    assert.equal(at(files, 0, "diff file").newPath, "src/components/Foo.tsx");
+    assert.equal(at(files, 1, "diff file").isNew, true);
+    assert.equal(at(files, 2, "diff file").isDeleted, true);
+    assert.equal(at(files, 3, "diff file").isBinary, true);
   });
 
   it("rawPatch starts with diff --git line", () => {
     const files = parseUnifiedDiff(MODIFIED_DIFF);
-    assert.ok(files[0].rawPatch.startsWith("diff --git "));
+    assert.ok(at(files, 0, "diff file").rawPatch.startsWith("diff --git "));
   });
 
   it("tracks old/new line numbers on context lines", () => {
     const files = parseUnifiedDiff(MODIFIED_DIFF);
-    const contextLines = files[0].lines.filter((l) => l.type === "context");
+    const contextLines = at(files, 0, "diff file").lines.filter((l) => l.type === "context");
     assert.ok(contextLines.length > 0);
     for (const l of contextLines) {
       assert.notEqual(l.oldLine, null);

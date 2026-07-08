@@ -28,10 +28,11 @@ import json  # noqa: E402, I001
 import logging  # noqa: E402
 import os  # noqa: E402, F401
 import re  # noqa: E402
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+from collections.abc import AsyncIterator, Mapping  # noqa: E402
 from datetime import datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import AsyncIterator  # noqa: E402, UP035
+from typing import Protocol  # noqa: E402
 from uuid import uuid4  # noqa: E402
 
 import httpx  # noqa: E402
@@ -47,7 +48,8 @@ from app.application.llm_runner import (  # noqa: E402
     llm_api_url,
     resolve_streaming_context,
 )
-from app.domain.models import Prototype, PrototypeVersion, Project  # noqa: E402
+from app.domain.models import Prototype, PrototypeVersion, Project, RuntimeCatalog  # noqa: E402
+from app.json_safety import object_dict, parse_json_object, string_value  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +68,160 @@ class StreamEvent:
     """An SSE event to yield. `data` is JSON-serializable."""
 
     event: str
-    data: dict
+    data: Mapping[str, object]
+
+
+class RuntimeCatalogLoader(Protocol):
+    async def load_catalog(self) -> RuntimeCatalog: ...
+
+
+@dataclass(frozen=True)
+class RuntimePrototypeEvidence:
+    """Safe request-scoped browser evidence for code-backed generation."""
+
+    attempted_url: str | None = None
+    final_url: str | None = None
+    success: bool = False
+    title: str | None = None
+    viewport: dict[str, object] | None = None
+    visible_text_excerpt: str | None = None
+    structure_summary: str | None = None
+    console_errors: list[str] = field(default_factory=list)
+    screenshot_path: str | None = None
+    failure_reason: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: object) -> RuntimePrototypeEvidence | None:
+        if not isinstance(payload, dict):
+            return None
+        return cls(
+            attempted_url=_trim_optional_text(payload.get("attempted_url"), 500),
+            final_url=_trim_optional_text(payload.get("final_url"), 500),
+            success=payload.get("success") is True,
+            title=_trim_optional_text(payload.get("title"), 240),
+            viewport=_safe_viewport(payload.get("viewport")),
+            visible_text_excerpt=_trim_optional_text(payload.get("visible_text_excerpt"), 560),
+            structure_summary=_trim_optional_text(payload.get("structure_summary"), 420),
+            console_errors=_safe_console_errors(payload.get("console_errors")),
+            screenshot_path=_trim_optional_text(payload.get("screenshot_path"), 500),
+            failure_reason=_trim_optional_text(payload.get("failure_reason"), 500),
+        )
+
+    def to_prompt_block(self) -> str:
+        lines = ["Runtime browser evidence for this route:"]
+        if self.success:
+            lines.append(
+                "- Capture status: success; prefer this visible runtime evidence over source-only inference when they conflict."
+            )
+        else:
+            lines.append(
+                "- Capture status: failed or unavailable; fall back to the source excerpt and do not mention capture failure in the artifact."
+            )
+        if self.attempted_url:
+            lines.append(f"- Attempted URL: {self.attempted_url}")
+        if self.final_url:
+            lines.append(f"- Final URL: {self.final_url}")
+        if self.title:
+            lines.append(f"- Page title: {self.title}")
+        if self.viewport:
+            width = self.viewport.get("width")
+            height = self.viewport.get("height")
+            if width is not None or height is not None:
+                lines.append(f"- Viewport: {width or '?'}x{height or '?'}")
+        if self.visible_text_excerpt:
+            lines.append("- Visible text excerpt:")
+            lines.append(self.visible_text_excerpt)
+        if self.structure_summary:
+            lines.append("- Structural inventory:")
+            lines.append(self.structure_summary)
+        if self.console_errors:
+            lines.append("- Console errors observed:")
+            lines.extend(f"  - {item}" for item in self.console_errors)
+        if self.screenshot_path:
+            lines.append(f"- Screenshot metadata/path: {self.screenshot_path}")
+        if self.failure_reason and not self.success:
+            lines.append(f"- Capture failure reason: {self.failure_reason}")
+        return "\n".join(lines)
+
+    def to_meta(self) -> dict[str, object]:
+        return {
+            "attempted_url": self.attempted_url,
+            "final_url": self.final_url,
+            "success": self.success,
+            "title": self.title,
+            "viewport": self.viewport,
+            "visible_text_excerpt": self.visible_text_excerpt,
+            "structure_summary": self.structure_summary,
+            "console_errors": self.console_errors,
+            "screenshot_path": self.screenshot_path,
+            "failure_reason": self.failure_reason,
+        }
+
+
+class RuntimeCaptureService(Protocol):
+    async def capture_candidate(
+        self,
+        project: Project,
+        candidate: CodePrototypeCandidate,
+        base_url: str | None,
+    ) -> RuntimePrototypeEvidence: ...
 
 
 _MD_FENCE = re.compile(r"^```(?:html|HTML)?\s*\n(.*?)\n```\s*$", re.DOTALL)
+_SOURCE_UNIT_RE = re.compile(r"(?:^|\n\n)--- ([^-][^\n]*?) ---\n")
+CODE_BRIEF_MAX_SOURCE_CHARS = 1_800
+CODE_BRIEF_MAX_UNIT_CHARS = 560
+CODE_BRIEF_HEAD_CHARS = 220
+
+
+def _trim_optional_text(value: object, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped[:limit]
+
+
+def _safe_viewport(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    viewport: dict[str, object] = {}
+    for key in ("width", "height", "device_scale_factor"):
+        raw = value.get(key)
+        if isinstance(raw, bool):
+            continue
+        if isinstance(raw, int | float):
+            viewport[key] = raw
+    return viewport or None
+
+
+def _safe_console_errors(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    errors: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        clean = item.strip()
+        if not clean:
+            continue
+        errors.append(clean[:220])
+        if len(errors) >= 5:
+            break
+    return errors
+
+
+def is_complete_html_document(text: str) -> bool:
+    """Return whether the generated artifact is a complete HTML document."""
+    stripped = text.strip()
+    lowered = stripped.lower()
+    return (
+        lowered.startswith("<!doctype html>")
+        and "<html" in lowered
+        and "</html>" in lowered
+        and lowered.endswith("</html>")
+    )
 
 
 def strip_markdown_fence(text: str) -> str:
@@ -87,6 +239,132 @@ def strip_markdown_fence(text: str) -> str:
     if stripped.startswith("```html") or stripped.startswith("```HTML"):
         return re.sub(r"^```(?:html|HTML)\s*\n?", "", stripped).strip()
     return stripped
+
+
+def _is_high_signal_source_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    high_signal_tokens = (
+        "return (",
+        "return <",
+        "className=",
+        "t(",
+        "useState(",
+        "useMemo(",
+        "useCallback(",
+        "InteractionEmptyState",
+        "Dialog",
+        "PageFrame",
+        "Button",
+        "Input",
+        "Tabs",
+        "Table",
+        "Card",
+        "loading",
+        "empty",
+        "error",
+        "failed",
+        "title",
+        "description",
+        "placeholder",
+    )
+    if stripped.startswith(("export function ", "function ", "const ")) and (
+        "=>" in stripped or stripped.endswith("{")
+    ):
+        return True
+    if stripped.startswith(("<", "{", "</")):
+        return True
+    return any(token in stripped for token in high_signal_tokens)
+
+
+def _split_source_excerpt_units(source_excerpt: str) -> list[tuple[str, str]]:
+    matches = list(_SOURCE_UNIT_RE.finditer(source_excerpt))
+    if not matches:
+        return [("source", source_excerpt)]
+    units: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(source_excerpt)
+        units.append((match.group(1).strip(), source_excerpt[start:end].strip()))
+    return units
+
+
+def compact_code_source_excerpt(source_excerpt: str) -> str:
+    """Shrink source context for LLM generation while preserving UI signal.
+
+    The scanner intentionally keeps rich source metadata for traceability and
+    hashing. The LLM prompt has a different job: provide enough structure to
+    generate a complete static prototype. Large route files often spend their
+    first thousands of characters on imports/state setup, so a naive prefix
+    truncation hides the JSX and pushes the model into max-token failures.
+    """
+    excerpt = source_excerpt.strip()
+    if len(excerpt) <= CODE_BRIEF_MAX_SOURCE_CHARS:
+        return excerpt
+
+    chunks: list[str] = []
+    remaining = CODE_BRIEF_MAX_SOURCE_CHARS
+    for rel, content in _split_source_excerpt_units(excerpt):
+        if remaining <= 0:
+            break
+        header = f"\n\n--- {rel} ---\n"
+        head = content[:CODE_BRIEF_HEAD_CHARS].rstrip()
+        high_signal_lines: list[str] = []
+        seen: set[str] = set()
+        for line in content.splitlines():
+            normalized = line.strip()
+            if normalized in seen or not _is_high_signal_source_line(line):
+                continue
+            seen.add(normalized)
+            high_signal_lines.append(line.rstrip())
+            if sum(len(item) + 1 for item in high_signal_lines) >= CODE_BRIEF_MAX_UNIT_CHARS:
+                break
+        signal_block = ""
+        if high_signal_lines:
+            signal_block = (
+                "// High-signal UI lines extracted for generation:\n"
+                + "\n".join(high_signal_lines)
+            )
+        if signal_block:
+            head_budget = max(0, CODE_BRIEF_MAX_UNIT_CHARS - len(signal_block) - 2)
+            body = "\n\n".join(
+                part
+                for part in (head[:head_budget].rstrip(), signal_block)
+                if part
+            ).strip()
+        else:
+            body = head[:CODE_BRIEF_MAX_UNIT_CHARS].rstrip()
+        unit = f"{header}{body}"
+        if len(unit) > remaining:
+            unit = unit[:remaining].rstrip()
+        chunks.append(unit)
+        remaining -= len(unit)
+
+    compacted = "".join(chunks).strip()
+    if not compacted:
+        return excerpt[:CODE_BRIEF_MAX_SOURCE_CHARS].rstrip()
+    return (
+        compacted
+        + "\n\n[Source excerpt compacted for generation; full source paths and hash are preserved in metadata.]"
+    )
+
+
+def build_editable_code_candidate_brief(candidate: CodePrototypeCandidate) -> str:
+    """Build a short user-editable candidate brief shown before generation."""
+    source_paths = ", ".join(candidate.source_paths[:4])
+    signals = ", ".join(candidate.signals[:6])
+    return (
+        f"Route: {candidate.route}\n"
+        f"Title: {candidate.title}\n"
+        f"Primary source: {candidate.primary_source_path}\n"
+        f"Related sources: {source_paths}\n"
+        f"Framework: {candidate.framework_hint}\n"
+        f"Signals: {signals or 'page candidate'}\n\n"
+        "Generate a compact, complete static prototype for this page. "
+        "Preserve the visible navigation, primary workflow, important controls, "
+        "and one representative loading/empty/error state when relevant."
+    )
 
 
 def build_html_system_prompt(brief: str) -> str:
@@ -109,6 +387,10 @@ def build_html_system_prompt(brief: str) -> str:
         "- Start the response with <!DOCTYPE html>.\n"
         "- End the response with </html>.\n"
         "- Do not include any commentary before or after the document.\n\n"
+        "Output budget:\n"
+        "- Complete HTML beats exhaustive detail. Never continue a section if it risks an unfinished document.\n"
+        "- Target 70-110 compact lines and fewer than 14,000 characters.\n"
+        "- For complex apps, render a representative first viewport plus at most one secondary state, not every panel/row/modal.\n\n"
         f"User brief: {brief.strip()}\n\n"
         "<!DOCTYPE html>"
     )
@@ -132,9 +414,32 @@ def build_iteration_system_prompt(latest_html: str, instruction: str) -> str:
     )
 
 
-def build_code_backed_brief(candidate: CodePrototypeCandidate, project: Project) -> str:
+def build_code_backed_brief(
+    candidate: CodePrototypeCandidate,
+    project: Project,
+    runtime_evidence: RuntimePrototypeEvidence | None = None,
+    editable_brief_override: str | None = None,
+) -> str:
     """Build the seed brief used for a code-backed prototype."""
     source_paths = ", ".join(candidate.source_paths)
+    source_excerpt = compact_code_source_excerpt(candidate.source_excerpt)
+    editable_override = (editable_brief_override or "").strip()
+    runtime_block = ""
+    if runtime_evidence is not None:
+        runtime_block = (
+            "Runtime evidence priority:\n"
+            "Use the browser evidence below before source-only inference when it is successful. "
+            "If it failed, silently fall back to source context. Treat the evidence as a compact visual brief; "
+            "do not try to reproduce every captured text node or structural item.\n\n"
+            f"{runtime_evidence.to_prompt_block()}\n\n"
+        )
+    override_block = ""
+    if editable_override:
+        override_block = (
+            "User-edited candidate brief override:\n"
+            f"{editable_override}\n\n"
+            "Use this edited brief as the primary page intent. Use runtime evidence and source excerpts only to fill in concrete labels, controls, and visual density.\n\n"
+        )
     return (
         f"Generate a faithful static HTML prototype for project '{project.name}'.\n"
         f"Source route: {candidate.route}\n"
@@ -147,8 +452,23 @@ def build_code_backed_brief(candidate: CodePrototypeCandidate, project: Project)
         "are unavailable. Preserve the existing app style implied by class names "
         "and component names. Include this traceability comment near the top of "
         f"the HTML: <!-- source: {candidate.route} {candidate.primary_source_path} -->.\n\n"
+        f"{runtime_block}"
+        f"{override_block}"
+        "Completeness and size requirements:\n"
+        "- Prefer a compact complete prototype over an exhaustive unfinished one.\n"
+        "- Keep the generated HTML short enough to finish within the response budget.\n"
+        "- Hard cap yourself at a compact first-screen artifact; omit lower-priority details rather than risking truncation.\n"
+        "- Prioritize the first viewport, primary workflow, and navigation structure.\n"
+        "- Include at most one of the representative loading/empty/error states, and omit the rest when space is tight.\n"
+        "- Summarize repetitive lower-priority sections instead of expanding every item.\n"
+        "- Keep the HTML concise: target roughly 80-140 lines, with compact CSS and JS.\n"
+        "- For complex admin/workbench pages, make a representative first-screen slice, "
+        "not a full product clone.\n"
+        "- Do not reproduce every table row, modal variant, settings field, graph node, "
+        "or long script; use 2-3 representative samples.\n"
+        "- The final output must still be a complete document ending with </html>.\n\n"
         "Source excerpt:\n"
-        f"{candidate.source_excerpt}"
+        f"{source_excerpt}"
     )
 
 
@@ -178,24 +498,34 @@ async def _stream_html(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[
             if response.status_code != 200:
                 body = await response.aread()
                 raise RuntimeError(f"prototype stream HTTP {response.status_code}: {body[:300]!r}")
+            stop_reason: str | None = None
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
                 raw = line[5:].strip()
                 if raw in ("", "[DONE]"):
                     continue
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
+                event = parse_json_object(raw)
+                if event is None:
                     continue
                 etype = event.get("type")
                 if etype == "content_block_delta":
-                    delta = event.get("delta") or {}
+                    delta = object_dict(event.get("delta"))
                     if delta.get("type") == "text_delta":
-                        text = delta.get("text") or ""
+                        text = string_value(delta.get("text"))
                         if text:
                             yield text
+                elif etype == "message_delta":
+                    delta = object_dict(event.get("delta"))
+                    raw_stop_reason = delta.get("stop_reason")
+                    if isinstance(raw_stop_reason, str):
+                        stop_reason = raw_stop_reason
                 elif etype == "message_stop":
+                    if stop_reason == "max_tokens":
+                        raise RuntimeError(
+                            "prototype stream stopped before a complete HTML document "
+                            "because the model reached its max token limit"
+                        )
                     return
 
 
@@ -216,12 +546,14 @@ class PrototypeService:
     def __init__(
         self,
         store: AsyncSQLiteStore,
-        runtime_catalog_service,
+        runtime_catalog_service: RuntimeCatalogLoader,
         discovery_service: CodePrototypeDiscoveryService | None = None,
+        runtime_capture_service: RuntimeCaptureService | None = None,
     ) -> None:
         self.store = store
         self.runtime_catalog_service = runtime_catalog_service
         self.discovery_service = discovery_service or CodePrototypeDiscoveryService()
+        self.runtime_capture_service = runtime_capture_service
 
     # --- CRUD pass-throughs ----------------------------------------------------
 
@@ -270,7 +602,7 @@ class PrototypeService:
             raise PrototypeError(f"prototype not found: {prototype_id}")
         return prototype
 
-    async def get_with_versions(self, prototype_id: str) -> dict:
+    async def get_with_versions(self, prototype_id: str) -> dict[str, object]:
         """Detail view: prototype + version metadata (no html bodies)."""
         prototype = await self.get(prototype_id)
         versions = await self.store.list_prototype_versions(prototype_id)
@@ -367,19 +699,30 @@ class PrototypeService:
         if not cleaned:
             yield StreamEvent("error", {"message": "LLM returned empty HTML"})
             return
+        if not is_complete_html_document(cleaned):
+            yield StreamEvent(
+                "error",
+                {
+                    "message": (
+                        "LLM returned an incomplete HTML document; generation was not saved"
+                    )
+                },
+            )
+            return
 
         # Disk mirror: <repo>/.agent-collab/prototypes/<id>/v<n>/index.html
         version_id = str(uuid4())
-        disk_path = self._version_disk_path(project, prototype.id, next_version)
+        disk_target = self._version_disk_path(project, prototype.id, next_version)
+        disk_path: Path | None = disk_target
         try:
-            disk_path.parent.mkdir(parents=True, exist_ok=True)
-            disk_path.write_text(cleaned, encoding="utf-8")
+            disk_target.parent.mkdir(parents=True, exist_ok=True)
+            disk_target.write_text(cleaned, encoding="utf-8")
         except OSError as exc:
             # Disk failure is non-fatal: the DB still holds the html. We
             # log + keep the disk_path as None so the UI doesn't show a
             # broken link.
             logger.warning("prototype disk mirror failed: %s", exc)
-            disk_path = None  # type: ignore[assignment]
+            disk_path = None
 
         now = datetime.now()
         version = PrototypeVersion(
@@ -432,7 +775,7 @@ class PrototypeService:
         yield StreamEvent("batch_meta", {"count": len(prototypes)})
 
         ok: list[str] = []
-        failed: list[dict] = []
+        failed: list[dict[str, str]] = []
 
         for p in prototypes:
             yield StreamEvent(
@@ -481,12 +824,12 @@ class PrototypeService:
 
     # --- Code-driven generation ----------------------------------------------
 
-    async def list_code_candidates(self, project_id: str) -> dict:
+    async def list_code_candidates(self, project_id: str) -> dict[str, object]:
         project = await self.store.load_project(project_id)
         if project is None:
             raise PrototypeError(f"project not found: {project_id}")
         candidates = self.discovery_service.scan_project(project)
-        items = []
+        items: list[dict[str, object]] = []
         counts = {"create": 0, "regenerate": 0, "skip": 0, "unsupported": 0}
         for candidate in candidates:
             existing = await self.store.load_prototype_by_source(project_id, candidate.id)
@@ -505,6 +848,7 @@ class PrototypeService:
             item = candidate.to_dict()
             item.update(
                 {
+                    "editable_brief": build_editable_code_candidate_brief(candidate),
                     "action": action,
                     "prototype_id": existing.id if existing else None,
                 }
@@ -512,12 +856,43 @@ class PrototypeService:
             items.append(item)
         return {"project_id": project_id, "count": len(items), "counts": counts, "candidates": items}
 
-    async def generate_all_from_code_stream(self, project_id: str) -> AsyncIterator[StreamEvent]:
+    async def generate_all_from_code_stream(
+        self,
+        project_id: str,
+        candidate_ids: list[str] | None = None,
+        instruction: str | None = None,
+        candidate_instructions: dict[str, str] | None = None,
+        candidate_brief_overrides: dict[str, str] | None = None,
+        runtime_evidence_by_candidate: dict[str, RuntimePrototypeEvidence] | None = None,
+        use_runtime_evidence: bool = False,
+        runtime_base_url: str | None = None,
+    ) -> AsyncIterator[StreamEvent]:
         project = await self.store.load_project(project_id)
         if project is None:
             raise PrototypeError(f"project not found: {project_id}")
 
-        candidates = self.discovery_service.scan_project(project)
+        selected_ids = {item for item in (candidate_ids or []) if item}
+        custom_instruction = (instruction or "").strip()
+        candidate_instruction_map = {
+            key: value.strip()
+            for key, value in (candidate_instructions or {}).items()
+            if key and value.strip()
+        }
+        candidate_brief_override_map = {
+            key: value.strip()
+            for key, value in (candidate_brief_overrides or {}).items()
+            if key and value.strip()
+        }
+        runtime_evidence_map = runtime_evidence_by_candidate or {}
+        runtime_capture_requested = use_runtime_evidence and bool((runtime_base_url or "").strip())
+        discovered = self.discovery_service.scan_project(project)
+        candidates = [
+            candidate
+            for candidate in discovered
+            if not selected_ids or candidate.id in selected_ids
+        ]
+        discovered_ids = {candidate.id for candidate in discovered}
+        missing_candidate_ids = sorted(selected_ids - discovered_ids)
         classified: list[tuple[CodePrototypeCandidate, Prototype | None, str]] = []
         counts = {"create": 0, "regenerate": 0, "skip": 0, "unsupported": 0}
         for candidate in candidates:
@@ -528,6 +903,11 @@ class PrototypeService:
                 existing
                 and existing.current_version > 0
                 and existing.source_hash == candidate.source_hash
+                and not custom_instruction
+                and candidate.id not in candidate_instruction_map
+                and candidate.id not in candidate_brief_override_map
+                and candidate.id not in runtime_evidence_map
+                and not runtime_capture_requested
             ):
                 action = "skip"
             elif existing:
@@ -545,9 +925,13 @@ class PrototypeService:
                 "changed_count": counts["regenerate"],
                 "unchanged_count": counts["skip"],
                 "unsupported_count": counts["unsupported"],
+                "requested_count": len(selected_ids) if selected_ids else None,
+                "matched_count": len(candidates),
+                "missing_candidate_ids": missing_candidate_ids,
                 "candidates": [
                     {
                         **candidate.to_dict(),
+                        "editable_brief": build_editable_code_candidate_brief(candidate),
                         "action": action,
                         "prototype_id": existing.id if existing else None,
                     }
@@ -557,6 +941,17 @@ class PrototypeService:
         )
 
         summary = {"created": 0, "regenerated": 0, "skipped": 0, "failed": 0, "unsupported": 0}
+        for missing_id in missing_candidate_ids:
+            summary["failed"] += 1
+            yield StreamEvent(
+                "prototype_error",
+                {
+                    "candidate_id": missing_id,
+                    "prototype_id": None,
+                    "message": "selected candidate was not found in the latest scan",
+                },
+            )
+
         for candidate, existing, action in classified:
             yield StreamEvent(
                 "candidate_start",
@@ -591,8 +986,54 @@ class PrototypeService:
 
             prototype = existing
             try:
+                effective_instruction = self._combined_code_instruction(
+                    custom_instruction,
+                    candidate_instruction_map.get(candidate.id),
+                )
+                editable_brief_override = candidate_brief_override_map.get(candidate.id)
+                runtime_evidence = runtime_evidence_map.get(candidate.id)
+                if runtime_evidence is None and runtime_capture_requested:
+                    yield StreamEvent(
+                        "candidate_capture",
+                        {
+                            "candidate_id": candidate.id,
+                            "route": candidate.route,
+                            "base_url": runtime_base_url,
+                        },
+                    )
+                    runtime_evidence = await self._capture_runtime_evidence(
+                        project,
+                        candidate,
+                        runtime_base_url,
+                    )
+                    if runtime_evidence.success:
+                        yield StreamEvent(
+                            "candidate_capture_done",
+                            {
+                                "candidate_id": candidate.id,
+                                "attempted_url": runtime_evidence.attempted_url,
+                                "final_url": runtime_evidence.final_url,
+                                "screenshot_path": runtime_evidence.screenshot_path,
+                            },
+                        )
+                    else:
+                        yield StreamEvent(
+                            "candidate_capture_failed",
+                            {
+                                "candidate_id": candidate.id,
+                                "attempted_url": runtime_evidence.attempted_url,
+                                "message": runtime_evidence.failure_reason
+                                or "runtime capture unavailable",
+                            },
+                        )
                 if prototype is None:
-                    prototype = await self._create_code_prototype(project, candidate)
+                    prototype = await self._create_code_prototype(
+                        project,
+                        candidate,
+                        instruction=effective_instruction,
+                        editable_brief_override=editable_brief_override,
+                        runtime_evidence=runtime_evidence,
+                    )
                     yield StreamEvent(
                         "prototype_created",
                         {
@@ -602,7 +1043,14 @@ class PrototypeService:
                         },
                     )
                 else:
-                    await self._refresh_code_seed(project, prototype, candidate)
+                    await self._refresh_code_seed(
+                        project,
+                        prototype,
+                        candidate,
+                        instruction=effective_instruction,
+                        editable_brief_override=editable_brief_override,
+                        runtime_evidence=runtime_evidence,
+                    )
 
                 completed = False
                 async for ev in self.stream_events(prototype.id, instruction=None):
@@ -622,7 +1070,10 @@ class PrototypeService:
                         await self.store.update_prototype_source_metadata(
                             prototype.id,
                             candidate.source_hash,
-                            json.dumps(self._candidate_meta(candidate), ensure_ascii=False),
+                            json.dumps(
+                                self._candidate_meta(candidate, runtime_evidence),
+                                ensure_ascii=False,
+                            ),
                         )
                         if action == "create":
                             summary["created"] += 1
@@ -654,7 +1105,12 @@ class PrototypeService:
         yield StreamEvent("all_done", summary)
 
     async def _create_code_prototype(
-        self, project: Project, candidate: CodePrototypeCandidate
+        self,
+        project: Project,
+        candidate: CodePrototypeCandidate,
+        instruction: str | None = None,
+        editable_brief_override: str | None = None,
+        runtime_evidence: RuntimePrototypeEvidence | None = None,
     ) -> Prototype:
         now = datetime.now()
         prototype = Prototype(
@@ -666,7 +1122,10 @@ class PrototypeService:
             source_kind="code",
             source_ref=candidate.id,
             source_hash=candidate.source_hash,
-            source_meta_json=json.dumps(self._candidate_meta(candidate), ensure_ascii=False),
+            source_meta_json=json.dumps(
+                self._candidate_meta(candidate, runtime_evidence),
+                ensure_ascii=False,
+            ),
             created_at=now,
             updated_at=now,
         )
@@ -675,7 +1134,13 @@ class PrototypeService:
             id=str(uuid4()),
             prototype_id=prototype.id,
             version_no=0,
-            instruction=build_code_backed_brief(candidate, project),
+            instruction=self._build_code_seed_brief(
+                candidate,
+                project,
+                instruction,
+                editable_brief_override,
+                runtime_evidence,
+            ),
             html="",
             disk_path=None,
             created_at=now,
@@ -684,22 +1149,92 @@ class PrototypeService:
         return prototype
 
     async def _refresh_code_seed(
-        self, project: Project, prototype: Prototype, candidate: CodePrototypeCandidate
+        self,
+        project: Project,
+        prototype: Prototype,
+        candidate: CodePrototypeCandidate,
+        instruction: str | None = None,
+        editable_brief_override: str | None = None,
+        runtime_evidence: RuntimePrototypeEvidence | None = None,
     ) -> None:
         now = datetime.now()
         seed = PrototypeVersion(
             id=str(uuid4()),
             prototype_id=prototype.id,
             version_no=0,
-            instruction=build_code_backed_brief(candidate, project),
+            instruction=self._build_code_seed_brief(
+                candidate,
+                project,
+                instruction,
+                editable_brief_override,
+                runtime_evidence,
+            ),
             html="",
             disk_path=None,
             created_at=now,
         )
         await self.store.save_prototype_version(seed)
 
-    def _candidate_meta(self, candidate: CodePrototypeCandidate) -> dict:
-        return {
+    def _build_code_seed_brief(
+        self,
+        candidate: CodePrototypeCandidate,
+        project: Project,
+        instruction: str | None,
+        editable_brief_override: str | None = None,
+        runtime_evidence: RuntimePrototypeEvidence | None = None,
+    ) -> str:
+        brief = build_code_backed_brief(
+            candidate,
+            project,
+            runtime_evidence,
+            editable_brief_override,
+        )
+        clean_instruction = (instruction or "").strip()
+        if not clean_instruction:
+            return brief
+        return (
+            f"{brief}\n\n"
+            "Additional user guidance for this selected generation run:\n"
+            f"{clean_instruction}"
+        )
+
+    def _combined_code_instruction(
+        self,
+        shared_instruction: str | None,
+        candidate_instruction: str | None,
+    ) -> str | None:
+        parts = []
+        shared = (shared_instruction or "").strip()
+        candidate = (candidate_instruction or "").strip()
+        if shared:
+            parts.append(f"Shared guidance: {shared}")
+        if candidate:
+            parts.append(f"Candidate-specific guidance: {candidate}")
+        return "\n".join(parts) if parts else None
+
+    async def _capture_runtime_evidence(
+        self,
+        project: Project,
+        candidate: CodePrototypeCandidate,
+        runtime_base_url: str | None,
+    ) -> RuntimePrototypeEvidence:
+        if self.runtime_capture_service is None:
+            return RuntimePrototypeEvidence(
+                success=False,
+                failure_reason="runtime capture service is not configured",
+            )
+        return await self.runtime_capture_service.capture_candidate(
+            project,
+            candidate,
+            runtime_base_url,
+        )
+
+    def _candidate_meta(
+        self,
+        candidate: CodePrototypeCandidate,
+        runtime_evidence: RuntimePrototypeEvidence | None = None,
+    ) -> dict[str, object]:
+        meta: dict[str, object] = {
             "route": candidate.route,
             "kind": candidate.kind,
             "framework_hint": candidate.framework_hint,
@@ -707,6 +1242,9 @@ class PrototypeService:
             "primary_source_path": candidate.primary_source_path,
             "signals": candidate.signals,
         }
+        if runtime_evidence is not None:
+            meta["runtime_evidence"] = runtime_evidence.to_meta()
+        return meta
 
     # --- Disk helpers ----------------------------------------------------------
 
@@ -727,10 +1265,9 @@ class PrototypeService:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":  # pragma: no cover - manual smoke
-    print(
-        "build_html_system_prompt('pricing page') -> ",
+    logger.info(
+        "build_html_system_prompt('pricing page') -> %s ...",
         build_html_system_prompt("pricing page")[:120],
-        "...",
     )
     sample = "```html\n<!DOCTYPE html>\n<html></html>\n```"
-    print("strip_markdown_fence -> ", strip_markdown_fence(sample)[:60])
+    logger.info("strip_markdown_fence -> %s", strip_markdown_fence(sample)[:60])

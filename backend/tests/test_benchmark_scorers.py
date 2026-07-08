@@ -8,6 +8,8 @@ These tests pin the determinism contract: given a fixed
 
 from __future__ import annotations  # noqa: I001
 
+from typing import cast
+
 import pytest
 
 from benchmark.scorers import Scorer, ScorerEntry, ScorerRegistry  # noqa: F401
@@ -76,8 +78,9 @@ def test_execution_one_fail_decreases_value_and_passes_false():
     assert s.passed is False
     assert s.metadata["passed"] == 1
     assert s.metadata["total"] == 2
-    assert len(s.metadata["failed"]) == 1
-    assert s.metadata["failed"][0]["command"] == "b"
+    failed = cast(list[dict[str, object]], s.metadata["failed"])
+    assert len(failed) == 1
+    assert failed[0]["command"] == "b"
     assert s.notes == "1/2 QA commands passed"
 
 
@@ -195,7 +198,8 @@ def test_coverage_partial_coverage_reflects_in_value():
     assert s.passed is False
     assert s.metadata["covered"] == 1
     assert s.metadata["total"] == 3
-    assert "return application json" in s.metadata["uncovered"][0]
+    uncovered = cast(list[str], s.metadata["uncovered"])
+    assert "return application json" in uncovered[0]
 
 
 def test_coverage_none_covered_returns_zero():
@@ -327,7 +331,7 @@ def test_registry_empty_name_rejected():
 
     reg = ScorerRegistry()
     with pytest.raises(ValueError):
-        reg.register(Nameless())  # type: ignore[arg-type]
+        reg.register(Nameless())
 
 
 def test_registry_negative_weight_rejected():

@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import type { Workspace } from "@/lib/types";
 import { Folder, ChevronRight, Clock, Plus, Trash2, Star } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, safeJsonStringArray } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -15,16 +15,18 @@ import { Button } from "@/components/ui/button";
 const FAVORITES_KEY = "agent-collab.favorites";
 
 function getFavorites(): Set<string> {
+  if (typeof window === "undefined") return new Set();
   try {
-    const stored = localStorage.getItem(FAVORITES_KEY);
-    return new Set(stored ? JSON.parse(stored) : []);
+    const stored = window.localStorage.getItem(FAVORITES_KEY);
+    return new Set(stored ? (safeJsonStringArray(stored) ?? []) : []);
   } catch {
     return new Set();
   }
 }
 
 function saveFavorites(favorites: Set<string>) {
-  localStorage.setItem(FAVORITES_KEY, JSON.stringify(Array.from(favorites)));
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(Array.from(favorites)));
 }
 
 interface WorkspaceGridProps {
@@ -99,10 +101,10 @@ export function WorkspaceGrid({
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteTarget) return;
     setIsDeleting(true);
-    
+
     // Optimistically remove
     setOptimisticWorkspaces((prev) => (prev ?? workspaces).filter((w) => w.id !== deleteTarget.id));
-    
+
     try {
       await onDelete(deleteTarget.id);
       addToast({ type: "success", title: t("workspace.toast.deleted") });
@@ -128,7 +130,9 @@ export function WorkspaceGrid({
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5 }}
         >
-          <h2 className="text-3xl font-black tracking-tight text-foreground mb-2">{t("workspace.title")}</h2>
+          <h2 className="text-3xl font-black tracking-tight text-foreground mb-2">
+            {t("workspace.title")}
+          </h2>
           <p className="text-text-muted font-medium">{t("workspace.subtitle")}</p>
         </motion.div>
         <motion.button
@@ -145,7 +149,7 @@ export function WorkspaceGrid({
         </motion.button>
       </div>
 
-      <motion.div 
+      <motion.div
         layout
         className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
       >
@@ -234,7 +238,7 @@ export function WorkspaceGrid({
                   onClick={(e) => toggleFavorite(ws, e)}
                   className={cn(
                     "p-2 rounded-lg hover:bg-surface-hover transition-all",
-                    favorites.has(ws.id) ? "text-warning" : "text-text-muted hover:text-warning"
+                    favorites.has(ws.id) ? "text-warning" : "text-text-muted hover:text-warning",
                   )}
                 >
                   <Star size={14} className={favorites.has(ws.id) ? "fill-warning" : ""} />
@@ -262,7 +266,10 @@ export function WorkspaceGrid({
                 {ws.title}
               </h3>
               {ws.cwd && (
-                <div className="text-[10px] font-mono text-text-muted/60 mb-3 truncate" title={ws.cwd}>
+                <div
+                  className="text-[10px] font-mono text-text-muted/60 mb-3 truncate"
+                  title={ws.cwd}
+                >
                   {ws.cwd}
                 </div>
               )}
@@ -271,7 +278,10 @@ export function WorkspaceGrid({
                   <Clock size={12} />
                   <span>{t("workspace.recent")}</span>
                 </div>
-                <ChevronRight size={14} className="ml-auto opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all text-brand" />
+                <ChevronRight
+                  size={14}
+                  className="ml-auto opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all text-brand"
+                />
               </div>
             </motion.div>
           ))}
@@ -306,7 +316,11 @@ export function WorkspaceGrid({
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
         title={t("workspace.dialog.deleteSingleTitle")}
-        description={deleteTarget ? t("workspace.dialog.deleteSingleDescription", { name: deleteTarget.title }) : undefined}
+        description={
+          deleteTarget
+            ? t("workspace.dialog.deleteSingleDescription", { name: deleteTarget.title })
+            : undefined
+        }
         confirmText={t("workspace.action.delete")}
         onConfirm={handleDeleteConfirm}
         isLoading={isDeleting}

@@ -7,6 +7,7 @@ type KeyboardShortcut = {
   altKey?: boolean;
   metaKey?: boolean;
   action: () => void;
+  description?: string;
 };
 
 function matchesKey(event: KeyboardEvent, shortcut: KeyboardShortcut): boolean {

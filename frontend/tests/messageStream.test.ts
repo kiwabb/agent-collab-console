@@ -10,9 +10,13 @@ interface PendingAssistant {
 }
 
 // Mirror of the hook's reducer logic (kept in sync with useExecutionProcessMessageStream).
-function applyDelta(prev: PendingAssistant | null, seq: number, deltaText: string): PendingAssistant {
+function applyDelta(
+  prev: PendingAssistant | null,
+  seq: number,
+  deltaText: string,
+): PendingAssistant {
   if (prev && seq <= prev.lastSeq) {
-    return prev;  // ignore duplicate / out-of-order
+    return prev; // ignore duplicate / out-of-order
   }
   return { text: (prev?.text ?? "") + deltaText, lastSeq: seq };
 }

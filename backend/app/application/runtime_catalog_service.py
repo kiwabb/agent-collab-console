@@ -1,16 +1,23 @@
-from __future__ import annotations
-
 """Runtime catalog service for managing executor/provider/model configurations."""
 
-from typing import Any  # noqa: E402, F401
+from __future__ import annotations
 
-from app.application import timeouts  # noqa: E402
-from app.domain.models import (  # noqa: E402
+from collections.abc import Awaitable
+from typing import Protocol
+
+from app.application import timeouts
+from app.domain.models import (
     RuntimeCatalog,
     RuntimeExecutorConfig,
-    RuntimeProviderConfig,
     RuntimeModelConfig,
+    RuntimeProviderConfig,
 )
+
+
+class RuntimeCatalogStore(Protocol):
+    def load_runtime_catalog(self) -> Awaitable[RuntimeCatalog | None]: ...
+
+    def save_runtime_catalog(self, catalog: RuntimeCatalog) -> Awaitable[None]: ...
 
 
 class RuntimeCatalogValidationError(ValueError):
@@ -33,7 +40,7 @@ class RuntimeCatalogService:
     # Supported template placeholders
     TEMPLATE_PLACEHOLDERS = {"{model}", "{provider}", "{workspace_cwd}", "{task_id}"}
 
-    def __init__(self, store):
+    def __init__(self, store: RuntimeCatalogStore) -> None:
         """Initialize with a store that has load_runtime_catalog and save_runtime_catalog."""
         self._store = store
 
@@ -42,7 +49,7 @@ class RuntimeCatalogService:
 
         Returns a default catalog if none exists.
         """
-        catalog = await self._store.load_runtime_catalog()
+        catalog: RuntimeCatalog | None = await self._store.load_runtime_catalog()
         if catalog is None:
             catalog = self._create_default_catalog()
             await self._store.save_runtime_catalog(catalog)
@@ -103,22 +110,24 @@ class RuntimeCatalogService:
 
         # Validate defaults point to enabled items
         for executor in catalog.executors:
-            if executor.default_provider_id and executor.default_provider_id != "None":
-                provider = self._find_provider(catalog, executor.id, executor.default_provider_id)
-                if provider and not provider.enabled:
+            default_provider_id = executor.default_provider_id
+            if default_provider_id and default_provider_id != "None":
+                default_provider = self._find_provider(catalog, executor.id, default_provider_id)
+                if default_provider and not default_provider.enabled:
                     raise RuntimeCatalogValidationError(
-                        f"Executor '{executor.id}' defaults to disabled provider '{executor.default_provider_id}'"
+                        f"Executor '{executor.id}' defaults to disabled provider '{default_provider_id}'"
                     )
-                if provider and provider.default_model_id and provider.default_model_id != "None":
-                    model = self._find_model(
+                default_model_id = default_provider.default_model_id if default_provider else None
+                if default_model_id and default_model_id != "None":
+                    default_model = self._find_model(
                         catalog,
                         executor.id,
-                        executor.default_provider_id,
-                        provider.default_model_id,
+                        default_provider_id,
+                        default_model_id,
                     )
-                    if model and not model.enabled:
+                    if default_model and not default_model.enabled:
                         raise RuntimeCatalogValidationError(
-                            f"Provider '{provider.id}' defaults to disabled model '{provider.default_model_id}'"
+                            f"Provider '{default_provider_id}' defaults to disabled model '{default_model_id}'"
                         )
 
     def resolve_effective_config(
@@ -197,6 +206,10 @@ class RuntimeCatalogService:
         if provider_config is not None and not executor_config.api_endpoint:
             # Skip model whitelist check when a custom api_endpoint is configured —
             # the model list is for the UI picker only, not a hard gate for compatible APIs.
+            if provider is None:
+                raise RuntimeCatalogValidationError(
+                    f"No provider specified for executor '{executor}'"
+                )
             model_config = self._find_model(catalog, executor, provider, model)
             if model_config is None:
                 raise RuntimeCatalogValidationError(
@@ -310,6 +323,15 @@ class RuntimeCatalogService:
         if has_key:
             if executor.api_endpoint:
                 env["ANTHROPIC_BASE_URL"] = executor.api_endpoint
+                # Claude Code may perform telemetry / feature-discovery calls against
+                # Anthropic's default hosts before the model request. With a custom
+                # Anthropic-compatible endpoint (MiniMax, gateway, etc.) those calls
+                # can fail auth with the provider key even though the configured API
+                # endpoint is valid. Agent-console subprocesses only need the model
+                # call, so keep the CLI on the configured endpoint.
+                env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+                env["DISABLE_TELEMETRY"] = "1"
+                env["DISABLE_ERROR_REPORTING"] = "1"
             if executor.api_key:
                 env["ANTHROPIC_API_KEY"] = executor.api_key
             # else: ANTHROPIC_API_KEY is inherited from the process env.

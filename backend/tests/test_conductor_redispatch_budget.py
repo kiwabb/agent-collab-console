@@ -27,6 +27,7 @@ from app.application import task_dispatcher
 from app.application.role_concurrency import RoleConcurrencyLimiter
 from app.application.task_completion_registry import TaskCompletionRegistry
 from app.domain.models import Agent, CodexIssue, WorkflowGraph, WorkflowNode
+from app.json_safety import object_dict
 
 
 ISSUE_ID = "issue-budget"
@@ -99,6 +100,9 @@ class _Store:
 
     async def load_workflow_graph_for_issue(self, issue_id):
         return self._graph if issue_id == ISSUE_ID else None
+
+    async def load_project(self, project_id):
+        return object()
 
 
 class _WorktreeManager:
@@ -281,6 +285,9 @@ async def test_dispatch_role_prefers_exact_agent_match_before_prefix():
         async def add_workflow_node(self, node):
             self.added_node = node
 
+        async def update_workflow_node(self, node_id: str, **updates: object):
+            return None
+
         async def add_workflow_edge(self, edge):
             self.added_edge = edge
 
@@ -313,10 +320,6 @@ async def test_dispatch_batch_rejects_same_role_over_budget_before_worktrees():
     prepared.
     """
     store = _Store(role_node_count=3)
-    async def _load_project(project_id):
-        return object()
-
-    store.load_project = _load_project
     wm = _WorktreeManager()
     registry = ct.build_conductor_tools(
         project_id="p1",
@@ -327,13 +330,15 @@ async def test_dispatch_batch_rejects_same_role_over_budget_before_worktrees():
         worktree_manager=wm,
     )
 
-    result = await registry.tools["dispatch_batch"](
-        {
-            "agents": [
-                {"role": ROLE, "prompt": "first"},
-                {"role": ROLE, "prompt": "second"},
-            ]
-        }
+    result = object_dict(
+        await registry.tools["dispatch_batch"](
+            {
+                "agents": [
+                    {"role": ROLE, "prompt": "first"},
+                    {"role": ROLE, "prompt": "second"},
+                ]
+            }
+        )
     )
 
     assert result["status"] == "retries_exhausted"
@@ -353,10 +358,6 @@ async def test_dispatch_batch_aliases_share_redispatch_budget_before_worktrees()
     """Batch preflight canonicalizes aliases before counting requested roles."""
     store = _Store(role_node_count=3)
 
-    async def _load_project(project_id):
-        return object()
-
-    store.load_project = _load_project
     wm = _WorktreeManager()
     registry = ct.build_conductor_tools(
         project_id="p1",
@@ -367,17 +368,21 @@ async def test_dispatch_batch_aliases_share_redispatch_budget_before_worktrees()
         worktree_manager=wm,
     )
 
-    result = await registry.tools["dispatch_batch"](
-        {
-            "agents": [
-                {"role": "eng", "prompt": "first"},
-                {"role": "dev", "prompt": "second"},
-            ]
-        }
+    result = object_dict(
+        await registry.tools["dispatch_batch"](
+            {
+                "agents": [
+                    {"role": "eng", "prompt": "first"},
+                    {"role": "dev", "prompt": "second"},
+                ]
+            }
+        )
     )
 
     assert result["status"] == "retries_exhausted"
-    assert result["roles"][0]["role"] == ROLE
-    assert result["roles"][0]["dispatches"] == 3
-    assert result["roles"][0]["requested"] == 2
+    roles = result.get("roles")
+    role_result = object_dict(roles[0]) if isinstance(roles, list) else {}
+    assert role_result["role"] == ROLE
+    assert role_result["dispatches"] == 3
+    assert role_result["requested"] == 2
     assert wm.prepared == []

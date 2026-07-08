@@ -1,9 +1,6 @@
 import type { Phase } from "@/features/issues/phaseUtils";
 
-export type PhaseTransitionAction =
-  | "to_architecture"
-  | "to_development"
-  | "to_testing";
+export type PhaseTransitionAction = "to_architecture" | "to_development" | "to_testing";
 
 export interface PhaseSignals {
   currentPhase: Phase;
@@ -20,17 +17,11 @@ const VISIBLE_FROM: Record<PhaseTransitionAction, readonly Phase[]> = {
   to_testing: ["development", "testing"],
 };
 
-export function isVisible(
-  action: PhaseTransitionAction,
-  currentPhase: Phase,
-): boolean {
+export function isVisible(action: PhaseTransitionAction, currentPhase: Phase): boolean {
   return VISIBLE_FROM[action].includes(currentPhase);
 }
 
-export function canTransition(
-  action: PhaseTransitionAction,
-  signals: PhaseSignals,
-): boolean {
+export function canTransition(action: PhaseTransitionAction, signals: PhaseSignals): boolean {
   if (signals.isBusy[action] || signals.hasActiveIssueTask) return false;
   if (!isVisible(action, signals.currentPhase)) return false;
 

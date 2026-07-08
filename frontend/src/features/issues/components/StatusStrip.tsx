@@ -30,20 +30,35 @@ const STATUS_LABEL_KEY: Record<string, string> = {
   abandoned: "issue.command.status.abandoned",
 };
 
-export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSteer, onReset }: Props) {
+export function StatusStrip({
+  issue,
+  phase,
+  activeTask,
+  onPause,
+  onResume,
+  onSteer,
+  onReset,
+}: Props) {
   const { locale, t } = useI18n();
   const conductorStatus = phase.state?.conductor_status;
   const isConductorDone = conductorStatus === "success" || phase.phase === "done";
-  const status = issue?.status === "open" && (issue.current_phase === "done" || issue.current_phase === "completed")
-    ? "completed"
-    : !issue && isConductorDone
-    ? "completed"
-    : issue?.status ?? "open";
+  const status =
+    issue?.status === "open" &&
+    (issue.current_phase === "done" || issue.current_phase === "completed")
+      ? "completed"
+      : !issue && isConductorDone
+        ? "completed"
+        : (issue?.status ?? "open");
   const isPaused = conductorStatus === "paused" || status === "awaiting_approval";
   const isDone = status === "completed" || issue?.current_phase === "done" || isConductorDone;
   const isAbandoned = status === "abandoned" || issue?.git_merge_status === "abandoned";
-  const isConductorActive = !isDone && !isPaused && !isAbandoned && (conductorStatus === "running" || Boolean(phase.phase));
-  const conductorMotionPhase = isConductorActive ? phase.phase ?? "dispatching" : isPaused ? "paused" : "idle";
+  const isConductorActive =
+    !isDone && !isPaused && !isAbandoned && (conductorStatus === "running" || Boolean(phase.phase));
+  const conductorMotionPhase = isConductorActive
+    ? (phase.phase ?? "dispatching")
+    : isPaused
+      ? "paused"
+      : "idle";
 
   return (
     <section
@@ -59,7 +74,10 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
         <div className="grid gap-2.5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
           <div className="min-w-0 flex flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary/80">
-              <StatusBadge kind={inferStatusKind(status)} label={t(STATUS_LABEL_KEY[status] ?? "issue.command.status.queued")} />
+              <StatusBadge
+                kind={inferStatusKind(status)}
+                label={t(STATUS_LABEL_KEY[status] ?? "issue.command.status.queued")}
+              />
               <span className="font-mono bg-surface-input px-2 py-0.5 rounded-md text-text-muted text-[11px] border border-border-subtle/50">
                 #{issue?.id.slice(0, 8) ?? t("issue.command.loading")}
               </span>
@@ -109,7 +127,10 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
             </div>
           </div>
 
-          <div data-density="command-actions" className="grid grid-cols-3 gap-1.5 sm:max-w-[420px] xl:flex xl:flex-wrap xl:items-center xl:justify-end">
+          <div
+            data-density="command-actions"
+            className="grid grid-cols-3 gap-1.5 sm:max-w-[420px] xl:flex xl:flex-wrap xl:items-center xl:justify-end"
+          >
             <Button
               variant="outline"
               size="sm"
@@ -121,8 +142,14 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
                   : "bg-surface-raised text-text-primary hover:bg-surface-hover",
               )}
             >
-              {isPaused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}
-              <span className="truncate">{isPaused ? t("issue.command.resume") : t("issue.command.pause")}</span>
+              {isPaused ? (
+                <Play size={13} fill="currentColor" />
+              ) : (
+                <Pause size={13} fill="currentColor" />
+              )}
+              <span className="truncate">
+                {isPaused ? t("issue.command.resume") : t("issue.command.pause")}
+              </span>
             </Button>
 
             <Button
@@ -157,7 +184,7 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
                 ? "border-status-awaiting/40 bg-status-awaiting/5"
                 : "border-border-subtle bg-surface-input/35",
             isConductorActive && "motion-essential border-brand/35 bg-brand-muted/10",
-              )}
+          )}
         >
           {isConductorActive && (
             <span
@@ -174,9 +201,13 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
                   <span
                     className={cn(
                       "size-2.5 rounded-full",
-                      isDone ? "bg-status-done" :
-                      isPaused ? "bg-status-awaiting" :
-                      isAbandoned ? "bg-text-muted" : "bg-brand",
+                      isDone
+                        ? "bg-status-done"
+                        : isPaused
+                          ? "bg-status-awaiting"
+                          : isAbandoned
+                            ? "bg-text-muted"
+                            : "bg-brand",
                     )}
                   />
                 )}
@@ -187,11 +218,17 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
                     {t("issue.command.conductorPhase")}
                   </span>
                   <span className="font-mono text-sm font-bold text-foreground">
-                    {isDone ? t("issue.command.complete") : phase.phase ?? t("issue.command.idle")}
+                    {isDone
+                      ? t("issue.command.complete")
+                      : (phase.phase ?? t("issue.command.idle"))}
                   </span>
                   <span className="inline-flex items-center gap-1 font-mono text-xs text-text-muted">
                     <Clock3 size={12} />
-                    {isDone ? t("issue.command.complete") : phase.phaseDurationMs != null ? formatDuration(phase.phaseDurationMs) : "—"}
+                    {isDone
+                      ? t("issue.command.complete")
+                      : phase.phaseDurationMs != null
+                        ? formatDuration(phase.phaseDurationMs)
+                        : "—"}
                   </span>
                 </div>
                 <div className="flex min-w-0 items-start gap-1.5 font-mono text-xs text-text-muted">
@@ -205,7 +242,10 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
                 </div>
               </div>
             </div>
-            <p data-density="conductor-detail" className="min-w-0 whitespace-pre-wrap break-words rounded-md border border-border-subtle/50 bg-background/45 px-2.5 py-1.5 text-xs leading-relaxed text-text-secondary">
+            <p
+              data-density="conductor-detail"
+              className="min-w-0 whitespace-pre-wrap break-words rounded-md border border-border-subtle/50 bg-background/45 px-2.5 py-1.5 text-xs leading-relaxed text-text-secondary"
+            >
               {phase.detail || t("issue.command.noConductorDetail")}
             </p>
           </div>
@@ -216,7 +256,12 @@ export function StatusStrip({ issue, phase, activeTask, onPause, onResume, onSte
 }
 
 function formatClock(iso: string, locale: string): string {
-  return new Date(iso).toLocaleString(locale, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleString(locale, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export function formatDuration(ms: number): string {

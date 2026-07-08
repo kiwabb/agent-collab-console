@@ -3,27 +3,24 @@
 // call in the codebase; lifting them out of the per-domain file makes
 // the upcoming per-domain split straightforward without duplication.
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
-export const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE ?? "ws://localhost:9000";
+import { isRecord } from "@/lib/utils";
 
-interface ApiValidationError {
-  loc?: unknown;
-  msg?: unknown;
-}
+export const API_BASE = process.env["NEXT_PUBLIC_API_BASE"] ?? "/api";
+export const WS_BASE = process.env["NEXT_PUBLIC_WS_BASE"] ?? "ws://localhost:9000";
 
 export function formatApiErrorDetail(detail: unknown, fallback: string): string {
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
     const parts = detail
       .map((item) => {
-        if (!item || typeof item !== "object") return String(item);
-        const error = item as ApiValidationError;
-        const loc = Array.isArray(error.loc)
-          ? error.loc.map((part) => String(part)).join(".")
-          : typeof error.loc === "string"
-            ? error.loc
+        if (!isRecord(item)) return String(item);
+        const locValue = item["loc"];
+        const loc = Array.isArray(locValue)
+          ? locValue.map((part) => String(part)).join(".")
+          : typeof locValue === "string"
+            ? locValue
             : "";
-        const msg = typeof error.msg === "string" ? error.msg : "";
+        const msg = typeof item["msg"] === "string" ? item["msg"] : "";
         if (loc && msg) return `${loc}: ${msg}`;
         return msg || loc || JSON.stringify(item);
       })
@@ -72,7 +69,8 @@ export async function handleResponse<T>(response: Response): Promise<T> {
     let errorMessage = `HTTP ${response.status}`;
     try {
       const err = await response.json();
-      errorMessage = formatApiErrorDetail((err as { detail?: unknown }).detail, errorMessage);
+      const detail = isRecord(err) ? err["detail"] : undefined;
+      errorMessage = formatApiErrorDetail(detail, errorMessage);
     } catch {
       // If JSON parsing fails, try reading as text
       try {
@@ -88,5 +86,50 @@ export async function handleResponse<T>(response: Response): Promise<T> {
     }
     throw new Error(errorMessage);
   }
+  if (response.status === 204 || response.status === 205) {
+    return undefined as T;
+  }
   return response.json() as Promise<T>;
+}
+
+export async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  return handleResponse<T>(response);
+}
+
+export async function apiDedupedRequest<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await dedupedFetch(url, init);
+  return handleResponse<T>(response);
+}
+
+export async function apiRequestOr<T>(
+  url: string,
+  fallback: T,
+  options: {
+    init?: RequestInit;
+    dedupe?: boolean;
+    errorMessage?: (status: number) => string;
+  } = {},
+): Promise<T> {
+  const response = options.dedupe
+    ? await dedupedFetch(url, options.init)
+    : await fetch(url, options.init);
+  if (!response.ok) {
+    const message = options.errorMessage?.(response.status);
+    if (message) console.error(message);
+    return fallback;
+  }
+  return response.json() as Promise<T>;
+}
+
+export function jsonRequestInit(method: string, body: unknown): RequestInit {
+  return {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
+export async function apiJsonRequest<T>(url: string, method: string, body: unknown): Promise<T> {
+  return apiRequest<T>(url, jsonRequestInit(method, body));
 }

@@ -14,6 +14,7 @@ dependencies = [
     "pypdf>=5.0.0",
     "python-multipart>=0.0.9",
     "httpx>=0.27.0",
+    "playwright>=1.51.0",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +23,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.6.0",
     "mypy>=1.10.0",
+    "types-openpyxl>=3.1.5.20260518",
 ]
 
 [build-system]
@@ -72,19 +74,9 @@ warn_unused_ignores = true
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 no_implicit_optional = true
-check_untyped_defs = false
+check_untyped_defs = true
 ignore_missing_imports = true
 warn_return_any = true
-
-# Files that are part of the Phase 1 mypy baseline (frozen in current
-# shape; Phase 2/5 progressively tighten). A new file added under app/
-# MUST pass `disallow_untyped_defs` immediately — this override only
-# relaxes the pre-existing 94-module surface.
-[[tool.mypy.overrides]]
-module = "app.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-check_untyped_defs = false
 
 # Phase 5 burn-down: per-module strict list. Each entry must be 0-error
 # under `mypy --strict` (see scripts/mypy_burndown.sh). Modules graduate
@@ -92,18 +84,131 @@ check_untyped_defs = false
 # 0 errors under the same flags.
 [[tool.mypy.overrides]]
 module = [
+    "app",
+    "app.json_safety",
+    "app.adapters",
+    "app.adapters.base",
     "app.adapters.audit_log_query",
+    "app.adapters.async_sqlite_store",
+    "app.adapters.claude_cli_adapter",
+    "app.adapters.codex_cli_adapter",
+    "app.adapters.fake_claude_adapter",
+    "app.adapters.fake_codex_adapter",
+    "app.adapters.local_process",
+    "app.adapters.sqlite_store",
+    "app.domain",
+    "app.domain.models",
+    "app.domain.ports",
+    "app.domain.states",
+    "app.bootstrap",
+    "app.main",
+    "app.application",
+    "app.application.agent_catalog",
+    "app.application.agent_seed",
+    "app.application.agent_catalog.catalog",
+    "app.application.agent_catalog.generic_specialist_workflow",
+    "app.application.approval_service",
+    "app.application.architect_workflow",
+    "app.application.audit.categories",
+    "app.application.audit.writer",
+    "app.application.audit.recorders",
+    "app.application.audit_logger",
+    "app.application.budget_service",
+    "app.application.clarification",
+    "app.application.claude_process_runtime",
+    "app.application.codex_app_server_runtime",
+    "app.application.codex_process_manager",
+    "app.application.codex_task_runner",
     "app.application.command_safety",
+    "app.application.conductor_lease",
+    "app.application.conductor_llm",
+    "app.application.conductor_main_loop",
+    "app.application.conductor_pause_registry",
     "app.application.conductor_policy",
+    "app.application.conductor_recovery",
+    "app.application.conductor_session_registry",
     "app.application.conductor_state_machine",
+    "app.application.conductor_tools",
     "app.application.embedding_service",
+    "app.application.engineer_workflow",
+    "app.application.event_bus",
+    "app.application.four_phase_preset",
+    "app.application.git_service",
+    "app.application.github_pr_followup",
+    "app.application.help_event_parser",
+    "app.application.help_orchestrator",
     "app.application.intent_classifier",
+    "app.application.code_prototype_discovery",
+    "app.application.orchestration_service",
     "app.application.issue_artifact_documents",
+    "app.application.json_rpc_client",
+    "app.application.knowledge_index_service",
+    "app.application.llm_runner",
     "app.application.phase_duration_estimator",
+    "app.application.project_conductor",
+    "app.application.project_memory_service",
+    "app.application.project_review_scheduler",
+    "app.application.project_run_manager",
+    "app.application.project_script_suggestions",
+    "app.application.project_service",
+    "app.application.product_manager_documents",
+    "app.application.product_manager_router",
+    "app.application.product_manager_service",
+    "app.application.process_runtime_common",
+    "app.application.prototype_service",
+    "app.application.qa_failure_summary",
+    "app.application.qa_workflow",
+    "app.application.resume_service",
+    "app.application.review_guard",
+    "app.application.role_concurrency",
+    "app.application.role_workflow_service",
+    "app.application.runtime_prototype_capture",
+    "app.application.runtime_catalog_service",
+    "app.application.self_improvement_proposal_scheduler",
+    "app.application.self_improvement_apply_service",
+    "app.application.self_improvement_service",
+    "app.application.session_service",
+    "app.application.skill_service",
+    "app.application.specialist_orchestrator",
+    "app.application.specialist_requests",
+    "app.application.stall_watchdog",
+    "app.application.subagent_result_builder",
+    "app.application.task_completion_registry",
+    "app.application.team_notes_service",
+    "app.application.task_dispatcher",
+    "app.application.task_serialization",
     "app.application.task_activity",
+    "app.application.task_status_events",
+    "app.application.task_statuses",
     "app.application.timeouts",
     "app.application.tolerant_json",
+    "app.application.usage_utils",
+    "app.application.worktree_claude_hooks",
+    "app.application.worktree_manager",
+    "app.application.workflow_orchestrator",
+    "app.application.workflow_scheduler",
+    "app.application.audit",
+    "app.interfaces.api",
+    "app.interfaces",
     "app.interfaces.common",
+    "app.interfaces.codex_ws",
+    "app.interfaces.execution_process_views",
+    "app.interfaces.sse",
+    "app.interfaces.ws_events",
+    "benchmark",
+    "benchmark.aggregations",
+    "benchmark.api",
+    "benchmark.cli",
+    "benchmark.correlation",
+    "benchmark.golden_loader",
+    "benchmark.golden_schema",
+    "benchmark.job",
+    "benchmark.judge",
+    "benchmark.runner",
+    "benchmark.scorers",
+    "benchmark.scorers_impl",
+    "benchmark.store",
+    "benchmark.types",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

@@ -86,10 +86,4 @@ export const PERSONAS: Record<RoleId, Persona> = {
 };
 
 /** Canonical order shown in the dock, left → right. */
-export const ROLE_ORDER: RoleId[] = [
-  "conductor",
-  "product_manager",
-  "architect",
-  "engineer",
-  "qa",
-];
+export const ROLE_ORDER: RoleId[] = ["conductor", "product_manager", "architect", "engineer", "qa"];

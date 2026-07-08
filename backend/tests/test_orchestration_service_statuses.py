@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.adapters.base import AgentResult, WorkerTaskPayload
 from app.application.orchestration_service import OrchestrationService
 from app.domain.models import Session, Task
 
@@ -29,7 +30,7 @@ class _WorkerAdapter:
     def __init__(self, status: str) -> None:
         self.status = status
 
-    def execute(self, payload: dict) -> dict:
+    def execute(self, payload: WorkerTaskPayload) -> AgentResult:
         return {
             "agent_id": "worker-1",
             "role": "engineer",

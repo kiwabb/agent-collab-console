@@ -9,7 +9,11 @@ import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import type { RuntimeCatalog, RuntimeExecutorConfig } from "@/lib/types";
 import type { TranslationKey } from "@/lib/i18n";
-import { testRuntimeExecutor, validateRuntimeCatalog } from "@/lib/api/runtime";
+import {
+  testRuntimeExecutor,
+  testRuntimeExecutorCli,
+  validateRuntimeCatalog,
+} from "@/lib/api/runtime";
 import { CheckCircle, XCircle } from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
@@ -147,6 +151,7 @@ export function RuntimeCatalogEditor({ catalog, onChange, className }: RuntimeCa
 
   const toggleExecutorEnabled = (index: number) => {
     const executor = localCatalog.executors[index];
+    if (!executor) return;
     updateExecutor(index, { enabled: !executor.enabled });
   };
 
@@ -235,9 +240,31 @@ export function RuntimeCatalogEditor({ catalog, onChange, className }: RuntimeCa
             onRemove={() => removeExecutor(executorIndex)}
             onToggleEnabled={() => toggleExecutorEnabled(executorIndex)}
             onTest={async (exec) => {
+              const providerId = exec.default_provider_id ?? null;
+              const provider = providerId
+                ? exec.providers.find((item) => item.id === providerId)
+                : null;
+              const modelId = exec.default_model ?? provider?.default_model_id ?? null;
               const result = await testRuntimeExecutor({
                 executor_id: exec.id,
-                api_endpoint: exec.api_endpoint,
+                ...(providerId ? { provider_id: providerId } : {}),
+                ...(modelId ? { model_id: modelId } : {}),
+                ...(exec.api_endpoint !== undefined ? { api_endpoint: exec.api_endpoint } : {}),
+                ...(exec.api_key ? { api_key: exec.api_key } : {}),
+              });
+              return result;
+            }}
+            onTestCli={async (exec) => {
+              const providerId = exec.default_provider_id ?? null;
+              const provider = providerId
+                ? exec.providers.find((item) => item.id === providerId)
+                : null;
+              const modelId = exec.default_model ?? provider?.default_model_id ?? null;
+              const result = await testRuntimeExecutorCli({
+                executor_id: exec.id,
+                ...(providerId ? { provider_id: providerId } : {}),
+                ...(modelId ? { model_id: modelId } : {}),
+                ...(exec.api_endpoint !== undefined ? { api_endpoint: exec.api_endpoint } : {}),
                 ...(exec.api_key ? { api_key: exec.api_key } : {}),
               });
               return result;
@@ -412,6 +439,9 @@ interface ExecutorCardProps {
   onTest: (
     executor: RuntimeExecutorConfig,
   ) => Promise<{ success: boolean; latency_ms?: number; error?: string }>;
+  onTestCli: (
+    executor: RuntimeExecutorConfig,
+  ) => Promise<{ success: boolean; latency_ms?: number; error?: string }>;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }
 
@@ -421,11 +451,19 @@ function ExecutorCard({
   onRemove,
   onToggleEnabled,
   onTest,
+  onTestCli,
   t,
 }: ExecutorCardProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [testingCli, setTestingCli] = useState(false);
   const [testResult, setTestResult] = useState<{
+    success: boolean;
+    latency_ms?: number;
+    error?: string;
+    mode?: string;
+  } | null>(null);
+  const [cliTestResult, setCliTestResult] = useState<{
     success: boolean;
     latency_ms?: number;
     error?: string;
@@ -446,6 +484,19 @@ function ExecutorCard({
       setTestResult({ success: false, error: String(err) });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const handleCliTest = async () => {
+    setTestingCli(true);
+    setCliTestResult(null);
+    try {
+      const result = await onTestCli(executor);
+      setCliTestResult(result);
+    } catch (err) {
+      setCliTestResult({ success: false, error: String(err) });
+    } finally {
+      setTestingCli(false);
     }
   };
 
@@ -488,14 +539,38 @@ function ExecutorCard({
                   <XCircle className="h-3 w-3 text-destructive" />
                 )
               ) : null}
-              {t("runtime.catalog.test")}
+              {t("runtime.catalog.testApi")}
             </Button>
+            {executor.executor_type === "claude" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCliTest}
+                disabled={testingCli}
+                data-density={testingCli ? "runtime-catalog-test-cli-tool" : "runtime-catalog-test-cli"}
+                className={cn("gap-1.5", testingCli && "motion-essential")}
+              >
+                {testingCli ? (
+                  <AgentThinkingIndicator phase="tool" size={12} />
+                ) : cliTestResult ? (
+                  cliTestResult.success ? (
+                    <CheckCircle className="h-3 w-3 text-green-500" />
+                  ) : (
+                    <XCircle className="h-3 w-3 text-destructive" />
+                  )
+                ) : null}
+                {t("runtime.catalog.testCli")}
+              </Button>
+            )}
             {testResult?.success && (
               <span className="text-xs text-green-500">
                 {testResult.mode === "local_cli"
                   ? t("runtime.catalog.testLocalOk")
                   : `${testResult.latency_ms}ms`}
               </span>
+            )}
+            {cliTestResult?.success && (
+              <span className="text-xs text-green-500">{t("runtime.catalog.testCliOk")}</span>
             )}
             <Button
               variant="ghost"
@@ -510,6 +585,11 @@ function ExecutorCard({
         {testResult && !testResult.success && (
           <p className="mt-2 break-words text-xs text-destructive" title={testResult.error}>
             {testResult.error}
+          </p>
+        )}
+        {cliTestResult && !cliTestResult.success && (
+          <p className="mt-2 break-words text-xs text-destructive" title={cliTestResult.error}>
+            {cliTestResult.error}
           </p>
         )}
       </CardHeader>
@@ -612,8 +692,10 @@ function ExecutorCard({
                       value={provider.command_template || ""}
                       onChange={(e) => {
                         const newProviders = [...executor.providers];
+                        const existingProvider = newProviders[providerIndex];
+                        if (!existingProvider) return;
                         newProviders[providerIndex] = {
-                          ...newProviders[providerIndex],
+                          ...existingProvider,
                           command_template: e.target.value || null,
                         };
                         onUpdate({ providers: newProviders });

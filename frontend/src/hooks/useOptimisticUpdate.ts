@@ -8,7 +8,11 @@ interface OptimisticState<T> {
   error: Error | null;
 }
 
-type ToastFunction = (toast: { type: "success" | "error" | "warning" | "info"; title: string; message?: string }) => void;
+type ToastFunction = (toast: {
+  type: "success" | "error" | "warning" | "info";
+  title: string;
+  message?: string;
+}) => void;
 
 interface UseOptimisticUpdateOptions<T> {
   initialData: T;
@@ -83,7 +87,7 @@ export function useOptimisticUpdate<T>({
         }
       }
     },
-    [onUpdate, onError, rollbackOnError, addToast]
+    [onUpdate, onError, rollbackOnError, addToast],
   );
 
   const setData = useCallback((data: T) => {
@@ -103,7 +107,7 @@ export function useOptimisticUpdate<T>({
 // Hook for managing a list with optimistic add/remove/update
 export function useOptimisticList<T extends { id: string }>(
   initialItems: T[],
-  addToast?: ToastFunction
+  addToast?: ToastFunction,
 ) {
   const [items, setItems] = useState<T[]>(initialItems);
 
@@ -127,7 +131,7 @@ export function useOptimisticList<T extends { id: string }>(
         }
       }
     },
-    [addToast]
+    [addToast],
   );
 
   const optimisticRemove = useCallback(
@@ -153,7 +157,7 @@ export function useOptimisticList<T extends { id: string }>(
         }
       }
     },
-    [items, addToast]
+    [items, addToast],
   );
 
   const optimisticUpdate = useCallback(
@@ -163,9 +167,7 @@ export function useOptimisticList<T extends { id: string }>(
       if (!item) return;
 
       // Optimistically update
-      setItems((prev) =>
-        prev.map((i) => (i.id === id ? { ...i, ...updates } : i))
-      );
+      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...updates } : i)));
 
       try {
         await updateFn();
@@ -182,7 +184,7 @@ export function useOptimisticList<T extends { id: string }>(
         }
       }
     },
-    [items, addToast]
+    [items, addToast],
   );
 
   return {

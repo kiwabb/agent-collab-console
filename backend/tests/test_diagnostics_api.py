@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
+from typing import cast
 
 import pytest
 
@@ -103,6 +104,7 @@ def test_diagnostics_never_leaks_runtime_api_keys(client):
 def test_diagnostics_includes_project_review_scheduler_error(client):
     from app.application.github_pr_followup import reset_github_pr_followup_status
     from app.application.project_review_scheduler import (
+        ProjectReviewSchedulerStore,
         reset_project_review_scheduler_status,
         run_project_review_scheduler_loop,
     )
@@ -119,7 +121,7 @@ def test_diagnostics_includes_project_review_scheduler_error(client):
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(
             run_project_review_scheduler_loop(
-                object(),
+                cast(ProjectReviewSchedulerStore, object()),
                 interval_s=11,
                 limit=4,
                 tick_fn=tick,
@@ -148,6 +150,7 @@ def test_diagnostics_includes_self_improvement_proposal_scheduler_error(client):
     from app.application.github_pr_followup import reset_github_pr_followup_status
     from app.application.project_review_scheduler import reset_project_review_scheduler_status
     from app.application.self_improvement_proposal_scheduler import (
+        SelfImprovementProposalSchedulerStore,
         reset_self_improvement_proposal_scheduler_status,
         run_self_improvement_proposal_scheduler_loop,
     )
@@ -168,7 +171,7 @@ def test_diagnostics_includes_self_improvement_proposal_scheduler_error(client):
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(
             run_self_improvement_proposal_scheduler_loop(
-                object(),
+                cast(SelfImprovementProposalSchedulerStore, object()),
                 interval_s=11,
                 limit=4,
                 tick_fn=tick,

@@ -1,36 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  getSubAgentResults,
-  getAgentMesh,
-  appendConductorMessage,
-} from "../src/lib/api";
-
-type FetchCall = {
-  input: RequestInfo | URL;
-  init?: RequestInit;
-};
-
-function withMockFetch(
-  responseBody: unknown,
-  run: (calls: FetchCall[]) => Promise<void>,
-) {
-  const originalFetch = globalThis.fetch;
-  const calls: FetchCall[] = [];
-
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ input, init });
-    return new Response(JSON.stringify(responseBody), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }) as typeof fetch;
-
-  return run(calls).finally(() => {
-    globalThis.fetch = originalFetch;
-  });
-}
+import { getSubAgentResults, getAgentMesh, appendConductorMessage } from "../src/lib/api";
+import { contentType, jsonRequestBody, withMockJsonFetch } from "./fetchTestUtils";
+import { at } from "./testAssertions";
 
 test("getSubAgentResults hits the subagent-results endpoint", async () => {
   const mockResults = [
@@ -47,30 +20,27 @@ test("getSubAgentResults hits the subagent-results endpoint", async () => {
     },
   ];
 
-  await withMockFetch(mockResults, async (calls) => {
+  await withMockJsonFetch(mockResults, async (calls) => {
     const result = await getSubAgentResults("issue-1");
 
     assert.equal(result.length, 1);
-    assert.equal(result[0].task_id, "task-1");
-    assert.equal(result[0].role, "engineer");
-    assert.equal(result[0].status, "done");
+    const firstResult = at(result, 0, "subagent result");
+    assert.equal(firstResult.task_id, "task-1");
+    assert.equal(firstResult.role, "engineer");
+    assert.equal(firstResult.status, "done");
     assert.equal(calls.length, 1);
-    assert.equal(
-      String(calls[0].input),
-      "/api/codex/issues/issue-1/subagent-results",
-    );
-    assert.equal(calls[0].init, undefined);
+    const call = at(calls, 0, "fetch call");
+    assert.equal(call.input, "/api/codex/issues/issue-1/subagent-results");
+    assert.equal(call.init, undefined);
   });
 });
 
 test("getSubAgentResults URL-encodes issue ID", async () => {
-  await withMockFetch([], async (calls) => {
+  await withMockJsonFetch([], async (calls) => {
     await getSubAgentResults("issue/with/slashes");
 
-    assert.equal(
-      String(calls[0].input),
-      "/api/codex/issues/issue%2Fwith%2Fslashes/subagent-results",
-    );
+    const call = at(calls, 0, "fetch call");
+    assert.equal(call.input, "/api/codex/issues/issue%2Fwith%2Fslashes/subagent-results");
   });
 });
 
@@ -88,50 +58,41 @@ test("getAgentMesh hits the agent-mesh endpoint", async () => {
     },
   ];
 
-  await withMockFetch(mockMessages, async (calls) => {
+  await withMockJsonFetch(mockMessages, async (calls) => {
     const result = await getAgentMesh("issue-1");
 
     assert.equal(result.length, 1);
-    assert.equal(result[0].id, "msg-1");
-    assert.equal(result[0].message_type, "handoff");
+    const firstMessage = at(result, 0, "agent mesh message");
+    assert.equal(firstMessage.id, "msg-1");
+    assert.equal(firstMessage.message_type, "handoff");
     assert.equal(calls.length, 1);
-    assert.equal(
-      String(calls[0].input),
-      "/api/codex/issues/issue-1/agent-mesh",
-    );
-    assert.equal(calls[0].init, undefined);
+    const call = at(calls, 0, "fetch call");
+    assert.equal(call.input, "/api/codex/issues/issue-1/agent-mesh");
+    assert.equal(call.init, undefined);
   });
 });
 
 test("appendConductorMessage posts message to conductor message endpoint", async () => {
-  await withMockFetch({ status: "ok" }, async (calls) => {
+  await withMockJsonFetch({ status: "ok" }, async (calls) => {
     const result = await appendConductorMessage("project-1", "Hello from user");
 
     assert.equal(result.status, "ok");
     assert.equal(calls.length, 1);
-    assert.equal(
-      String(calls[0].input),
-      "/api/codex/projects/project-1/conductor/message",
-    );
-    assert.equal(calls[0].init?.method, "POST");
-    assert.equal(
-      calls[0].init?.headers &&
-        (calls[0].init.headers as Record<string, string>)["Content-Type"],
-      "application/json",
-    );
-    assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+    const call = at(calls, 0, "fetch call");
+    assert.equal(call.input, "/api/codex/projects/project-1/conductor/message");
+    assert.equal(call.init?.method, "POST");
+    assert.equal(contentType(call.init), "application/json");
+    assert.deepEqual(jsonRequestBody(call), {
       message: "Hello from user",
     });
   });
 });
 
 test("appendConductorMessage URL-encodes project ID", async () => {
-  await withMockFetch({ status: "ok" }, async (calls) => {
+  await withMockJsonFetch({ status: "ok" }, async (calls) => {
     await appendConductorMessage("project/with/slashes", "test");
 
-    assert.equal(
-      String(calls[0].input),
-      "/api/codex/projects/project%2Fwith%2Fslashes/conductor/message",
-    );
+    const call = at(calls, 0, "fetch call");
+    assert.equal(call.input, "/api/codex/projects/project%2Fwith%2Fslashes/conductor/message");
   });
 });

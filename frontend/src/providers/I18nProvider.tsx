@@ -1,7 +1,13 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { DEFAULT_LOCALE, type Locale, type TranslationKey, getDictionaryValue, isLocale } from "@/lib/i18n";
+import {
+  DEFAULT_LOCALE,
+  type Locale,
+  type TranslationKey,
+  getDictionaryValue,
+  isLocale,
+} from "@/lib/i18n";
 
 const STORAGE_KEY = "agent-collab.locale";
 

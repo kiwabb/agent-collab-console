@@ -27,9 +27,7 @@ export function MacroRecorder({ open, onOpenChange }: MacroRecorderProps) {
         <DialogHeader>
           <DialogTitle>{t("macroRecorder.title")}</DialogTitle>
         </DialogHeader>
-        <div className="p-4 text-sm text-muted-foreground">
-          {t("macroRecorder.placeholder")}
-        </div>
+        <div className="p-4 text-sm text-muted-foreground">{t("macroRecorder.placeholder")}</div>
       </DialogContent>
     </Dialog>
   );

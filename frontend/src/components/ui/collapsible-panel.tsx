@@ -40,7 +40,7 @@ export function CollapsiblePanel({
         onClick={handleToggle}
         className={cn(
           "w-full flex items-center gap-2 px-4 py-3 bg-surface-raised hover:bg-surface-hover transition-colors text-left",
-          headerClassName
+          headerClassName,
         )}
       >
         {isOpen ? (
@@ -54,7 +54,7 @@ export function CollapsiblePanel({
       <div
         className={cn(
           "transition-all duration-300 ease-out",
-          isOpen ? "max-h-[5000px] opacity-100" : "max-h-0 opacity-0 overflow-hidden"
+          isOpen ? "max-h-[5000px] opacity-100" : "max-h-0 opacity-0 overflow-hidden",
         )}
       >
         <div className={cn("p-4", contentClassName)}>{children}</div>

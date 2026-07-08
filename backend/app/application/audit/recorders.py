@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Typed recorder facade for the unified audit trail.
 
 This is the seam business modules depend on. Each function owns the *shaping*
@@ -17,12 +15,18 @@ Every recorder:
   instrumentation can never perturb the thing it audits.
 """
 
+from __future__ import annotations
+
+import logging
 import time
-from typing import Any
+from collections.abc import Mapping, Sequence
 
 from app.application.audit import categories as cat
 from app.application.audit.writer import default_sink
 from app.domain.ports import AuditSink
+from app.json_safety import JsonObject, object_dict
+
+logger = logging.getLogger(__name__)
 
 
 def _sink(sink: AuditSink | None) -> AuditSink:
@@ -33,6 +37,10 @@ def _sink(sink: AuditSink | None) -> AuditSink:
     singleton instance that `default_sink()` returns.
     """
     return sink if sink is not None else default_sink()
+
+
+def _audit_optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 # --- generic EventBus event ------------------------------------------------
@@ -57,9 +65,55 @@ EVENT_SKIP_TYPES = frozenset(
 # writer truncates to 8000 chars on serialize anyway; this keeps the common case
 # small and avoids shipping big nested blobs through the queue.
 _EVENT_PAYLOAD_LIMIT = 4000
+_EVENT_INLINE_KEYS = frozenset(
+    {
+        "project_id",
+        "issue_id",
+        "task_id",
+        "workspace_id",
+        "session_id",
+        "role",
+        "task_kind",
+        "status",
+        "execution_process_id",
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "setup_script",
+        "run_command",
+    }
+)
 
 
-def record_event(envelope: dict[str, Any], *, sink: AuditSink | None = None) -> None:
+def _event_inline_value(value: object) -> object:
+    """Keep business event fields readable without turning audit rows huge."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= 2000 else value[:2000] + "…[trimmed]"
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_event_inline_value(item) for item in list(value)[:20]]
+    if isinstance(value, Mapping):
+        return {
+            str(key): _event_inline_value(nested)
+            for key, nested in list(value.items())[:20]
+        }
+    text = str(value)
+    return text if len(text) <= 1000 else text[:1000] + "…[trimmed]"
+
+
+def _tail_text(value: object, limit: int = 2000) -> str:
+    return str(value or "")[-limit:]
+
+
+def record_event(
+    envelope: Mapping[str, object],
+    *,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
+    sink: AuditSink | None = None,
+) -> None:
     """Mirror a generic EventBus event into the unified audit_log.
 
     Best-effort + non-blocking: any failure here is swallowed so audit
@@ -72,35 +126,55 @@ def record_event(envelope: dict[str, Any], *, sink: AuditSink | None = None) -> 
         event_type = str(envelope.get("type") or "unknown")
         if event_type in EVENT_SKIP_TYPES:
             return
-        payload = envelope.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
+        payload = object_dict(envelope.get("payload"))
         issue_id = payload.get("issue_id")
         task_id = payload.get("task_id")
         conductor_task_id = payload.get("conductor_task_id")
         execution_process_id = payload.get("execution_process_id")
+        resolved_execution_process_id = _audit_optional_str(execution_process_id)
+        resolved_trace_id = trace_id or _audit_optional_str(payload.get("trace_id")) or resolved_execution_process_id
+        resolved_span_id = span_id or _audit_optional_str(payload.get("span_id")) or _audit_optional_str(task_id)
+        resolved_parent_span_id = parent_span_id or _audit_optional_str(payload.get("parent_span_id"))
         # Trim before enqueue: keep the type + a bounded payload preview so a
         # large nested blob never travels through the queue in full.
         preview = str(payload)
         if len(preview) > _EVENT_PAYLOAD_LIMIT:
             preview = preview[:_EVENT_PAYLOAD_LIMIT] + "…[trimmed]"
+        audit_payload: dict[str, object] = {
+            "type": event_type,
+            "event_id": envelope.get("event_id"),
+            "ts": envelope.get("ts"),
+            "payload_preview": preview,
+        }
+        for key in _EVENT_INLINE_KEYS:
+            if key in payload:
+                audit_payload[key] = _event_inline_value(payload.get(key))
+        event_status = _audit_optional_str(payload.get("status"))
+        if event_type == "project_script_updated" and event_status is None:
+            event_status = "ok"
+        correlation_id = (
+            resolved_trace_id
+            or resolved_execution_process_id
+            or _audit_optional_str(payload.get("project_id"))
+            or _audit_optional_str(payload.get("issue_id"))
+            or _audit_optional_str(task_id)
+        )
         _sink(sink).record(
             cat.CATEGORY_EVENT,
             actor=event_type,
             issue_id=str(issue_id) if issue_id else None,
             task_id=str(task_id) if task_id else None,
             conductor_task_id=str(conductor_task_id) if conductor_task_id else None,
-            execution_process_id=str(execution_process_id) if execution_process_id else None,
-            payload={
-                "type": event_type,
-                "event_id": envelope.get("event_id"),
-                "ts": envelope.get("ts"),
-                "payload_preview": preview,
-            },
+            execution_process_id=resolved_execution_process_id,
+            correlation_id=correlation_id,
+            trace_id=resolved_trace_id,
+            span_id=resolved_span_id,
+            parent_span_id=resolved_parent_span_id,
+            status=event_status,
+            payload=audit_payload,
         )
-    except Exception as exc:  # noqa: BLE001, RUF100
-        import sys
-
-        print(f"[audit] event mirror error: {exc}", file=sys.stderr)
+    except Exception:  # noqa: BLE001, RUF100
+        logger.exception("audit event mirror failed")
 
 
 # --- git command -----------------------------------------------------------
@@ -108,13 +182,16 @@ def record_event(envelope: dict[str, Any], *, sink: AuditSink | None = None) -> 
 
 def record_git_command(
     args: list[str],
-    cwd: Any,
+    cwd: object,
     exit_code: int | None,
     stdout: str,
     stderr: str,
     started: float,
     *,
     error: str | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
     sink: AuditSink | None = None,
 ) -> None:
     """Record one git command into the unified audit_log.
@@ -133,6 +210,9 @@ def record_git_command(
             actor="git",
             status=status,
             duration_ms=duration_ms,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
             payload={
                 "argv": ["git", *[str(a) for a in args]],
                 "cwd": str(cwd) if cwd else None,
@@ -143,17 +223,20 @@ def record_git_command(
             error=error,
         )
     except Exception:  # noqa: BLE001, RUF100
-        pass
+        logger.debug("audit git command recording failed", exc_info=True)
 
 
 # --- QA command executions -------------------------------------------------
 
 
 def record_command_execs(
-    execution_results: list[dict] | None,
+    execution_results: Sequence[Mapping[str, object]] | None,
     issue_id: str | None,
     task_id: str | None,
     *,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
     sink: AuditSink | None = None,
 ) -> None:
     """Mirror each QA command execution into the command_exec category.
@@ -179,18 +262,21 @@ def record_command_execs(
                 task_id=task_id,
                 status=status,
                 duration_ms=duration_ms,
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
                 payload={
                     "command": r.get("command"),
                     "exit_code": exit_code,
-                    "stdout": (r.get("stdout") or "")[-2000:],
-                    "stderr": (r.get("stderr") or "")[-2000:],
+                    "stdout": _tail_text(r.get("stdout")),
+                    "stderr": _tail_text(r.get("stderr")),
                     "duration_s": duration_s,
                     "refused": refused,
                 },
                 error=str(refused) if refused else None,
             )
     except Exception:  # noqa: BLE001, RUF100
-        pass
+        logger.debug("audit command execution recording failed", exc_info=True)
 
 
 # --- CLI subprocess spawn --------------------------------------------------
@@ -206,6 +292,10 @@ def record_cli_spawn(
     model: str | None,
     resume_session_id: str | None,
     pid: int | None,
+    execution_process_id: str | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
     sink: AuditSink | None = None,
 ) -> None:
     """Record a CLI subprocess launch into the cli_spawn category.
@@ -225,10 +315,15 @@ def record_cli_spawn(
             cat.CATEGORY_CLI_SPAWN,
             actor="claude",
             task_id=task_id,
+            execution_process_id=execution_process_id,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
             payload={
                 "argv": argv,
                 "cwd": cwd,
                 "workspace_id": workspace_id,
+                "execution_process_id": execution_process_id,
                 "executor": "claude",
                 "provider": provider,
                 "model": model,
@@ -237,7 +332,7 @@ def record_cli_spawn(
             },
         )
     except Exception:  # noqa: BLE001, RUF100
-        pass
+        logger.debug("audit cli spawn recording failed", exc_info=True)
 
 
 # --- conductor turn --------------------------------------------------------
@@ -263,7 +358,10 @@ def record_conductor_turn(
     issue_id: str,
     conductor_task_id: str,
     kind: str,
-    payload: dict[str, Any],
+    payload: JsonObject,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
     sink: AuditSink | None = None,
 ) -> None:
     """Co-locate a unified audit row alongside the conductor_turns write.
@@ -297,11 +395,14 @@ def record_conductor_turn(
             issue_id=issue_id,
             conductor_task_id=conductor_task_id,
             status=status,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
             payload=payload,
             error=error,
         )
     except Exception:  # noqa: BLE001, RUF100
-        pass
+        logger.debug("audit conductor turn recording failed", exc_info=True)
 
 
 # --- auto-plan LLM call ----------------------------------------------------
@@ -312,10 +413,13 @@ def record_autoplan(
     *,
     executor_id: str | None,
     model: str | None,
-    payload: dict[str, Any] | None = None,
+    payload: JsonObject | None = None,
     status: str | None = None,
     started: float | None = None,
     error: str | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
     sink: AuditSink | None = None,
 ) -> None:
     """Record an auto-plan LLM call/return into the unified audit_log.
@@ -326,7 +430,7 @@ def record_autoplan(
     runner, which already swallows its own errors and falls back to heuristics.
     """
     try:
-        body = {"executor_id": executor_id, "model": model}
+        body: JsonObject = {"executor_id": executor_id, "model": model}
         if payload:
             body.update(payload)
         duration_ms = int((time.monotonic() - started) * 1000) if started is not None else None
@@ -335,8 +439,11 @@ def record_autoplan(
             actor="auto_plan",
             status=status,
             duration_ms=duration_ms,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
             payload=body,
             error=error,
         )
     except Exception:  # noqa: BLE001, RUF100
-        pass
+        logger.debug("audit auto-plan call recording failed", exc_info=True)

@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from asyncio.subprocess import Process
 from datetime import datetime
+from typing import cast
 
 import pytest
 
 from app.application.process_runtime_common import AsyncProcessEntry, BaseProcessRuntime
-from app.domain.models import CodexSession, CodexTask, ExecutionProcess
+from app.domain.models import CodexSession, CodexTask, ExecutionProcess, HelpRequest, LogEvent
 
 
 class StoreStub:
@@ -51,6 +53,24 @@ class StoreStub:
 
     async def list_codex_task_messages(self, task_id, execution_process_id=None):
         return []
+
+    async def update_execution_process_usage(
+        self,
+        process_id: str,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        total_cost_usd: float | None = None,
+    ) -> None:
+        return None
+
+    async def load_help_request(self, help_request_id: str) -> HelpRequest | None:
+        return None
+
+
+class LogStoreStub:
+    async def append_log_event(self, event: LogEvent) -> None:
+        return None
 
 
 class EventBusStub:
@@ -139,10 +159,15 @@ def _fixture(returncode=None, stdout=None, stderr=None):
     )
     store = StoreStub(task, workspace, process)
     bus = EventBusStub()
-    runtime = _Runtime(codex_store=store, log_store=None, event_bus=bus, refresh_task_result=None)
+    runtime = _Runtime(
+        codex_store=store,
+        log_store=LogStoreStub(),
+        event_bus=bus,
+        refresh_task_result=None,
+    )
     proc = FakeProc(stdout, stderr, returncode=returncode)
     entry = AsyncProcessEntry(
-        proc=proc,
+        proc=cast(Process, proc),
         output_task=None,
         alive=True,
         session_id="workspace-1",

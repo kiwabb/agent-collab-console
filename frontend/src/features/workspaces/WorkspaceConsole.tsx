@@ -12,8 +12,13 @@ import type { CodexIssue, CodexTask, Project, RuntimeCatalog, Workspace } from "
 import { useExecutionProcessesContext } from "@/contexts/ExecutionProcessesContext";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
+import { isRecord } from "@/lib/utils";
 import { NewIssueDialog } from "./NewIssueDialog";
-import { WorkspaceConsoleHeader, type IssueStatusFilter, type IssueSortMode } from "./WorkspaceConsoleHeader";
+import {
+  WorkspaceConsoleHeader,
+  type IssueStatusFilter,
+  type IssueSortMode,
+} from "./WorkspaceConsoleHeader";
 import { IssueListPanel } from "./IssueListPanel";
 
 interface Props {
@@ -35,21 +40,24 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
   const [statusFilter, setStatusFilter] = useState<IssueStatusFilter>("all");
   const [sortMode, setSortMode] = useState<IssueSortMode>("updated");
 
-  const refresh = useCallback(async (showLoader = false) => {
-    if (showLoader) setIsLoading(true);
-    try {
-      const [allIssues, allTasks] = await Promise.all([
-        getCodexIssues(workspaceId),
-        getCodexTasks(workspaceId, null),
-      ]);
-      setIssues(allIssues);
-      setTasks(allTasks);
-    } catch {
-      // Realtime refresh is best-effort; the full load path surfaces errors.
-    } finally {
-      if (showLoader) setIsLoading(false);
-    }
-  }, [workspaceId]);
+  const refresh = useCallback(
+    async (showLoader = false) => {
+      if (showLoader) setIsLoading(true);
+      try {
+        const [allIssues, allTasks] = await Promise.all([
+          getCodexIssues(workspaceId),
+          getCodexTasks(workspaceId, null),
+        ]);
+        setIssues(allIssues);
+        setTasks(allTasks);
+      } catch {
+        // Realtime refresh is best-effort; the full load path surfaces errors.
+      } finally {
+        if (showLoader) setIsLoading(false);
+      }
+    },
+    [workspaceId],
+  );
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -64,7 +72,11 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
       setCatalog(runtimeCatalog);
       await refresh(false);
     } catch (err) {
-      addToast({ type: "error", title: t("workspace.toast.loadFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("workspace.toast.loadFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setIsLoading(false);
     }
@@ -75,15 +87,20 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
   }, [load]);
 
   useEffect(() => {
-    if (!lastEvent) return;
-    const type = (lastEvent as { type?: string }).type;
+    if (!isRecord(lastEvent)) return;
+    const type = lastEvent["type"];
     if (type === "issue_merged" || type === "issue_abandoned" || type === "task_created") {
       void refresh(false);
       return;
     }
     if (type === "task_status") {
-      const status = String((lastEvent as { status?: string }).status || "").toLowerCase();
-      if (status === "done" || status === "completed" || status === "failed" || status === "running") {
+      const status = String(lastEvent["status"] || "").toLowerCase();
+      if (
+        status === "done" ||
+        status === "completed" ||
+        status === "failed" ||
+        status === "running"
+      ) {
         void refresh(false);
       }
     }
@@ -92,14 +109,18 @@ export default function WorkspaceConsole({ workspaceId }: Props) {
   const visibleIssues = useMemo(() => {
     const filtered = issues.filter((issue) => {
       if (statusFilter === "all") return true;
-      if (statusFilter === "awaiting") return issue.status === "awaiting_approval" || issue.status === "awaiting_review";
-      if (statusFilter === "running") return issue.status === "in_progress" || issue.status === "running";
-      if (statusFilter === "queued") return issue.status === "open" || issue.status === "queued" || issue.status === "pending";
+      if (statusFilter === "awaiting")
+        return issue.status === "awaiting_approval" || issue.status === "awaiting_review";
+      if (statusFilter === "running")
+        return issue.status === "in_progress" || issue.status === "running";
+      if (statusFilter === "queued")
+        return issue.status === "open" || issue.status === "queued" || issue.status === "pending";
       if (statusFilter === "done") return issue.status === "completed" || issue.status === "done";
       return issue.status === "failed";
     });
     return [...filtered].sort((a, b) => {
-      if (sortMode === "phase") return String(a.current_phase).localeCompare(String(b.current_phase));
+      if (sortMode === "phase")
+        return String(a.current_phase).localeCompare(String(b.current_phase));
       if (sortMode === "status") return String(a.status).localeCompare(String(b.status));
       const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
       const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;

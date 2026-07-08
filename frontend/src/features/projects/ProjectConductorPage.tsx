@@ -87,7 +87,9 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
 
   return (
     <section
-      data-density={isProjectConductorThinking ? "project-conductor-thinking-shell" : "project-conductor-shell"}
+      data-density={
+        isProjectConductorThinking ? "project-conductor-thinking-shell" : "project-conductor-shell"
+      }
       className={cn(
         "relative overflow-hidden rounded-3xl border border-border-subtle bg-[radial-gradient(circle_at_top_left,rgba(230,149,82,0.18),transparent_34%),linear-gradient(135deg,var(--surface-raised),var(--surface))] shadow-2xl shadow-black/5",
         isProjectConductorThinking && "motion-essential border-brand/35",
@@ -126,14 +128,29 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
             variant="outline"
             onClick={() => void load()}
             disabled={loading}
-            data-density={loading ? "project-conductor-refresh-thinking" : "project-conductor-refresh"}
+            data-density={
+              loading ? "project-conductor-refresh-thinking" : "project-conductor-refresh"
+            }
             className={cn("gap-2 rounded-xl", loading && "motion-essential")}
           >
-            {loading ? <AgentThinkingIndicator phase="thinking" size={14} /> : <RefreshCcw size={14} />}
+            {loading ? (
+              <AgentThinkingIndicator phase="thinking" size={14} />
+            ) : (
+              <RefreshCcw size={14} />
+            )}
             {t("projectConductor.refresh")}
           </Button>
-          <Button size="sm" onClick={() => void handleScheduledReview()} disabled={asking} className="gap-2 rounded-xl">
-            {asking ? <AgentThinkingIndicator phase="thinking" size={14} /> : <DatabaseZap size={14} />}
+          <Button
+            size="sm"
+            onClick={() => void handleScheduledReview()}
+            disabled={asking}
+            className="gap-2 rounded-xl"
+          >
+            {asking ? (
+              <AgentThinkingIndicator phase="thinking" size={14} />
+            ) : (
+              <DatabaseZap size={14} />
+            )}
             {t("projectConductor.scheduleReview")}
           </Button>
         </div>
@@ -143,13 +160,26 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
         <div className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Metric label={t("projectConductor.metric.hotTokens")} value={state?.hot_tokens ?? 0} />
-            <Metric label={t("projectConductor.metric.warmTokens")} value={state?.warm_tokens ?? 0} />
-            <Metric label={t("projectConductor.metric.coldMemories")} value={state?.cold_memories.length ?? 0} />
-            <Metric label={t("projectConductor.metric.tasksHandled")} value={state?.total_tasks_handled ?? 0} />
+            <Metric
+              label={t("projectConductor.metric.warmTokens")}
+              value={state?.warm_tokens ?? 0}
+            />
+            <Metric
+              label={t("projectConductor.metric.coldMemories")}
+              value={state?.cold_memories.length ?? 0}
+            />
+            <Metric
+              label={t("projectConductor.metric.tasksHandled")}
+              value={state?.total_tasks_handled ?? 0}
+            />
           </div>
 
           <div
-            data-density={isProjectConductorThinking ? "project-conductor-thinking-actions" : "project-conductor-actions"}
+            data-density={
+              isProjectConductorThinking
+                ? "project-conductor-thinking-actions"
+                : "project-conductor-actions"
+            }
             className={cn(
               "relative overflow-hidden rounded-2xl border border-border-subtle bg-surface/65 p-4",
               isProjectConductorThinking && "motion-essential border-brand/30 bg-brand-muted/10",
@@ -163,7 +193,9 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
             )}
             <div className="flex items-center gap-2 mb-3">
               <MessageSquareText size={15} className="text-brand" />
-              <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">{t("projectConductor.askTitle")}</h3>
+              <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">
+                {t("projectConductor.askTitle")}
+              </h3>
             </div>
             <div className="flex gap-2">
               <Input
@@ -175,8 +207,16 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
                 placeholder={t("projectConductor.askPlaceholder")}
                 className="bg-surface-input border-border-subtle"
               />
-              <Button onClick={() => void handleAsk()} disabled={asking || !question.trim()} className="gap-2">
-                {asking ? <AgentThinkingIndicator phase="thinking" size={14} /> : <Send size={14} />}
+              <Button
+                onClick={() => void handleAsk()}
+                disabled={asking || !question.trim()}
+                className="gap-2"
+              >
+                {asking ? (
+                  <AgentThinkingIndicator phase="thinking" size={14} />
+                ) : (
+                  <Send size={14} />
+                )}
                 {t("projectConductor.askAction")}
               </Button>
             </div>
@@ -187,7 +227,10 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
             )}
           </div>
 
-          <MemoryBlock title={t("projectConductor.section.pinned")} body={state?.pinned_text || t("projectConductor.empty.pinned")} />
+          <MemoryBlock
+            title={t("projectConductor.section.pinned")}
+            body={state?.pinned_text || t("projectConductor.empty.pinned")}
+          />
           <ProjectConductorThreadDock projectId={projectId} onLoopDone={() => void load()} />
         </div>
 
@@ -196,8 +239,8 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
             title={t("projectConductor.section.warmSummaries")}
             empty={t("projectConductor.empty.warm")}
             items={(state?.warm_summaries ?? []).map((item, index) => ({
-              id: String(item.id ?? index),
-              body: String(item.summary ?? JSON.stringify(item)),
+              id: String(item["id"] ?? index),
+              body: String(item["summary"] ?? JSON.stringify(item)),
             }))}
           />
           <ListBlock
@@ -212,8 +255,8 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
             title={t("projectConductor.section.hotThread")}
             empty={loading ? t("projectConductor.loading") : t("projectConductor.empty.hot")}
             items={latestHot.map((item, index) => ({
-              id: String(item.task_id ?? item.created_at ?? index),
-              body: `${String(item.role ?? "event")}: ${String(item.content ?? JSON.stringify(item))}`,
+              id: String(item["task_id"] ?? item["created_at"] ?? index),
+              body: `${String(item["role"] ?? "event")}: ${String(item["content"] ?? JSON.stringify(item))}`,
             }))}
           />
         </div>
@@ -234,7 +277,9 @@ function Metric({ label, value }: { label: string; value: number }) {
 function MemoryBlock({ title, body }: { title: string; body: string }) {
   return (
     <div className="rounded-2xl border border-border-subtle bg-surface/65 p-4">
-      <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted mb-3">{title}</h3>
+      <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted mb-3">
+        {title}
+      </h3>
       <pre className="max-h-52 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">
         {body}
       </pre>
@@ -253,13 +298,18 @@ function ListBlock({
 }) {
   return (
     <div className="rounded-2xl border border-border-subtle bg-surface/65 p-4">
-      <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted mb-3">{title}</h3>
+      <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted mb-3">
+        {title}
+      </h3>
       {items.length === 0 ? (
         <p className="text-xs text-text-muted">{empty}</p>
       ) : (
         <ul className="space-y-2">
           {items.map((item) => (
-            <li key={item.id} className="rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs leading-relaxed text-text-secondary">
+            <li
+              key={item.id}
+              className="rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs leading-relaxed text-text-secondary"
+            >
               {item.body}
             </li>
           ))}

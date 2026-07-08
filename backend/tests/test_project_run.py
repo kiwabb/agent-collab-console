@@ -71,7 +71,7 @@ def test_start_status_logs_then_stop_via_manager(tmp_path):
     """
     import asyncio
 
-    from app.application.project_run_manager import ProjectRunManager
+    from app.application.project_run_manager import ProjectRunManager, RunLogs
 
     async def scenario():
         repo = _make_git_repo(tmp_path / "mgr")
@@ -85,7 +85,7 @@ def test_start_status_logs_then_stop_via_manager(tmp_path):
         assert mgr.status(pid)["running"] is True
 
         # Wait for the readers to capture some "tick" output.
-        logs = {"lines": []}
+        logs: RunLogs = {"lines": [], "last_seq": 0, "running": True, "exit_code": None}
         for _ in range(60):
             logs = mgr.get_logs(pid)
             if any("tick" in ln["line"] for ln in logs["lines"]):

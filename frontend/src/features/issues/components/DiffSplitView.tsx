@@ -22,9 +22,7 @@ export function DiffSplitView({ diff }: Props) {
   const active = files[activeIdx] ?? null;
 
   if (files.length === 0) {
-    return (
-      <div className="p-4 text-sm text-text-muted">No file changes.</div>
-    );
+    return <div className="p-4 text-sm text-text-muted">No file changes.</div>;
   }
 
   return (
@@ -89,14 +87,10 @@ function FileRow({
       </div>
       <div className="font-mono text-[10.5px] flex items-center gap-1.5 whitespace-nowrap">
         {file.additions > 0 && (
-          <span style={{ color: "var(--color-status-done)" }}>
-            +{file.additions}
-          </span>
+          <span style={{ color: "var(--color-status-done)" }}>+{file.additions}</span>
         )}
         {file.deletions > 0 && (
-          <span style={{ color: "var(--color-status-failed)" }}>
-            −{file.deletions}
-          </span>
+          <span style={{ color: "var(--color-status-failed)" }}>−{file.deletions}</span>
         )}
         <span className="inline-flex gap-px ml-1">
           {Array.from({ length: 5 }, (_, i) => (
@@ -130,13 +124,9 @@ function DiffHead({ file }: { file: DiffFile | null }) {
         {base}
       </div>
       <div className="font-mono text-[11px] text-text-muted whitespace-nowrap">
-        <span style={{ color: "var(--color-status-done)" }}>
-          +{file.additions}
-        </span>{" "}
-        <span style={{ color: "var(--color-status-failed)" }}>
-          −{file.deletions}
-        </span>{" "}
-        · viewing <span className="text-text-secondary">unified</span>
+        <span style={{ color: "var(--color-status-done)" }}>+{file.additions}</span>{" "}
+        <span style={{ color: "var(--color-status-failed)" }}>−{file.deletions}</span> · viewing{" "}
+        <span className="text-text-secondary">unified</span>
       </div>
     </div>
   );

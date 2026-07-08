@@ -6,7 +6,14 @@ import pytest
 
 from app.application.claude_process_runtime import ClaudeProcessRuntime
 from app.application.codex_app_server_runtime import CodexAppServerRuntime
-from app.domain.models import CodexSession, CodexTask
+from app.domain.models import (
+    CodexSession,
+    CodexTask,
+    CodexTaskMessage,
+    ExecutionProcess,
+    HelpRequest,
+    LogEvent,
+)
 
 
 class _Store:
@@ -26,11 +33,49 @@ class _Store:
     async def save_codex_task(self, task: CodexTask):
         self.task = task
 
+    async def update_execution_process_status(
+        self,
+        process_id: str,
+        status: str,
+        exit_code: int | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        return None
+
+    async def load_execution_process(self, process_id: str) -> ExecutionProcess | None:
+        return None
+
+    async def list_codex_task_messages(
+        self, task_id: str, execution_process_id: str | None = None
+    ) -> list[CodexTaskMessage]:
+        return []
+
+    async def update_execution_process_usage(
+        self,
+        process_id: str,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        total_cost_usd: float | None = None,
+    ) -> None:
+        return None
+
+    async def save_codex_task_message(self, message: CodexTaskMessage) -> None:
+        return None
+
+    async def load_help_request(self, help_request_id: str) -> HelpRequest | None:
+        return None
+
+
+class _LogStore:
+    async def append_log_event(self, event: LogEvent) -> None:
+        return None
+
 
 class _FakeProcess:
     pid = 12345
-    stdin = None
-    stdout = None
+    stdin = object()
+    stdout = object()
     stderr = None
     returncode = None
 
@@ -75,7 +120,7 @@ async def test_claude_process_disables_python_bytecode_by_default(monkeypatch, t
     )
     monkeypatch.setattr(ClaudeProcessRuntime, "_reader_loop", fake_reader_loop)
 
-    runtime = ClaudeProcessRuntime(codex_store=_Store(workspace, task), log_store=None)
+    runtime = ClaudeProcessRuntime(codex_store=_Store(workspace, task), log_store=_LogStore())
 
     await runtime._spawn_process_async(
         workspace_id=workspace.id,
@@ -151,7 +196,7 @@ async def test_codex_app_server_disables_python_bytecode_by_default(monkeypatch,
         fake_handshake,
     )
 
-    runtime = CodexAppServerRuntime(codex_store=_Store(workspace, task), log_store=None)
+    runtime = CodexAppServerRuntime(codex_store=_Store(workspace, task), log_store=_LogStore())
 
     await runtime._spawn_process_async(
         workspace_id=workspace.id,
@@ -161,6 +206,8 @@ async def test_codex_app_server_disables_python_bytecode_by_default(monkeypatch,
         waiter=None,
         cwd=str(tmp_path),
     )
-    await runtime._processes[task.id].output_task
+    output_task = runtime._processes[task.id].output_task
+    assert output_task is not None
+    await output_task
 
     assert captured_env["PYTHONDONTWRITEBYTECODE"] == "1"

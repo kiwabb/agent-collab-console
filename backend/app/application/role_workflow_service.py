@@ -1,8 +1,9 @@
 from __future__ import annotations  # noqa: I001
 
-from datetime import datetime
 import json
 import logging
+from datetime import datetime
+from typing import TYPE_CHECKING, Protocol
 
 from app.application.architect_workflow import ArchitectWorkflow
 from app.application.clarification import (
@@ -14,9 +15,26 @@ from app.application.agent_catalog.generic_specialist_workflow import GenericSpe
 from app.application.product_manager_service import ProductManagerService
 from app.application.project_memory_service import project_memory
 from app.application.qa_workflow import QAWorkflow
-
+from app.application.specialist_requests import SpecialistCallRequest
+from app.application.knowledge_index_service import KnowledgeStore
+from app.application.specialist_orchestrator import SpecialistStore
+from app.application.team_notes_service import TeamNotesStore
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.application.embedding_service import EmbeddingService
+    from app.application.knowledge_index_service import ArtifactRow
+    from app.application.project_script_suggestions import ProjectScriptSuggestion
+    from app.domain.models import CodexTask, Project
+
+
+class RoleWorkflowStore(KnowledgeStore, SpecialistStore, TeamNotesStore, Protocol):
+    async def save_artifact(self, artifact: ArtifactRow) -> None: ...
+
+    async def load_project(self, project_id: str) -> Project | None: ...
+
+    async def save_project(self, project: Project) -> None: ...
 
 ENGINEER_ROLES = frozenset({"engineer", "engineer_frontend", "engineer_backend"})
 OPERATIONS_ROLES = frozenset({"operations_engineer"})
@@ -26,7 +44,7 @@ MANAGED_ROLES = frozenset({"product_manager", "architect", "qa"}) | ENGINEER_ROL
 class RoleWorkflowService:
     """Dispatches role-specific prompt building and result persistence."""
 
-    def __init__(self, codex_store=None) -> None:
+    def __init__(self, codex_store: RoleWorkflowStore | None = None) -> None:
         self._pm_service = ProductManagerService()
         self._architect_service = ArchitectWorkflow()
         self._engineer_service = EngineerWorkflow()
@@ -34,12 +52,12 @@ class RoleWorkflowService:
         self._specialist_service = GenericSpecialistWorkflow()
         self.codex_store = codex_store
 
-    def is_managed_role(self, role: str) -> bool:
+    def is_managed_role(self, role: str | None) -> bool:
         return role in MANAGED_ROLES or self._is_specialist_role(role)
 
     async def build_prompt(
         self,
-        task,
+        task: CodexTask,
         workspace_title: str | None = None,
         project_repo_path: str | None = None,
     ) -> str | None:
@@ -100,12 +118,13 @@ class RoleWorkflowService:
                 )
         if not memory_text:
             memory_text = project_memory.read_for_prompt(project_repo_path)
+        prompt_text = str(prompt_with_escape)
         if memory_text:
-            return project_memory.format_for_prompt(memory_text) + "\n" + prompt_with_escape
-        return prompt_with_escape
+            return str(project_memory.format_for_prompt(memory_text)) + "\n" + prompt_text
+        return prompt_text
 
     @staticmethod
-    def _read_steer_notes(task) -> str | None:
+    def _read_steer_notes(task: CodexTask) -> str | None:
         workspace_path = task.workspace_path
         issue_id = task.issue_id
         if not workspace_path or not issue_id:
@@ -132,10 +151,14 @@ class RoleWorkflowService:
             "they override prior assumptions, the PRD, and team_notes if they conflict.\n"
         )
 
-    async def persist_result(self, task, workspace_title: str | None = None) -> any:
+    async def persist_result(
+        self,
+        task: CodexTask,
+        workspace_title: str | None = None,
+    ) -> object | None:
         """Persist artifacts for a completed managed role task. No-op for unmanaged roles."""
         role = task.role
-        doc = None
+        doc: object | None = None
         if role == "product_manager":
             doc = self._pm_service.persist_prd_from_result(task, workspace_title)
         elif role == "architect":
@@ -166,36 +189,55 @@ class RoleWorkflowService:
         # The scheduler will handle pausing parent, running specialist, and resuming parent.
         if doc is not None and role in (ENGINEER_ROLES | {"qa"}):
             call_specialist = getattr(doc, "call_specialist", None)
-            if call_specialist and isinstance(call_specialist, dict):
+            if isinstance(call_specialist, SpecialistCallRequest):
+                await self._request_specialist(
+                    task,
+                    call_specialist.role_key,
+                    call_specialist.prompt,
+                    call_specialist.why,
+                )
+            elif call_specialist and isinstance(call_specialist, dict):
                 specialist_role_key = call_specialist.get("role_key")
                 specialist_prompt = call_specialist.get("prompt")
                 why = call_specialist.get("why", "")
-                if specialist_role_key and specialist_prompt:
+                if isinstance(specialist_role_key, str) and isinstance(specialist_prompt, str):
                     await self._request_specialist(
-                        task, specialist_role_key, specialist_prompt, why
+                        task,
+                        specialist_role_key,
+                        specialist_prompt,
+                        why if isinstance(why, str) else "",
                     )
 
         # If store is available and document has written_files, persist to DB
-        if self.codex_store and doc and hasattr(doc, "written_files"):
+        written_files = getattr(doc, "written_files", None) if doc is not None else None
+        store = self.codex_store
+        if store and doc and isinstance(written_files, list):
             import asyncio  # noqa: I001
             from app.application import knowledge_index_service
             from app.application.embedding_service import get_embedding_service
 
-            for f in doc.written_files:
-                artifact_row = {
-                    "id": f"{task.issue_id}:{f['name']}",
+            for f in written_files:
+                if not isinstance(f, dict):
+                    continue
+                name = f.get("name")
+                path = f.get("path")
+                kind = f.get("kind")
+                if not isinstance(name, str) or not isinstance(path, str):
+                    continue
+                artifact_row: ArtifactRow = {
+                    "id": f"{task.issue_id}:{name}",
                     "issue_id": task.issue_id,
                     "task_id": task.id,
-                    "name": f["name"],
-                    "path": f["path"],
-                    "kind": f["kind"],
+                    "name": name,
+                    "path": path,
+                    "kind": kind if isinstance(kind, str) else "",
                     "created_at": datetime.now().isoformat(),
                 }
-                await self.codex_store.save_artifact(artifact_row)
+                await store.save_artifact(artifact_row)
                 # FTS index: synchronous in-band (cheap).
-                try:  # noqa: SIM105
-                    await knowledge_index_service.index_artifact(self.codex_store, artifact_row)
-                except Exception as exc:  # noqa: BLE001
+                try:
+                    await knowledge_index_service.index_artifact(store, artifact_row)
+                except Exception as exc:
                     import logging
 
                     logging.getLogger(__name__).warning(
@@ -208,18 +250,27 @@ class RoleWorkflowService:
                 emb = get_embedding_service()
                 if emb.enabled:
 
-                    async def _embed(row=artifact_row, emb=emb):
+                    async def _embed(
+                        row: ArtifactRow = artifact_row,
+                        emb: EmbeddingService = emb,
+                    ) -> None:
                         try:
-                            text = knowledge_index_service._read_artifact_text(row.get("path"))
+                            path_value = row.get("path")
+                            text = knowledge_index_service._read_artifact_text(
+                                path_value if isinstance(path_value, str) else None
+                            )
                             if not text:
                                 return
                             vec = await emb.embed_one(text[:8000])
                             if vec:
+                                artifact_id = row.get("id")
+                                if not isinstance(artifact_id, str):
+                                    return
                                 await knowledge_index_service.store_artifact_embedding(
-                                    self.codex_store, row["id"], vec, emb.model_label
+                                    store, artifact_id, vec, emb.model_label
                                 )
                         except Exception:  # noqa: BLE001, RUF100
-                            pass
+                            logger.debug("artifact embedding side task failed", exc_info=True)
 
                     asyncio.create_task(_embed())  # noqa: RUF006
 
@@ -229,9 +280,9 @@ class RoleWorkflowService:
     def _is_specialist_role(role: str | None) -> bool:
         return bool(role and (role.startswith("specialist:") or role.startswith("custom:")))
 
-    async def _record_critique(self, task, critique: str) -> None:
+    async def _record_critique(self, task: CodexTask, critique: str) -> None:
         """Persist an Engineer→Architect critique as an AgentMessage and emit the bus event."""
-        if not self.codex_store:
+        if not self.codex_store or not task.issue_id:
             return
         try:
             from uuid import uuid4  # noqa: I001
@@ -240,9 +291,7 @@ class RoleWorkflowService:
             from app.application.event_bus import event_bus
 
             # Look up the graph so we can attach graph_id.
-            graph = None
-            if hasattr(self.codex_store, "load_workflow_graph_for_issue"):
-                graph = await self.codex_store.load_workflow_graph_for_issue(task.issue_id)
+            graph = await self.codex_store.load_workflow_graph_for_issue(task.issue_id)
 
             msg = AgentMessage(
                 id=str(uuid4()),
@@ -277,7 +326,11 @@ class RoleWorkflowService:
             logger.warning("_record_critique failed: %s", exc)
 
     async def _request_specialist(
-        self, task, specialist_role_key: str, specialist_prompt: str, why: str
+        self,
+        task: CodexTask,
+        specialist_role_key: str,
+        specialist_prompt: str,
+        why: str,
     ) -> None:
         """Phase 4: Request specialist help from Engineer/QA task."""
         if not self.codex_store:
@@ -287,7 +340,7 @@ class RoleWorkflowService:
             from app.application.specialist_orchestrator import SpecialistOrchestrator
             from app.bootstrap import get_task_runner
 
-            async def _noop_refresh(_task):
+            async def _noop_refresh(_task: CodexTask) -> object | None:
                 return None
 
             orchestrator = SpecialistOrchestrator(
@@ -305,11 +358,12 @@ class RoleWorkflowService:
             logger.warning("_request_specialist setup failed: %s", exc)
             raise
 
-    async def _build_operations_engineer_prompt(self, task) -> str:
-        if not self.codex_store or not task.project_id:
+    async def _build_operations_engineer_prompt(self, task: CodexTask) -> str:
+        project_id = task.project_id
+        if not self.codex_store or not project_id:
             return self._fallback_operations_prompt(task)
         try:
-            project = await self.codex_store.load_project(task.project_id)
+            project = await self.codex_store.load_project(project_id)
         except Exception:  # noqa: BLE001, RUF100
             project = None
         if project is None:
@@ -322,25 +376,19 @@ class RoleWorkflowService:
 
             repo_context = collect_project_script_context(project.repo_path)
             request_context = self._read_operations_request_context(task)
-            return build_project_script_suggestion_prompt(
-                project=project,
-                repo_context=repo_context,
-                existing_setup_script=(
-                    request_context["setup_script"]
-                    if "setup_script" in request_context
-                    else project.setup_script
-                ),
-                existing_run_command=(
-                    request_context["run_command"]
-                    if "run_command" in request_context
-                    else project.run_command
-                ),
+            return str(
+                build_project_script_suggestion_prompt(
+                    project=project,
+                    repo_context=repo_context,
+                    existing_setup_script=request_context.get("setup_script", project.setup_script),
+                    existing_run_command=request_context.get("run_command", project.run_command),
+                )
             )
         except Exception:  # noqa: BLE001, RUF100
             return self._fallback_operations_prompt(task)
 
     @staticmethod
-    def _read_operations_request_context(task) -> dict[str, str]:
+    def _read_operations_request_context(task: CodexTask) -> dict[str, str]:
         prompt = task.prompt or ""
         marker = "Operations request context JSON:"
         if marker not in prompt:
@@ -375,7 +423,7 @@ class RoleWorkflowService:
         return out
 
     @staticmethod
-    def _fallback_operations_prompt(task) -> str:
+    def _fallback_operations_prompt(task: CodexTask) -> str:
         return (
             "You are an Operations Engineer. Inspect the current project and output exactly one "
             "raw JSON object with this schema:\n"
@@ -386,7 +434,9 @@ class RoleWorkflowService:
             f"User/project request:\n{task.prompt or ''}"
         )
 
-    async def _persist_operations_engineer_result(self, task):
+    async def _persist_operations_engineer_result(
+        self, task: CodexTask
+    ) -> ProjectScriptSuggestion:
         from app.application.project_script_suggestions import parse_project_script_suggestion
 
         raw_result = task.result or ""
@@ -399,8 +449,9 @@ class RoleWorkflowService:
         if suggestion is None:
             raise ValueError("Operations Engineer could not produce a project script suggestion")
 
-        if self.codex_store and task.project_id:
-            project = await self.codex_store.load_project(task.project_id)
+        project_id = task.project_id
+        if self.codex_store and project_id:
+            project = await self.codex_store.load_project(project_id)
             if project is not None:
                 suggestion = suggestion.model_copy(
                     update={
@@ -449,12 +500,18 @@ class RoleWorkflowService:
                             "project_id": project.id,
                             "session_id": project.id,
                             "task_id": task.id,
+                            "role": task.role,
+                            "task_kind": task.task_kind,
+                            "execution_process_id": task.last_execution_process_id,
+                            "trace_id": task.trace_id,
+                            "span_id": task.span_id,
+                            "parent_span_id": task.parent_span_id,
                             "setup_script": project.setup_script,
                             "run_command": project.run_command,
                         }
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("project script update events failed: %s", exc)
+                    logger.warning("project script update events failed: %s", exc, exc_info=True)
         task.result = suggestion.model_dump_json()
         note_lines = [
             "[OPERATIONS SCRIPT UPDATED]",

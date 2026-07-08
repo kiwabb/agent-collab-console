@@ -10,17 +10,44 @@ type CreateCodexIssueFn = (
   model?: string | null,
 ) => Promise<CodexIssue>;
 type AutoStartIssueGraphFn = (issueId: string) => Promise<WorkflowGraph>;
-type RunCodexTaskFn = (taskId: string, overrides?: { executor?: string; provider?: string | null; model?: string | null }) => Promise<ExecutionProcess>;
-type UpdateTaskFn = (taskId: string, executor?: string, provider?: string | null, model?: string | null) => Promise<CodexTask>;
+type CreateCodexTaskFn = (
+  sessionId: string,
+  title: string,
+  prompt: string,
+  parentTaskId?: string | null,
+  executor?: string,
+  role?: string,
+  issueId?: string | null,
+  phase?: string,
+  provider?: string | null,
+  model?: string | null,
+) => Promise<CodexTask>;
+type RunCodexTaskFn = (
+  taskId: string,
+  overrides?: {
+    executor?: string | undefined;
+    provider?: string | null | undefined;
+    model?: string | null | undefined;
+  },
+) => Promise<ExecutionProcess>;
+type UpdateTaskFn = (
+  taskId: string,
+  executor?: string,
+  provider?: string | null,
+  model?: string | null,
+) => Promise<CodexTask>;
 
 export async function createIssueAndInitialTask({
   workspaceId,
   title,
   description,
   createCodexIssue,
+  createCodexTask,
   autoStartIssueGraph,
+  runCodexTask,
   baseBranch,
   executor,
+  issueTitle,
   provider,
   model,
 }: {
@@ -28,14 +55,20 @@ export async function createIssueAndInitialTask({
   title: string;
   description: string;
   createCodexIssue: CreateCodexIssueFn;
-  autoStartIssueGraph: AutoStartIssueGraphFn;
-  baseBranch?: string | null;
+  createCodexTask?: CreateCodexTaskFn;
+  autoStartIssueGraph?: AutoStartIssueGraphFn;
+  runCodexTask?: RunCodexTaskFn;
+  baseBranch?: string | null | undefined;
   // Conductor executor selection — persisted on the issue and used by sub-agents.
-  executor?: string;
-  issueTitle?: string;
-  provider?: string | null;
-  model?: string | null;
-}): Promise<{ issue: CodexIssue }> {
+  executor?: string | undefined;
+  issueTitle?: string | undefined;
+  provider?: string | null | undefined;
+  model?: string | null | undefined;
+}): Promise<{
+  issue: CodexIssue;
+  initialTask?: CodexTask;
+  executionProcess?: ExecutionProcess;
+}> {
   const issue = await createCodexIssue(
     workspaceId,
     title,
@@ -45,7 +78,29 @@ export async function createIssueAndInitialTask({
     provider ?? null,
     model ?? null,
   );
-  await autoStartIssueGraph(issue.id);
+  if (createCodexTask && runCodexTask) {
+    const initialTask = await createCodexTask(
+      workspaceId,
+      issueTitle ?? title,
+      description,
+      null,
+      executor ?? "codex",
+      "product_manager",
+      issue.id,
+      "requirements",
+      provider ?? null,
+      model ?? null,
+    );
+    const executionProcess = await runCodexTask(initialTask.id, {
+      executor,
+      provider,
+      model,
+    });
+    return { issue, initialTask, executionProcess };
+  }
+  if (autoStartIssueGraph) {
+    await autoStartIssueGraph(issue.id);
+  }
   return { issue };
 }
 
@@ -87,7 +142,11 @@ export async function runCodexTaskWithExecutor({
     }
 
     try {
-      return await runTask(taskId, { executor: selectedExecutor, provider: selectedProvider, model: selectedModel });
+      return await runTask(taskId, {
+        executor: selectedExecutor,
+        provider: selectedProvider,
+        model: selectedModel,
+      });
     } catch (runError) {
       try {
         await updateTask(taskId, previousExecutor, previousProvider, previousModel);
@@ -97,5 +156,9 @@ export async function runCodexTaskWithExecutor({
       throw runError;
     }
   }
-  return runTask(taskId, { executor: selectedExecutor, provider: selectedProvider, model: selectedModel });
+  return runTask(taskId, {
+    executor: selectedExecutor,
+    provider: selectedProvider,
+    model: selectedModel,
+  });
 }

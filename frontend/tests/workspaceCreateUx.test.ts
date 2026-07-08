@@ -1,16 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readCompactSource as readSource } from "./sourceTestUtils";
 
 import { formatApiErrorDetail } from "../src/lib/api";
 import { getDictionaryValue } from "../src/lib/i18n";
-
-const SRC_ROOT = join(process.cwd(), "src");
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
 
 test("formatApiErrorDetail renders FastAPI 422 array details", () => {
   const message = formatApiErrorDetail(
@@ -41,5 +34,8 @@ test("workspace dialog enforces the backend title min length contract", () => {
   assert.match(source, /trimmedTitleLength >= 3 && !saving/);
   assert.match(source, /showTitleMinLengthHint/);
   assert.match(source, /t\("workspace\.field\.titleMinLengthHint"\)/);
-  assert.equal(getDictionaryValue("en-US", "workspace.field.titleMinLengthHint"), "At least 3 characters");
+  assert.equal(
+    getDictionaryValue("en-US", "workspace.field.titleMinLengthHint"),
+    "At least 3 characters",
+  );
 });

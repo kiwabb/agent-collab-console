@@ -23,6 +23,7 @@ from benchmark.runner import (
     ExecutorResult,  # noqa: F401
     FakeExecutor,
     RunOptions,
+    _is_benchmark_runtime_store,
 )
 from benchmark.store import (
     BenchmarkEpoch,  # noqa: F401
@@ -78,6 +79,45 @@ def _mixed_results() -> dict[str, list[IssueArtifacts]]:
     }
 
 
+class _AsyncRuntimeStore:
+    async def list_codex_tasks(
+        self,
+        session_id: str | None = None,
+        issue_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def list_execution_processes(
+        self, session_id: str | None = None, task_id: str | None = None
+    ) -> list[object]:
+        return []
+
+
+class _SyncRuntimeStore:
+    def list_codex_tasks(
+        self,
+        session_id: str | None = None,
+        issue_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        return []
+
+    def list_execution_processes(
+        self, session_id: str | None = None, task_id: str | None = None
+    ) -> list[object]:
+        return []
+
+
+def test_benchmark_runtime_store_guard_accepts_async_store() -> None:
+    assert _is_benchmark_runtime_store(_AsyncRuntimeStore()) is True
+
+
+def test_benchmark_runtime_store_guard_rejects_sync_or_missing_store() -> None:
+    assert _is_benchmark_runtime_store(_SyncRuntimeStore()) is False
+    assert _is_benchmark_runtime_store(None) is False
+
+
 # ---------------------------------------------------------------------------
 # run() — orchestration contract
 # ---------------------------------------------------------------------------
@@ -94,6 +134,7 @@ async def test_run_with_all_pass_aggregates_to_one():
     assert run.status == "completed"
     assert run.aggregate_pass_at_1 == pytest.approx(1.0)
     assert run.aggregate_pass_at_1_stderr == 0.0
+    assert run.cost_total_usd is not None
     assert run.cost_total_usd >= 0
     # Every fixture should have 3 epochs.
     epochs = store.list_epochs(run.id)
@@ -240,6 +281,7 @@ async def test_run_artifacts_json_is_persisted():
 
     await runner.run(RunOptions(epochs=1, fixture_ids=["add-backend-echo-endpoint"]))
     eps = store.list_epochs(store.list_runs()[0].id)
+    assert eps[0].artifacts_json is not None
     blob = json.loads(eps[0].artifacts_json)
     assert blob["issue_id"] == "codex-add-backend-echo-endpoint"
     assert "Add the endpoint" in blob["tasks"]
@@ -277,4 +319,5 @@ async def test_run_persists_executor_error_as_failed_epoch():
     assert by_id["add-backend-echo-endpoint"].error is None
     assert by_id["add-backend-ping-endpoint"].error == "boom: conductor crashed"
     # The failed epoch is counted as a failure in the aggregate.
+    assert run.aggregate_pass_at_1 is not None
     assert run.aggregate_pass_at_1 < 1.0

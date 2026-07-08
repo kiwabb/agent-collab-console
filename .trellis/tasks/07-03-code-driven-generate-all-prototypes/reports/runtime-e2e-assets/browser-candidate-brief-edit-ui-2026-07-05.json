@@ -1,0 +1,51 @@
+{
+  "hasBriefTextarea": true,
+  "hasLimitCounter": true,
+  "hasModifiedChip": true,
+  "relevantText": "next-app-router--artifacts\nPage\n\nVersions Label: v2\n\nDelete Button\n预览\n代码\n\nIterate Hint\n\nIterate Button\nv1\nv2\n扫描代码页面\n\n19 个候选 · 新建 0 · 变更 0 · 跳过 19\n\nPage\n跳过\nBRIEF 已修改\n/agents\nfrontend/src/app/agents/page.tsx\nsha256:df186f31c63\n\n需要更细控制时，可以编辑这个候选的生成 brief；未修改则继续使用源码 + 运行时证据自动 brief。\n\n收起 brief\n重置 brief\n\nbrief 已修改95/1200 字符\n\nPage\n跳过\n/approvals\nfrontend/src/app/approvals/page.tsx\nsha256:1a1f711e4ad\n\n需要更细控制时，可以编辑这个候选的生成 brief；未修改则继续使用源码 + 运行时证据自动 brief。\n\n编辑 brief\n重置 brief\nPage\n跳过\n/artifacts\nfrontend/src/app/artifacts/page.tsx\nsha256:6cdef8ed72a\n\n需要更细控制时，可以编辑这个候选的生成 brief；未修改则继续使用源码 + 运行时证据自动 brief。\n\n编",
+  "selectedCountVisible": true,
+  "textareas": [
+    {
+      "disabled": false,
+      "maxLength": null,
+      "placeholder": "迭代指令，例如：把 CTA 按钮改成实心填充",
+      "rows": "3",
+      "valueStart": ""
+    },
+    {
+      "disabled": false,
+      "maxLength": "1200",
+      "placeholder": "编辑这个页面的生成 brief…",
+      "rows": "6",
+      "valueStart": "Route: /agents\nFocus on an operator-facing agent roster with compact cards and one empty state."
+    },
+    {
+      "disabled": false,
+      "maxLength": null,
+      "placeholder": "可选：只针对这个页面的说明，例如保留审批列表密度、突出空态或移动端布局。",
+      "rows": "2",
+      "valueStart": ""
+    },
+    {
+      "disabled": false,
+      "maxLength": null,
+      "placeholder": "可选：只针对这个页面的说明，例如保留审批列表密度、突出空态或移动端布局。",
+      "rows": "2",
+      "valueStart": ""
+    },
+    {
+      "disabled": false,
+      "maxLength": null,
+      "placeholder": "可选：只针对这个页面的说明，例如保留审批列表密度、突出空态或移动端布局。",
+      "rows": "2",
+      "valueStart": ""
+    },
+    {
+      "disabled": false,
+      "maxLength": null,
+      "placeholder": "可选：只针对这个页面的说明，例如保留审批列表密度、突出空态或移动端布局。",
+      "rows": "2",
+      "valueStart": ""
+    }
+  ]
+}

@@ -9,12 +9,11 @@ Two complementary layers (merged from two independently developed designs):
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 from app.application.task_statuses import is_task_success_status
+from app.json_safety import JsonObject, object_dict, parse_json_object
 
 
 @dataclass(frozen=True)
@@ -255,9 +254,9 @@ class ConductorPolicyDecision:
     reason_code: str
     reason: str
     prompt_hint: str = ""
-    evidence: list[dict[str, Any]] = field(default_factory=list)
+    evidence: list[JsonObject] = field(default_factory=list)
 
-    def to_payload(self) -> dict[str, Any]:
+    def to_payload(self) -> JsonObject:
         return {
             "action": self.action,
             "reason_code": self.reason_code,
@@ -267,26 +266,22 @@ class ConductorPolicyDecision:
         }
 
 
-def _turn_payload(turn: object) -> dict[str, Any]:
+def _turn_payload(turn: object) -> JsonObject:
     raw = getattr(turn, "payload_json", None)
-    if not raw:
+    if raw is None or raw == "":
         return {}
-    try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError:
+    decoded = parse_json_object(raw)
+    if decoded is None:
         return {"raw": str(raw)}
-    return decoded if isinstance(decoded, dict) else {"value": decoded}
+    return decoded
 
 
-def _tool_result_payload(turn: object) -> dict[str, Any]:
+def _tool_result_payload(turn: object) -> JsonObject:
     payload = _turn_payload(turn)
-    result = payload.get("result")
-    if isinstance(result, dict):
-        return result
-    return {}
+    return object_dict(payload.get("result"))
 
 
-def _evidence_from_turn(turn: object, *, status: str = "", role: str = "") -> dict[str, Any]:
+def _evidence_from_turn(turn: object, *, status: str = "", role: str = "") -> JsonObject:
     return {
         "kind": "conductor_turn",
         "id": getattr(turn, "id", None),

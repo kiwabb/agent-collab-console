@@ -43,6 +43,7 @@ from pathlib import Path
 from .runner import (
     BenchmarkRunner,
     FakeExecutor,
+    IssueExecutor,
     RealConductorExecutor,
     RunOptions,
 )
@@ -120,6 +121,7 @@ async def _async_main(args: argparse.Namespace) -> int:
     elif args.dry_run:
         catalog_snapshot = json.dumps({"dry_run": True})
 
+    executor: IssueExecutor
     if args.dry_run:
         executor = FakeExecutor()
     else:

@@ -48,7 +48,7 @@ def _failed_task(**overrides) -> CodexTask:
         updated_at=datetime.now(),
     )
     base.update(overrides)
-    return CodexTask(**base)
+    return CodexTask.model_validate(base)
 
 
 def _done_task(**overrides) -> CodexTask:
@@ -74,7 +74,7 @@ def _done_task(**overrides) -> CodexTask:
         updated_at=datetime.now(),
     )
     base.update(overrides)
-    return CodexTask(**base)
+    return CodexTask.model_validate(base)
 
 
 def _node(*, retries: int = 0, max_retries: int = 1) -> WorkflowNode:
@@ -277,6 +277,7 @@ async def test_failed_workflow_task_marks_node_failed_when_retry_dispatch_fails(
         for event in events
     )
     retry_result = await registry.wait_for("task-failed", timeout=0.1)
+    assert isinstance(retry_result, dict)
     assert retry_result["task_id"] == failed_retry_task.id
     assert retry_result["status"] == "failed"
     assert "runner unavailable" in retry_result["error"]

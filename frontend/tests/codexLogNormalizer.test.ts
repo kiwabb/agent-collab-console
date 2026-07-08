@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { normalizeLogs } from "../src/lib/codexLogNormalizer";
+import { at } from "./testAssertions";
 
 test("notification logs are unwrapped into visible Codex entries", () => {
   const logs = [
@@ -33,10 +34,12 @@ test("notification logs are unwrapped into visible Codex entries", () => {
   const entries = normalizeLogs(logs);
 
   assert.equal(entries.length, 2);
-  assert.equal(entries[0].type, "status");
-  assert.equal(entries[0].label, "started");
-  assert.equal(entries[1].type, "assistant");
-  assert.equal(entries[1].content, "你好");
+  const firstEntry = at(entries, 0, "normalized entry");
+  const secondEntry = at(entries, 1, "normalized entry");
+  assert.equal(firstEntry.type, "status");
+  assert.equal(firstEntry.label, "started");
+  assert.equal(secondEntry.type, "assistant");
+  assert.equal(secondEntry.content, "你好");
 });
 
 test("notification logs accept camelCase Codex item types", () => {
@@ -74,11 +77,13 @@ test("notification logs accept camelCase Codex item types", () => {
   const entries = normalizeLogs(logs);
 
   assert.equal(entries.length, 2);
-  assert.equal(entries[0].type, "assistant");
-  assert.equal(entries[0].content, "你好呀");
-  assert.equal(entries[1].type, "command");
-  assert.equal(entries[1].status, "success");
-  assert.equal(entries[1].output, "hello\n");
+  const firstEntry = at(entries, 0, "normalized entry");
+  const secondEntry = at(entries, 1, "normalized entry");
+  assert.equal(firstEntry.type, "assistant");
+  assert.equal(firstEntry.content, "你好呀");
+  assert.equal(secondEntry.type, "command");
+  assert.equal(secondEntry.status, "success");
+  assert.equal(secondEntry.output, "hello\n");
 });
 
 test("normalizeLogs tolerates realtime events with missing content", () => {
@@ -92,8 +97,32 @@ test("normalizeLogs tolerates realtime events with missing content", () => {
   const entries = normalizeLogs(logs);
 
   assert.equal(entries.length, 1);
-  assert.equal(entries[0].type, "raw");
-  assert.equal(entries[0].content, "");
+  const firstEntry = at(entries, 0, "normalized entry");
+  assert.equal(firstEntry.type, "raw");
+  assert.equal(firstEntry.content, "");
+});
+
+test("normalizeLogs treats malformed or non-object JSON as raw output", () => {
+  const entries = normalizeLogs([
+    {
+      id: "array-json",
+      stream: "stdout",
+      content: '["not","an","event"]',
+    },
+    {
+      id: "bad-json",
+      stream: "stdout",
+      content: "{bad",
+    },
+  ]);
+
+  assert.equal(entries.length, 2);
+  const firstEntry = at(entries, 0, "normalized entry");
+  const secondEntry = at(entries, 1, "normalized entry");
+  assert.equal(firstEntry.type, "raw");
+  assert.equal(firstEntry.content, '["not","an","event"]');
+  assert.equal(secondEntry.type, "raw");
+  assert.equal(secondEntry.content, "{bad");
 });
 
 test("normalizeLogs uses log ids to keep realtime keys unique", () => {
@@ -118,7 +147,10 @@ test("normalizeLogs uses log ids to keep realtime keys unique", () => {
     },
   ]);
 
-  assert.notEqual(first[0].id, second[0].id);
+  assert.notEqual(
+    at(first, 0, "first normalized entry").id,
+    at(second, 0, "second normalized entry").id,
+  );
 });
 
 test("notification logs surface agent message delta events as assistant entries", () => {
@@ -148,8 +180,9 @@ test("notification logs surface agent message delta events as assistant entries"
   ]);
 
   assert.equal(entries.length, 1);
-  assert.equal(entries[0].type, "assistant");
-  assert.equal(entries[0].content, "你好");
+  const firstEntry = at(entries, 0, "normalized entry");
+  assert.equal(firstEntry.type, "assistant");
+  assert.equal(firstEntry.content, "你好");
 });
 
 test("notification error logs are visible error entries", () => {
@@ -169,8 +202,9 @@ test("notification error logs are visible error entries", () => {
   ]);
 
   assert.equal(entries.length, 1);
-  assert.equal(entries[0].type, "error");
-  assert.match(entries[0].content || "", /gpt-5\.5/);
+  const firstEntry = at(entries, 0, "normalized entry");
+  assert.equal(firstEntry.type, "error");
+  assert.match(firstEntry.content || "", /gpt-5\.5/);
 });
 
 test("runtime and error streams become readable progress entries", () => {
@@ -188,8 +222,10 @@ test("runtime and error streams become readable progress entries", () => {
   ]);
 
   assert.equal(entries.length, 2);
-  assert.equal(entries[0].type, "status");
-  assert.equal(entries[0].label, "Runtime");
-  assert.equal(entries[1].type, "error");
-  assert.equal(entries[1].content, "Codex app-server failed: boom");
+  const firstEntry = at(entries, 0, "normalized entry");
+  const secondEntry = at(entries, 1, "normalized entry");
+  assert.equal(firstEntry.type, "status");
+  assert.equal(firstEntry.label, "Runtime");
+  assert.equal(secondEntry.type, "error");
+  assert.equal(secondEntry.content, "Codex app-server failed: boom");
 });

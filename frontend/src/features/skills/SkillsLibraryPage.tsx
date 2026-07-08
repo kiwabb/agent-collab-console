@@ -45,7 +45,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { SkillMarkdown } from "./SkillMarkdown";
-import { cn } from "@/lib/utils";
+import { cn, isRecord, safeJsonParse } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 
 const UNCATEGORIZED = "__uncategorized__";
@@ -190,7 +190,6 @@ export function SkillsLibraryPage() {
         s.link,
         s.category ?? "",
         s.tags.join(" "),
-
       ]
         .join(" ")
         .toLowerCase();
@@ -253,14 +252,22 @@ export function SkillsLibraryPage() {
     if (selectedSkills.length === 0) return;
     const text = selectedSkills.map((s) => `${s.name}\t${s.link}`).join("\n");
     await navigator.clipboard.writeText(text);
-    addToast({ type: "success", title: t("skills.toast.copiedText"), message: `${selectedSkills.length}` });
+    addToast({
+      type: "success",
+      title: t("skills.toast.copiedText"),
+      message: `${selectedSkills.length}`,
+    });
   };
 
   const handleCopyJson = async () => {
     if (selectedSkills.length === 0) return;
     const payload = selectedSkills.map((s) => ({ name: s.name, link: s.link }));
     await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-    addToast({ type: "success", title: t("skills.toast.copiedJson"), message: `${selectedSkills.length}` });
+    addToast({
+      type: "success",
+      title: t("skills.toast.copiedJson"),
+      message: `${selectedSkills.length}`,
+    });
   };
 
   const handleDelete = useCallback(async () => {
@@ -319,7 +326,9 @@ export function SkillsLibraryPage() {
         {selectedSkills.length > 0 && (
           <div className="px-6 py-2 border-b border-border-subtle bg-brand/5 flex items-center justify-between gap-3 text-[12px]">
             <div className="text-text-secondary">
-              {t("skills.selected.prefix")} <span className="font-semibold text-foreground">{selectedSkills.length}</span> {t("skills.selected.suffix")}
+              {t("skills.selected.prefix")}{" "}
+              <span className="font-semibold text-foreground">{selectedSkills.length}</span>{" "}
+              {t("skills.selected.suffix")}
             </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" onClick={handleCopyText} className="gap-1">
@@ -345,7 +354,10 @@ export function SkillsLibraryPage() {
           <div className="border-r border-border-subtle flex flex-col min-h-0">
             <div className="px-3 py-2 border-b border-border-subtle space-y-2">
               <div className="relative">
-                <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted" />
+                <Search
+                  size={12}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted"
+                />
                 <Input
                   placeholder={t("skills.searchPlaceholder")}
                   value={search}
@@ -409,7 +421,10 @@ export function SkillsLibraryPage() {
 
             <div className="flex-1 overflow-auto">
               {loading && (
-                <div data-density="skills-list-loading-tool" className="motion-essential px-4 py-6 text-[12px] text-text-muted flex items-center gap-2">
+                <div
+                  data-density="skills-list-loading-tool"
+                  className="motion-essential px-4 py-6 text-[12px] text-text-muted flex items-center gap-2"
+                >
                   <AgentThinkingIndicator phase="tool" size={12} /> {t("skills.loading")}
                 </div>
               )}
@@ -533,10 +548,14 @@ export function SkillsLibraryPage() {
                                     />
                                     <div className="min-w-0 flex-1">
                                       <div className="flex items-center gap-2">
-                                        <span className="text-[13px] font-semibold truncate">{s.name}</span>
+                                        <span className="text-[13px] font-semibold truncate">
+                                          {s.name}
+                                        </span>
                                       </div>
                                       {s.description && (
-                                        <div className="text-[11px] text-text-muted line-clamp-2 mt-0.5">{s.description}</div>
+                                        <div className="text-[11px] text-text-muted line-clamp-2 mt-0.5">
+                                          {s.description}
+                                        </div>
                                       )}
                                       {s.tags && s.tags.length > 0 && (
                                         <div className="flex flex-wrap gap-1 mt-1">
@@ -709,8 +728,7 @@ function SkillDetailPanel({
     }
   };
 
-  const displayBody =
-    viewLang === "original" ? body : translations[viewLang] ?? body;
+  const displayBody = viewLang === "original" ? body : (translations[viewLang] ?? body);
 
   return (
     <>
@@ -865,9 +883,7 @@ function SkillDetailPanel({
             {t("skills.preview.fetchFailed")}: {fetchErr}
           </div>
         )}
-        {!loading && !fetchErr && displayBody !== null && (
-          <SkillMarkdown content={displayBody} />
-        )}
+        {!loading && !fetchErr && displayBody !== null && <SkillMarkdown content={displayBody} />}
       </div>
     </>
   );
@@ -919,7 +935,10 @@ function SkillEditorDialog({
       addToast({ type: "error", title: t("skills.toast.missingFields") });
       return;
     }
-    const tags = tagsText.split(",").map((s) => s.trim()).filter(Boolean);
+    const tags = tagsText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     setSubmitting(true);
     try {
       if (editing) {
@@ -927,10 +946,17 @@ function SkillEditorDialog({
       } else {
         await createSkill({ ...form, tags });
       }
-      addToast({ type: "success", title: editing ? t("skills.toast.updated") : t("skills.toast.created") });
+      addToast({
+        type: "success",
+        title: editing ? t("skills.toast.updated") : t("skills.toast.created"),
+      });
       await onSaved();
     } catch (err) {
-      addToast({ type: "error", title: t("skills.toast.saveFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("skills.toast.saveFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setSubmitting(false);
     }
@@ -940,12 +966,16 @@ function SkillEditorDialog({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{editing ? t("skills.editor.editTitle") : t("skills.editor.newTitle")}</DialogTitle>
+          <DialogTitle>
+            {editing ? t("skills.editor.editTitle") : t("skills.editor.newTitle")}
+          </DialogTitle>
           <DialogDescription>{t("skills.editor.subtitle")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="text-[12px] text-text-muted block mb-1">{t("skills.field.name")} *</label>
+            <label className="text-[12px] text-text-muted block mb-1">
+              {t("skills.field.name")} *
+            </label>
             <Input
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -953,7 +983,9 @@ function SkillEditorDialog({
             />
           </div>
           <div>
-            <label className="text-[12px] text-text-muted block mb-1">{t("skills.field.link")} *</label>
+            <label className="text-[12px] text-text-muted block mb-1">
+              {t("skills.field.link")} *
+            </label>
             <Input
               value={form.link}
               onChange={(e) => setForm((f) => ({ ...f, link: e.target.value }))}
@@ -961,7 +993,9 @@ function SkillEditorDialog({
             />
           </div>
           <div>
-            <label className="text-[12px] text-text-muted block mb-1">{t("skills.field.description")}</label>
+            <label className="text-[12px] text-text-muted block mb-1">
+              {t("skills.field.description")}
+            </label>
             <Textarea
               value={form.description ?? ""}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
@@ -970,7 +1004,9 @@ function SkillEditorDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[12px] text-text-muted block mb-1">{t("skills.field.category")}</label>
+              <label className="text-[12px] text-text-muted block mb-1">
+                {t("skills.field.category")}
+              </label>
               <Input
                 value={form.category ?? ""}
                 onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
@@ -978,7 +1014,9 @@ function SkillEditorDialog({
               />
             </div>
             <div>
-              <label className="text-[12px] text-text-muted block mb-1">{t("skills.field.tags")}</label>
+              <label className="text-[12px] text-text-muted block mb-1">
+                {t("skills.field.tags")}
+              </label>
               <Input
                 value={tagsText}
                 onChange={(e) => setTagsText(e.target.value)}
@@ -1029,7 +1067,11 @@ function SkillImportDialog({
       await onImported(res);
       onClose();
     } catch (err) {
-      addToast({ type: "error", title: t("skills.toast.importFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("skills.toast.importFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setBusy(false);
       if (mdRef.current) mdRef.current.value = "";
@@ -1037,14 +1079,19 @@ function SkillImportDialog({
   };
 
   const handleXlsx = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+    const file = files?.[0];
+    if (!file) return;
     setBusy(true);
     try {
-      const res = await importSkillsExcel(files[0]);
+      const res = await importSkillsExcel(file);
       await onImported(res);
       onClose();
     } catch (err) {
-      addToast({ type: "error", title: t("skills.toast.importFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("skills.toast.importFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setBusy(false);
       if (xlsxRef.current) xlsxRef.current.value = "";
@@ -1128,7 +1175,7 @@ function SkillImportDialog({
 interface ParsedSkill {
   name: string;
   link: string;
-  description?: string;
+  description?: string | undefined;
 }
 
 function deriveNameFromUrl(url: string): string {
@@ -1136,7 +1183,7 @@ function deriveNameFromUrl(url: string): string {
     const u = new URL(url);
     const segs = u.pathname.split("/").filter(Boolean);
     if (segs.length === 0) return u.hostname;
-    let last = decodeURIComponent(segs[segs.length - 1]);
+    let last = decodeURIComponent(segs[segs.length - 1] ?? "");
     last = last.replace(/\.(md|markdown|txt|html?|json|ya?ml)$/i, "");
     return last || u.hostname;
   } catch {
@@ -1150,37 +1197,35 @@ function parseSkillsText(input: string): ParsedSkill[] {
 
   // JSON array of {name?, link|url, description?}
   if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed);
+    const parsed = safeJsonParse(trimmed);
+    if (parsed !== null) {
       const arr: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
       const out: ParsedSkill[] = [];
       for (const item of arr) {
-        if (!item || typeof item !== "object") continue;
-        const obj = item as Record<string, unknown>;
+        if (!isRecord(item)) continue;
+        const obj = item;
         const link =
-          typeof obj.link === "string"
-            ? obj.link
-            : typeof obj.url === "string"
-              ? obj.url
+          typeof obj["link"] === "string"
+            ? obj["link"]
+            : typeof obj["url"] === "string"
+              ? obj["url"]
               : null;
         if (!link) continue;
         const name =
-          typeof obj.name === "string" && obj.name.trim()
-            ? obj.name.trim()
-            : typeof obj.title === "string" && obj.title.trim()
-              ? obj.title.trim()
+          typeof obj["name"] === "string" && obj["name"].trim()
+            ? obj["name"].trim()
+            : typeof obj["title"] === "string" && obj["title"].trim()
+              ? obj["title"].trim()
               : deriveNameFromUrl(link);
         const desc =
-          typeof obj.description === "string"
-            ? obj.description.trim() || undefined
-            : typeof obj.desc === "string"
-              ? obj.desc.trim() || undefined
+          typeof obj["description"] === "string"
+            ? obj["description"].trim() || undefined
+            : typeof obj["desc"] === "string"
+              ? obj["desc"].trim() || undefined
               : undefined;
         out.push({ name, link: link.trim(), description: desc });
       }
       if (out.length > 0) return dedupe(out);
-    } catch {
-      // fall through to line-by-line
     }
   }
 
@@ -1199,9 +1244,9 @@ function parseSkillsText(input: string): ParsedSkill[] {
     // Markdown link: [name](url) [- desc]?
     const md = line.match(/^\[([^\]]+)\]\(([^)\s]+)\)\s*(?:[-:—–|]\s*)?(.*)$/);
     if (md) {
-      name = md[1].trim();
-      link = md[2].trim();
-      description = md[3].trim() || undefined;
+      name = (md[1] ?? "").trim();
+      link = (md[2] ?? "").trim();
+      description = (md[3] ?? "").trim() || undefined;
     } else {
       const urlMatch = line.match(/https?:\/\/[^\s)<>"']+/);
       if (!urlMatch) continue;
@@ -1401,7 +1446,10 @@ function SkillPasteDialog({
             onClick={submit}
             disabled={rows.length === 0 || submitting}
             data-density={submitting ? "skills-paste-saveall-tool" : "skills-paste-saveall"}
-            className={cn("gap-1 bg-brand hover:bg-brand-strong text-black font-semibold", submitting && "motion-essential")}
+            className={cn(
+              "gap-1 bg-brand hover:bg-brand-strong text-black font-semibold",
+              submitting && "motion-essential",
+            )}
           >
             {submitting && <AgentThinkingIndicator phase="tool" size={12} />}
             {t("skills.paste.saveAll")} ({rows.length})

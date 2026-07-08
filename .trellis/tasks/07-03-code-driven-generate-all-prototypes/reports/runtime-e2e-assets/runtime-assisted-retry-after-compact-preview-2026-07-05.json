@@ -1,0 +1,93 @@
+{
+  "candidate_count": 8,
+  "preview": [
+    {
+      "candidate_id": "next-app-router--agents",
+      "route": "/agents",
+      "generation_status": "failed",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "f9ca5b88-784b-40cd-9bde-8b32796fab85",
+      "version_no": 1,
+      "html_complete": true,
+      "html_chars": 16904,
+      "error": "LLM returned an incomplete HTML document; generation was not saved"
+    },
+    {
+      "candidate_id": "next-app-router--approvals",
+      "route": "/approvals",
+      "generation_status": "failed",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "11f309c4-1ecf-446b-b55d-90fe0d1729c9",
+      "version_no": 1,
+      "html_complete": true,
+      "html_chars": 19223,
+      "error": "LLM returned an incomplete HTML document; generation was not saved"
+    },
+    {
+      "candidate_id": "next-app-router--audit",
+      "route": "/audit",
+      "generation_status": "done",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "63c155d2-113a-46f7-bb6b-91d9efb67f5f",
+      "version_no": 2,
+      "html_complete": true,
+      "html_chars": 12127,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--issues-id",
+      "route": "/issues/:id",
+      "generation_status": "done",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "af53dadd-4b42-4557-a069-a56a1bb9ddde",
+      "version_no": 3,
+      "html_complete": true,
+      "html_chars": 13724,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--knowledge",
+      "route": "/knowledge",
+      "generation_status": "done",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "299b328b-0c76-4de4-94fe-920fc4cf07ba",
+      "version_no": 2,
+      "html_complete": true,
+      "html_chars": 11729,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--projects-id-prototypes",
+      "route": "/projects/:id/prototypes",
+      "generation_status": "failed",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "142c71cf-317c-450f-a9f2-9bfe1388c322",
+      "version_no": 1,
+      "html_complete": true,
+      "html_chars": 9837,
+      "error": "LLM returned an incomplete HTML document; generation was not saved"
+    },
+    {
+      "candidate_id": "next-app-router--skills",
+      "route": "/skills",
+      "generation_status": "done",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "0724ad0a-e051-4cfa-9c90-4c71e7d2492b",
+      "version_no": 2,
+      "html_complete": true,
+      "html_chars": 9205,
+      "error": null
+    },
+    {
+      "candidate_id": "next-app-router--workspaces-wsid",
+      "route": "/workspaces/:wsId",
+      "generation_status": "done",
+      "capture_event": "candidate_capture_done",
+      "prototype_id": "4582159b-d5ec-445c-954c-3d66aa1e667f",
+      "version_no": 2,
+      "html_complete": true,
+      "html_chars": 8555,
+      "error": null
+    }
+  ]
+}

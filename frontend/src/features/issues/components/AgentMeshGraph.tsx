@@ -46,12 +46,18 @@ function getNodeColor(status?: string): string {
 
 function getEdgeColor(messageType: string): string {
   switch (messageType) {
-    case "handoff": return "#22c55e";
-    case "critique": return "#ef4444";
-    case "specialist_call": return "#3b82f6";
-    case "specialist_result": return "#6366f1";
-    case "clarification": return "#f59e0b";
-    default: return "#6b7280";
+    case "handoff":
+      return "#22c55e";
+    case "critique":
+      return "#ef4444";
+    case "specialist_call":
+      return "#3b82f6";
+    case "specialist_result":
+      return "#6366f1";
+    case "clarification":
+      return "#f59e0b";
+    default:
+      return "#6b7280";
   }
 }
 
@@ -106,11 +112,7 @@ export function AgentMeshGraph({ nodes, edges }: Props) {
   const posMap = new Map(positions.map((p) => [p.id, p]));
 
   return (
-    <svg
-      viewBox="0 0 400 300"
-      className="w-full h-auto"
-      aria-label="Agent mesh visualization"
-    >
+    <svg viewBox="0 0 400 300" className="w-full h-auto" aria-label="Agent mesh visualization">
       {/* Edges */}
       {edges.map((edge) => {
         const from = posMap.get(edge.from_node_key);

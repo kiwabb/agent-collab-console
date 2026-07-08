@@ -156,10 +156,14 @@ export function SlideIn({
 }: SlideInProps) {
   const getInitial = () => {
     switch (direction) {
-      case "left": return { x: -distance, opacity: 0 };
-      case "right": return { x: distance, opacity: 0 };
-      case "up": return { y: distance, opacity: 0 };
-      case "down": return { y: -distance, opacity: 0 };
+      case "left":
+        return { x: -distance, opacity: 0 };
+      case "right":
+        return { x: distance, opacity: 0 };
+      case "up":
+        return { y: distance, opacity: 0 };
+      case "down":
+        return { y: -distance, opacity: 0 };
     }
   };
 

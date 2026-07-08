@@ -18,15 +18,15 @@ interface ConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  description?: string;
-  confirmText?: string;
-  cancelText?: string;
+  description?: string | undefined;
+  confirmText?: string | undefined;
+  cancelText?: string | undefined;
   onConfirm: () => void;
-  isLoading?: boolean;
-  loadingMotionPhase?: string;
-  loadingDensity?: string;
-  loadingIndicatorSize?: number;
-  variant?: "destructive" | "warning" | "default";
+  isLoading?: boolean | undefined;
+  loadingMotionPhase?: string | undefined;
+  loadingDensity?: string | undefined;
+  loadingIndicatorSize?: number | undefined;
+  variant?: "destructive" | "warning" | "default" | undefined;
 }
 
 export function ConfirmDialog({
@@ -68,9 +68,7 @@ export function ConfirmDialog({
             )}
             <DialogTitle>{title}</DialogTitle>
           </div>
-          {description && (
-            <DialogDescription className="pt-2">{description}</DialogDescription>
-          )}
+          {description && <DialogDescription className="pt-2">{description}</DialogDescription>}
         </DialogHeader>
         <DialogFooter className="sm:justify-end">
           <Button
@@ -94,10 +92,7 @@ export function ConfirmDialog({
           >
             {isLoading ? (
               loadingMotionPhase ? (
-                <AgentThinkingIndicator
-                  phase={loadingMotionPhase}
-                  size={loadingIndicatorSize}
-                />
+                <AgentThinkingIndicator phase={loadingMotionPhase} size={loadingIndicatorSize} />
               ) : (
                 <span className="flex items-center gap-2">
                   <div className="flex gap-1">

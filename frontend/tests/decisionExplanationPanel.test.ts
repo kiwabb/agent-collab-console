@@ -1,44 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readCompactSource as readSource } from "./sourceTestUtils";
+import { withMockJsonFetch } from "./fetchTestUtils";
+import { at } from "./testAssertions";
 
 import { getIssueOrchestrationPolicy } from "../src/lib/api";
 import { deriveDecisionExplanationView } from "../src/features/issues/components/deriveDecisionExplanationView";
 
-const SRC_ROOT = join(process.cwd(), "src");
-
-type FetchCall = {
-  input: RequestInfo | URL;
-  init?: RequestInit;
-};
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
-
-function withMockFetch(
-  responseBody: unknown,
-  run: (calls: FetchCall[]) => Promise<void>,
-) {
-  const originalFetch = globalThis.fetch;
-  const calls: FetchCall[] = [];
-
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ input, init });
-    return new Response(JSON.stringify(responseBody), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }) as typeof fetch;
-
-  return run(calls).finally(() => {
-    globalThis.fetch = originalFetch;
-  });
-}
-
 test("getIssueOrchestrationPolicy hits the policy endpoint and returns the typed shape", async () => {
-  await withMockFetch(
+  await withMockJsonFetch(
     {
       issue_id: "issue-1",
       recommendation: "single_engineer",
@@ -53,17 +23,15 @@ test("getIssueOrchestrationPolicy hits the policy endpoint and returns the typed
       assert.equal(result?.recommendation, "single_engineer");
       assert.equal(result?.batch_allowed, false);
       assert.deepEqual(result?.signals, ["trivial"]);
-      assert.equal(
-        String(calls[0].input),
-        "/api/codex/issues/issue-1/orchestration-policy",
-      );
-      assert.equal(calls[0].init, undefined);
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/codex/issues/issue-1/orchestration-policy");
+      assert.equal(call.init, undefined);
     },
   );
 });
 
 test("getIssueOrchestrationPolicy URL-encodes issue IDs", async () => {
-  await withMockFetch(
+  await withMockJsonFetch(
     {
       issue_id: "issue/with/slashes",
       recommendation: "single_engineer",
@@ -74,10 +42,8 @@ test("getIssueOrchestrationPolicy URL-encodes issue IDs", async () => {
     async (calls) => {
       await getIssueOrchestrationPolicy("issue/with/slashes");
 
-      assert.equal(
-        String(calls[0].input),
-        "/api/codex/issues/issue%2Fwith%2Fslashes/orchestration-policy",
-      );
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/codex/issues/issue%2Fwith%2Fslashes/orchestration-policy");
     },
   );
 });

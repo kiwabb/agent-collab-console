@@ -67,13 +67,19 @@ export function AgentCatalogPanel() {
   }, []);
 
   const grouped = useMemo(() => {
-    return TIER_ORDER.reduce<Record<AgentTier, Agent[]>>((acc, tier) => {
-      acc[tier] = agents.filter((agent) => agent.agent_tier === tier);
-      return acc;
-    }, { managed: [], specialist: [], custom: [] });
+    return TIER_ORDER.reduce<Record<AgentTier, Agent[]>>(
+      (acc, tier) => {
+        acc[tier] = agents.filter((agent) => agent.agent_tier === tier);
+        return acc;
+      },
+      { managed: [], specialist: [], custom: [] },
+    );
   }, [agents]);
 
-  const tierCopy: Record<AgentTier, { title: string; description: string; icon: ReactNode; tone: string }> = {
+  const tierCopy: Record<
+    AgentTier,
+    { title: string; description: string; icon: ReactNode; tone: string }
+  > = {
     managed: {
       title: t("settings.agentTier.managed.title"),
       description: t("settings.agentTier.managed.desc"),
@@ -136,7 +142,11 @@ export function AgentCatalogPanel() {
             data-density={loading ? "agent-catalog-refresh-dispatch" : "agent-catalog-refresh"}
             className={cn("gap-2 rounded-xl", loading && "motion-essential")}
           >
-            {loading ? <AgentThinkingIndicator phase="dispatching" size={14} /> : <RefreshCcw size={14} />}
+            {loading ? (
+              <AgentThinkingIndicator phase="dispatching" size={14} />
+            ) : (
+              <RefreshCcw size={14} />
+            )}
             {t("settings.refresh")}
           </Button>
         </div>
@@ -169,12 +179,19 @@ export function AgentCatalogPanel() {
                 >
                   <div className="p-4 border-b border-border-subtle bg-surface-raised/60">
                     <div className="flex items-center gap-3">
-                      <div className={cn("size-9 rounded-xl border flex items-center justify-center", meta.tone)}>
+                      <div
+                        className={cn(
+                          "size-9 rounded-xl border flex items-center justify-center",
+                          meta.tone,
+                        )}
+                      >
                         {meta.icon}
                       </div>
                       <div className="min-w-0">
                         <h3 className="text-sm font-black tracking-tight">{meta.title}</h3>
-                        <p className="text-[10px] text-text-muted leading-relaxed">{meta.description}</p>
+                        <p className="text-[10px] text-text-muted leading-relaxed">
+                          {meta.description}
+                        </p>
                       </div>
                     </div>
                     <div className="mt-4 text-[10px] font-black uppercase tracking-[0.2em] text-text-muted">
@@ -187,42 +204,51 @@ export function AgentCatalogPanel() {
                       <div className="p-6 text-center text-xs text-text-muted">
                         {t(`settings.agentTierEmpty.${tier}` as const)}
                       </div>
-                    ) : grouped[tier].map((agent) => {
-                      const display = getAgentDisplay(agent);
-                      return (
-                        <article key={agent.id} className="p-4 hover:bg-surface-hover transition-colors">
-                          <div className="flex items-start gap-3">
-                            <div className="mt-0.5 size-8 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center text-text-muted">
-                              <Bot size={14} />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <h4 className="text-[13px] font-bold truncate">{display.name}</h4>
-                                {agent.is_builtin && (
-                                  <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-brand">
-                                    {t("settings.builtIn")}
-                                  </span>
-                                )}
+                    ) : (
+                      grouped[tier].map((agent) => {
+                        const display = getAgentDisplay(agent);
+                        return (
+                          <article
+                            key={agent.id}
+                            className="p-4 hover:bg-surface-hover transition-colors"
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="mt-0.5 size-8 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center text-text-muted">
+                                <Bot size={14} />
                               </div>
-                              <p className="mt-1 font-mono text-[10px] text-text-muted truncate">{agent.role_key}</p>
-                              {display.description && (
-                                <p className="mt-2 text-[11px] text-text-secondary leading-relaxed line-clamp-3">
-                                  {display.description}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="text-[13px] font-bold truncate">{display.name}</h4>
+                                  {agent.is_builtin && (
+                                    <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-brand">
+                                      {t("settings.builtIn")}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="mt-1 font-mono text-[10px] text-text-muted truncate">
+                                  {agent.role_key}
                                 </p>
-                              )}
-                              <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-text-muted">
-                                <span className="rounded-lg border border-border-subtle bg-surface-raised px-2 py-1 font-mono">
-                                  {t("settings.agentMeta.executor")}: {agent.default_executor ?? t("settings.agentMeta.unset")}
-                                </span>
-                                <span className="rounded-lg border border-border-subtle bg-surface-raised px-2 py-1 font-mono">
-                                  {t("settings.agentMeta.artifact")}: {agent.artifact_subdir ?? t("settings.agentMeta.none")}
-                                </span>
+                                {display.description && (
+                                  <p className="mt-2 text-[11px] text-text-secondary leading-relaxed line-clamp-3">
+                                    {display.description}
+                                  </p>
+                                )}
+                                <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-text-muted">
+                                  <span className="rounded-lg border border-border-subtle bg-surface-raised px-2 py-1 font-mono">
+                                    {t("settings.agentMeta.executor")}:{" "}
+                                    {agent.default_executor ?? t("settings.agentMeta.unset")}
+                                  </span>
+                                  <span className="rounded-lg border border-border-subtle bg-surface-raised px-2 py-1 font-mono">
+                                    {t("settings.agentMeta.artifact")}:{" "}
+                                    {agent.artifact_subdir ?? t("settings.agentMeta.none")}
+                                  </span>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </article>
-                      );
-                    })}
+                          </article>
+                        );
+                      })
+                    )}
                   </div>
                 </section>
               );

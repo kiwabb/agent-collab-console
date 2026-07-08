@@ -75,10 +75,8 @@ export function IssueActivityTimelineHorizontal({ issueId, reloadKey }: Props) {
       const t = Date.parse(e.timestamp);
       if (!Number.isNaN(t)) allTs.push(t);
     }
-    if (pipeline?.started_at)
-      allTs.push(new Date(pipeline.started_at).getTime());
-    if (pipeline?.completed_at)
-      allTs.push(new Date(pipeline.completed_at).getTime());
+    if (pipeline?.started_at) allTs.push(new Date(pipeline.started_at).getTime());
+    if (pipeline?.completed_at) allTs.push(new Date(pipeline.completed_at).getTime());
     if (allTs.length === 0) {
       return { startMs: 0, endMs: 0, durationMs: 0 };
     }
@@ -105,16 +103,16 @@ export function IssueActivityTimelineHorizontal({ issueId, reloadKey }: Props) {
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border-subtle font-mono text-[12px] text-text-muted flex-wrap">
         <div className="flex items-center gap-2.5">
           <Clock size={14} className="text-text-muted" />
-          <span className="text-foreground font-semibold text-[13px]">{t("issue.activity.timelineTitle")}</span>
+          <span className="text-foreground font-semibold text-[13px]">
+            {t("issue.activity.timelineTitle")}
+          </span>
           <span className="text-text-faint">·</span>
           <span>{t("issue.activity.timelineEventCount", { n: String(activity.length) })}</span>
           {startMs > 0 && endMs > 0 && (
             <>
               <span className="text-text-faint">·</span>
               <span>
-                {fmtTime(startMs)}{" "}
-                <span className="text-text-faint">→</span>{" "}
-                {fmtTime(endMs)}
+                {fmtTime(startMs)} <span className="text-text-faint">→</span> {fmtTime(endMs)}
               </span>
               <span className="text-text-faint">·</span>
               <span>{fmtDuration(Math.round(durationMs / 1000))}</span>
@@ -134,10 +132,7 @@ export function IssueActivityTimelineHorizontal({ issueId, reloadKey }: Props) {
                   : "border-border-muted text-text-muted hover:text-foreground hover:bg-surface-hover",
               )}
             >
-              <span
-                className="size-1.5 rounded-full"
-                style={{ background: filterDot(b) }}
-              />
+              <span className="size-1.5 rounded-full" style={{ background: filterDot(b) }} />
               {bucketLabel(b)}
             </button>
           ))}
@@ -153,20 +148,14 @@ export function IssueActivityTimelineHorizontal({ issueId, reloadKey }: Props) {
             minWidth: Math.max(filtered.length * 220 + 120, 720),
           }}
         >
-          <div
-            className="relative h-px bg-border-muted"
-            style={{ marginTop: 120 }}
-          >
+          <div className="relative h-px bg-border-muted" style={{ marginTop: 120 }}>
             {filtered.map((e, i) => {
               const ts = Date.parse(e.timestamp);
               // Distribute events evenly across the rail so cards never
               // overlap regardless of how close their real timestamps are.
               // Clamp to 5%–95% so the first/last card (~180px wide) doesn't
               // get clipped by the scroll container edges.
-              const pct =
-                filtered.length > 1
-                  ? 5 + (i / (filtered.length - 1)) * 90
-                  : 50;
+              const pct = filtered.length > 1 ? 5 + (i / (filtered.length - 1)) * 90 : 50;
               const bucket = bucketOf(e);
               const isTop = i % 2 === 0;
               return (
@@ -205,15 +194,7 @@ export function IssueActivityTimelineHorizontal({ issueId, reloadKey }: Props) {
   );
 }
 
-function EventCard({
-  event,
-  index,
-  top,
-}: {
-  event: ActivityEvent;
-  index: number;
-  top: boolean;
-}) {
+function EventCard({ event, index, top }: { event: ActivityEvent; index: number; top: boolean }) {
   const bucket = bucketOf(event);
   const tone = cardTone(bucket);
   return (
@@ -228,10 +209,7 @@ function EventCard({
       }}
     >
       <div className="flex items-center gap-1.5 mb-1">
-        <span
-          className="font-mono text-[10px] tabular-nums"
-          style={{ color: tone.text }}
-        >
+        <span className="font-mono text-[10px] tabular-nums" style={{ color: tone.text }}>
           {circledNumber(index)}
         </span>
         <span
@@ -241,13 +219,9 @@ function EventCard({
           {event.actor}
         </span>
       </div>
-      <div className="text-[12px] leading-snug text-foreground line-clamp-3">
-        {event.text}
-      </div>
+      <div className="text-[12px] leading-snug text-foreground line-clamp-3">{event.text}</div>
       {event.aux && (
-        <div className="font-mono text-[10px] text-text-faint mt-1 truncate">
-          {event.aux}
-        </div>
+        <div className="font-mono text-[10px] text-text-faint mt-1 truncate">{event.aux}</div>
       )}
     </div>
   );

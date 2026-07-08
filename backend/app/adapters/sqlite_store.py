@@ -1,17 +1,126 @@
 import json
 import logging
+import re
 import sqlite3
+from collections.abc import Sequence
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
+
+from app.domain.models import (
+    AgentCallTrace,
+    AgentRun,
+    Approval,
+    ApprovalEvent,
+    Artifact,
+    AuditLog,
+    CodexIssue,
+    CodexMessage,
+    CodexSession,
+    CodexTask,
+    CodexTaskMessage,
+    ConductorState,
+    ConductorStateLog,
+    ConductorTask,
+    ConductorTurn,
+    ExecutionProcess,
+    HelpRequest,
+    LogEvent,
+    Message,
+    PlanDetails,
+    ProjectConductorState,
+    ProjectMemoryEmbedding,
+    RuntimeCatalog,
+    SelfImprovementApplicationEvent,
+    SelfImprovementProposal,
+    Session,
+    Task,
+)
+from app.json_safety import object_dict_or_none
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import Session, Task, AgentRun, Artifact, Message, Approval, ApprovalEvent, PlanDetails, CodexSession, CodexMessage, CodexIssue, CodexTask, CodexTaskMessage, LogEvent, ExecutionProcess, HelpRequest, RuntimeCatalog, SelfImprovementProposal
+
+class RowWithKeys(Protocol):
+    def keys(self) -> Sequence[str]: ...
+
+
+SQLITE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _row_has_key(row: RowWithKeys, key: str) -> bool:
+    """Return whether a sqlite row exposes a column name."""
+    return key in row.keys()  # noqa: SIM118 - sqlite Row membership checks values, not column names.
+
+
+def _quote_sqlite_identifier(name: object) -> str:
+    if not isinstance(name, str) or SQLITE_IDENTIFIER_RE.fullmatch(name) is None:
+        raise ValueError(f"unsafe sqlite identifier: {name!r}")
+    return f'"{name}"'
+
+
+def _log_events_query(
+    *, has_task_id: bool, has_execution_process_id: bool, reverse: bool
+) -> str:
+    if has_task_id and has_execution_process_id:
+        if reverse:
+            return "SELECT * FROM log_events WHERE session_id = ? AND task_id = ? AND execution_process_id = ? ORDER BY created_at DESC LIMIT ?"
+        return "SELECT * FROM log_events WHERE session_id = ? AND task_id = ? AND execution_process_id = ? ORDER BY created_at ASC LIMIT ?"
+    if has_execution_process_id:
+        if reverse:
+            return "SELECT * FROM log_events WHERE session_id = ? AND execution_process_id = ? ORDER BY created_at DESC LIMIT ?"
+        return "SELECT * FROM log_events WHERE session_id = ? AND execution_process_id = ? ORDER BY created_at ASC LIMIT ?"
+    if has_task_id:
+        if reverse:
+            return "SELECT * FROM log_events WHERE session_id = ? AND task_id = ? ORDER BY created_at DESC LIMIT ?"
+        return "SELECT * FROM log_events WHERE session_id = ? AND task_id = ? ORDER BY created_at ASC LIMIT ?"
+    if reverse:
+        return "SELECT * FROM log_events WHERE session_id = ? ORDER BY created_at DESC LIMIT ?"
+    return "SELECT * FROM log_events WHERE session_id = ? ORDER BY created_at ASC LIMIT ?"
+
+
+def _json_object(value: str | None) -> dict[str, object] | None:
+    if not value:
+        return None
+    parsed: object = json.loads(value)
+    return object_dict_or_none(parsed)
+
+
+def _json_string_list(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    parsed: object = json.loads(value)
+    if not isinstance(parsed, list):
+        return None
+    return [item for item in parsed if isinstance(item, str)]
+
+
+def _codex_settings(value: str | None) -> dict[str, bool]:
+    parsed = _json_object(value)
+    if parsed is None:
+        return {"plan_first_pm": True}
+    settings = {key: item for key, item in parsed.items() if isinstance(item, bool)}
+    return settings or {"plan_first_pm": True}
+
+
+def _plan_details(value: str | None) -> PlanDetails | None:
+    parsed = _json_object(value)
+    if parsed is None:
+        return None
+    summary = parsed.get("summary")
+    next_steps = parsed.get("next_steps")
+    task_title = parsed.get("task_title")
+    if not isinstance(summary, str) or not isinstance(task_title, str):
+        return None
+    if not isinstance(next_steps, list) or not all(isinstance(item, str) for item in next_steps):
+        return None
+    return PlanDetails(summary=summary, next_steps=next_steps, task_title=task_title)
 
 
 class SQLiteStore:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path | str) -> None:
         self.db_path = db_path
         self._init_db()
 
@@ -21,19 +130,21 @@ class SQLiteStore:
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
-    def _execute(self, conn: sqlite3.Connection, query: str, params: tuple = ()) -> sqlite3.Cursor:
+    def _execute(
+        self, conn: sqlite3.Connection, query: str, params: tuple[object, ...] = ()
+    ) -> sqlite3.Cursor:
         """Execute a query with error handling and rollback on failure."""
         try:
             return conn.execute(query, params)
         except sqlite3.Error as e:
             logger.error("Database error: %s | query: %s | params: %s", e, query, params)
-            try:
+            with suppress(sqlite3.Error):
                 conn.rollback()
-            except sqlite3.Error:
-                pass
             raise
 
-    def _execute_with_commit(self, conn: sqlite3.Connection, query: str, params: tuple = ()) -> sqlite3.Cursor:
+    def _execute_with_commit(
+        self, conn: sqlite3.Connection, query: str, params: tuple[object, ...] = ()
+    ) -> sqlite3.Cursor:
         """Execute a query with commit, rolling back on failure."""
         try:
             cur = conn.execute(query, params)
@@ -41,13 +152,11 @@ class SQLiteStore:
             return cur
         except sqlite3.Error as e:
             logger.error("Database error: %s | query: %s | params: %s", e, query, params)
-            try:
+            with suppress(sqlite3.Error):
                 conn.rollback()
-            except sqlite3.Error:
-                pass
             raise
 
-    def _init_db(self):
+    def _init_db(self) -> None:
         conn = self._get_conn()
         try:
             conn.executescript("""
@@ -188,6 +297,9 @@ class SQLiteStore:
                     resume_session_id TEXT,
                     resume_message_id TEXT,
                     last_execution_process_id TEXT,
+                    trace_id TEXT,
+                    span_id TEXT,
+                    parent_span_id TEXT,
                     sequence_index INTEGER,
                     sequence_group TEXT,
                     review_comment TEXT,
@@ -211,6 +323,9 @@ class SQLiteStore:
                     content TEXT NOT NULL,
                     task_id TEXT,
                     execution_process_id TEXT,
+                    trace_id TEXT,
+                    span_id TEXT,
+                    parent_span_id TEXT,
                     created_at TEXT,
                     FOREIGN KEY (session_id) REFERENCES codex_sessions(id)
                 );
@@ -255,226 +370,128 @@ class SQLiteStore:
             """)
             # Add created_at column to existing tables if not present (backward compatibility)
             for table in ["tasks", "runs", "artifacts", "messages", "approvals", "approval_events"]:
-                try:
+                with suppress(sqlite3.OperationalError):
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN created_at TEXT")
-                except sqlite3.OperationalError:
-                    pass  # Column already exists
             # Add thread_id column to codex_sessions for session resume support
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_sessions ADD COLUMN thread_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_sessions ADD COLUMN claude_thread_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_sessions ADD COLUMN project_id TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_sessions ADD COLUMN settings_json TEXT")
-            except sqlite3.OperationalError:
-                pass
             # Add task_id column to log_events for task-scoped log attribution
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE log_events ADD COLUMN task_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_task_messages ADD COLUMN execution_process_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE log_events ADD COLUMN execution_process_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
             # Add executor column to codex_tasks for dual-executor support
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN project_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN phase TEXT DEFAULT 'requirements'")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN issue_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN role TEXT DEFAULT 'general'")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN executor TEXT DEFAULT 'codex'")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_session_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN resume_message_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN workspace_path TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_branch TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_base_branch TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_worktree_path TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_merge_status TEXT DEFAULT 'open'")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN git_last_commit_sha TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN last_execution_process_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            # Distributed-tracing identity (approach C) on tasks, log_events, audit_log.
+            for _trace_col in ("trace_id", "span_id", "parent_span_id"):
+                with suppress(sqlite3.OperationalError):
+                    conn.execute(f"ALTER TABLE codex_tasks ADD COLUMN {_trace_col} TEXT")
+                with suppress(sqlite3.OperationalError):
+                    conn.execute(f"ALTER TABLE log_events ADD COLUMN {_trace_col} TEXT")
+                with suppress(sqlite3.OperationalError):
+                    conn.execute(f"ALTER TABLE audit_log ADD COLUMN {_trace_col} TEXT")
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN task_kind TEXT DEFAULT 'normal'")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN blocked_by_help_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
             # Add provider and model columns to codex_tasks
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN provider TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN model TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN result_json TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE agents ADD COLUMN agent_tier TEXT DEFAULT 'managed'")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN project_id TEXT")
-            except sqlite3.OperationalError:
-                pass
             for _issue_exec_col in ("executor", "provider", "model"):
-                try:
+                with suppress(sqlite3.OperationalError):
                     conn.execute(f"ALTER TABLE codex_issues ADD COLUMN {_issue_exec_col} TEXT")
-                except sqlite3.OperationalError:
-                    pass
             # Per-issue cost budget (cost-aware conductor scheduling, PR2)
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN budget_usd REAL")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN review_comment TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN milestone TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN git_branch TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN git_base_branch TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN git_worktree_path TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN git_merge_status TEXT DEFAULT 'open'")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN git_last_commit_sha TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_url TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN github_pr_state TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
             # Add executor/provider/model snapshot columns to execution_processes
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN executor TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN provider TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN model TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN kind TEXT NOT NULL DEFAULT 'initial'")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN triggering_message_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_index INTEGER")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN sequence_group TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN review_comment TEXT")
-            except sqlite3.OperationalError:
-                pass
             # Add token usage and cost columns to execution_processes
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN input_tokens INTEGER")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN output_tokens INTEGER")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN cache_read_tokens INTEGER")
-            except sqlite3.OperationalError:
-                pass
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE execution_processes ADD COLUMN total_cost_usd REAL")
-            except sqlite3.OperationalError:
-                pass
             # Create runtime_catalog_settings table if not exists
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS runtime_catalog_settings (
@@ -595,10 +612,8 @@ class SQLiteStore:
                     FOREIGN KEY (graph_id) REFERENCES workflow_graphs(id)
                 )
             """)
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_tasks ADD COLUMN workflow_node_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
             # Knowledge stack: FTS5 virtual tables + embedding stores + team-notes state
             conn.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
@@ -764,6 +779,22 @@ class SQLiteStore:
                     updated_at TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS self_improvement_application_events (
+                    id TEXT PRIMARY KEY,
+                    proposal_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    issue_id TEXT NOT NULL,
+                    target_kind TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    path TEXT,
+                    content_sha256 TEXT,
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT,
+                    created_at TEXT
+                )
+            """)
             # Unified audit trail (PR1). One row per LLM call/return, tool use/result,
             # command exec, git command, CLI spawn, generic event, or agent finalize.
             # Line-level stdout/stderr stays in log_events (joined via
@@ -779,10 +810,34 @@ class SQLiteStore:
                     conductor_task_id TEXT,
                     execution_process_id TEXT,
                     correlation_id TEXT,
+                    trace_id TEXT,
+                    span_id TEXT,
+                    parent_span_id TEXT,
                     status TEXT,
                     duration_ms INTEGER,
                     payload_json TEXT NOT NULL DEFAULT '{}',
                     error TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_call_traces (
+                    id TEXT PRIMARY KEY,
+                    audit_log_id TEXT,
+                    trace_id TEXT,
+                    span_id TEXT,
+                    parent_span_id TEXT,
+                    issue_id TEXT,
+                    task_id TEXT,
+                    execution_process_id TEXT,
+                    kind TEXT NOT NULL,
+                    title TEXT,
+                    request_json TEXT,
+                    response_json TEXT,
+                    request_preview TEXT,
+                    response_preview TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    is_truncated INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT
                 )
             """)
             # Create indexes for frequently queried columns
@@ -797,6 +852,10 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_session_id ON log_events(session_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_task_id ON log_events(task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_execution_process_id ON log_events(execution_process_id)")
+            with suppress(sqlite3.OperationalError):
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_log_events_trace_id ON log_events(trace_id)")
+            with suppress(sqlite3.OperationalError):
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_trace_id ON audit_log(trace_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_session_id ON execution_processes(session_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_processes_task_id ON execution_processes(task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_help_requests_parent_task_id ON help_requests(parent_task_id)")
@@ -825,33 +884,25 @@ class SQLiteStore:
                 "ALTER TABLE conductor_tasks ADD COLUMN heartbeat_at TEXT",
                 "ALTER TABLE conductor_tasks ADD COLUMN lease_expires_at TEXT",
             ):
-                try:
+                with suppress(sqlite3.OperationalError):
                     conn.execute(stmt)
-                except sqlite3.OperationalError:
-                    pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_tasks_lease ON conductor_tasks(status, lease_expires_at)")
             # Phase 4: add instance_index to workflow_nodes for existing DBs
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute(
                     "ALTER TABLE workflow_nodes ADD COLUMN instance_index INTEGER NOT NULL DEFAULT 0"
                 )
-            except sqlite3.OperationalError:
-                pass
             # Parallel swarm: add batch_key to group nodes from one dispatch_batch call
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute(
                     "ALTER TABLE workflow_nodes ADD COLUMN batch_key TEXT"
                 )
-            except sqlite3.OperationalError:
-                pass
             # Must run BEFORE idx_conductor_turns_inbox below; the index
             # references consumed_at, and on an existing DB without the column
             # the CREATE INDEX otherwise raises sqlite3.OperationalError and
             # tanks the whole _init_db().
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE conductor_turns ADD COLUMN consumed_at TEXT")
-            except sqlite3.OperationalError:
-                pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_task_turn ON conductor_turns(conductor_task_id, turn_index, sub_index)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_issue_created ON conductor_turns(issue_id, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conductor_turns_inbox ON conductor_turns(conductor_task_id, kind, consumed_at, created_at)")
@@ -860,23 +911,27 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_project_created ON self_improvement_proposals(project_id, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_issue ON self_improvement_proposals(issue_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_status ON self_improvement_proposals(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_events_project_created ON self_improvement_application_events(project_id, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_events_proposal_created ON self_improvement_application_events(proposal_id, created_at)")
             # Audit log filter/pagination indexes (PR3 read API will lean on these).
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_category_created ON audit_log(category, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_audit_log_id ON agent_call_traces(audit_log_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_trace_id ON agent_call_traces(trace_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_task_id ON agent_call_traces(task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_execution_process_id ON agent_call_traces(execution_process_id)")
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database initialization error: %s", e)
-            try:
+            with suppress(sqlite3.Error):
                 conn.rollback()
-            except sqlite3.Error:
-                pass
             raise
         finally:
             conn.close()
 
-    def _ensure_db(self):
+    def _ensure_db(self) -> None:
         """Re-run schema creation so callers never hit a missing-table error."""
         self._init_db()
 
@@ -888,7 +943,7 @@ class SQLiteStore:
         """Parse datetime from SQLite storage."""
         return datetime.fromisoformat(s) if s else None
 
-    def save_session(self, session: Session):
+    def save_session(self, session: Session) -> None:
         conn = self._get_conn()
         try:
             conn.execute(
@@ -933,10 +988,8 @@ class SQLiteStore:
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database error saving session %s: %s", session.id, e)
-            try:
+            with suppress(sqlite3.Error):
                 conn.rollback()
-            except sqlite3.Error:
-                pass
             raise
         finally:
             conn.close()
@@ -977,7 +1030,7 @@ class SQLiteStore:
                     role=r_row["role"],
                     status=r_row["status"],
                     summary=r_row["summary"],
-                    payload=json.loads(r_row["payload"]) if r_row["payload"] else None,
+                    payload=_json_object(r_row["payload"]),
                     created_at=self._parse_datetime(r_row["created_at"]),
                 ))
 
@@ -985,11 +1038,9 @@ class SQLiteStore:
             for a_row in conn.execute("SELECT * FROM artifacts WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)", (session_id,)):
                 content = a_row["content"]
                 try:
-                    parsed = json.loads(content)
-                    if isinstance(parsed, dict):
-                        content = PlanDetails(**parsed)
-                    else:
-                        content = parsed
+                    parsed_plan = _plan_details(content)
+                    if parsed_plan is not None:
+                        content = parsed_plan
                 except (json.JSONDecodeError, TypeError):
                     pass
                 session.artifacts.append(Artifact(
@@ -997,7 +1048,7 @@ class SQLiteStore:
                     task_id=a_row["task_id"],
                     kind=a_row["kind"],
                     content=content,
-                    steps=json.loads(a_row["steps"]) if a_row["steps"] else None,
+                    steps=_json_string_list(a_row["steps"]),
                     created_at=self._parse_datetime(a_row["created_at"]),
                 ))
 
@@ -1038,13 +1089,11 @@ class SQLiteStore:
             return session
         except sqlite3.Error as e:
             logger.error("Database error loading session %s: %s", session_id, e)
-            try:
+            with suppress(sqlite3.Error):
                 conn.rollback()
-            except sqlite3.Error:
-                pass
             raise
 
-    def list_sessions(self) -> list[dict]:
+    def list_sessions(self) -> list[dict[str, object]]:
         """List all sessions with id, title, state."""
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -1054,7 +1103,7 @@ class SQLiteStore:
 
     # --- Codex Session persistence ---
 
-    def save_codex_session(self, session: CodexSession):
+    def save_codex_session(self, session: CodexSession) -> None:
         self._ensure_db()
         conn = self._get_conn()
         try:
@@ -1078,15 +1127,13 @@ class SQLiteStore:
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database error saving codex session %s: %s", session.id, e)
-            try:
+            with suppress(sqlite3.Error):
                 conn.rollback()
-            except sqlite3.Error:
-                pass
             raise
         finally:
             conn.close()
 
-    def save_codex_workspace(self, workspace: CodexSession):
+    def save_codex_workspace(self, workspace: CodexSession) -> None:
         self.save_codex_session(workspace)
 
     def load_codex_session(self, session_id: str) -> CodexSession | None:
@@ -1117,21 +1164,21 @@ class SQLiteStore:
             id=row["id"],
             title=row["title"],
             cwd=row["cwd"],
-            project_id=row["project_id"] if "project_id" in row.keys() else None,
+            project_id=row["project_id"] if _row_has_key(row, "project_id") else None,
             status=row["status"],
             created_at=self._parse_datetime(row["created_at"]),
             last_active_at=self._parse_datetime(row["last_active_at"]),
             log_path=row["log_path"],
-            thread_id=row["thread_id"] if "thread_id" in row.keys() else None,
-            claude_thread_id=row["claude_thread_id"] if "claude_thread_id" in row.keys() else None,
-            settings=json.loads(row["settings_json"]) if "settings_json" in row.keys() and row["settings_json"] else {"plan_first_pm": True},
+            thread_id=row["thread_id"] if _row_has_key(row, "thread_id") else None,
+            claude_thread_id=row["claude_thread_id"] if _row_has_key(row, "claude_thread_id") else None,
+            settings=_codex_settings(row["settings_json"] if _row_has_key(row, "settings_json") else None),
             messages=messages,
         )
 
     def load_codex_workspace(self, workspace_id: str) -> CodexSession | None:
         return self.load_codex_session(workspace_id)
 
-    def list_codex_sessions(self) -> list[dict]:
+    def list_codex_sessions(self) -> list[dict[str, object]]:
         """List all codex sessions with id, title, status, created_at, last_active_at."""
         self._ensure_db()
         conn = self._get_conn()
@@ -1140,13 +1187,13 @@ class SQLiteStore:
         conn.close()
         return [{"id": r["id"], "title": r["title"], "project_id": r["project_id"], "status": r["status"],
                  "created_at": r["created_at"], "last_active_at": r["last_active_at"],
-                 "settings": json.loads(r["settings_json"]) if r["settings_json"] else {"plan_first_pm": True}}
+                 "settings": _codex_settings(r["settings_json"])}
                 for r in rows]
 
-    def list_codex_workspaces(self) -> list[dict]:
+    def list_codex_workspaces(self) -> list[dict[str, object]]:
         return self.list_codex_sessions()
 
-    def delete_codex_session(self, session_id: str):
+    def delete_codex_session(self, session_id: str) -> None:
         """Delete a codex session and all its related records in proper cascade order."""
         self._ensure_db()
         conn = self._get_conn()
@@ -1178,7 +1225,7 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def delete_codex_issue(self, issue_id: str):
+    def delete_codex_issue(self, issue_id: str) -> None:
         """Delete a codex issue record."""
         self._ensure_db()
         conn = self._get_conn()
@@ -1186,10 +1233,10 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def delete_codex_workspace(self, workspace_id: str):
+    def delete_codex_workspace(self, workspace_id: str) -> None:
         self.delete_codex_session(workspace_id)
 
-    def save_codex_issue(self, issue: CodexIssue):
+    def save_codex_issue(self, issue: CodexIssue) -> None:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1234,30 +1281,30 @@ class SQLiteStore:
         return CodexIssue(
             id=row["id"],
             session_id=row["session_id"],
-            project_id=row["project_id"] if "project_id" in row.keys() else None,
+            project_id=row["project_id"] if _row_has_key(row, "project_id") else None,
             title=row["title"],
             description=row["description"],
             current_phase=row["current_phase"],
             status=row["status"],
-            review_comment=row["review_comment"] if "review_comment" in row.keys() else None,
+            review_comment=row["review_comment"] if _row_has_key(row, "review_comment") else None,
             is_pinned=bool(row["is_pinned"]),
-            milestone=row["milestone"] if "milestone" in row.keys() and row["milestone"] else None,
-            git_branch=row["git_branch"] if "git_branch" in row.keys() and row["git_branch"] else None,
-            git_base_branch=row["git_base_branch"] if "git_base_branch" in row.keys() and row["git_base_branch"] else None,
-            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in row.keys() and row["git_worktree_path"] else None,
-            git_merge_status=row["git_merge_status"] if "git_merge_status" in row.keys() and row["git_merge_status"] else "open",
-            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in row.keys() and row["git_last_commit_sha"] else None,
-            github_pr_url=row["github_pr_url"] if "github_pr_url" in row.keys() and row["github_pr_url"] else None,
-            github_pr_state=row["github_pr_state"] if "github_pr_state" in row.keys() and row["github_pr_state"] else None,
-            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
-            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
-            model=row["model"] if "model" in row.keys() and row["model"] else None,
-            budget_usd=row["budget_usd"] if "budget_usd" in row.keys() and row["budget_usd"] is not None else None,
+            milestone=row["milestone"] if _row_has_key(row, "milestone") and row["milestone"] else None,
+            git_branch=row["git_branch"] if _row_has_key(row, "git_branch") and row["git_branch"] else None,
+            git_base_branch=row["git_base_branch"] if _row_has_key(row, "git_base_branch") and row["git_base_branch"] else None,
+            git_worktree_path=row["git_worktree_path"] if _row_has_key(row, "git_worktree_path") and row["git_worktree_path"] else None,
+            git_merge_status=row["git_merge_status"] if _row_has_key(row, "git_merge_status") and row["git_merge_status"] else "open",
+            git_last_commit_sha=row["git_last_commit_sha"] if _row_has_key(row, "git_last_commit_sha") and row["git_last_commit_sha"] else None,
+            github_pr_url=row["github_pr_url"] if _row_has_key(row, "github_pr_url") and row["github_pr_url"] else None,
+            github_pr_state=row["github_pr_state"] if _row_has_key(row, "github_pr_state") and row["github_pr_state"] else None,
+            executor=row["executor"] if _row_has_key(row, "executor") and row["executor"] else None,
+            provider=row["provider"] if _row_has_key(row, "provider") and row["provider"] else None,
+            model=row["model"] if _row_has_key(row, "model") and row["model"] else None,
+            budget_usd=row["budget_usd"] if _row_has_key(row, "budget_usd") and row["budget_usd"] is not None else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def list_codex_issues(self, session_id: str | None = None) -> list[dict]:
+    def list_codex_issues(self, session_id: str | None = None) -> list[dict[str, object]]:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
@@ -1271,7 +1318,7 @@ class SQLiteStore:
 
     # --- Codex Tasks ---
 
-    def save_codex_task(self, task: CodexTask):
+    def save_codex_task(self, task: CodexTask) -> None:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1280,13 +1327,15 @@ class SQLiteStore:
                 status, result, result_json, parent_task_id, task_kind, blocked_by_help_id, workspace_path,
                 git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha,
                 resume_session_id, resume_message_id, last_execution_process_id,
+                trace_id, span_id, parent_span_id,
                 sequence_index, sequence_group, review_comment, workflow_node_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (task.id, task.session_id, task.project_id, task.issue_id, task.phase, task.title, task.prompt, task.role, task.executor,
              task.provider, task.model, task.status, task.result, task.result_json, task.parent_task_id, task.task_kind, task.blocked_by_help_id,
              task.workspace_path,
              task.git_branch, task.git_base_branch, task.git_worktree_path, task.git_merge_status, task.git_last_commit_sha,
              task.resume_session_id, task.resume_message_id, task.last_execution_process_id,
+             task.trace_id, task.span_id, task.parent_span_id,
              task.sequence_index, task.sequence_group, task.review_comment, task.workflow_node_id,
              self._format_datetime(task.created_at),
              self._format_datetime(task.updated_at)),
@@ -1305,34 +1354,37 @@ class SQLiteStore:
         return CodexTask(
             id=row["id"],
             session_id=row["session_id"],
-            project_id=row["project_id"] if "project_id" in row.keys() and row["project_id"] else None,
-            issue_id=row["issue_id"] if "issue_id" in row.keys() and row["issue_id"] else None,
-            phase=row["phase"] if "phase" in row.keys() and row["phase"] else "requirements",
+            project_id=row["project_id"] if _row_has_key(row, "project_id") and row["project_id"] else None,
+            issue_id=row["issue_id"] if _row_has_key(row, "issue_id") and row["issue_id"] else None,
+            phase=row["phase"] if _row_has_key(row, "phase") and row["phase"] else "requirements",
             title=row["title"],
             prompt=row["prompt"],
-            role=row["role"] if "role" in row.keys() and row["role"] else "general",
+            role=row["role"] if _row_has_key(row, "role") and row["role"] else "general",
             executor=row["executor"] if row["executor"] else "codex",
-            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
-            model=row["model"] if "model" in row.keys() and row["model"] else None,
+            provider=row["provider"] if _row_has_key(row, "provider") and row["provider"] else None,
+            model=row["model"] if _row_has_key(row, "model") and row["model"] else None,
             status=row["status"],
             result=row["result"],
-            result_json=row["result_json"] if "result_json" in row.keys() and row["result_json"] else None,
+            result_json=row["result_json"] if _row_has_key(row, "result_json") and row["result_json"] else None,
             parent_task_id=row["parent_task_id"] if row["parent_task_id"] else None,
-            task_kind=row["task_kind"] if "task_kind" in row.keys() and row["task_kind"] else "normal",
-            blocked_by_help_id=row["blocked_by_help_id"] if "blocked_by_help_id" in row.keys() and row["blocked_by_help_id"] else None,
-            workspace_path=row["workspace_path"] if "workspace_path" in row.keys() and row["workspace_path"] else None,
-            git_branch=row["git_branch"] if "git_branch" in row.keys() and row["git_branch"] else None,
-            git_base_branch=row["git_base_branch"] if "git_base_branch" in row.keys() and row["git_base_branch"] else None,
-            git_worktree_path=row["git_worktree_path"] if "git_worktree_path" in row.keys() and row["git_worktree_path"] else None,
-            git_merge_status=row["git_merge_status"] if "git_merge_status" in row.keys() and row["git_merge_status"] else "open",
-            git_last_commit_sha=row["git_last_commit_sha"] if "git_last_commit_sha" in row.keys() and row["git_last_commit_sha"] else None,
-            resume_session_id=row["resume_session_id"] if "resume_session_id" in row.keys() and row["resume_session_id"] else None,
-            resume_message_id=row["resume_message_id"] if "resume_message_id" in row.keys() and row["resume_message_id"] else None,
-            last_execution_process_id=row["last_execution_process_id"] if "last_execution_process_id" in row.keys() and row["last_execution_process_id"] else None,
-            sequence_index=row["sequence_index"] if "sequence_index" in row.keys() else None,
-            sequence_group=row["sequence_group"] if "sequence_group" in row.keys() else None,
-            review_comment=row["review_comment"] if "review_comment" in row.keys() else None,
-            workflow_node_id=row["workflow_node_id"] if "workflow_node_id" in row.keys() and row["workflow_node_id"] else None,
+            task_kind=row["task_kind"] if _row_has_key(row, "task_kind") and row["task_kind"] else "normal",
+            blocked_by_help_id=row["blocked_by_help_id"] if _row_has_key(row, "blocked_by_help_id") and row["blocked_by_help_id"] else None,
+            workspace_path=row["workspace_path"] if _row_has_key(row, "workspace_path") and row["workspace_path"] else None,
+            git_branch=row["git_branch"] if _row_has_key(row, "git_branch") and row["git_branch"] else None,
+            git_base_branch=row["git_base_branch"] if _row_has_key(row, "git_base_branch") and row["git_base_branch"] else None,
+            git_worktree_path=row["git_worktree_path"] if _row_has_key(row, "git_worktree_path") and row["git_worktree_path"] else None,
+            git_merge_status=row["git_merge_status"] if _row_has_key(row, "git_merge_status") and row["git_merge_status"] else "open",
+            git_last_commit_sha=row["git_last_commit_sha"] if _row_has_key(row, "git_last_commit_sha") and row["git_last_commit_sha"] else None,
+            resume_session_id=row["resume_session_id"] if _row_has_key(row, "resume_session_id") and row["resume_session_id"] else None,
+            resume_message_id=row["resume_message_id"] if _row_has_key(row, "resume_message_id") and row["resume_message_id"] else None,
+            last_execution_process_id=row["last_execution_process_id"] if _row_has_key(row, "last_execution_process_id") and row["last_execution_process_id"] else None,
+            trace_id=row["trace_id"] if _row_has_key(row, "trace_id") and row["trace_id"] else None,
+            span_id=row["span_id"] if _row_has_key(row, "span_id") and row["span_id"] else None,
+            parent_span_id=row["parent_span_id"] if _row_has_key(row, "parent_span_id") and row["parent_span_id"] else None,
+            sequence_index=row["sequence_index"] if _row_has_key(row, "sequence_index") else None,
+            sequence_group=row["sequence_group"] if _row_has_key(row, "sequence_group") else None,
+            review_comment=row["review_comment"] if _row_has_key(row, "review_comment") else None,
+            workflow_node_id=row["workflow_node_id"] if _row_has_key(row, "workflow_node_id") and row["workflow_node_id"] else None,
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
@@ -1342,7 +1394,7 @@ class SQLiteStore:
         session_id: str | None = None,
         issue_id: str | None = None,
         project_id: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """List tasks, optionally filtered by session_id."""
         self._ensure_db()
         conn = self._get_conn()
@@ -1352,9 +1404,11 @@ class SQLiteStore:
             "parent_task_id, task_kind, blocked_by_help_id, workspace_path, "
             "git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, "
             "resume_session_id, resume_message_id, last_execution_process_id, "
+            "trace_id, span_id, parent_span_id, "
             "sequence_index, sequence_group, review_comment, workflow_node_id, created_at, updated_at FROM codex_tasks"
         )
-        clauses, params = [], []
+        clauses: list[str] = []
+        params: list[object] = []
         if session_id:
             clauses.append("session_id = ?")
             params.append(session_id)
@@ -1369,7 +1423,7 @@ class SQLiteStore:
         conn.close()
         return [dict(r) for r in rows]
 
-    def save_help_request(self, help_request: HelpRequest):
+    def save_help_request(self, help_request: HelpRequest) -> None:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1409,7 +1463,6 @@ class SQLiteStore:
         conn.close()
         if not row:
             return None
-        continuation_payload = json.loads(row["continuation_payload"]) if row["continuation_payload"] else None
         return HelpRequest(
             id=row["id"],
             workspace_id=row["workspace_id"],
@@ -1422,7 +1475,7 @@ class SQLiteStore:
             context_summary=row["context_summary"],
             status=row["status"],
             error_message=row["error_message"],
-            continuation_payload=continuation_payload,
+            continuation_payload=_json_object(row["continuation_payload"]),
             created_at=self._parse_datetime(row["created_at"]),
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
@@ -1460,7 +1513,7 @@ class SQLiteStore:
                 context_summary=row["context_summary"],
                 status=row["status"],
                 error_message=row["error_message"],
-                continuation_payload=json.loads(row["continuation_payload"]) if row["continuation_payload"] else None,
+                continuation_payload=_json_object(row["continuation_payload"]),
                 created_at=self._parse_datetime(row["created_at"]),
                 started_at=self._parse_datetime(row["started_at"]),
                 completed_at=self._parse_datetime(row["completed_at"]),
@@ -1470,7 +1523,7 @@ class SQLiteStore:
             for row in rows
         ]
 
-    def delete_codex_task(self, task_id: str):
+    def delete_codex_task(self, task_id: str) -> None:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1480,11 +1533,12 @@ class SQLiteStore:
         conn.execute("DELETE FROM codex_task_messages WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM execution_processes WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM log_events WHERE task_id = ?", (task_id,))
+        conn.execute("DELETE FROM agent_call_traces WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM codex_tasks WHERE id = ?", (task_id,))
         conn.commit()
         conn.close()
 
-    def save_codex_task_message(self, message: CodexTaskMessage):
+    def save_codex_task_message(self, message: CodexTaskMessage) -> None:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1524,7 +1578,7 @@ class SQLiteStore:
             CodexTaskMessage(
                 id=r["id"],
                 task_id=r["task_id"],
-                execution_process_id=r["execution_process_id"] if "execution_process_id" in r.keys() else None,
+                execution_process_id=r["execution_process_id"] if _row_has_key(r, "execution_process_id") else None,
                 role=r["role"],
                 content=r["content"],
                 created_at=self._parse_datetime(r["created_at"]),
@@ -1532,7 +1586,7 @@ class SQLiteStore:
             for r in rows
         ]
 
-    def reset(self):
+    def reset(self) -> None:
         """Delete all data from all tables. Used by tests to isolate each test case."""
         conn = self._get_conn()
         for table in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
@@ -1542,15 +1596,17 @@ class SQLiteStore:
             # Skip FTS5 virtual table shadow tables to prevent corruption
             if name.startswith(("issues_fts_", "artifacts_fts_")):
                 continue
-            conn.execute(f"DELETE FROM {name}")
+            quoted_name = _quote_sqlite_identifier(name)
+            # Identifier is validated by _quote_sqlite_identifier.
+            conn.execute(f"DELETE FROM {quoted_name}")  # nosec B608
         conn.commit()
         conn.close()
 
-    def append_log_event(self, event: LogEvent):
+    def append_log_event(self, event: LogEvent) -> None:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT INTO log_events (id, session_id, stream, content, task_id, execution_process_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO log_events (id, session_id, stream, content, task_id, execution_process_id, trace_id, span_id, parent_span_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 event.id,
                 event.session_id,
@@ -1558,6 +1614,9 @@ class SQLiteStore:
                 event.content,
                 event.task_id,
                 event.execution_process_id,
+                event.trace_id,
+                event.span_id,
+                event.parent_span_id,
                 self._format_datetime(event.created_at),
             ),
         )
@@ -1575,25 +1634,32 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        order = "DESC" if reverse else "ASC"
         if execution_process_id and task_id:
             rows = conn.execute(
-                f"SELECT * FROM log_events WHERE session_id = ? AND task_id = ? AND execution_process_id = ? ORDER BY created_at {order} LIMIT ?",
+                _log_events_query(
+                    has_task_id=True, has_execution_process_id=True, reverse=reverse
+                ),
                 (session_id, task_id, execution_process_id, limit),
             ).fetchall()
         elif execution_process_id:
             rows = conn.execute(
-                f"SELECT * FROM log_events WHERE session_id = ? AND execution_process_id = ? ORDER BY created_at {order} LIMIT ?",
+                _log_events_query(
+                    has_task_id=False, has_execution_process_id=True, reverse=reverse
+                ),
                 (session_id, execution_process_id, limit),
             ).fetchall()
         elif task_id:
             rows = conn.execute(
-                f"SELECT * FROM log_events WHERE session_id = ? AND task_id = ? ORDER BY created_at {order} LIMIT ?",
+                _log_events_query(
+                    has_task_id=True, has_execution_process_id=False, reverse=reverse
+                ),
                 (session_id, task_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                f"SELECT * FROM log_events WHERE session_id = ? ORDER BY created_at {order} LIMIT ?",
+                _log_events_query(
+                    has_task_id=False, has_execution_process_id=False, reverse=reverse
+                ),
                 (session_id, limit),
             ).fetchall()
         conn.close()
@@ -1603,8 +1669,11 @@ class SQLiteStore:
                 session_id=r["session_id"],
                 stream=r["stream"],
                 content=r["content"],
-                task_id=r["task_id"] if "task_id" in r.keys() else None,
-                execution_process_id=r["execution_process_id"] if "execution_process_id" in r.keys() else None,
+                task_id=r["task_id"] if _row_has_key(r, "task_id") else None,
+                execution_process_id=r["execution_process_id"] if _row_has_key(r, "execution_process_id") else None,
+                trace_id=r["trace_id"] if _row_has_key(r, "trace_id") and r["trace_id"] else None,
+                span_id=r["span_id"] if _row_has_key(r, "span_id") and r["span_id"] else None,
+                parent_span_id=r["parent_span_id"] if _row_has_key(r, "parent_span_id") and r["parent_span_id"] else None,
                 created_at=self._parse_datetime(r["created_at"]),
             )
             for r in rows
@@ -1612,7 +1681,7 @@ class SQLiteStore:
 
     # --- ExecutionProcess ---
 
-    def save_execution_process(self, process: ExecutionProcess):
+    def save_execution_process(self, process: ExecutionProcess) -> None:
         """Create or update an ExecutionProcess record."""
         self._ensure_db()
         conn = self._get_conn()
@@ -1645,15 +1714,15 @@ class SQLiteStore:
             session_id=row["session_id"],
             status=row["status"],
             exit_code=row["exit_code"],
-            executor=row["executor"] if "executor" in row.keys() and row["executor"] else None,
-            provider=row["provider"] if "provider" in row.keys() and row["provider"] else None,
-            model=row["model"] if "model" in row.keys() and row["model"] else None,
-            input_tokens=row["input_tokens"] if "input_tokens" in row.keys() else None,
-            output_tokens=row["output_tokens"] if "output_tokens" in row.keys() else None,
-            cache_read_tokens=row["cache_read_tokens"] if "cache_read_tokens" in row.keys() else None,
-            total_cost_usd=row["total_cost_usd"] if "total_cost_usd" in row.keys() else None,
-            kind=row["kind"] if "kind" in row.keys() and row["kind"] else "initial",
-            triggering_message_id=row["triggering_message_id"] if "triggering_message_id" in row.keys() else None,
+            executor=row["executor"] if _row_has_key(row, "executor") and row["executor"] else None,
+            provider=row["provider"] if _row_has_key(row, "provider") and row["provider"] else None,
+            model=row["model"] if _row_has_key(row, "model") and row["model"] else None,
+            input_tokens=row["input_tokens"] if _row_has_key(row, "input_tokens") else None,
+            output_tokens=row["output_tokens"] if _row_has_key(row, "output_tokens") else None,
+            cache_read_tokens=row["cache_read_tokens"] if _row_has_key(row, "cache_read_tokens") else None,
+            total_cost_usd=row["total_cost_usd"] if _row_has_key(row, "total_cost_usd") else None,
+            kind=row["kind"] if _row_has_key(row, "kind") and row["kind"] else "initial",
+            triggering_message_id=row["triggering_message_id"] if _row_has_key(row, "triggering_message_id") else None,
             started_at=self._parse_datetime(row["started_at"]),
             completed_at=self._parse_datetime(row["completed_at"]),
             created_at=self._parse_datetime(row["created_at"]),
@@ -1692,15 +1761,15 @@ class SQLiteStore:
                 session_id=r["session_id"],
                 status=r["status"],
                 exit_code=r["exit_code"],
-                executor=r["executor"] if "executor" in r.keys() and r["executor"] else None,
-                provider=r["provider"] if "provider" in r.keys() and r["provider"] else None,
-                model=r["model"] if "model" in r.keys() and r["model"] else None,
-                input_tokens=r["input_tokens"] if "input_tokens" in r.keys() else None,
-                output_tokens=r["output_tokens"] if "output_tokens" in r.keys() else None,
-                cache_read_tokens=r["cache_read_tokens"] if "cache_read_tokens" in r.keys() else None,
-                total_cost_usd=r["total_cost_usd"] if "total_cost_usd" in r.keys() else None,
-                kind=r["kind"] if "kind" in r.keys() and r["kind"] else "initial",
-                triggering_message_id=r["triggering_message_id"] if "triggering_message_id" in r.keys() else None,
+                executor=r["executor"] if _row_has_key(r, "executor") and r["executor"] else None,
+                provider=r["provider"] if _row_has_key(r, "provider") and r["provider"] else None,
+                model=r["model"] if _row_has_key(r, "model") and r["model"] else None,
+                input_tokens=r["input_tokens"] if _row_has_key(r, "input_tokens") else None,
+                output_tokens=r["output_tokens"] if _row_has_key(r, "output_tokens") else None,
+                cache_read_tokens=r["cache_read_tokens"] if _row_has_key(r, "cache_read_tokens") else None,
+                total_cost_usd=r["total_cost_usd"] if _row_has_key(r, "total_cost_usd") else None,
+                kind=r["kind"] if _row_has_key(r, "kind") and r["kind"] else "initial",
+                triggering_message_id=r["triggering_message_id"] if _row_has_key(r, "triggering_message_id") else None,
                 started_at=self._parse_datetime(r["started_at"]),
                 completed_at=self._parse_datetime(r["completed_at"]),
                 created_at=self._parse_datetime(r["created_at"]),
@@ -1711,7 +1780,7 @@ class SQLiteStore:
 
     def list_execution_process_runtime_rows(self, session_id: str) -> list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]]:
         processes = self.list_execution_processes(session_id=session_id)
-        rows = []
+        rows: list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]] = []
         for process in processes:
             task = self.load_codex_task(process.task_id)
             messages = self.list_codex_task_messages(process.task_id, execution_process_id=process.id)
@@ -1719,7 +1788,7 @@ class SQLiteStore:
             rows.append((process, task, messages, logs))
         return rows
 
-    def update_execution_process_status(self, process_id: str, status: str, exit_code: int | None = None, completed_at: datetime | None = None):
+    def update_execution_process_status(self, process_id: str, status: str, exit_code: int | None = None, completed_at: datetime | None = None) -> None:
         """Update the status of an ExecutionProcess."""
         self._ensure_db()
         conn = self._get_conn()
@@ -1733,7 +1802,7 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def update_execution_process_usage(self, process_id: str, input_tokens: int | None = None, output_tokens: int | None = None, cache_read_tokens: int | None = None, total_cost_usd: float | None = None):
+    def update_execution_process_usage(self, process_id: str, input_tokens: int | None = None, output_tokens: int | None = None, cache_read_tokens: int | None = None, total_cost_usd: float | None = None) -> None:
         """Update the token usage and cost of an ExecutionProcess."""
         self._ensure_db()
         conn = self._get_conn()
@@ -1749,7 +1818,7 @@ class SQLiteStore:
     # --- Conductor State ---
 
     def save_conductor_state(self, state: "ConductorState") -> None:
-        from app.domain.models import ConductorState  # noqa: F401 (type hint import)
+        from app.domain.models import ConductorState
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1790,7 +1859,7 @@ class SQLiteStore:
         )
 
     def save_project_conductor_state(self, state: "ProjectConductorState") -> None:
-        from app.domain.models import ProjectConductorState  # noqa: F401
+        from app.domain.models import ProjectConductorState
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1837,31 +1906,30 @@ class SQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def _row_to_conductor_task(self, row) -> "ConductorTask":
+    def _row_to_conductor_task(self, row: sqlite3.Row) -> "ConductorTask":
         from app.domain.models import ConductorTask
 
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = _json_object(row["payload_json"]) or {}
         except json.JSONDecodeError:
             payload = {}
-        keys = row.keys()
         return ConductorTask(
             id=row["id"],
             project_id=row["project_id"],
             task_kind=row["task_kind"],
-            payload=payload if isinstance(payload, dict) else {},
+            payload=payload,
             issue_id=row["issue_id"],
             status=row["status"],
             result_json=row["result_json"],
-            lease_owner=row["lease_owner"] if "lease_owner" in keys and row["lease_owner"] else None,
-            heartbeat_at=self._parse_datetime(row["heartbeat_at"] if "heartbeat_at" in keys else None),
-            lease_expires_at=self._parse_datetime(row["lease_expires_at"] if "lease_expires_at" in keys else None),
+            lease_owner=row["lease_owner"] if _row_has_key(row, "lease_owner") and row["lease_owner"] else None,
+            heartbeat_at=self._parse_datetime(row["heartbeat_at"] if _row_has_key(row, "heartbeat_at") else None),
+            lease_expires_at=self._parse_datetime(row["lease_expires_at"] if _row_has_key(row, "lease_expires_at") else None),
             created_at=self._parse_datetime(row["created_at"]),
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
     def save_conductor_task(self, task: "ConductorTask") -> None:
-        from app.domain.models import ConductorTask  # noqa: F401
+        from app.domain.models import ConductorTask
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -1932,7 +2000,7 @@ class SQLiteStore:
         return [self._row_to_conductor_task(row) for row in rows]
 
     def save_conductor_turn(self, turn: "ConductorTurn") -> None:
-        from app.domain.models import ConductorTurn  # noqa: F401
+        from app.domain.models import ConductorTurn
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -2064,13 +2132,13 @@ class SQLiteStore:
                 kind=row["kind"],
                 payload_json=row["payload_json"] or "{}",
                 created_at=self._parse_datetime(row["created_at"]),
-                consumed_at=self._parse_datetime(row["consumed_at"]) if "consumed_at" in row.keys() else None,
+                consumed_at=self._parse_datetime(row["consumed_at"]) if _row_has_key(row, "consumed_at") else None,
             )
             for row in rows
         ]
 
     def save_conductor_state_log(self, entry: "ConductorStateLog") -> None:
-        from app.domain.models import ConductorStateLog  # noqa: F401
+        from app.domain.models import ConductorStateLog
 
         self._ensure_db()
         conn = self._get_conn()
@@ -2133,15 +2201,16 @@ class SQLiteStore:
         ]
 
     def save_audit_log(self, entry: "AuditLog") -> None:
-        from app.domain.models import AuditLog  # noqa: F401
+        from app.domain.models import AuditLog
 
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
             """INSERT OR REPLACE INTO audit_log
                (id, created_at, category, actor, issue_id, task_id, conductor_task_id,
-                execution_process_id, correlation_id, status, duration_ms, payload_json, error)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                execution_process_id, correlation_id, trace_id, span_id, parent_span_id,
+                status, duration_ms, payload_json, error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 entry.id,
                 self._format_datetime(entry.created_at or datetime.now()),
@@ -2152,6 +2221,9 @@ class SQLiteStore:
                 entry.conductor_task_id,
                 entry.execution_process_id,
                 entry.correlation_id,
+                entry.trace_id,
+                entry.span_id,
+                entry.parent_span_id,
                 entry.status,
                 entry.duration_ms,
                 entry.payload_json,
@@ -2160,6 +2232,130 @@ class SQLiteStore:
         )
         conn.commit()
         conn.close()
+
+    def load_audit_log(self, audit_log_id: str) -> "AuditLog" | None:
+        from app.domain.models import AuditLog
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM audit_log WHERE id = ?", (audit_log_id,)).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return AuditLog(
+            id=row["id"],
+            created_at=self._parse_datetime(row["created_at"]),
+            category=row["category"],
+            actor=row["actor"],
+            issue_id=row["issue_id"],
+            task_id=row["task_id"],
+            conductor_task_id=row["conductor_task_id"],
+            execution_process_id=row["execution_process_id"],
+            correlation_id=row["correlation_id"],
+            trace_id=row["trace_id"] if _row_has_key(row, "trace_id") else None,
+            span_id=row["span_id"] if _row_has_key(row, "span_id") else None,
+            parent_span_id=row["parent_span_id"] if _row_has_key(row, "parent_span_id") else None,
+            status=row["status"],
+            duration_ms=int(row["duration_ms"]) if row["duration_ms"] is not None else None,
+            payload_json=row["payload_json"],
+            error=row["error"],
+        )
+
+    def save_agent_call_trace(self, trace: AgentCallTrace) -> None:
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO agent_call_traces
+               (id, audit_log_id, trace_id, span_id, parent_span_id, issue_id, task_id,
+                execution_process_id, kind, title, request_json, response_json,
+                request_preview, response_preview, metadata_json, is_truncated, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                trace.id,
+                trace.audit_log_id,
+                trace.trace_id,
+                trace.span_id,
+                trace.parent_span_id,
+                trace.issue_id,
+                trace.task_id,
+                trace.execution_process_id,
+                trace.kind,
+                trace.title,
+                trace.request_json,
+                trace.response_json,
+                trace.request_preview,
+                trace.response_preview,
+                trace.metadata_json,
+                1 if trace.is_truncated else 0,
+                self._format_datetime(trace.created_at or datetime.now()),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def _agent_call_trace_from_row(self, row: sqlite3.Row) -> AgentCallTrace:
+        return AgentCallTrace(
+            id=row["id"],
+            audit_log_id=row["audit_log_id"],
+            trace_id=row["trace_id"],
+            span_id=row["span_id"],
+            parent_span_id=row["parent_span_id"],
+            issue_id=row["issue_id"],
+            task_id=row["task_id"],
+            execution_process_id=row["execution_process_id"],
+            kind=row["kind"],
+            title=row["title"],
+            request_json=row["request_json"],
+            response_json=row["response_json"],
+            request_preview=row["request_preview"],
+            response_preview=row["response_preview"],
+            metadata_json=row["metadata_json"] or "{}",
+            is_truncated=bool(row["is_truncated"]),
+            created_at=self._parse_datetime(row["created_at"]),
+        )
+
+    def load_agent_call_trace(self, audit_log_id: str) -> AgentCallTrace | None:
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM agent_call_traces WHERE audit_log_id = ? ORDER BY created_at DESC LIMIT 1",
+            (audit_log_id,),
+        ).fetchone()
+        conn.close()
+        return self._agent_call_trace_from_row(row) if row is not None else None
+
+    def list_agent_call_traces(
+        self,
+        *,
+        trace_id: str | None = None,
+        task_id: str | None = None,
+        execution_process_id: str | None = None,
+        limit: int = 100,
+    ) -> list[AgentCallTrace]:
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        clauses: list[str] = []
+        params: list[object] = []
+        if trace_id:
+            clauses.append("trace_id = ?")
+            params.append(trace_id)
+        if task_id:
+            clauses.append("task_id = ?")
+            params.append(task_id)
+        if execution_process_id:
+            clauses.append("execution_process_id = ?")
+            params.append(execution_process_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, min(limit, 500)))
+        rows = conn.execute(
+            f"SELECT * FROM agent_call_traces {where} ORDER BY created_at ASC LIMIT ?",  # nosec B608
+            tuple(params),
+        ).fetchall()
+        conn.close()
+        return [self._agent_call_trace_from_row(row) for row in rows]
 
     def list_audit_logs(
         self,
@@ -2208,6 +2404,9 @@ class SQLiteStore:
                 conductor_task_id=row["conductor_task_id"],
                 execution_process_id=row["execution_process_id"],
                 correlation_id=row["correlation_id"],
+                trace_id=row["trace_id"],
+                span_id=row["span_id"],
+                parent_span_id=row["parent_span_id"],
                 status=row["status"],
                 duration_ms=int(row["duration_ms"]) if row["duration_ms"] is not None else None,
                 payload_json=row["payload_json"],
@@ -2217,7 +2416,7 @@ class SQLiteStore:
         ]
 
     def save_project_memory_embedding(self, memory: "ProjectMemoryEmbedding") -> None:
-        from app.domain.models import ProjectMemoryEmbedding  # noqa: F401
+        from app.domain.models import ProjectMemoryEmbedding
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
@@ -2243,7 +2442,7 @@ class SQLiteStore:
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
         sql = "SELECT * FROM project_memory_embeddings WHERE project_id = ? ORDER BY created_at ASC"
-        args: list = [project_id]
+        args: list[object] = [project_id]
         if limit is not None:
             sql += " LIMIT ?"
             args.append(limit)
@@ -2263,7 +2462,7 @@ class SQLiteStore:
         ]
 
     def save_self_improvement_proposal(self, proposal: "SelfImprovementProposal") -> None:
-        from app.domain.models import SelfImprovementProposal  # noqa: F401
+        from app.domain.models import SelfImprovementProposal
 
         self._ensure_db()
         conn = self._get_conn()
@@ -2327,10 +2526,11 @@ class SQLiteStore:
             clauses.append("status = ?")
             args.append(status)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        # WHERE fragments are built only from fixed column predicates above; values stay parameterized.
         sql = (
             "SELECT id, project_id, issue_id, target_kind, title, recommendation, evidence_json, "
             "severity, confidence, status, fingerprint, created_at, updated_at "
-            f"FROM self_improvement_proposals{where} ORDER BY created_at DESC, id DESC"
+            f"FROM self_improvement_proposals{where} ORDER BY created_at DESC, id DESC"  # nosec B608
         )
         if limit is not None:
             sql += " LIMIT ?"
@@ -2356,9 +2556,137 @@ class SQLiteStore:
             for row in rows
         ]
 
+    def load_self_improvement_proposal(
+        self, proposal_id: str
+    ) -> "SelfImprovementProposal | None":
+        from app.domain.models import SelfImprovementProposal
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, project_id, issue_id, target_kind, title, recommendation, evidence_json, "
+            "severity, confidence, status, fingerprint, created_at, updated_at "
+            "FROM self_improvement_proposals WHERE id = ?",
+            (proposal_id,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return SelfImprovementProposal(
+            id=row["id"],
+            project_id=row["project_id"],
+            issue_id=row["issue_id"],
+            target_kind=row["target_kind"],
+            title=row["title"],
+            recommendation=row["recommendation"],
+            evidence_json=row["evidence_json"] or "[]",
+            severity=row["severity"] or "info",
+            confidence=float(row["confidence"] or 0),
+            status=row["status"] or "proposed",
+            fingerprint=row["fingerprint"],
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    def update_self_improvement_proposal_status(
+        self, proposal_id: str, status: str
+    ) -> "SelfImprovementProposal | None":
+        self._ensure_db()
+        conn = self._get_conn()
+        cur = conn.execute(
+            "UPDATE self_improvement_proposals SET status = ?, updated_at = ? WHERE id = ?",
+            (status, self._format_datetime(datetime.now()), proposal_id),
+        )
+        conn.commit()
+        conn.close()
+        if cur.rowcount == 0:
+            return None
+        return self.load_self_improvement_proposal(proposal_id)
+
+    def save_self_improvement_application_event(
+        self, event: "SelfImprovementApplicationEvent"
+    ) -> None:
+        from app.domain.models import SelfImprovementApplicationEvent
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO self_improvement_application_events
+               (id, proposal_id, project_id, issue_id, target_kind, action, status,
+                path, content_sha256, result_json, error, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event.id,
+                event.proposal_id,
+                event.project_id,
+                event.issue_id,
+                event.target_kind,
+                event.action,
+                event.status,
+                event.path,
+                event.content_sha256,
+                event.result_json or "{}",
+                event.error,
+                self._format_datetime(event.created_at or datetime.now()),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_self_improvement_application_events(
+        self,
+        project_id: str | None = None,
+        proposal_id: str | None = None,
+        limit: int | None = None,
+    ) -> list["SelfImprovementApplicationEvent"]:
+        from app.domain.models import SelfImprovementApplicationEvent
+
+        self._ensure_db()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        clauses: list[str] = []
+        args: list[object] = []
+        if project_id is not None:
+            clauses.append("project_id = ?")
+            args.append(project_id)
+        if proposal_id is not None:
+            clauses.append("proposal_id = ?")
+            args.append(proposal_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        # WHERE fragments are built only from fixed column predicates above; values stay parameterized.
+        sql = (
+            "SELECT id, proposal_id, project_id, issue_id, target_kind, action, status, "
+            "path, content_sha256, result_json, error, created_at "
+            f"FROM self_improvement_application_events{where} "  # nosec B608
+            "ORDER BY created_at DESC, id DESC"
+        )
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(max(1, min(int(limit), 100)))
+        rows = conn.execute(sql, tuple(args)).fetchall()
+        conn.close()
+        return [
+            SelfImprovementApplicationEvent(
+                id=row["id"],
+                proposal_id=row["proposal_id"],
+                project_id=row["project_id"],
+                issue_id=row["issue_id"],
+                target_kind=row["target_kind"],
+                action=row["action"],
+                status=row["status"],
+                path=row["path"],
+                content_sha256=row["content_sha256"],
+                result_json=row["result_json"] or "{}",
+                error=row["error"],
+                created_at=self._parse_datetime(row["created_at"]),
+            )
+            for row in rows
+        ]
+
     # --- Runtime Catalog ---
 
-    def save_runtime_catalog(self, catalog: "RuntimeCatalog"):
+    def save_runtime_catalog(self, catalog: "RuntimeCatalog") -> None:
         """Save the runtime catalog to the database."""
         self._ensure_db()
         conn = self._get_conn()
@@ -2380,14 +2708,16 @@ class SQLiteStore:
         if not row:
             return None
         try:
-            data = json.loads(row["data"])
-            return RuntimeCatalog(**data)
+            data = _json_object(row["data"])
+            if data is None:
+                return None
+            return RuntimeCatalog.model_validate(data)
         except (json.JSONDecodeError, TypeError, ValueError):
             return None
 
     # --- Artifact Paths ---
 
-    def save_artifact(self, artifact: dict) -> None:
+    def save_artifact(self, artifact: dict[str, object]) -> None:
         """Save artifact path to database. Fields: id, issue_id, task_id, name, path, kind, created_at."""
         self._ensure_db()
         conn = self._get_conn()
@@ -2407,15 +2737,13 @@ class SQLiteStore:
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database error saving artifact: %s", e)
-            try:
+            with suppress(sqlite3.Error):
                 conn.rollback()
-            except sqlite3.Error:
-                pass
             raise
         finally:
             conn.close()
 
-    def list_artifacts(self, issue_id: str) -> list[dict]:
+    def list_artifacts(self, issue_id: str) -> list[dict[str, object]]:
         """List all artifacts for an issue, ordered by created_at."""
         self._ensure_db()
         conn = self._get_conn()

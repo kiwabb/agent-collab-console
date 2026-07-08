@@ -12,14 +12,17 @@ import json
 import logging
 import time
 import traceback
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, Union  # noqa: UP035
+from typing import Awaitable, Callable, Protocol, Union, cast  # noqa: UP035
 from uuid import uuid4
 
 from app.application import timeouts
 from app.application.budget_service import (
+    BudgetStore,
+    IssueBudgetStatus,
     budget_steering_event,
     collect_candidate_model_prices,
     compute_issue_budget_status,
@@ -38,32 +41,79 @@ from app.application.conductor_policy import (
     decide_conductor_policy,
     render_conductor_policy_hint,
 )
-from app.application.phase_duration_estimator import get_phase_duration_estimator
+from app.application.github_pr_followup import EventBusLike
+from app.application.phase_duration_estimator import (
+    PhaseDurationEstimator,
+    get_phase_duration_estimator,
+)
 from app.application.conductor_llm import call_conductor_llm, resolve_conductor_llm_context
-from app.application.project_conductor import ProjectConductor
-from app.application.project_memory_service import record_project_memory
-from app.application.runtime_catalog_service import RuntimeCatalogService
-from app.application.self_improvement_service import record_issue_self_improvement
+from app.application.project_conductor import ProjectConductor, ProjectConductorStore
+from app.application.project_memory_service import ProjectMemoryStore, record_project_memory
+from app.application.runtime_catalog_service import RuntimeCatalogService, RuntimeCatalogStore
+from app.application.self_improvement_service import (
+    _ProposalStore as SelfImprovementProposalStore,
+    record_issue_self_improvement,
+)
 from app.application.task_statuses import (
     TASK_FAILURE_STATUSES,
     TASK_SUCCESS_STATUSES,
     is_task_failure_status,
     normalize_task_status,
 )
-from app.domain.models import ConductorStateLog, ConductorTask, ConductorTurn
+from app.application.task_dispatcher import TaskDispatcherFn
+from app.domain.models import (
+    CodexIssue,
+    ConductorStateLog,
+    ConductorTask,
+    ConductorTurn,
+    ConductorTurnKind,
+    Project,
+    WorkflowGraph,
+)
+from app.json_safety import JsonObject, object_dict
 
 
-ToolCallable = Callable[[dict[str, Any]], Union[Awaitable[Any], Any]]  # noqa: UP007
+ToolCallable = Callable[[JsonObject], Union[Awaitable[object], object]]  # noqa: UP007
 LLMCallable = Callable[
-    [list[dict[str, Any]], list[dict[str, Any]]],
-    Union[Awaitable[dict[str, Any]], dict[str, Any]],  # noqa: UP007
+    [list[JsonObject], list[JsonObject]],
+    Union[Awaitable[JsonObject], JsonObject],  # noqa: UP007
 ]
 TurnRecorder = Callable[..., Union[Awaitable[None], None]]  # noqa: UP007
 InboxDrainer = Callable[[], Union[Awaitable[list[str]], list[str]]]  # noqa: UP007
 PauseGate = Callable[[], Union[Awaitable[None], None]]  # noqa: UP007
 PausePredicate = Callable[[], Union[Awaitable[bool], bool]]  # noqa: UP007
-InflightTaskSetter = Callable[[asyncio.Task | None], Union[Awaitable[None], None]]  # noqa: UP007
+InflightTaskSetter = Callable[[asyncio.Task[JsonObject] | None], Union[Awaitable[None], None]]  # noqa: UP007
 TokenDeltaRecorder = Callable[..., Union[Awaitable[None], None]]  # noqa: UP007
+
+
+class _ConductorTaskSaver(Protocol):
+    def save_conductor_task(self, task: ConductorTask) -> Awaitable[None]: ...
+
+
+class _IssueSaver(Protocol):
+    def save_codex_issue(self, issue: CodexIssue) -> Awaitable[None]: ...
+
+
+class _IssueLoader(Protocol):
+    def load_codex_issue(self, issue_id: str) -> Awaitable[CodexIssue | None]: ...
+
+
+class _LatestConductorTaskLoader(Protocol):
+    def load_latest_conductor_task_for_issue(
+        self, issue_id: str
+    ) -> Awaitable[ConductorTask | None]: ...
+
+
+class _WorkflowGraphLoader(Protocol):
+    def load_workflow_graph_for_issue(self, issue_id: str) -> Awaitable[WorkflowGraph | None]: ...
+
+
+class _WorkflowGraphSaver(Protocol):
+    def save_workflow_graph(self, graph: WorkflowGraph) -> Awaitable[None]: ...
+
+
+class _ProjectLoader(Protocol):
+    def load_project(self, project_id: str) -> Awaitable[Project | None]: ...
 
 
 def conductor_language_directive(output_language: str | None) -> str:
@@ -119,7 +169,7 @@ def detect_text_language(*texts: str | None) -> str:
 
 def build_issue_conductor_prompt(
     *,
-    issue,
+    issue: CodexIssue,
     project_context: str,
     budget_context: str,
     language_directive: str,
@@ -214,8 +264,8 @@ HEARTBEAT_DEGRADED_ALERT_AFTER = 3
 class ConductorLoopResult:
     status: str
     final_text: str
-    messages: list[dict[str, Any]]
-    tool_events: list[dict[str, Any]] = field(default_factory=list)
+    messages: list[JsonObject]
+    tool_events: list[JsonObject] = field(default_factory=list)
     turn_count: int = 0
 
 
@@ -233,7 +283,7 @@ def _normalize_conductor_status(status: str | None) -> str:
     if normalized in _CONDUCTOR_SUCCESS_STATUSES:
         return "done"
     if normalized in _CONDUCTOR_FAILURE_STATUSES:
-        return normalized
+        return str(normalized)
     return "failed"
 
 
@@ -275,18 +325,18 @@ async def _run_heartbeat_pulse(
                 exc,
             )
             if consecutive_failures == alert_after and on_degraded is not None:
-                try:  # noqa: SIM105
+                try:
                     await on_degraded(consecutive_failures, exc)
                 except Exception:  # noqa: BLE001, RUF100
-                    pass
+                    log.debug("conductor heartbeat degradation callback failed", exc_info=True)
 
 
 async def run_conductor_loop(
     *,
     prompt: str,
     llm: LLMCallable,
-    tools: dict[str, ToolCallable],
-    tool_definitions: list[dict[str, Any]],
+    tools: Mapping[str, ToolCallable],
+    tool_definitions: list[JsonObject],
     max_turns: int = 8,
     max_wall_s: float | None = None,
     turn_recorder: TurnRecorder | None = None,
@@ -303,8 +353,8 @@ async def run_conductor_loop(
     so without this a pathological issue could run for tens of hours. When the
     ceiling is crossed the loop seals as ``status="max_wall"``.
     """
-    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
-    tool_events: list[dict[str, Any]] = []
+    messages: list[JsonObject] = [{"role": "user", "content": prompt}]
+    tool_events: list[JsonObject] = []
     final_text = ""
     loop_started = time.monotonic()
 
@@ -445,6 +495,7 @@ async def run_conductor_loop(
             str(tool_use.get("name") or "") == "request_user_clarification"
             for tool_use in tool_uses
         )
+        events: list[JsonObject]
         if clarification_mixed_with_work:
             events = [
                 _tool_protocol_error(
@@ -457,12 +508,12 @@ async def run_conductor_loop(
                 for tool_use in tool_uses
             ]
         elif finalize_mixed_with_work:
-            events = [None for _ in tool_uses]
-            executable_uses: list[dict[str, Any]] = []
+            pending_events: list[JsonObject | None] = [None for _ in tool_uses]
+            executable_uses: list[JsonObject] = []
             executable_indices: list[int] = []
             for idx, tool_use in enumerate(tool_uses):
                 if str(tool_use.get("name") or "") == "finalize_task":
-                    events[idx] = _tool_protocol_error(
+                    pending_events[idx] = _tool_protocol_error(
                         tool_use,
                         (
                             "finalize_task cannot be used in the same turn as other tools; "
@@ -474,12 +525,12 @@ async def run_conductor_loop(
                     executable_uses.append(tool_use)
             executable_events = await _execute_tool_uses(executable_uses, tools)
             for idx, event in zip(executable_indices, executable_events):  # noqa: B905
-                events[idx] = event
-            events = [event for event in events if event is not None]
+                pending_events[idx] = event
+            events = [event for event in pending_events if event is not None]
         else:
             events = await _execute_tool_uses(tool_uses, tools)
 
-        result_blocks: list[dict[str, Any]] = []
+        result_blocks: list[JsonObject] = []
         for sub_index, event in enumerate(events, start=1):
             tool_events.append(event)
             if event["name"] == "finalize_task" and finalize_mixed_with_work:
@@ -552,7 +603,6 @@ async def run_conductor_loop(
                     tool_events=tool_events,
                     turn_count=turn_index + 1,
                 )
-
         messages.append({"role": "user", "content": result_blocks})
 
     await _record_turn(
@@ -572,9 +622,9 @@ async def run_conductor_loop(
 
 
 async def _execute_tool_uses(
-    tool_uses: list[dict[str, Any]],
-    tools: dict[str, ToolCallable],
-) -> list[dict[str, Any]]:
+    tool_uses: list[JsonObject],
+    tools: Mapping[str, ToolCallable],
+) -> list[JsonObject]:
     """Execute one turn's tool_use blocks, concurrently when there are several.
 
     Each ``_execute_tool_use`` already converts its own failure into an error
@@ -586,7 +636,7 @@ async def _execute_tool_uses(
     return list(await asyncio.gather(*(_execute_tool_use(tu, tools) for tu in tool_uses)))
 
 
-def _tool_protocol_error(tool_use: dict[str, Any], error: str) -> dict[str, Any]:
+def _tool_protocol_error(tool_use: JsonObject, error: str) -> JsonObject:
     tool_input = tool_use.get("input") if isinstance(tool_use.get("input"), dict) else {}
     return {
         "id": str(tool_use.get("id") or ""),
@@ -598,12 +648,13 @@ def _tool_protocol_error(tool_use: dict[str, Any], error: str) -> dict[str, Any]
 
 
 async def _execute_tool_use(
-    tool_use: dict[str, Any],
-    tools: dict[str, ToolCallable],
-) -> dict[str, Any]:
+    tool_use: JsonObject,
+    tools: Mapping[str, ToolCallable],
+) -> JsonObject:
     tool_id = str(tool_use.get("id") or "")
     name = str(tool_use.get("name") or "")
-    tool_input = tool_use.get("input") if isinstance(tool_use.get("input"), dict) else {}
+    tool_input_raw = tool_use.get("input")
+    tool_input = object_dict(tool_input_raw)
     tool = tools.get(name)
     if tool is None:
         return {
@@ -632,34 +683,37 @@ async def _execute_tool_use(
         }
 
 
-def _normalise_content(content: Any) -> list[dict[str, Any]]:
+def _normalise_content(content: object) -> list[JsonObject]:
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
     if isinstance(content, list):
-        return [block for block in content if isinstance(block, dict)]
+        return [object_dict(block) for block in content if isinstance(block, dict)]
     return []
 
 
-def _text_from_content(content: list[dict[str, Any]]) -> str:
+def _text_from_content(content: list[JsonObject]) -> str:
     return "".join(str(block.get("text") or "") for block in content if block.get("type") == "text")
 
 
-async def _maybe_await(value):
+async def _maybe_await[T](value: Awaitable[T] | T) -> T:
     if inspect.isawaitable(value):
-        return await value
+        return await cast(Awaitable[T], value)
     return value
 
 
 async def _call_llm_with_optional_delta(
     llm: LLMCallable,
     *,
-    messages: list[dict[str, Any]],
-    tool_definitions: list[dict[str, Any]],
+    messages: list[JsonObject],
+    tool_definitions: list[JsonObject],
     on_token_delta: TokenDeltaRecorder | None,
-):
+) -> JsonObject:
     params = inspect.signature(llm).parameters
     if "on_token_delta" in params:
-        return await _maybe_await(llm(messages, tool_definitions, on_token_delta=on_token_delta))
+        llm_with_delta = cast(Callable[..., Awaitable[JsonObject] | JsonObject], llm)
+        return await _maybe_await(
+            llm_with_delta(messages, tool_definitions, on_token_delta=on_token_delta)
+        )
     return await _maybe_await(llm(messages, tool_definitions))
 
 
@@ -668,8 +722,8 @@ async def _record_turn(
     *,
     turn_index: int,
     sub_index: int,
-    kind: str,
-    payload: dict[str, Any],
+    kind: ConductorTurnKind,
+    payload: JsonObject,
 ) -> None:
     if turn_recorder is None:
         return
@@ -687,8 +741,8 @@ def _audit_conductor_turn(
     *,
     issue_id: str,
     conductor_task_id: str,
-    kind: str,
-    payload: dict[str, Any],
+    kind: ConductorTurnKind,
+    payload: JsonObject,
 ) -> None:
     """Co-locate a unified audit row alongside the conductor_turns write.
 
@@ -704,15 +758,16 @@ def _audit_conductor_turn(
         conductor_task_id=conductor_task_id,
         kind=kind,
         payload=payload,
+        trace_id=conductor_task_id,
     )
 
 
 async def run_issue_conductor_loop(
-    issue,
+    issue: CodexIssue,
     project_id: str,
-    store,
-    event_bus=None,
-    task_dispatcher_fn=None,
+    store: object,
+    event_bus: EventBusLike | None = None,
+    task_dispatcher_fn: TaskDispatcherFn | None = None,
     recovery_context: str = "",
 ) -> ConductorLoopResult:
     """Entry point for Conductor-driven issue orchestration."""
@@ -739,7 +794,7 @@ async def run_issue_conductor_loop(
         created_at=started_at,
         updated_at=started_at,
     )
-    await store.save_conductor_task(conductor_task)
+    await cast(_ConductorTaskSaver, store).save_conductor_task(conductor_task)
     await pause_registry.register(conductor_task.id)
     from app.application.conductor_session_registry import ConductorSessionRegistry
 
@@ -756,7 +811,7 @@ async def run_issue_conductor_loop(
         try:
             issue.status = "in_progress"
             issue.updated_at = datetime.now()
-            await store.save_codex_issue(issue)
+            await cast(_IssueSaver, store).save_codex_issue(issue)
             await _append_event(
                 event_bus,
                 {
@@ -771,7 +826,7 @@ async def run_issue_conductor_loop(
     estimator = get_phase_duration_estimator(store)
 
     current_turn_index = -1
-    heartbeat_pulse_task: asyncio.Task | None = None
+    heartbeat_pulse_task: asyncio.Task[None] | None = None
 
     async def heartbeat() -> None:
         now = datetime.now()
@@ -779,7 +834,7 @@ async def run_issue_conductor_loop(
         conductor_task.heartbeat_at = now
         conductor_task.lease_expires_at = now + timedelta(seconds=lease_ttl_s)
         conductor_task.updated_at = now
-        await store.save_conductor_task(conductor_task)
+        await cast(_ConductorTaskSaver, store).save_conductor_task(conductor_task)
 
     async def _on_heartbeat_degraded(n: int, exc: Exception) -> None:
         await _append_event(
@@ -805,7 +860,7 @@ async def run_issue_conductor_loop(
         )
 
     async def persist_turn(
-        *, turn_index: int, sub_index: int, kind: str, payload: dict[str, Any]
+        *, turn_index: int, sub_index: int, kind: ConductorTurnKind, payload: JsonObject
     ) -> None:
         nonlocal current_turn_index
         # Non-fatal: the background pulse is the authoritative lease renewer;
@@ -938,9 +993,10 @@ async def run_issue_conductor_loop(
             conductor_task.updated_at = latest_task.updated_at
         elif conductor_task.status == "paused":
             payload = conductor_task.payload if isinstance(conductor_task.payload, dict) else {}
+            resume_detail = payload.get("resume_detail")
             await set_phase(
                 str(payload.get("resume_phase") or "awaiting_llm"),
-                payload.get("resume_detail") if payload.get("resume_detail") else None,
+                resume_detail if isinstance(resume_detail, str) and resume_detail else None,
                 status="running",
             )
 
@@ -951,10 +1007,11 @@ async def run_issue_conductor_loop(
             event_bus=event_bus,
             task_dispatcher_fn=task_dispatcher_fn,
             issue_id=issue.id,
+            conductor_task_id=conductor_task.id,
             on_status=set_phase,
         )
 
-        catalog = await RuntimeCatalogService(store).load_catalog()
+        catalog = await RuntimeCatalogService(cast(RuntimeCatalogStore, store)).load_catalog()
         cllm = resolve_conductor_llm_context(catalog)
         language_directive = ""
         try:
@@ -966,9 +1023,17 @@ async def run_issue_conductor_loop(
                 output_language = detect_text_language(issue.title, issue.description)
             language_directive = conductor_language_directive(output_language)
         except Exception:  # noqa: BLE001, RUF100
-            pass
+            logger.debug(
+                "conductor language directive resolution failed: issue_id=%s",
+                issue.id,
+                exc_info=True,
+            )
 
-        conductor = ProjectConductor(project_id=project_id, store=store, event_bus=event_bus)
+        conductor = ProjectConductor(
+            project_id=project_id,
+            store=cast(ProjectConductorStore, store),
+            event_bus=event_bus,
+        )
         project_context = ""
         try:
             state = await conductor.get_or_create_state()
@@ -984,7 +1049,7 @@ async def run_issue_conductor_loop(
                             str(w) for w in warm[-3:]
                         )
         except Exception:  # noqa: BLE001, RUF100
-            pass
+            logger.debug("conductor project context load failed: issue_id=%s", issue.id, exc_info=True)
 
         # Cost-aware scheduling (PR2 + PR3): make accrued spend + budget visible to
         # the orchestrating brain, and (PR3) steer model choice / wind-down by it.
@@ -996,9 +1061,20 @@ async def run_issue_conductor_loop(
         budget_context = ""
         budget_status = None
         try:
-            budget_status = await compute_issue_budget_status(store, issue)
-            candidates = collect_candidate_model_prices(catalog)
-            budget_context = "\n\n" + render_budget_summary(budget_status, candidates)
+            budget_status = await compute_issue_budget_status(cast(BudgetStore, store), issue)
+            try:
+                candidates = collect_candidate_model_prices(catalog)
+            except Exception:  # noqa: BLE001, RUF100
+                candidates = []
+            prompt_budget_status = IssueBudgetStatus(
+                issue_id=budget_status.issue_id,
+                spent_usd=budget_status.spent_usd,
+                budget_usd=budget_status.budget_usd,
+                budget_source=budget_status.budget_source,
+                soft_warn_ratio=budget_status.soft_warn_ratio,
+                reserved_usd=0.0,
+            )
+            budget_context = "\n\n" + render_budget_summary(prompt_budget_status, candidates)
             steering = budget_steering_event(budget_status)
             if steering is not None:
                 await _append_event(
@@ -1006,7 +1082,7 @@ async def run_issue_conductor_loop(
                     {**steering, "conductor_task_id": conductor_task.id},
                 )
         except Exception:  # noqa: BLE001, RUF100
-            pass
+            logger.debug("conductor budget context load failed: issue_id=%s", issue.id, exc_info=True)
 
         # Runtime per-loop policy decision (origin/main design). Required even
         # when the prompt is built by the local helper below, because the `llm`
@@ -1046,7 +1122,11 @@ async def run_issue_conductor_loop(
             recovery_context=recovery_context,
         )
 
-        async def llm(messages, tools, on_token_delta=None):
+        async def llm(
+            messages: list[JsonObject],
+            tools: list[JsonObject],
+            on_token_delta: TokenDeltaRecorder | None = None,
+        ) -> JsonObject:
             if policy_decision.action == "skip_llm":
                 return {
                     "stop_reason": "tool_use",
@@ -1183,7 +1263,7 @@ async def run_issue_conductor_loop(
             ensure_ascii=False,
             default=str,
         )
-        await store.save_conductor_task(conductor_task)
+        await cast(_ConductorTaskSaver, store).save_conductor_task(conductor_task)
         return result
     except Exception as exc:  # noqa: BLE001, RUF100
         logger.exception("run_issue_conductor_loop failed for issue %s", issue.id)
@@ -1211,14 +1291,16 @@ async def run_issue_conductor_loop(
 async def recover_background_conductor_failure(
     *,
     issue_id: str,
-    store,
-    event_bus,
+    store: object,
+    event_bus: EventBusLike | None,
     exc: BaseException,
 ) -> None:
-    issue = await store.load_codex_issue(issue_id)
+    issue = await cast(_IssueLoader, store).load_codex_issue(issue_id)
     if issue is None or not hasattr(store, "load_latest_conductor_task_for_issue"):
         return
-    conductor_task = await store.load_latest_conductor_task_for_issue(issue_id)
+    conductor_task = await cast(_LatestConductorTaskLoader, store).load_latest_conductor_task_for_issue(
+        issue_id
+    )
     if conductor_task is None or is_task_failure_status(conductor_task.status):
         return
     await _record_failure(
@@ -1231,14 +1313,19 @@ async def recover_background_conductor_failure(
 
 
 async def _record_failure(
-    *, store, issue, conductor_task: ConductorTask, event_bus, exc: BaseException
+    *,
+    store: object,
+    issue: CodexIssue,
+    conductor_task: ConductorTask,
+    event_bus: EventBusLike | None,
+    exc: BaseException,
 ) -> None:
     error_message = str(exc) or exc.__class__.__name__
     tb_text = _truncate_text(
         "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), _TRACEBACK_LIMIT
     )
     estimator = get_phase_duration_estimator(store)
-    error_payload = {
+    error_payload: JsonObject = {
         "error_class": exc.__class__.__name__,
         "message": error_message,
         "traceback": tb_text,
@@ -1285,7 +1372,7 @@ async def _record_failure(
         },
         ensure_ascii=False,
     )
-    await store.save_conductor_task(conductor_task)
+    await cast(_ConductorTaskSaver, store).save_conductor_task(conductor_task)
     await _append_event(
         event_bus,
         {
@@ -1305,11 +1392,17 @@ async def _record_failure(
     )
 
 
-async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status: str) -> None:
+async def _seal_graph_and_issue_status(
+    *,
+    store: object,
+    issue: CodexIssue,
+    event_bus: EventBusLike | None,
+    result_status: str,
+) -> None:
     graph_status = "done" if _is_conductor_success_status(result_status) else "failed"
     graph = None
     try:
-        graph = await store.load_workflow_graph_for_issue(issue.id)
+        graph = await cast(_WorkflowGraphLoader, store).load_workflow_graph_for_issue(issue.id)
     except Exception as exc:  # noqa: BLE001, RUF100
         logging.getLogger(__name__).warning("workflow graph load failed during terminal seal: %s", exc)
 
@@ -1318,18 +1411,20 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
             if graph.status != graph_status:
                 graph.status = graph_status
                 graph.updated_at = datetime.now()
-                await store.save_workflow_graph(graph)
+                await cast(_WorkflowGraphSaver, store).save_workflow_graph(graph)
         except Exception as exc:  # noqa: BLE001, RUF100
             logging.getLogger(__name__).warning("workflow graph status seal failed: %s", exc)
         if graph_status == "done":
             try:
-                await record_project_memory(graph.id, store)
+                await record_project_memory(graph.id, cast(ProjectMemoryStore, store))
             except Exception as exc:  # noqa: BLE001, RUF100
                 logging.getLogger(__name__).warning(
                     "project memory record failed after successful seal: %s", exc
                 )
             try:
-                await record_issue_self_improvement(issue, store)
+                await record_issue_self_improvement(
+                    issue, cast(SelfImprovementProposalStore, store)
+                )
             except Exception as exc:  # noqa: BLE001, RUF100
                 logging.getLogger(__name__).warning("self_improvement extraction failed: %s", exc)
 
@@ -1341,7 +1436,7 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
         if not preserve_awaiting_status:
             issue.status = "completed" if graph_status == "done" else "failed"
             issue.updated_at = datetime.now()
-            await store.save_codex_issue(issue)
+            await cast(_IssueSaver, store).save_codex_issue(issue)
             await _append_event(
                 event_bus,
                 {
@@ -1361,7 +1456,9 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
     # fault-tolerant style of the record_project_memory block above: a failure
     # here only warns and never blocks the terminal seal.
     try:
-        project = await store.load_project(issue.project_id)
+        project: Project | None = None
+        if issue.project_id:
+            project = await cast(_ProjectLoader, store).load_project(issue.project_id)
         if project is not None:
             from app.bootstrap import worktree_manager as _wm
 
@@ -1370,7 +1467,7 @@ async def _seal_graph_and_issue_status(*, store, issue, event_bus, result_status
         logging.getLogger(__name__).warning("swarm worktree terminal cleanup failed: %s", exc)
 
 
-async def _append_event(event_bus, payload: dict[str, Any]) -> None:
+async def _append_event(event_bus: EventBusLike | None, payload: JsonObject) -> None:
     if event_bus is None or not hasattr(event_bus, "append"):
         return
     result = event_bus.append(payload)
@@ -1378,7 +1475,7 @@ async def _append_event(event_bus, payload: dict[str, Any]) -> None:
         await result
 
 
-def _prepare_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _prepare_payload(payload: JsonObject) -> JsonObject:
     raw = json.dumps(payload, ensure_ascii=False, default=str)
     if len(raw) <= _TURN_PAYLOAD_LIMIT:
         return payload
@@ -1395,7 +1492,7 @@ def _truncate_text(value: str, limit: int) -> str:
     return f"{value[: max(0, limit - 16)]}...[truncated]"
 
 
-def _summarize_turn(kind: str, payload: dict[str, Any]) -> str:
+def _summarize_turn(kind: str, payload: JsonObject) -> str:
     if kind == "llm_request":
         return f"LLM request with {payload.get('message_count', 0)} messages"
     if kind == "llm_response":
@@ -1418,14 +1515,14 @@ def _summarize_turn(kind: str, payload: dict[str, Any]) -> str:
 
 async def transition_conductor_phase(
     *,
-    store,
-    event_bus,
+    store: object,
+    event_bus: EventBusLike | None,
     issue_id: str,
     conductor_task: ConductorTask,
     phase: str,
     detail: str | None = None,
     status: str | None = None,
-    estimator=None,
+    estimator: PhaseDurationEstimator | None = None,
 ) -> None:
     new_status = status or conductor_task.status
     current_phase = _conductor_phase(conductor_task)
@@ -1479,7 +1576,7 @@ async def transition_conductor_phase(
         "detail": detail,
     }
     conductor_task.updated_at = transition_at
-    await store.save_conductor_task(conductor_task)
+    await cast(_ConductorTaskSaver, store).save_conductor_task(conductor_task)
     await _record_conductor_state_transition(
         store=store,
         issue_id=issue_id,
@@ -1520,7 +1617,7 @@ async def transition_conductor_phase(
 
 async def _record_conductor_state_transition(
     *,
-    store,
+    store: object,
     issue_id: str,
     from_phase: str | None,
     to_phase: str,
@@ -1528,7 +1625,7 @@ async def _record_conductor_state_transition(
     to_detail: str | None,
     transition_at: datetime,
     is_legal: bool,
-    estimator=None,
+    estimator: PhaseDurationEstimator | None = None,
 ) -> None:
     save_state_log = getattr(store, "save_conductor_state_log", None)
     list_state_logs = getattr(store, "list_conductor_state_logs", None)
@@ -1561,7 +1658,7 @@ async def _record_conductor_state_transition(
 
 
 async def _emit_conductor_status(
-    event_bus, *, issue_id: str, conductor_task: ConductorTask
+    event_bus: EventBusLike | None, *, issue_id: str, conductor_task: ConductorTask
 ) -> None:
     await _append_event(
         event_bus,

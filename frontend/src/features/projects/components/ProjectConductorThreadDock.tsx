@@ -13,15 +13,27 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 
+import {
+  parseProjectConductorRecord,
+  parseProjectConductorToolEvent,
+  readProjectConductorToolEvents,
+} from "./projectConductorStreamEvents";
+
 type ThreadEvent = {
   id: string;
   role: string;
   content: string;
-  status?: string;
-  tool_events?: ProjectConductorToolEvent[];
+  status?: string | undefined;
+  tool_events?: ProjectConductorToolEvent[] | undefined;
 };
 
-export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectId: string; onLoopDone?: () => void }) {
+export function ProjectConductorThreadDock({
+  projectId,
+  onLoopDone,
+}: {
+  projectId: string;
+  onLoopDone?: () => void;
+}) {
   const { addToast } = useToast();
   const { t } = useI18n();
   const [prompt, setPrompt] = useState("");
@@ -41,28 +53,25 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
     const source = new EventSource(streamUrl);
     source.addEventListener("open", () => setConnected(true));
     source.addEventListener("event", (message) => {
-      try {
-        const parsed = JSON.parse((message as MessageEvent).data) as Record<string, unknown>;
-        setEvents((prev) => [
+      const parsed = parseProjectConductorRecord(message);
+      if (!parsed) return;
+      setEvents((prev) =>
+        [
           {
-            id: String(parsed.task_id ?? parsed.created_at ?? `${Date.now()}-${prev.length}`),
-            role: String(parsed.role ?? "project_conductor"),
-            content: String(parsed.content ?? ""),
-            status: typeof parsed.status === "string" ? parsed.status : undefined,
-            tool_events: Array.isArray(parsed.tool_events) ? (parsed.tool_events as ProjectConductorToolEvent[]) : [],
+            id: String(parsed["task_id"] ?? parsed["created_at"] ?? `${Date.now()}-${prev.length}`),
+            role: String(parsed["role"] ?? "project_conductor"),
+            content: String(parsed["content"] ?? ""),
+            status: typeof parsed["status"] === "string" ? parsed["status"] : undefined,
+            tool_events: readProjectConductorToolEvents(parsed["tool_events"]),
           },
           ...prev,
-        ].slice(0, 12));
-      } catch {
-        // Ignore malformed replay rows; the next event can still render.
-      }
+        ].slice(0, 12),
+      );
     });
     source.addEventListener("tool", (message) => {
-      try {
-        setTools((prev) => [JSON.parse((message as MessageEvent).data) as ProjectConductorToolEvent, ...prev].slice(0, 12));
-      } catch {
-        // Ignore malformed tool cards.
-      }
+      const toolEvent = parseProjectConductorToolEvent(message);
+      if (!toolEvent) return;
+      setTools((prev) => [toolEvent, ...prev].slice(0, 12));
     });
     source.addEventListener("done", () => {
       setConnected(false);
@@ -126,9 +135,13 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
             <RadioTower size={17} />
           </div>
           <div>
-            <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">{t("projectConductor.threadDock.title")}</h3>
+            <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">
+              {t("projectConductor.threadDock.title")}
+            </h3>
             <p className="mt-1 text-xs text-text-muted">
-              {connected ? t("projectConductor.threadDock.listening") : t("projectConductor.threadDock.replayHint")}
+              {connected
+                ? t("projectConductor.threadDock.listening")
+                : t("projectConductor.threadDock.replayHint")}
             </p>
           </div>
         </div>
@@ -143,7 +156,11 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
           ) : (
             <span aria-hidden className="size-2 rounded-full bg-text-muted" />
           )}
-          {running ? t("projectConductor.threadDock.status.running") : connected ? t("projectConductor.threadDock.status.streaming") : t("projectConductor.threadDock.status.idle")}
+          {running
+            ? t("projectConductor.threadDock.status.running")
+            : connected
+              ? t("projectConductor.threadDock.status.streaming")
+              : t("projectConductor.threadDock.status.idle")}
         </div>
       </div>
 
@@ -158,7 +175,9 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
           className="bg-surface-input border-border-subtle"
         />
         <Button
-          data-density={running ? "project-conductor-loop-dispatch-cta" : "project-conductor-loop-cta"}
+          data-density={
+            running ? "project-conductor-loop-dispatch-cta" : "project-conductor-loop-cta"
+          }
           onClick={() => void handleStartLoop()}
           disabled={running}
           className={cn("gap-2 shrink-0", running && "motion-essential")}
@@ -170,7 +189,10 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
 
       {latestResult && (
         <div className="mt-3 rounded-xl border border-brand/15 bg-brand/5 p-3 text-xs leading-relaxed text-text-secondary">
-          <span className="font-black text-text-primary">{t("projectConductor.threadDock.latest")}</span> {latestResult.answer}
+          <span className="font-black text-text-primary">
+            {t("projectConductor.threadDock.latest")}
+          </span>{" "}
+          {latestResult.answer}
         </div>
       )}
 
@@ -180,12 +202,19 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
             <Bot size={13} /> {t("projectConductor.threadDock.turns")}
           </div>
           {events.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">{t("projectConductor.threadDock.empty.turns")}</p>
+            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">
+              {t("projectConductor.threadDock.empty.turns")}
+            </p>
           ) : (
             events.map((event) => (
-              <div key={event.id} className="rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs">
+              <div
+                key={event.id}
+                className="rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs"
+              >
                 <div className="font-black text-text-primary">{event.role}</div>
-                <p className="mt-1 whitespace-pre-wrap leading-relaxed text-text-secondary">{event.content || t("projectConductor.threadDock.empty.turn")}</p>
+                <p className="mt-1 whitespace-pre-wrap leading-relaxed text-text-secondary">
+                  {event.content || t("projectConductor.threadDock.empty.turn")}
+                </p>
               </div>
             ))
           )}
@@ -196,18 +225,26 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
             <Wrench size={13} /> {t("projectConductor.threadDock.toolCards")}
           </div>
           {tools.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">{t("projectConductor.threadDock.empty.tools")}</p>
+            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">
+              {t("projectConductor.threadDock.empty.tools")}
+            </p>
           ) : (
             tools.map((tool, index) => {
-              const isProjectConductorToolActive = isProjectConductorStreaming && index === 0 && !tool.is_error;
+              const isProjectConductorToolActive =
+                isProjectConductorStreaming && index === 0 && !tool.is_error;
 
               return (
                 <div
                   key={`${tool.id}-${index}`}
-                  data-density={isProjectConductorToolActive ? "project-conductor-active-tool-card" : "project-conductor-tool-card"}
+                  data-density={
+                    isProjectConductorToolActive
+                      ? "project-conductor-active-tool-card"
+                      : "project-conductor-tool-card"
+                  }
                   className={cn(
                     "relative overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs transition-colors",
-                    isProjectConductorToolActive && "motion-essential border-brand/30 bg-brand-muted/10",
+                    isProjectConductorToolActive &&
+                      "motion-essential border-brand/30 bg-brand-muted/10",
                   )}
                 >
                   {isProjectConductorToolActive && (
@@ -218,11 +255,15 @@ export function ProjectConductorThreadDock({ projectId, onLoopDone }: { projectI
                   )}
                   <div className="flex items-center justify-between gap-2">
                     <span className="inline-flex min-w-0 items-center gap-1.5 font-black text-text-primary">
-                      {isProjectConductorToolActive && <AgentThinkingIndicator phase="tool" size={12} className="shrink-0" />}
+                      {isProjectConductorToolActive && (
+                        <AgentThinkingIndicator phase="tool" size={12} className="shrink-0" />
+                      )}
                       <span className="truncate">{tool.name}</span>
                     </span>
                     <span className={tool.is_error ? "text-red-500" : "text-text-muted"}>
-                      {tool.is_error ? t("projectConductor.threadDock.toolState.error") : t("projectConductor.threadDock.toolState.ok")}
+                      {tool.is_error
+                        ? t("projectConductor.threadDock.toolState.error")
+                        : t("projectConductor.threadDock.toolState.ok")}
                     </span>
                   </div>
                   <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-text-muted">

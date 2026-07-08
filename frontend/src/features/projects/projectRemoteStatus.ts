@@ -87,9 +87,10 @@ export function describeRemoteStatus(
   }
   if (status.current_branch !== status.branch) {
     return {
-      label: status.behind > 0
-        ? fill(t("projects.updateBehind"), { n: status.behind })
-        : t("projects.updateUpToDate"),
+      label:
+        status.behind > 0
+          ? fill(t("projects.updateBehind"), { n: status.behind })
+          : t("projects.updateUpToDate"),
       title: fill(t("projects.updateNotOnDefaultTitle"), { branch }),
       tone: "muted",
       canSync: false,

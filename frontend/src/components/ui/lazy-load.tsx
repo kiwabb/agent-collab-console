@@ -24,17 +24,16 @@ export function LazyImage({
   const [isLoaded, setIsLoaded] = useState(false);
   const [isInView, setIsInView] = useState(false);
   const [error, setError] = useState(false);
-  const imgRef = useState<HTMLImageElement | null>(null)[0];
 
   useEffect(() => {
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
+        if (entry?.isIntersecting) {
           setIsInView(true);
           observer.disconnect();
         }
       },
-      { rootMargin: "100px" }
+      { rootMargin: "100px" },
     );
 
     // We'll observe when the component mounts
@@ -56,10 +55,7 @@ export function LazyImage({
       {/* Loading state */}
       {!isLoaded && !error && (
         <div
-          className={cn(
-            "absolute inset-0 bg-surface-raised animate-pulse",
-            placeholderClassName
-          )}
+          className={cn("absolute inset-0 bg-surface-raised animate-pulse", placeholderClassName)}
         >
           {loadingComponent}
         </div>
@@ -112,7 +108,7 @@ export function LazyComponent({
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
+        if (entry?.isIntersecting) {
           setIsVisible(true);
           if (triggerOnce) {
             observer.disconnect();
@@ -121,7 +117,7 @@ export function LazyComponent({
           setIsVisible(false);
         }
       },
-      { rootMargin }
+      { rootMargin },
     );
 
     observer.observe(ref);
@@ -142,11 +138,7 @@ export function LazyComponent({
             {children}
           </motion.div>
         ) : (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             {fallback}
           </motion.div>
         )}
@@ -170,12 +162,12 @@ export function LazySection({ children, className, delay = 0 }: LazySectionProps
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
+        if (entry?.isIntersecting) {
           setTimeout(() => setIsVisible(true), delay);
           observer.disconnect();
         }
       },
-      { rootMargin: "50px" }
+      { rootMargin: "50px" },
     );
 
     observer.observe(ref);

@@ -18,15 +18,17 @@ source of truth. This service adds:
                                  (drops soft-deleted blocks, orders pinned-first).
 
 Block IDs are deterministic: prefer the `<!-- issue:<id> -->` marker; if
-absent (legacy / hand-written blocks) the SHA-1 of the heading line is used.
+absent (legacy / hand-written blocks) a non-security SHA-1 digest of the heading
+line is used.
 """
 import hashlib  # noqa: E402
 import logging  # noqa: E402
 import re  # noqa: E402
+from collections.abc import Sequence  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Iterable  # noqa: E402, F401, UP035
+from typing import Protocol, TypedDict  # noqa: E402
 
 from app.application.project_memory_service import (  # noqa: E402
     MEMORY_BYTES_CAP,
@@ -43,6 +45,27 @@ DISTILLED_HEADER_PREFIX = "## ⚙️ Distilled lessons"
 HEADING_DATE_RE = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?)\s+[—\-]\s+(.+?)\s*$")
 
 
+class TeamNotesState(TypedDict):
+    deleted_at: str | None
+    pinned: bool
+
+
+class TeamNotesDbCursor(Protocol):
+    async def fetchone(self) -> Sequence[object] | None: ...
+
+    async def fetchall(self) -> list[Sequence[object]]: ...
+
+
+class TeamNotesDbConnection(Protocol):
+    async def execute(self, sql: str, parameters: Sequence[object] = ()) -> TeamNotesDbCursor: ...
+
+    async def commit(self) -> None: ...
+
+
+class TeamNotesStore(Protocol):
+    async def _get_conn(self) -> TeamNotesDbConnection: ...
+
+
 @dataclass
 class NoteBlock:
     block_id: str
@@ -54,7 +77,7 @@ class NoteBlock:
     deleted_at: str | None = None
     distilled: bool = False
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         return {
             "block_id": self.block_id,
             "issue_id": self.issue_id,
@@ -78,7 +101,7 @@ class TeamNotesService:
     def parse_blocks(self, markdown: str) -> list[NoteBlock]:
         if not markdown or not markdown.strip():
             return []
-        chunks = self.memory._split_into_blocks(markdown)  # type: ignore[attr-defined]
+        chunks = self.memory._split_into_blocks(markdown)
         out: list[NoteBlock] = []
         for raw in chunks:
             block = self._parse_one(raw)
@@ -114,7 +137,8 @@ class TeamNotesService:
         block_id = (
             f"issue:{issue_id}"
             if issue_id
-            else "h:" + hashlib.sha1(heading.encode("utf-8")).hexdigest()[:16]
+            else "h:"
+            + hashlib.sha1(heading.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
         )
         return NoteBlock(
             block_id=block_id,
@@ -130,7 +154,7 @@ class TeamNotesService:
     # ------------------------------------------------------------------
 
     def memory_path(self, project_repo_path: str | None) -> Path | None:
-        return self.memory._memory_path(project_repo_path)  # type: ignore[attr-defined]
+        return self.memory._memory_path(project_repo_path)
 
     def read_markdown(self, project_repo_path: str | None) -> str:
         path = self.memory_path(project_repo_path)
@@ -143,7 +167,7 @@ class TeamNotesService:
 
     async def list_blocks(
         self,
-        store,
+        store: TeamNotesStore,
         project_id: str,
         project_repo_path: str | None,
         include_deleted: bool = False,
@@ -160,23 +184,26 @@ class TeamNotesService:
             blocks = [b for b in blocks if not b.deleted_at]
         return blocks
 
-    async def soft_delete(self, store, project_id: str, block_id: str) -> None:
+    async def soft_delete(self, store: TeamNotesStore, project_id: str, block_id: str) -> None:
         await self._upsert_state(
             store,
             project_id,
             block_id,
             deleted_at=datetime.now(timezone.utc).isoformat(),  # noqa: UP017
+            update_deleted_at=True,
         )
 
-    async def restore(self, store, project_id: str, block_id: str) -> None:
-        await self._upsert_state(store, project_id, block_id, deleted_at=None)
+    async def restore(self, store: TeamNotesStore, project_id: str, block_id: str) -> None:
+        await self._upsert_state(store, project_id, block_id, deleted_at=None, update_deleted_at=True)
 
-    async def set_pinned(self, store, project_id: str, block_id: str, pinned: bool) -> None:
+    async def set_pinned(
+        self, store: TeamNotesStore, project_id: str, block_id: str, pinned: bool
+    ) -> None:
         await self._upsert_state(store, project_id, block_id, pinned=pinned)
 
     async def format_for_prompt(
         self,
-        store,
+        store: TeamNotesStore,
         project_id: str | None,
         project_repo_path: str | None,
     ) -> str | None:
@@ -201,7 +228,7 @@ class TeamNotesService:
             return None
         # Reuse the cap from project_memory.
         if len(rebuilt.encode("utf-8")) > MEMORY_BYTES_CAP:
-            rebuilt = self.memory._trim_to_cap(rebuilt + "\n")  # type: ignore[attr-defined]
+            rebuilt = self.memory._trim_to_cap(rebuilt + "\n")
         return rebuilt
 
     # ------------------------------------------------------------------
@@ -210,11 +237,12 @@ class TeamNotesService:
 
     async def _upsert_state(
         self,
-        store,
+        store: TeamNotesStore,
         project_id: str,
         block_id: str,
         *,
-        deleted_at: str | None = ...,
+        deleted_at: str | None = None,
+        update_deleted_at: bool = False,
         pinned: bool | None = None,
     ) -> None:
         conn = await store._get_conn()
@@ -224,9 +252,9 @@ class TeamNotesService:
             (project_id, block_id),
         )
         row = await cur.fetchone()
-        cur_deleted = row[0] if row else None
+        cur_deleted = _optional_text(row[0]) if row else None
         cur_pinned = bool(row[1]) if row else False
-        new_deleted = cur_deleted if deleted_at is ... else deleted_at
+        new_deleted = deleted_at if update_deleted_at else cur_deleted
         new_pinned = cur_pinned if pinned is None else bool(pinned)
         await conn.execute(
             "INSERT OR REPLACE INTO team_notes_state (project_id, block_id, deleted_at, pinned) "
@@ -235,7 +263,9 @@ class TeamNotesService:
         )
         await conn.commit()
 
-    async def _load_state(self, store, project_id: str) -> dict[str, dict]:
+    async def _load_state(
+        self, store: TeamNotesStore, project_id: str
+    ) -> dict[str, TeamNotesState]:
         try:
             conn = await store._get_conn()
             cur = await conn.execute(
@@ -246,11 +276,17 @@ class TeamNotesService:
         except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("team_notes_service._load_state failed: %s", exc)
             return {}
-        out: dict[str, dict] = {}
+        out: dict[str, TeamNotesState] = {}
         for r in rows:
-            out[r[0]] = {"deleted_at": r[1], "pinned": bool(r[2])}
+            block_id = _optional_text(r[0])
+            if block_id:
+                out[block_id] = {"deleted_at": _optional_text(r[1]), "pinned": bool(r[2])}
         return out
 
 
 # Module-level singleton
 team_notes = TeamNotesService()
+
+
+def _optional_text(value: object) -> str | None:
+    return value if isinstance(value, str) else None

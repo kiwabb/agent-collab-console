@@ -18,7 +18,6 @@ import {
   Sun,
   Monitor,
   Languages,
-  Settings,
   Database,
   Palette,
   Check,
@@ -35,7 +34,8 @@ import { PageFrame } from "@/features/workbench/components/PageFrame";
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
-  const { fontSize, reducedMotion, compactMode, setFontSize, setReducedMotion, setCompactMode } = usePreferences();
+  const { fontSize, reducedMotion, compactMode, setFontSize, setReducedMotion, setCompactMode } =
+    usePreferences();
   const { locale, setLocale, t } = useI18n();
   const [runtimeCatalog, setRuntimeCatalog] = useState<RuntimeCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -46,7 +46,9 @@ export function SettingsPage() {
   useEffect(() => {
     getRuntimeCatalog()
       .then(setRuntimeCatalog)
-      .catch((err) => setError(err instanceof Error ? err.message : t("settings.runtimeLoadFailed")))
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : t("settings.runtimeLoadFailed")),
+      )
       .finally(() => setLoading(false));
   }, [t]);
 
@@ -140,8 +142,12 @@ export function SettingsPage() {
 
             <div className="mt-auto">
               <div className="p-4 rounded-2xl bg-gradient-to-br from-brand/10 to-transparent border border-brand/10">
-                <p className="text-[10px] font-bold text-brand uppercase tracking-widest mb-1">{t("settings.generalStatus")}</p>
-                <p className="text-[9px] text-text-muted leading-relaxed">{t("settings.generalStatusDesc")}</p>
+                <p className="text-[10px] font-bold text-brand uppercase tracking-widest mb-1">
+                  {t("settings.generalStatus")}
+                </p>
+                <p className="text-[9px] text-text-muted leading-relaxed">
+                  {t("settings.generalStatusDesc")}
+                </p>
               </div>
             </div>
           </aside>
@@ -149,7 +155,10 @@ export function SettingsPage() {
           {/* Tab Content */}
           <main className="flex-1 overflow-y-auto no-scrollbar scroll-smooth bg-surface/10">
             <div className="w-full min-h-full">
-              <TabsContent value="general" className="w-full p-8 mt-0 outline-none animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <TabsContent
+                value="general"
+                className="w-full p-8 mt-0 outline-none animate-in fade-in slide-in-from-bottom-4 duration-500"
+              >
                 <div className="mb-6">
                   <h2 className="text-2xl font-black tracking-tight text-foreground mb-1 italic">
                     {t("settings.appearance")}
@@ -176,24 +185,32 @@ export function SettingsPage() {
                             "w-full flex items-center gap-4 p-3 rounded-xl border transition-all text-left group",
                             theme === option.value
                               ? "bg-brand/5 border-brand/30 text-brand ring-1 ring-brand/20"
-                              : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary"
+                              : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary",
                           )}
                         >
-                          <div className={cn(
-                            "size-10 rounded-lg flex items-center justify-center transition-all",
-                            theme === option.value ? "bg-brand/10 scale-110" : "bg-surface-raised group-hover:bg-surface-hover"
-                          )}>
+                          <div
+                            className={cn(
+                              "size-10 rounded-lg flex items-center justify-center transition-all",
+                              theme === option.value
+                                ? "bg-brand/10 scale-110"
+                                : "bg-surface-raised group-hover:bg-surface-hover",
+                            )}
+                          >
                             {option.icon}
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-bold">{option.label}</p>
                             <p className="text-[10px] opacity-60 truncate">
-                              {option.value === 'system' ? t("settings.followDevice") : t("settings.useMode", { mode: option.value })}
+                              {option.value === "system"
+                                ? t("settings.followDevice")
+                                : t("settings.useMode", { mode: option.value })}
                             </p>
                           </div>
-                          {theme === option.value && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
-                            <Check size={12} className="text-background" />
-                          </div>}
+                          {theme === option.value && (
+                            <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
+                              <Check size={12} className="text-background" />
+                            </div>
+                          )}
                         </button>
                       ))}
                     </CardContent>
@@ -217,24 +234,32 @@ export function SettingsPage() {
                             "w-full flex items-center gap-4 p-3 rounded-xl border transition-all text-left group",
                             locale === option.value
                               ? "bg-brand/5 border-brand/30 text-brand ring-1 ring-brand/20"
-                              : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary"
+                              : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary",
                           )}
                         >
-                          <div className={cn(
-                            "size-10 rounded-lg flex items-center justify-center transition-all",
-                            locale === option.value ? "bg-brand/10 scale-110" : "bg-surface-raised group-hover:bg-surface-hover"
-                          )}>
+                          <div
+                            className={cn(
+                              "size-10 rounded-lg flex items-center justify-center transition-all",
+                              locale === option.value
+                                ? "bg-brand/10 scale-110"
+                                : "bg-surface-raised group-hover:bg-surface-hover",
+                            )}
+                          >
                             <Languages size={18} />
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-bold">{option.label}</p>
                             <p className="text-[10px] opacity-60 truncate">
-                              {locale === option.value ? t("settings.language.zh") : t("settings.language.en")}
+                              {locale === option.value
+                                ? t("settings.language.zh")
+                                : t("settings.language.en")}
                             </p>
                           </div>
-                          {locale === option.value && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
-                            <Check size={12} className="text-background" />
-                          </div>}
+                          {locale === option.value && (
+                            <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
+                              <Check size={12} className="text-background" />
+                            </div>
+                          )}
                         </button>
                       ))}
                     </CardContent>
@@ -258,22 +283,30 @@ export function SettingsPage() {
                             "w-full flex items-center gap-4 p-3 rounded-xl border transition-all text-left group",
                             fontSize === option.value
                               ? "bg-brand/5 border-brand/30 text-brand ring-1 ring-brand/20"
-                              : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary"
+                              : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary",
                           )}
                         >
-                          <div className={cn(
-                            "size-10 rounded-lg flex items-center justify-center transition-all",
-                            fontSize === option.value ? "bg-brand/10 scale-110" : "bg-surface-raised group-hover:bg-surface-hover"
-                          )}>
+                          <div
+                            className={cn(
+                              "size-10 rounded-lg flex items-center justify-center transition-all",
+                              fontSize === option.value
+                                ? "bg-brand/10 scale-110"
+                                : "bg-surface-raised group-hover:bg-surface-hover",
+                            )}
+                          >
                             <Type size={18} />
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-bold">{option.label}</p>
-                            <p className="text-[10px] opacity-60">{t(`settings.fontSize.${option.value}`)}</p>
+                            <p className="text-[10px] opacity-60">
+                              {t(`settings.fontSize.${option.value}`)}
+                            </p>
                           </div>
-                          {fontSize === option.value && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
-                            <Check size={12} className="text-background" />
-                          </div>}
+                          {fontSize === option.value && (
+                            <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
+                              <Check size={12} className="text-background" />
+                            </div>
+                          )}
                         </button>
                       ))}
                     </CardContent>
@@ -295,22 +328,30 @@ export function SettingsPage() {
                           "w-full flex items-center gap-4 p-3 rounded-xl border transition-all text-left group",
                           reducedMotion
                             ? "bg-brand/5 border-brand/30 text-brand ring-1 ring-brand/20"
-                            : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary"
+                            : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary",
                         )}
                       >
-                        <div className={cn(
-                          "size-10 rounded-lg flex items-center justify-center transition-all",
-                          reducedMotion ? "bg-brand/10 scale-110" : "bg-surface-raised group-hover:bg-surface-hover"
-                        )}>
+                        <div
+                          className={cn(
+                            "size-10 rounded-lg flex items-center justify-center transition-all",
+                            reducedMotion
+                              ? "bg-brand/10 scale-110"
+                              : "bg-surface-raised group-hover:bg-surface-hover",
+                          )}
+                        >
                           <Zap size={18} />
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-bold">{t("settings.reducedMotion")}</p>
-                          <p className="text-[10px] opacity-60">{reducedMotion ? t("settings.state.on") : t("settings.state.off")}</p>
+                          <p className="text-[10px] opacity-60">
+                            {reducedMotion ? t("settings.state.on") : t("settings.state.off")}
+                          </p>
                         </div>
-                        {reducedMotion && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
-                          <Check size={12} className="text-background" />
-                        </div>}
+                        {reducedMotion && (
+                          <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
+                            <Check size={12} className="text-background" />
+                          </div>
+                        )}
                       </button>
                     </CardContent>
                   </Card>
@@ -331,29 +372,40 @@ export function SettingsPage() {
                           "w-full flex items-center gap-4 p-3 rounded-xl border transition-all text-left group",
                           compactMode
                             ? "bg-brand/5 border-brand/30 text-brand ring-1 ring-brand/20"
-                            : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary"
+                            : "bg-surface/50 hover:bg-surface border-border-subtle text-text-secondary",
                         )}
                       >
-                        <div className={cn(
-                          "size-10 rounded-lg flex items-center justify-center transition-all",
-                          compactMode ? "bg-brand/10 scale-110" : "bg-surface-raised group-hover:bg-surface-hover"
-                        )}>
+                        <div
+                          className={cn(
+                            "size-10 rounded-lg flex items-center justify-center transition-all",
+                            compactMode
+                              ? "bg-brand/10 scale-110"
+                              : "bg-surface-raised group-hover:bg-surface-hover",
+                          )}
+                        >
                           <LayoutGrid size={18} />
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-bold">{t("settings.compactMode")}</p>
-                          <p className="text-[10px] opacity-60">{compactMode ? t("settings.state.on") : t("settings.state.off")}</p>
+                          <p className="text-[10px] opacity-60">
+                            {compactMode ? t("settings.state.on") : t("settings.state.off")}
+                          </p>
                         </div>
-                        {compactMode && <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
-                          <Check size={12} className="text-background" />
-                        </div>}
+                        {compactMode && (
+                          <div className="size-5 rounded-full bg-brand flex items-center justify-center animate-in zoom-in duration-300">
+                            <Check size={12} className="text-background" />
+                          </div>
+                        )}
                       </button>
                     </CardContent>
                   </Card>
                 </div>
               </TabsContent>
 
-              <TabsContent value="runtime" className="w-full p-8 mt-0 outline-none animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <TabsContent
+                value="runtime"
+                className="w-full p-8 mt-0 outline-none animate-in fade-in slide-in-from-bottom-4 duration-500"
+              >
                 <div className="mb-6">
                   <h2 className="text-2xl font-black tracking-tight text-foreground mb-1 italic">
                     {t("settings.runtimeConfig")}
@@ -398,36 +450,41 @@ export function SettingsPage() {
                             {t("settings.retryConnection")}
                           </Button>
                         </div>
-                      ) : runtimeCatalog && (
-                        <RuntimeCatalogEditor
-                          catalog={runtimeCatalog}
-                          onChange={async (cat) => {
-                            setSaveStatus("saving");
-                            try {
-                              const savedCatalog = await updateRuntimeCatalog(cat);
-                              setRuntimeCatalog(savedCatalog);
-                              setSaveStatus("saved");
-                            } catch (err) {
-                              setSaveError(err instanceof Error ? err.message : t("settings.saveFailed"));
-                              setSaveStatus("error");
-                            }
-                          }}
-                          className="pb-8"
-                        />
+                      ) : (
+                        runtimeCatalog && (
+                          <RuntimeCatalogEditor
+                            catalog={runtimeCatalog}
+                            onChange={async (cat) => {
+                              setSaveStatus("saving");
+                              try {
+                                const savedCatalog = await updateRuntimeCatalog(cat);
+                                setRuntimeCatalog(savedCatalog);
+                                setSaveStatus("saved");
+                              } catch (err) {
+                                setSaveError(
+                                  err instanceof Error ? err.message : t("settings.saveFailed"),
+                                );
+                                setSaveStatus("error");
+                              }
+                            }}
+                            className="pb-8"
+                          />
+                        )
                       )}
                     </div>
                   </CardContent>
                 </Card>
               </TabsContent>
 
-              <TabsContent value="agents" className="w-full p-8 mt-0 outline-none animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <TabsContent
+                value="agents"
+                className="w-full p-8 mt-0 outline-none animate-in fade-in slide-in-from-bottom-4 duration-500"
+              >
                 <div className="mb-6">
                   <h2 className="text-2xl font-black tracking-tight text-foreground mb-1 italic">
                     {t("settings.agents")}
                   </h2>
-                  <p className="text-xs text-text-muted">
-                    {t("settings.agentsDesc")}
-                  </p>
+                  <p className="text-xs text-text-muted">{t("settings.agentsDesc")}</p>
                 </div>
                 <AgentCatalogPanel />
               </TabsContent>

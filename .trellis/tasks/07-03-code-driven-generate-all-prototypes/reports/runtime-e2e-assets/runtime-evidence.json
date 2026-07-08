@@ -1,0 +1,30 @@
+{
+  "help": {
+    "attempted_url": "http://localhost:4000/help",
+    "final_url": "http://localhost:4000/help",
+    "success": true,
+    "title": "Agent Collaboration Workbench",
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "visible_text_excerpt": "C\ncodex\n/\nagent-collab-console\n/\n显示此帮助\n跳转或搜索…\n⌘\nK\nZ\nA\nagent-collab-console\n切换项目\n工作区\n待办箱\n工作区列表\n3\n我的任务\n审批\n调度器\n审计日志\n产物\n知识库\n简历\n代理\n技能\n会话\nagent-collab-console\n主工作区\n测试1\n设置\n帮助与快捷键\nGETTING STARTED\nGetting Started\nGetting Started Desc\nBack To Inbox\n快速开始（5 步）\n1\n选择（或创建）一个工作区\n点击侧边栏的 需求 进入需求视图；如果你还没有工作区，先到 工作区 创建一个绑定 git 仓库的工作区。\n打开需求视图 →\n2\n创建一个新需求\n在工作区控制台底部输入你想要完成的事情（例如 \"添加一个 /api/ping 端点，返回 {pong: true}\"）然后按 ↵。系统会自动在一个新分支上为每个需求创建一个 git worktree。\n3\n规划工作\n打开需求 → DAG 标签页。两种方式：\n• 自动规划 — 让编排器 LLM 提出一个图\n• 选择一个模板 — Feature / Bug fix / Hotfix / Refactor / Docs\n然后点击 保存图 → 启动。\n4\n观察智能体工作\nPM → 架构师 → 工程师 → QA 按顺序调度。每个磁贴显示实时状态（例如 \"工程师：工作中… 正在编辑 api.py\"）。\n• alt-点击 任何磁贴 → \"智能体为什么这样决定？\"抽屉\n• 引导 按钮（右上角）→ 在运行中投入提示\n• 分叉 按钮 → 分支出去尝试不同方向\n5\n交付\n当 QA 通过时，需求头状态变为 完成。打开 Diff · Merge：\n• 打开 GitHub PR → 推送分支并通过 gh 打开一个真正的 PR\n• Squash-merge → 如果跳过 PR 循环则本地合并\n• 本地接管 → 复制 cd path && code . 到剪贴板如果你想手动获取 worktree\n页面地图\nInbox\nDesc\nWorkspaces\n工作区 CRUD；点击一个工作区打开其控制台。\nApprovals\n需求 / 任务评审 / 智能体问题 / Codex 工具调用等待你的决定。\nArtifacts\n每个 PRD / 设计 / 工程师报告 / QA 报告的跨需求浏览器。\nAgents\nDesc\nSettings\nDesc\nINSIDE ISSUE\nDAG\n5 字符画布（指挥者 + PM/架构师/工程师/QA）。实时状态，alt-点击打开解释抽屉，无图时自动规划 + 5 个模板。\n任务 · 运行\n任务列表（每个角色一个）+ 最近一次运行的日志/消息/结果。后续跟进可切换 CHAT / REFINE / RERUN 模式。\n产物\n此需求的持久化文件：PRD、系统设计、实现报告、QA 报告。刷新按钮 + 阶段进行中时自动轮询。\nDiff · Merge\ngit diff vs 基础分支 + 提交 / 打开 GitHub PR / Squash-merge / 放弃（60 秒撤销）。\n引导\n向下一个智能体调度发送运行中的提示。保存在磁盘上的 `_steer.md` 并自动注入到提示中。\n分叉\n将需求的当前状态分支到兄弟需求 — 尝试不同方向同时不丢失原始。\nUndo\nBody\n键盘快捷键\n⌘+\nK\n/ Ctrl K\n跳转到需求 / 工作区 / 页面（命令面板）\nalt+\nclick\n在 DAG 节点上 — 打开智能体推理抽屉\n↑+\n↓\nUp Down\n↵\nEnter\nesc\n关闭任何面板 / 对话框 / 抽屉\nCONCEPTS\nProject — Body\nWorkspace — Body\nIssue — Body\nDag — Body\nTask — Body\nRun — Body\nArtifact — Body\nSteer — Body\nMemory — Body\ncodex 0.1.0\nbackend localhost:9000 ✓",
+    "structure_summary": "headings: Getting Started, 快速开始（5 步）, 选择（或创建）一个工作区, 创建一个新需求, 规划工作, 观察智能体工作, 交付, 页面地图, INSIDE ISSUE, 键盘快捷键, CONCEPTS\nbuttons: 打开导航, agent-collab-console, 跳转或搜索…\n⌘\nK, 帮助, Z, A\nagent-collab-console\n切换项目, 待办箱, 工作区列表\n3, 我的任务, 审批, 调度器, 审计日志\nlinks: C, codex\ninputs: \nlandmarks: header, nav, aside, main, section, section, section, section, section, footer",
+    "console_errors": [],
+    "screenshot_path": "/Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/.trellis/tasks/07-03-code-driven-generate-all-prototypes/reports/runtime-e2e-assets/help-runtime.png"
+  },
+  "issue": {
+    "attempted_url": "http://localhost:4000/issues/demo-id",
+    "final_url": "http://localhost:4000/issues/demo-id",
+    "success": true,
+    "title": "Agent Collaboration Workbench",
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "visible_text_excerpt": "C\ncodex\n/\nagent-collab-console\n/\nIssue\n/\ndemo-id\n跳转或搜索…\n⌘\nK\nZ\nA\nagent-collab-console\n切换项目\n工作区\n待办箱\n工作区列表\n3\n我的任务\n审批\n调度器\n审计日志\n产物\n知识库\n简历\n代理\n技能\n会话\nagent-collab-console\n主工作区\n测试1\n设置\n帮助与快捷键\nQueued\n#Loading\nLoading Issue\nPause\nRestart Steer\nReset\nCONDUCTOR PHASE\nIdle\n—\nActive Task\nNone\nNo Conductor Detail\nTimeline Title\nArtifacts\n0\nDiff\nMesh\nTIMELINE TITLE\nTimeline Description\nEvent Count\nEmpty Timeline\nTitle\nSUB\nEmpty\nAcceptance\nACCEPTANCE BY\n0/0\n0%\nAcceptance Empty\n消耗\n本次运行\nTOKENS\n—\nCOST\n—\nDURATION\n—\nRUNS\n—\n预算 · —\n—\n活动\nACTIVITY EVENTS\n暂无活动事件。\n相似 issue\n暂无相似 issue。\nSend\ncodex 0.1.0\nbackend localhost:9000 ✓\n加载 diff 失败\nIssue not found",
+    "structure_summary": "headings: Loading Issue, 代码评审, Branch Operations\nbuttons: 打开导航, agent-collab-console, 跳转或搜索…\n⌘\nK, 帮助, Z, A\nagent-collab-console\n切换项目, 待办箱, 工作区列表\n3, 我的任务, 审批, 调度器, 审计日志\nlinks: C, codex, Download Zip\ninputs: Chat Placeholder\nlandmarks: header, nav, aside, main, main, section, section, section, section, section, section, aside",
+    "console_errors": [],
+    "screenshot_path": "/Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/.trellis/tasks/07-03-code-driven-generate-all-prototypes/reports/runtime-e2e-assets/issue-demo-runtime.png"
+  }
+}

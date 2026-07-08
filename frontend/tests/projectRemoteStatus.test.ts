@@ -66,10 +66,7 @@ test("up to date → success tone, not syncable", () => {
 });
 
 test("behind + clean + can_fast_forward → action tone, syncable, count filled", () => {
-  const d = describeRemoteStatus(
-    status({ behind: 3, can_fast_forward: true }),
-    t,
-  )!;
+  const d = describeRemoteStatus(status({ behind: 3, can_fast_forward: true }), t)!;
   assert.equal(d.label, "3 behind");
   assert.equal(d.tone, "action");
   assert.equal(d.canSync, true);
@@ -77,19 +74,13 @@ test("behind + clean + can_fast_forward → action tone, syncable, count filled"
 });
 
 test("dirty working tree blocks sync even when behind", () => {
-  const d = describeRemoteStatus(
-    status({ behind: 2, dirty: true, can_fast_forward: false }),
-    t,
-  )!;
+  const d = describeRemoteStatus(status({ behind: 2, dirty: true, can_fast_forward: false }), t)!;
   assert.equal(d.label, "Local changes");
   assert.equal(d.canSync, false);
 });
 
 test("diverged (ahead>0) blocks sync", () => {
-  const d = describeRemoteStatus(
-    status({ behind: 1, ahead: 1, can_fast_forward: false }),
-    t,
-  )!;
+  const d = describeRemoteStatus(status({ behind: 1, ahead: 1, can_fast_forward: false }), t)!;
   assert.equal(d.label, "Diverged");
   assert.equal(d.canSync, false);
 });
@@ -108,10 +99,7 @@ test("fetch failed → warn tone offline label", () => {
 });
 
 test("checked out off the default branch is never syncable", () => {
-  const d = describeRemoteStatus(
-    status({ current_branch: "feature/x", behind: 2 }),
-    t,
-  )!;
+  const d = describeRemoteStatus(status({ current_branch: "feature/x", behind: 2 }), t)!;
   assert.equal(d.canSync, false);
   assert.equal(d.tone, "muted");
   assert.equal(d.label, "2 behind");

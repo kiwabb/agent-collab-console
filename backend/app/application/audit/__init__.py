@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Unified audit-trail package.
 
 Public facade for the audit subsystem. Business modules import from here:
@@ -18,6 +16,8 @@ The pieces:
 Business code depends only on the `AuditSink` Protocol (in `app.domain.ports`)
 plus these recorders — never on the writer or its singleton directly.
 """
+
+from __future__ import annotations
 
 from app.application.audit.categories import (
     AUDIT_CATEGORIES,
@@ -44,7 +44,6 @@ from app.application.audit.recorders import (
 from app.application.audit.writer import AuditLogger, _serialize_payload, audit_logger, default_sink
 
 __all__ = [
-    # categories
     "AUDIT_CATEGORIES",
     "CATEGORY_AGENT_FINALIZE",
     "CATEGORY_CLI_SPAWN",
@@ -55,18 +54,16 @@ __all__ = [
     "CATEGORY_LLM_RETURN",
     "CATEGORY_TOOL_RESULT",
     "CATEGORY_TOOL_USE",
-    # writer / sink
+    "CONDUCTOR_TURN_CATEGORY",
+    "EVENT_SKIP_TYPES",
     "AuditLogger",
+    "_serialize_payload",
     "audit_logger",
     "default_sink",
-    "_serialize_payload",
-    # recorders
     "record_autoplan",
     "record_cli_spawn",
     "record_command_execs",
     "record_conductor_turn",
     "record_event",
     "record_git_command",
-    "CONDUCTOR_TURN_CATEGORY",
-    "EVENT_SKIP_TYPES",
 ]

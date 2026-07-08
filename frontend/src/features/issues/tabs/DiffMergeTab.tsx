@@ -35,15 +35,25 @@ interface Props {
 
 const ACTIVE_STATUSES = new Set(["open", "in_progress"]);
 
-type BusyKind = "submit" | "review-approve" | "review-reject" | "merge" | "abandon" | "pr-create" | "pr-refresh" | null;
+type BusyKind =
+  | "submit"
+  | "review-approve"
+  | "review-reject"
+  | "merge"
+  | "abandon"
+  | "pr-create"
+  | "pr-refresh"
+  | null;
 type ConfirmKind = "merge" | "merge-force" | "abandon" | "reject" | null;
 type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
 
 function formatTimeAgo(ts: number, t: TranslateFn): string {
   const delta = Date.now() - ts;
   if (delta < 1500) return t("task.diffMerge.timeAgo.justNow");
-  if (delta < 60_000) return t("task.diffMerge.timeAgo.secondsAgo", { count: Math.floor(delta / 1000) });
-  if (delta < 3_600_000) return t("task.diffMerge.timeAgo.minutesAgo", { count: Math.floor(delta / 60_000) });
+  if (delta < 60_000)
+    return t("task.diffMerge.timeAgo.secondsAgo", { count: Math.floor(delta / 1000) });
+  if (delta < 3_600_000)
+    return t("task.diffMerge.timeAgo.minutesAgo", { count: Math.floor(delta / 60_000) });
   return t("task.diffMerge.timeAgo.hoursAgo", { count: Math.floor(delta / 3_600_000) });
 }
 
@@ -60,7 +70,9 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
   const [rejectReason, setRejectReason] = useState("");
   const [mergeForceMessage, setMergeForceMessage] = useState<string | null>(null);
   // D4: undo-bar visibility for the most recent abandon.
-  const [pendingAbandon, setPendingAbandon] = useState<{ issueId: string; title: string } | null>(null);
+  const [pendingAbandon, setPendingAbandon] = useState<{ issueId: string; title: string } | null>(
+    null,
+  );
   const inFlight = useRef(false);
 
   const load = useCallback(
@@ -105,7 +117,9 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
       busEventMatchers.issueId(issueId),
       busEventMatchers.typeIn("worktree_dirty", "task_status", "task_created"),
     ),
-    onEvent: () => { void load("poll"); },
+    onEvent: () => {
+      void load("poll");
+    },
     throttleMs: 1500,
     enabled: active,
   });
@@ -204,11 +218,12 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         addToast({
           type: "success",
           title: force ? t("task.diffMerge.mergedForced") : t("task.mergeSuccess"),
-          message: weekly !== null
-            ? weekly === 1
-              ? t("task.diffMerge.weeklyMergedOne")
-              : t("task.diffMerge.weeklyMergedMany", { count: weekly })
-            : undefined,
+          message:
+            weekly !== null
+              ? weekly === 1
+                ? t("task.diffMerge.weeklyMergedOne")
+                : t("task.diffMerge.weeklyMergedMany", { count: weekly })
+              : undefined,
         });
         // Land back on the Inbox so the user can immediately pick up the
         // next thing — they're done with this issue.
@@ -321,7 +336,11 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
     <div className="h-full min-h-0 overflow-y-auto p-6 flex flex-col gap-6">
       <div className="flex items-center justify-between -mt-2 shrink-0">
         <div className="text-[11px] text-text-muted">
-          {lastFetched ? <>{t("task.diffMerge.lastRefreshed", { time: formatTimeAgo(lastFetched, t) })}</> : "—"}
+          {lastFetched ? (
+            <>{t("task.diffMerge.lastRefreshed", { time: formatTimeAgo(lastFetched, t) })}</>
+          ) : (
+            "—"
+          )}
         </div>
         <Button
           size="sm"
@@ -331,13 +350,19 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           data-density={isRefreshing ? "diff-merge-refresh-tool" : "diff-merge-refresh"}
           className={cn(isRefreshing && "motion-essential")}
         >
-          {isRefreshing ? <AgentThinkingIndicator phase="tool" size={12} /> : <RefreshCw size={12} />}
+          {isRefreshing ? (
+            <AgentThinkingIndicator phase="tool" size={12} />
+          ) : (
+            <RefreshCw size={12} />
+          )}
           {t("task.diffMerge.refresh")}
         </Button>
       </div>
 
       <section className="rounded-lg border border-border-subtle p-4 shrink-0">
-        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">{t("task.review.title")}</h3>
+        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted mb-3">
+          {t("task.review.title")}
+        </h3>
         {reviewableTask ? (
           <div className="flex flex-col gap-3">
             <div className="text-sm">
@@ -347,12 +372,17 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
               <Button
                 disabled={!!busy}
                 onClick={() => void handleApprove()}
-                data-density={busy === "review-approve" ? "diff-merge-review-approve-thinking" : "diff-merge-review-approve"}
+                data-density={
+                  busy === "review-approve"
+                    ? "diff-merge-review-approve-thinking"
+                    : "diff-merge-review-approve"
+                }
                 className={cn(busy === "review-approve" && "motion-essential")}
               >
                 {busy === "review-approve" ? (
                   <span className="flex items-center gap-1.5">
-                    <AgentThinkingIndicator phase="thinking" size={12} /> {t("task.review.approving")}
+                    <AgentThinkingIndicator phase="thinking" size={12} />{" "}
+                    {t("task.review.approving")}
                   </span>
                 ) : (
                   t("task.review.approve")
@@ -374,7 +404,9 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           <Button
             disabled={!!busy}
             onClick={() => void handleSubmit()}
-            data-density={busy === "submit" ? "diff-merge-submit-review-thinking" : "diff-merge-submit-review"}
+            data-density={
+              busy === "submit" ? "diff-merge-submit-review-thinking" : "diff-merge-submit-review"
+            }
             className={cn(busy === "submit" && "motion-essential")}
           >
             {busy === "submit" ? (
@@ -391,9 +423,12 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
       </section>
 
       <section className="rounded-lg border border-border-subtle p-4 flex flex-col gap-3 shrink-0">
-        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted">{t("task.diffMerge.branchOperations")}</h3>
+        <h3 className="text-xs font-black uppercase tracking-widest text-text-muted">
+          {t("task.diffMerge.branchOperations")}
+        </h3>
         <div className="text-xs text-text-muted">
-          {t("task.branch")}: <code className="font-mono">{issue?.git_branch ?? "—"}</code> → {t("task.base")}: <code className="font-mono">{diff?.base_branch ?? "—"}</code>
+          {t("task.branch")}: <code className="font-mono">{issue?.git_branch ?? "—"}</code> →{" "}
+          {t("task.base")}: <code className="font-mono">{diff?.base_branch ?? "—"}</code>
         </div>
         {issue?.git_worktree_path && (
           <div className="flex items-center gap-2 text-[11px] text-text-muted bg-surface-input/40 rounded-md px-3 py-1.5 border border-border-subtle">
@@ -436,16 +471,16 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
               <ExternalLink size={11} />
             </a>
             {issue.github_pr_state && (
-              <span className="text-[11px] text-text-muted">
-                · {issue.github_pr_state}
-              </span>
+              <span className="text-[11px] text-text-muted">· {issue.github_pr_state}</span>
             )}
             <Button
               size="sm"
               variant="ghost"
               disabled={!!busy}
               onClick={() => void handleRefreshPR()}
-              data-density={busy === "pr-refresh" ? "diff-merge-pr-refresh-tool" : "diff-merge-pr-refresh"}
+              data-density={
+                busy === "pr-refresh" ? "diff-merge-pr-refresh-tool" : "diff-merge-pr-refresh"
+              }
               className={cn("ml-auto", busy === "pr-refresh" && "motion-essential")}
               title={t("task.diffMerge.refreshPrHint")}
             >
@@ -470,12 +505,18 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
                     ? t("task.diffMerge.nothingToOpenPr")
                     : t("task.diffMerge.createPrHint")
               }
-              data-density={busy === "pr-create" ? "diff-merge-create-pr-dispatch" : "diff-merge-create-pr"}
-              className={cn("bg-foreground text-background hover:bg-foreground/90", busy === "pr-create" && "motion-essential")}
+              data-density={
+                busy === "pr-create" ? "diff-merge-create-pr-dispatch" : "diff-merge-create-pr"
+              }
+              className={cn(
+                "bg-foreground text-background hover:bg-foreground/90",
+                busy === "pr-create" && "motion-essential",
+              )}
             >
               {busy === "pr-create" ? (
                 <span className="flex items-center gap-1.5">
-                  <AgentThinkingIndicator phase="dispatching" size={12} /> {t("task.diffMerge.openingPr")}
+                  <AgentThinkingIndicator phase="dispatching" size={12} />{" "}
+                  {t("task.diffMerge.openingPr")}
                 </span>
               ) : (
                 <span className="flex items-center gap-1.5">
@@ -500,7 +541,8 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           >
             {busy === "merge" ? (
               <span className="flex items-center gap-1.5">
-                <AgentThinkingIndicator phase="dispatching" size={12} /> {t("task.diffMerge.merging")}
+                <AgentThinkingIndicator phase="dispatching" size={12} />{" "}
+                {t("task.diffMerge.merging")}
               </span>
             ) : (
               t("task.mergeBack")
@@ -515,7 +557,8 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
           >
             {busy === "abandon" ? (
               <span className="flex items-center gap-1.5">
-                <AgentThinkingIndicator phase="dispatching" size={12} /> {t("task.diffMerge.abandoning")}
+                <AgentThinkingIndicator phase="dispatching" size={12} />{" "}
+                {t("task.diffMerge.abandoning")}
               </span>
             ) : isAbandoned ? (
               t("task.mergeStatus.abandoned")
@@ -531,29 +574,16 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         <div className="flex items-center justify-between gap-3.5 px-4 py-3 border-b border-border-subtle bg-surface flex-wrap shrink-0">
           <div className="flex items-center gap-4 font-mono text-[12px] text-text-muted flex-wrap">
             <span>
-              <b className="text-foreground font-medium">
-                {diff?.stat?.files ?? 0}
-              </b>{" "}
-              files changed
+              <b className="text-foreground font-medium">{diff?.stat?.files ?? 0}</b> files changed
             </span>
             <span>
-              <b className="text-status-done">
-                +{diff?.stat?.insertions ?? 0}
-              </b>{" "}
-              <b className="text-status-failed">
-                −{diff?.stat?.deletions ?? 0}
-              </b>
+              <b className="text-status-done">+{diff?.stat?.insertions ?? 0}</b>{" "}
+              <b className="text-status-failed">−{diff?.stat?.deletions ?? 0}</b>
             </span>
-            <DiffStatBar
-              add={diff?.stat?.insertions ?? 0}
-              rm={diff?.stat?.deletions ?? 0}
-            />
+            <DiffStatBar add={diff?.stat?.insertions ?? 0} rm={diff?.stat?.deletions ?? 0} />
             <span className="text-text-faint">·</span>
             <span>
-              base <b className="text-foreground font-medium">
-                {diff?.base_branch ?? "—"}
-              </b>{" "}
-              ← head{" "}
+              base <b className="text-foreground font-medium">{diff?.base_branch ?? "—"}</b> ← head{" "}
               <b className="text-foreground font-medium">
                 {diff?.branch ?? issue?.git_branch ?? "—"}
               </b>
@@ -566,7 +596,11 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
                 variant="outline"
                 disabled={!!busy || isAbandoned || !diff || diff.diff.length === 0}
                 onClick={() => void handleCreatePR()}
-                data-density={busy === "pr-create" ? "diff-merge-toolbar-create-pr-dispatch" : "diff-merge-toolbar-create-pr"}
+                data-density={
+                  busy === "pr-create"
+                    ? "diff-merge-toolbar-create-pr-dispatch"
+                    : "diff-merge-toolbar-create-pr"
+                }
                 className={cn("h-7 px-2.5 text-[12px]", busy === "pr-create" && "motion-essential")}
               >
                 {busy === "pr-create" ? (
@@ -581,7 +615,9 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
               size="sm"
               disabled={!!busy || isAbandoned || !diff || diff.diff.length === 0}
               onClick={() => setConfirmKind("merge")}
-              data-density={busy === "merge" ? "diff-merge-toolbar-back-dispatch" : "diff-merge-toolbar-back"}
+              data-density={
+                busy === "merge" ? "diff-merge-toolbar-back-dispatch" : "diff-merge-toolbar-back"
+              }
               className={cn(
                 "h-7 px-2.5 text-[12px] bg-brand hover:bg-brand-strong text-black font-semibold",
                 busy === "merge" && "motion-essential",
@@ -651,7 +687,10 @@ export function DiffMergeTab({ issueId, issue, active }: Props) {
         open={confirmKind === "abandon"}
         onOpenChange={(o) => !o && setConfirmKind(null)}
         title={t("task.abandonConfirmTitle")}
-        description={t("task.abandonConfirmBody").replace("{branch}", issue?.git_branch ?? t("task.diffMerge.branchFallback"))}
+        description={t("task.abandonConfirmBody").replace(
+          "{branch}",
+          issue?.git_branch ?? t("task.diffMerge.branchFallback"),
+        )}
         confirmText={t("task.abandon")}
         variant="destructive"
         isLoading={busy === "abandon"}
@@ -692,16 +731,23 @@ interface RejectDialogProps {
   onConfirm: () => void;
 }
 
-function RejectDialog({ open, reason, onReasonChange, isLoading, onClose, onConfirm }: RejectDialogProps) {
+function RejectDialog({
+  open,
+  reason,
+  onReasonChange,
+  isLoading,
+  onClose,
+  onConfirm,
+}: RejectDialogProps) {
   const { t } = useI18n();
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-xl bg-popover p-5 ring-1 ring-foreground/10 shadow-xl">
-        <h3 className="font-heading text-base font-medium mb-1">{t("task.review.rejectConfirmTitle")}</h3>
-        <p className="text-xs text-text-muted mb-3">
-          {t("task.review.rejectConfirmBody")}
-        </p>
+        <h3 className="font-heading text-base font-medium mb-1">
+          {t("task.review.rejectConfirmTitle")}
+        </h3>
+        <p className="text-xs text-text-muted mb-3">{t("task.review.rejectConfirmBody")}</p>
         <textarea
           autoFocus
           value={reason}
@@ -716,8 +762,13 @@ function RejectDialog({ open, reason, onReasonChange, isLoading, onClose, onConf
           </Button>
           <Button
             disabled={isLoading}
-            data-density={isLoading ? "diff-merge-review-reject-thinking" : "diff-merge-review-reject"}
-            className={cn("bg-warning text-background hover:bg-warning/90", isLoading && "motion-essential")}
+            data-density={
+              isLoading ? "diff-merge-review-reject-thinking" : "diff-merge-review-reject"
+            }
+            className={cn(
+              "bg-warning text-background hover:bg-warning/90",
+              isLoading && "motion-essential",
+            )}
             onClick={onConfirm}
           >
             {isLoading ? (

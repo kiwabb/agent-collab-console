@@ -40,6 +40,16 @@ def _create_project(client, tmp_path: Path, name: str = "demo"):
     return resp.json()
 
 
+def _seed_builtin_agents():
+    import asyncio
+
+    import app.bootstrap as bootstrap_module
+    from app.application.agent_seed import seed_builtin_agents
+
+    assert bootstrap_module.async_store is not None
+    asyncio.run(seed_builtin_agents(bootstrap_module.async_store))
+
+
 def test_create_project_from_local_succeeds(client, tmp_path):
     project = _create_project(client, tmp_path)
     assert project["repo_path"].endswith("demo")
@@ -654,6 +664,50 @@ def test_conductor_restart_rejects_missing_project_repo_without_creating_graph(c
     assert refreshed["git_branch"] == issue["git_branch"]
     graph = client.get(f"/api/codex/issues/{issue['id']}/graph")
     assert graph.status_code == 404
+
+
+def test_workflow_plan_and_graph_endpoints_materialize_compatible_dag(client, tmp_path):
+    _seed_builtin_agents()
+    project = _create_project(client, tmp_path, name="dag-host")
+    ws = client.post(
+        "/api/codex/workspaces", json={"title": "Workspace", "project_id": project["id"]}
+    ).json()
+    issue = client.post(
+        "/api/codex/issues", json={"session_id": ws["id"], "title": "Plan a DAG"}
+    ).json()
+
+    plan_resp = client.post(f"/api/codex/issues/{issue['id']}/plan")
+    assert plan_resp.status_code == 200, plan_resp.text
+    dag = plan_resp.json()
+    assert [node["node_key"] for node in dag["nodes"]][:4] == [
+        "product_manager",
+        "architect",
+        "engineer",
+        "qa",
+    ]
+
+    save_resp = client.post(
+        f"/api/codex/issues/{issue['id']}/graph",
+        json={"dag": dag, "created_by": "test"},
+    )
+    assert save_resp.status_code == 201, save_resp.text
+    graph = save_resp.json()
+    assert graph["status"] == "draft"
+    assert graph["created_by"] == "test"
+    assert [node["node_key"] for node in graph["nodes"]][:4] == [
+        "product_manager",
+        "architect",
+        "engineer",
+        "qa",
+    ]
+
+    get_resp = client.get(f"/api/codex/issues/{issue['id']}/graph")
+    assert get_resp.status_code == 200, get_resp.text
+    assert get_resp.json()["id"] == graph["id"]
+
+    start_resp = client.post(f"/api/codex/issues/{issue['id']}/graph/start")
+    assert start_resp.status_code == 200, start_resp.text
+    assert start_resp.json()["status"] == "running"
 
 
 # --- Remote update detection / fast-forward pull ---

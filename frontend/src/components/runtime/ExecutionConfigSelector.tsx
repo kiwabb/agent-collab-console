@@ -66,10 +66,11 @@ export function normalizeExecutionConfig(
     return { executor, provider, model };
   }
 
-  const resolvedExecutor = catalog.executors.find((candidate) => candidate.id === executor && candidate.enabled)
-    ?? getFirstEnabledExecutor(catalog)
-    ?? catalog.executors.find((candidate) => candidate.id === executor)
-    ?? null;
+  const resolvedExecutor =
+    catalog.executors.find((candidate) => candidate.id === executor && candidate.enabled) ??
+    getFirstEnabledExecutor(catalog) ??
+    catalog.executors.find((candidate) => candidate.id === executor) ??
+    null;
 
   if (!resolvedExecutor) {
     return { executor, provider, model };
@@ -99,7 +100,10 @@ export function ExecutionConfigSelector({
     [catalog, value.executor, value.provider, value.model],
   );
 
-  const currentExecutor = catalog?.executors.find((executor) => executor.id === normalizedValue.executor && executor.enabled) ?? null;
+  const currentExecutor =
+    catalog?.executors.find(
+      (executor) => executor.id === normalizedValue.executor && executor.enabled,
+    ) ?? null;
   const enabledExecutors = catalog?.executors.filter((executor) => executor.enabled) ?? [];
 
   const handleExecutorChange = (executorId: string | null) => {
@@ -137,7 +141,10 @@ export function ExecutionConfigSelector({
     return (
       <div
         data-density="execution-config-tool-loading"
-        className={cn("motion-essential relative flex min-h-[40px] items-center justify-center gap-2 overflow-hidden rounded-lg border border-status-tool/25 bg-status-tool/5 px-3 text-xs font-semibold text-text-muted", className)}
+        className={cn(
+          "motion-essential relative flex min-h-[40px] items-center justify-center gap-2 overflow-hidden rounded-lg border border-status-tool/25 bg-status-tool/5 px-3 text-xs font-semibold text-text-muted",
+          className,
+        )}
       >
         <span
           aria-hidden
@@ -190,7 +197,7 @@ export function getFallbackConfig(
   catalog: RuntimeCatalog | null,
   executor: string,
   provider: string | null,
-  model: string | null
+  model: string | null,
 ): ExecutionConfigValue {
   return normalizeExecutionConfig(catalog, executor, provider, model);
 }

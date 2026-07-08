@@ -16,7 +16,10 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-export function resolveThemePreference(theme: ThemePreference, systemPrefersDark: boolean): ResolvedTheme {
+export function resolveThemePreference(
+  theme: ThemePreference,
+  systemPrefersDark: boolean,
+): ResolvedTheme {
   if (theme === "dark") return "dark";
   if (theme === "light") return "light";
   return systemPrefersDark ? "dark" : "light";
@@ -34,7 +37,7 @@ function getSystemPrefersDark(): boolean {
 }
 
 function applyResolvedTheme(theme: ResolvedTheme) {
-  document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset["theme"] = theme;
   document.documentElement.classList.toggle("dark", theme === "dark");
   document.documentElement.style.colorScheme = theme;
 }

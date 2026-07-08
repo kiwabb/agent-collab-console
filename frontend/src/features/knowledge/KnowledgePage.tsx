@@ -17,10 +17,7 @@ import type { Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { TeamNotesEditor } from "./TeamNotesEditor";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
-import {
-  EmptyStateAction,
-  InteractionEmptyState,
-} from "@/components/ui/interaction-empty-state";
+import { EmptyStateAction, InteractionEmptyState } from "@/components/ui/interaction-empty-state";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 
@@ -56,8 +53,12 @@ export function KnowledgePage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    void listProjects().then(setProjects).catch(() => setProjects([]));
-    void getEmbeddingStatus().then(setEmbedding).catch(() => setEmbedding(null));
+    void listProjects()
+      .then(setProjects)
+      .catch(() => setProjects([]));
+    void getEmbeddingStatus()
+      .then(setEmbedding)
+      .catch(() => setEmbedding(null));
   }, []);
 
   useEffect(() => {
@@ -77,8 +78,8 @@ export function KnowledgePage() {
           q,
           scope,
           mode,
-          projectId: projectFilter || undefined,
           limit: 25,
+          ...(projectFilter ? { projectId: projectFilter } : {}),
         });
         setResults(data);
       } catch {
@@ -119,7 +120,7 @@ export function KnowledgePage() {
       eyebrow={t("knowledge.title")}
       title={t("knowledge.title")}
       description={t("knowledge.subtitle")}
-      actions={(
+      actions={
         <>
           <span
             className={
@@ -144,11 +145,15 @@ export function KnowledgePage() {
               reindexing && "motion-essential",
             )}
           >
-            {reindexing ? <AgentThinkingIndicator phase="tool" size={12} /> : <RefreshCw size={12} />}
+            {reindexing ? (
+              <AgentThinkingIndicator phase="tool" size={12} />
+            ) : (
+              <RefreshCw size={12} />
+            )}
             {t("knowledge.reindex")}
           </button>
         </>
-      )}
+      }
       contentClassName="space-y-4"
     >
       <nav className="enterprise-card flex items-center gap-2 rounded-2xl px-2 text-xs">

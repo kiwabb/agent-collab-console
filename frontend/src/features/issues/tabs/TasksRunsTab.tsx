@@ -15,14 +15,24 @@ import {
 import { getRuntimeCatalog } from "@/lib/api/runtime";
 import { useExecutionProcessLogStream } from "@/hooks/useExecutionProcessLogStream";
 import { useExecutionProcessMessageStream } from "@/hooks/useExecutionProcessMessageStream";
-import type { CodexIssue, CodexTask, CodexTaskMessage, ExecutionProcess, RuntimeCatalog } from "@/lib/types";
+import type {
+  CodexIssue,
+  CodexTask,
+  CodexTaskMessage,
+  ExecutionProcess,
+  RuntimeCatalog,
+} from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
-import { ExecutionConfigSelector, normalizeExecutionConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
+import {
+  ExecutionConfigSelector,
+  normalizeExecutionConfig,
+  type ExecutionConfigValue,
+} from "@/components/runtime/ExecutionConfigSelector";
 import { EmptyState } from "@/components/ui/empty-state";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
-import { cn } from "@/lib/utils";
+import { cn, isRecord, safeJsonParse } from "@/lib/utils";
 import { AgentLiveTimeline } from "@/features/runs/AgentLiveTimeline";
 import { TasksOverviewBar } from "@/features/issues/components/TasksOverviewBar";
 import { useBusEventEffect, busEventMatchers } from "@/hooks/useBusEventEffect";
@@ -53,19 +63,30 @@ export function TasksRunsTab({ issueId, issue }: Props) {
   const [catalog, setCatalog] = useState<RuntimeCatalog | null>(null);
   // Initial config is intentionally minimal — once the catalog loads or a task
   // is selected, normalizeExecutionConfig() resolves the right enabled executor id.
-  const [config, setConfig] = useState<ExecutionConfigValue>({ executor: "", provider: null, model: null });
+  const [config, setConfig] = useState<ExecutionConfigValue>({
+    executor: "",
+    provider: null,
+    model: null,
+  });
 
   useEffect(() => {
-    void getRuntimeCatalog().then(setCatalog).catch(() => setCatalog(null));
+    void getRuntimeCatalog()
+      .then(setCatalog)
+      .catch(() => setCatalog(null));
   }, []);
 
   const loadTasks = useCallback(async () => {
     try {
       const list = await getCodexTasks(null, issueId);
       setTasks(list);
-      if (!selectedTaskId && list.length > 0) setSelectedTaskId(list[0].id);
+      const firstTask = list[0];
+      if (!selectedTaskId && firstTask) setSelectedTaskId(firstTask.id);
     } catch (err) {
-      addToast({ type: "error", title: t("task.loadFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("task.loadFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }, [issueId, selectedTaskId, addToast, t]);
 
@@ -85,9 +106,12 @@ export function TasksRunsTab({ issueId, issue }: Props) {
   const loadRuns = useCallback(async (taskId: string) => {
     try {
       const list = await getExecutionProcesses(null, taskId);
-      const sorted = [...list].sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""));
+      const sorted = [...list].sort((a, b) =>
+        (b.started_at ?? "").localeCompare(a.started_at ?? ""),
+      );
       setRuns(sorted);
-      if (sorted.length > 0) setSelectedRunId(sorted[0].id);
+      const firstRun = sorted[0];
+      if (firstRun) setSelectedRunId(firstRun.id);
       else setSelectedRunId(null);
     } catch {
       setRuns([]);
@@ -104,7 +128,12 @@ export function TasksRunsTab({ issueId, issue }: Props) {
   useBusEventEffect({
     match: busEventMatchers.all(
       busEventMatchers.issueId(issueId),
-      busEventMatchers.typeIn("task_created", "task_status", "task_deleted", "workflow_node_updated"),
+      busEventMatchers.typeIn(
+        "task_created",
+        "task_status",
+        "task_deleted",
+        "workflow_node_updated",
+      ),
     ),
     onEvent: () => {
       void loadTasks();
@@ -119,7 +148,9 @@ export function TasksRunsTab({ issueId, issue }: Props) {
     const issueActive = issue != null && !ISSUE_TERMINAL.has(issue.status);
     const hasLive =
       issueActive ||
-      tasks.some((t) => t.status === "running" || t.status === "responding" || t.status === "pending") ||
+      tasks.some(
+        (t) => t.status === "running" || t.status === "responding" || t.status === "pending",
+      ) ||
       runs.some((r) => r.status === "running" || r.status === "in_progress");
     if (!hasLive) return;
     const id = window.setInterval(() => {
@@ -129,8 +160,14 @@ export function TasksRunsTab({ issueId, issue }: Props) {
     return () => window.clearInterval(id);
   }, [issue, tasks, runs, selectedTaskId, loadTasks, loadRuns]);
 
-  const selectedTask = useMemo(() => tasks.find((t) => t.id === selectedTaskId) ?? null, [tasks, selectedTaskId]);
-  const selectedRun = useMemo(() => runs.find((r) => r.id === selectedRunId) ?? null, [runs, selectedRunId]);
+  const selectedTask = useMemo(
+    () => tasks.find((t) => t.id === selectedTaskId) ?? null,
+    [tasks, selectedTaskId],
+  );
+  const selectedRun = useMemo(
+    () => runs.find((r) => r.id === selectedRunId) ?? null,
+    [runs, selectedRunId],
+  );
 
   // Re-normalize config whenever the catalog or selected task changes.
   // normalizeExecutionConfig falls back to the first enabled executor when the
@@ -147,11 +184,12 @@ export function TasksRunsTab({ issueId, issue }: Props) {
   const { logs } = useExecutionProcessLogStream(selectedRunId);
   const { messages, pendingAssistant } = useExecutionProcessMessageStream(selectedRunId);
   const composerBusyMotionPhase = mode === "rerun" ? "dispatching" : "thinking";
-  const composerBusyDensity = mode === "rerun"
-    ? "tasks-runs-rerun-dispatch-cta"
-    : mode === "refine"
-      ? "tasks-runs-refine-thinking-cta"
-      : "tasks-runs-chat-thinking-cta";
+  const composerBusyDensity =
+    mode === "rerun"
+      ? "tasks-runs-rerun-dispatch-cta"
+      : mode === "refine"
+        ? "tasks-runs-refine-thinking-cta"
+        : "tasks-runs-chat-thinking-cta";
 
   // A task is "fresh" if it has never been executed — show a primary Run
   // button instead of the chat/refine/rerun composer.
@@ -181,7 +219,11 @@ export function TasksRunsTab({ issueId, issue }: Props) {
       void loadTasks();
       void loadRuns(selectedTaskId);
     } catch (err) {
-      addToast({ type: "error", title: t("task.runFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("task.runFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setBusy(false);
     }
@@ -210,7 +252,11 @@ export function TasksRunsTab({ issueId, issue }: Props) {
       void loadTasks();
       void loadRuns(selectedTaskId);
     } catch (err) {
-      addToast({ type: "error", title: t("task.modeFailed", { mode }), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("task.modeFailed", { mode }),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setBusy(false);
     }
@@ -223,16 +269,22 @@ export function TasksRunsTab({ issueId, issue }: Props) {
       addToast({ type: "success", title: t("task.terminated") });
       void loadRuns(selectedTaskId);
     } catch (err) {
-      addToast({ type: "error", title: t("task.terminateFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("task.terminateFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }, [selectedTaskId, loadRuns, addToast, t]);
 
   return (
     <div className="h-full flex flex-col min-h-0 flex-1">
       <TasksOverviewBar issueId={issueId} />
-      <div className="flex-1 min-h-0 grid grid-cols-[220px_240px_1fr] gap-px bg-border-subtle">
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[220px_240px_1fr] gap-px bg-border-subtle overflow-auto">
         <div className="bg-surface overflow-y-auto flex flex-col min-h-0">
-          <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">Tasks</div>
+          <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">
+            {t("task.listTitle")}
+          </div>
           {tasks.length === 0 && (
             <div className="flex-1 flex items-center justify-center">
               <EmptyState
@@ -249,7 +301,9 @@ export function TasksRunsTab({ issueId, issue }: Props) {
               onClick={() => setSelectedTaskId(t.id)}
               className={cn(
                 "w-full text-left px-3 py-2 text-sm border-l-2 transition-colors",
-                t.id === selectedTaskId ? "border-brand bg-brand/5" : "border-transparent hover:bg-surface-hover"
+                t.id === selectedTaskId
+                  ? "border-brand bg-brand/5"
+                  : "border-transparent hover:bg-surface-hover",
               )}
             >
               <div className="truncate">{t.title}</div>
@@ -264,13 +318,19 @@ export function TasksRunsTab({ issueId, issue }: Props) {
         </div>
 
         <div className="bg-surface overflow-y-auto flex flex-col min-h-0">
-          <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">Runs</div>
+          <div className="p-3 text-[10px] font-black uppercase tracking-widest text-text-muted shrink-0">
+            {t("run.listTitle")}
+          </div>
           {runs.length === 0 && (
             <div className="flex-1 flex items-center justify-center">
               <EmptyState
                 icon="log"
-                title={selectedTaskId ? "No runs yet" : "No task selected"}
-                description={selectedTaskId ? "Click Run in the composer below to start." : "Select a task on the left."}
+                title={selectedTaskId ? t("run.noRunsTitle") : t("run.noRunsNoTask")}
+                description={
+                  selectedTaskId
+                    ? t("run.noRunsDescription")
+                    : t("run.noRunsNoTaskDescription")
+                }
               />
             </div>
           )}
@@ -281,7 +341,9 @@ export function TasksRunsTab({ issueId, issue }: Props) {
               onClick={() => setSelectedRunId(r.id)}
               className={cn(
                 "w-full text-left px-3 py-2 text-xs border-l-2 transition-colors",
-                r.id === selectedRunId ? "border-brand bg-brand/5" : "border-transparent hover:bg-surface-hover"
+                r.id === selectedRunId
+                  ? "border-brand bg-brand/5"
+                  : "border-transparent hover:bg-surface-hover",
               )}
             >
               <div className="flex items-center gap-2">
@@ -299,7 +361,9 @@ export function TasksRunsTab({ issueId, issue }: Props) {
         <div className="bg-background flex flex-col min-h-0">
           {selectedRunId && (
             <div className="px-4 pt-3 pb-2 flex items-center gap-2 border-b border-border-subtle">
-              <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">View</span>
+              <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">
+                {t("run.viewLabel")}
+              </span>
               <button
                 type="button"
                 onClick={() => setStreamView("live")}
@@ -307,10 +371,10 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                   "px-2 py-0.5 text-[11px] font-bold rounded border",
                   streamView === "live"
                     ? "border-brand bg-brand text-background"
-                    : "border-border-subtle text-text-muted hover:text-foreground"
+                    : "border-border-subtle text-text-muted hover:text-foreground",
                 )}
               >
-                Live
+                {t("run.viewLive")}
               </button>
               <button
                 type="button"
@@ -319,10 +383,10 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                   "px-2 py-0.5 text-[11px] font-bold rounded border",
                   streamView === "assistant"
                     ? "border-brand bg-brand text-background"
-                    : "border-border-subtle text-text-muted hover:text-foreground"
+                    : "border-border-subtle text-text-muted hover:text-foreground",
                 )}
               >
-                Assistant text
+                {t("run.viewAssistant")}
               </button>
               <button
                 type="button"
@@ -331,10 +395,10 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                   "px-2 py-0.5 text-[11px] font-bold rounded border",
                   streamView === "raw"
                     ? "border-brand bg-brand text-background"
-                    : "border-border-subtle text-text-muted hover:text-foreground"
+                    : "border-border-subtle text-text-muted hover:text-foreground",
                 )}
               >
-                Raw stream
+                {t("run.viewRaw")}
               </button>
             </div>
           )}
@@ -400,8 +464,13 @@ export function TasksRunsTab({ issueId, issue }: Props) {
               <>
                 {extractAssistantText(messages, pendingAssistant).map((entry, i) => (
                   <div key={`asst-${i}`} className="mb-3">
-                    <div className="text-[10px] uppercase text-text-muted mb-1">{entry.role}{entry.live ? " (live)" : ""}</div>
-                    <div className="whitespace-pre-wrap text-text-primary break-words">{entry.text}</div>
+                    <div className="text-[10px] uppercase text-text-muted mb-1">
+                      {entry.role}
+                      {entry.live ? " (live)" : ""}
+                    </div>
+                    <div className="whitespace-pre-wrap text-text-primary break-words">
+                      {entry.text}
+                    </div>
                   </div>
                 ))}
                 {messages.length === 0 && !pendingAssistant && logs.length > 0 && (
@@ -427,7 +496,9 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                 {messages.length === 0 && logs.length > 0 && (
                   <div className="text-text-muted break-all">
                     {logs.slice(-50).map((l) => (
-                      <div key={l.id} className="mb-1">{l.content?.slice(0, 200)}</div>
+                      <div key={l.id} className="mb-1">
+                        {l.content?.slice(0, 200)}
+                      </div>
                     ))}
                   </div>
                 )}
@@ -440,7 +511,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
               <>
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] text-text-muted">
-                    Task has not run yet · status: <b>{selectedTask?.status}</b>
+                    {t("task.notRunYet")} · status: <b>{selectedTask?.status}</b>
                   </span>
                   <button
                     type="button"
@@ -452,7 +523,11 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                 </div>
                 {configOpen && (
                   <div className="p-2 rounded border border-border-subtle bg-surface-raised">
-                    <ExecutionConfigSelector value={config} onChange={setConfig} catalog={catalog} />
+                    <ExecutionConfigSelector
+                      value={config}
+                      onChange={setConfig}
+                      catalog={catalog}
+                    />
                   </div>
                 )}
                 <div className="flex justify-end">
@@ -476,9 +551,24 @@ export function TasksRunsTab({ issueId, issue }: Props) {
             ) : (
               <>
                 <div className="flex items-center gap-2">
-                  <ModeButton current={mode} value="chat" onClick={() => setMode("chat")} hint={t("task.runMode.chatHint")} />
-                  <ModeButton current={mode} value="refine" onClick={() => setMode("refine")} hint={t("task.runMode.refineHint")} />
-                  <ModeButton current={mode} value="rerun" onClick={() => setMode("rerun")} hint={t("task.runMode.autoHint")} />
+                  <ModeButton
+                    current={mode}
+                    value="chat"
+                    onClick={() => setMode("chat")}
+                    hint={t("task.runMode.chatHint")}
+                  />
+                  <ModeButton
+                    current={mode}
+                    value="refine"
+                    onClick={() => setMode("refine")}
+                    hint={t("task.runMode.refineHint")}
+                  />
+                  <ModeButton
+                    current={mode}
+                    value="rerun"
+                    onClick={() => setMode("rerun")}
+                    hint={t("task.runMode.autoHint")}
+                  />
                   <button
                     type="button"
                     onClick={() => setConfigOpen((v) => !v)}
@@ -494,14 +584,20 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                 </div>
                 {configOpen && (
                   <div className="p-2 rounded border border-border-subtle bg-surface-raised">
-                    <ExecutionConfigSelector value={config} onChange={setConfig} catalog={catalog} />
+                    <ExecutionConfigSelector
+                      value={config}
+                      onChange={setConfig}
+                      catalog={catalog}
+                    />
                   </div>
                 )}
                 {mode !== "rerun" && (
                   <textarea
                     value={composer}
                     onChange={(e) => setComposer(e.target.value)}
-                    placeholder={mode === "refine" ? "Describe the changes to apply…" : "Send a message…"}
+                    placeholder={
+                      mode === "refine" ? "Describe the changes to apply…" : "Send a message…"
+                    }
                     rows={2}
                     className="w-full bg-surface-input border border-border-subtle rounded-md px-3 py-2 text-sm outline-none focus:border-brand resize-y"
                   />
@@ -518,7 +614,13 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                         <AgentThinkingIndicator phase={composerBusyMotionPhase} size={12} />
                         Sending…
                       </>
-                    ) : mode === "rerun" ? "Rerun" : mode === "refine" ? "Refine" : "Send"}
+                    ) : mode === "rerun" ? (
+                      "Rerun"
+                    ) : mode === "refine" ? (
+                      "Refine"
+                    ) : (
+                      "Send"
+                    )}
                   </Button>
                 </div>
               </>
@@ -575,7 +677,7 @@ function ModeButton({
         "px-2 py-1 text-[11px] font-bold uppercase tracking-wider rounded border transition-colors",
         active
           ? "border-brand bg-brand text-background"
-          : "border-border-subtle text-text-muted hover:text-foreground hover:bg-surface-hover"
+          : "border-border-subtle text-text-muted hover:text-foreground hover:bg-surface-hover",
       )}
     >
       {value}
@@ -623,8 +725,8 @@ function humanReadable(content: string): string {
   const trimmed = content.trim();
   // Try JSON-envelope path.
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      const obj = JSON.parse(trimmed);
+    const parsed = safeJsonParse(trimmed);
+    if (parsed !== null) {
       const collected: string[] = [];
       const walk = (n: unknown) => {
         if (!n) return;
@@ -633,30 +735,28 @@ function humanReadable(content: string): string {
           n.forEach(walk);
           return;
         }
-        if (typeof n === "object") {
-          const node = n as Record<string, unknown>;
-          if (node.type === "text" && typeof node.text === "string") {
-            collected.push(node.text);
+        if (isRecord(n)) {
+          const node = n;
+          if (node["type"] === "text" && typeof node["text"] === "string") {
+            collected.push(node["text"]);
           }
-          if (node.type === "thinking" && typeof node.thinking === "string") {
+          if (node["type"] === "thinking" && typeof node["thinking"] === "string") {
             // Thinking blocks are useful to surface in "assistant text"
             // mode for transparency; prefix so they're distinguishable.
-            collected.push(`[thinking] ${node.thinking}`);
+            collected.push(`[thinking] ${node["thinking"]}`);
           }
-          if (node.type === "tool_use") {
-            const name = node.name ?? "tool";
+          if (node["type"] === "tool_use") {
+            const name = node["name"] ?? "tool";
             collected.push(`[tool: ${String(name)}]`);
           }
-          if (node.type === "tool_result") {
+          if (node["type"] === "tool_result") {
             collected.push("[tool result]");
           }
           Object.values(node).forEach(walk);
         }
       };
-      walk(obj);
+      walk(parsed);
       if (collected.length > 0) return collected.join("\n").trim();
-    } catch {
-      // fall through
     }
   }
   return trimmed;

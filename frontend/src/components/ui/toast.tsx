@@ -10,7 +10,7 @@ interface Toast {
   id: string;
   type: ToastType;
   title: string;
-  message?: string;
+  message?: string | undefined;
 }
 
 interface ToastContextValue {
@@ -52,6 +52,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (toasts.length === 0) return;
     const latestToast = toasts[toasts.length - 1];
+    if (!latestToast) return;
     const timer = setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== latestToast.id));
     }, 5000);
@@ -73,15 +74,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               key={toast.id}
               className={cn(
                 "flex items-start gap-3 p-4 rounded-xl border backdrop-blur-sm shadow-lg pointer-events-auto animate-in slide-in-from-right-4 fade-in duration-300 min-w-[320px] max-w-[420px]",
-                styles[toast.type]
+                styles[toast.type],
               )}
             >
               <Icon size={18} className="shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-bold">{toast.title}</p>
-                {toast.message && (
-                  <p className="text-xs opacity-70 mt-1">{toast.message}</p>
-                )}
+                {toast.message && <p className="text-xs opacity-70 mt-1">{toast.message}</p>}
               </div>
               <button
                 onClick={() => removeToast(toast.id)}

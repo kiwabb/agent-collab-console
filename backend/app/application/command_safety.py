@@ -32,6 +32,8 @@ REFUSED_COMMAND_PATTERNS = [
 _SHELL_META = re.compile(r"[;&|`$<>]")
 
 ALLOWED_COMMANDS: tuple[tuple[str, ...], ...] = (
+    ("true",),
+    ("false",),
     ("pytest",),
     ("python", "-m", "pytest"),
     ("python3", "-m", "pytest"),

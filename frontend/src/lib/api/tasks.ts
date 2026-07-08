@@ -1,6 +1,6 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, WS_BASE, dedupedFetch, handleResponse } from "./fetch";
+import { API_BASE, WS_BASE, apiJsonRequest, apiRequest, apiRequestOr } from "./fetch";
 import type {
   CodexTask,
   CodexTaskMessage,
@@ -33,17 +33,12 @@ export async function createCodexTask(
     title,
     prompt,
     parent_task_id: parentTaskId,
-    executor,
+    executor: executor ?? undefined,
     provider,
     model,
     role,
   };
-  const response = await fetch(`${API_BASE}/codex/tasks`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<CodexTask>(response);
+  return apiJsonRequest<CodexTask>(`${API_BASE}/codex/tasks`, "POST", body);
 }
 export async function getCodexTasks(
   sessionId: string | null = null,
@@ -54,27 +49,30 @@ export async function getCodexTasks(
   if (issueId) params.set("issue_id", issueId);
   const query = params.toString();
   const url = query ? `${API_BASE}/codex/tasks?${query}` : `${API_BASE}/codex/tasks`;
-  const response = await dedupedFetch(url);
-  if (!response.ok) {
-    console.error(`getCodexTasks failed: HTTP ${response.status}`);
-    return [];
-  }
-  return response.json();
+  return apiRequestOr<CodexTask[]>(url, [], {
+    dedupe: true,
+    errorMessage: (status) => `getCodexTasks failed: HTTP ${status}`,
+  });
 }
 export async function getCodexTask(taskId: string): Promise<CodexTask> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}`);
-  return handleResponse<CodexTask>(response);
+  return apiRequest<CodexTask>(`${API_BASE}/codex/tasks/${taskId}`);
 }
 export async function runCodexTask(
   taskId: string,
-  overrides?: { executor?: string | null; provider?: string | null; model?: string | null },
+  overrides?: {
+    executor?: string | null | undefined;
+    provider?: string | null | undefined;
+    model?: string | null | undefined;
+  },
 ): Promise<ExecutionProcess> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/run`, {
-    method: "POST",
-    headers: overrides ? { "Content-Type": "application/json" } : undefined,
-    body: overrides ? JSON.stringify(overrides) : undefined,
-  });
-  return handleResponse<ExecutionProcess>(response);
+  const init: RequestInit = overrides
+    ? {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(overrides),
+      }
+    : { method: "POST" };
+  return apiRequest<ExecutionProcess>(`${API_BASE}/codex/tasks/${taskId}/run`, init);
 }
 export async function requestCodexTaskHelp(
   taskId: string,
@@ -83,74 +81,52 @@ export async function requestCodexTaskHelp(
   prompt = "",
   contextSummary = "",
 ): Promise<unknown> {
-  const body: RequestHelpRequest = {
-    target_executor: targetExecutor,
-    title: title || undefined,
-    prompt: prompt || undefined,
-    context_summary: contextSummary || undefined,
-  };
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/request-help`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse(response);
+  const body: RequestHelpRequest = { target_executor: targetExecutor };
+  if (title) body.title = title;
+  if (prompt) body.prompt = prompt;
+  if (contextSummary) body.context_summary = contextSummary;
+  return apiJsonRequest<unknown>(`${API_BASE}/codex/tasks/${taskId}/request-help`, "POST", body);
 }
 export async function deleteCodexTask(taskId: string): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}`, {
+  return apiRequest<unknown>(`${API_BASE}/codex/tasks/${taskId}`, {
     method: "DELETE",
   });
-  return handleResponse(response);
 }
 export async function terminateCodexTask(taskId: string): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/terminate`, {
+  return apiRequest<unknown>(`${API_BASE}/codex/tasks/${taskId}/terminate`, {
     method: "POST",
   });
-  return handleResponse(response);
 }
 export async function getCodexTaskLogs(taskId: string): Promise<unknown[]> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/logs`);
-  if (!response.ok) {
-    console.error(`getCodexTaskLogs(${taskId}) failed: HTTP ${response.status}`);
-    return [];
-  }
-  return response.json();
+  return apiRequestOr<unknown[]>(`${API_BASE}/codex/tasks/${taskId}/logs`, [], {
+    errorMessage: (status) => `getCodexTaskLogs(${taskId}) failed: HTTP ${status}`,
+  });
 }
 export async function getCodexTaskMessages(taskId: string): Promise<CodexTaskMessage[]> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/messages`);
-  if (!response.ok) {
-    console.error(`getCodexTaskMessages(${taskId}) failed: HTTP ${response.status}`);
-    return [];
-  }
-  return response.json();
+  return apiRequestOr<CodexTaskMessage[]>(`${API_BASE}/codex/tasks/${taskId}/messages`, [], {
+    errorMessage: (status) => `getCodexTaskMessages(${taskId}) failed: HTTP ${status}`,
+  });
 }
 export async function getTaskHelpRequests(taskId: string): Promise<HelpRequest[]> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/help-requests`);
-  if (!response.ok) {
-    console.error(`getTaskHelpRequests(${taskId}) failed: HTTP ${response.status}`);
-    return [];
-  }
-  return response.json();
+  return apiRequestOr<HelpRequest[]>(`${API_BASE}/codex/tasks/${taskId}/help-requests`, [], {
+    errorMessage: (status) => `getTaskHelpRequests(${taskId}) failed: HTTP ${status}`,
+  });
 }
 export async function sendCodexTaskMessage(
   taskId: string,
   content: string,
 ): Promise<SendMessageResult> {
   const body: SendMessageRequest = { content };
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/messages`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<SendMessageResult>(response);
+  return apiJsonRequest<SendMessageResult>(
+    `${API_BASE}/codex/tasks/${taskId}/messages`,
+    "POST",
+    body,
+  );
 }
 export async function chatCodexTask(taskId: string, content: string): Promise<SendMessageResult> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+  return apiJsonRequest<SendMessageResult>(`${API_BASE}/codex/tasks/${taskId}/chat`, "POST", {
+    content,
   });
-  return handleResponse<SendMessageResult>(response);
 }
 export async function sendCodexTask(
   taskId: string,
@@ -159,24 +135,20 @@ export async function sendCodexTask(
 ): Promise<SendMessageResult> {
   const body: { content: string; force_mode?: "chat" | "refine" } = { content };
   if (forceMode) body.force_mode = forceMode;
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/send`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<SendMessageResult>(response);
+  return apiJsonRequest<SendMessageResult>(`${API_BASE}/codex/tasks/${taskId}/send`, "POST", body);
 }
 export async function refineCodexTask(taskId: string, content: string): Promise<SendMessageResult> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/refine`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+  return apiJsonRequest<SendMessageResult>(`${API_BASE}/codex/tasks/${taskId}/refine`, "POST", {
+    content,
   });
-  return handleResponse<SendMessageResult>(response);
 }
 export async function rerunCodexTask(
   taskId: string,
-  overrides?: { executor?: string | null; provider?: string | null; model?: string | null },
+  overrides?: {
+    executor?: string | null | undefined;
+    provider?: string | null | undefined;
+    model?: string | null | undefined;
+  },
 ): Promise<SendMessageResult> {
   const hasOverrides = !!(
     overrides &&
@@ -189,20 +161,14 @@ export async function rerunCodexTask(
   } else {
     init.headers = { "Content-Type": "application/json" };
   }
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/rerun`, init);
-  return handleResponse<SendMessageResult>(response);
+  return apiRequest<SendMessageResult>(`${API_BASE}/codex/tasks/${taskId}/rerun`, init);
 }
 export async function updateCodexTaskExecutor(
   taskId: string,
   executor: "codex" | "claude",
 ): Promise<CodexTask> {
   const body: UpdateCodexTaskRequest = { executor };
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<CodexTask>(response);
+  return apiJsonRequest<CodexTask>(`${API_BASE}/codex/tasks/${taskId}`, "PATCH", body);
 }
 export async function updateCodexTask(
   taskId: string,
@@ -211,21 +177,17 @@ export async function updateCodexTask(
   model?: string | null,
 ): Promise<CodexTask> {
   const body: UpdateCodexTaskRequest = {};
-  if (executor !== undefined) body.executor = executor;
+  if (executor !== undefined) {
+    body.executor = executor;
+  }
   if (provider !== undefined) body.provider = provider;
   if (model !== undefined) body.model = model;
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<CodexTask>(response);
+  return apiJsonRequest<CodexTask>(`${API_BASE}/codex/tasks/${taskId}`, "PATCH", body);
 }
 export async function submitCodexTask(taskId: string): Promise<CodexTask> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/submit`, {
+  return apiRequest<CodexTask>(`${API_BASE}/codex/tasks/${taskId}/submit`, {
     method: "POST",
   });
-  return handleResponse<CodexTask>(response);
 }
 export async function reviewCodexTask(
   taskId: string,
@@ -233,12 +195,7 @@ export async function reviewCodexTask(
   comment: string | null,
 ): Promise<CodexTask> {
   const body = { decision, comment };
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/review`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse<CodexTask>(response);
+  return apiJsonRequest<CodexTask>(`${API_BASE}/codex/tasks/${taskId}/review`, "POST", body);
 }
 /** Answer a task that paused waiting for clarification. Re-runs the task
  * with the answer threaded through review_comment. */
@@ -246,17 +203,13 @@ export async function answerCodexTaskClarification(
   taskId: string,
   answer: string,
 ): Promise<CodexTask> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/answer`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ answer }),
+  return apiJsonRequest<CodexTask>(`${API_BASE}/codex/tasks/${taskId}/answer`, "POST", {
+    answer,
   });
-  return handleResponse<CodexTask>(response);
 }
 export async function getExecutionProcess(processId: string): Promise<ExecutionProcess> {
   try {
-    const response = await fetch(`${API_BASE}/codex/execution-processes/${processId}`);
-    return handleResponse<ExecutionProcess>(response);
+    return await apiRequest<ExecutionProcess>(`${API_BASE}/codex/execution-processes/${processId}`);
   } catch (err) {
     console.error(`getExecutionProcess(${processId}) failed:`, err);
     throw err;
@@ -273,23 +226,20 @@ export async function getExecutionProcesses(
   const url = query
     ? `${API_BASE}/codex/execution-processes?${query}`
     : `${API_BASE}/codex/execution-processes`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    console.error(`getExecutionProcesses failed: HTTP ${response.status}`);
-    return [];
-  }
-  return response.json();
+  return apiRequestOr<ExecutionProcess[]>(url, [], {
+    errorMessage: (status) => `getExecutionProcesses failed: HTTP ${status}`,
+  });
 }
 export async function continueCodexTask(taskId: string): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/codex/tasks/${taskId}/continue`, {
+  return apiRequest<unknown>(`${API_BASE}/codex/tasks/${taskId}/continue`, {
     method: "POST",
   });
-  return handleResponse(response);
 }
 export async function getExecutionProcessMessages(processId: string): Promise<CodexTaskMessage[]> {
   try {
-    const response = await fetch(`${API_BASE}/codex/execution-processes/${processId}/messages`);
-    return handleResponse<CodexTaskMessage[]>(response);
+    return await apiRequest<CodexTaskMessage[]>(
+      `${API_BASE}/codex/execution-processes/${processId}/messages`,
+    );
   } catch (err) {
     console.error(`getExecutionProcessMessages(${processId}) failed:`, err);
     throw err;
@@ -297,8 +247,7 @@ export async function getExecutionProcessMessages(processId: string): Promise<Co
 }
 export async function getExecutionProcessLogs(processId: string): Promise<LogEvent[]> {
   try {
-    const response = await fetch(`${API_BASE}/codex/execution-processes/${processId}/logs`);
-    return handleResponse<LogEvent[]>(response);
+    return await apiRequest<LogEvent[]>(`${API_BASE}/codex/execution-processes/${processId}/logs`);
   } catch (err) {
     console.error(`getExecutionProcessLogs(${processId}) failed:`, err);
     throw err;
@@ -332,14 +281,13 @@ export async function importCodexTasks(
   const formData = new FormData();
   formData.append("data", data);
   formData.append("format", format);
-  const response = await fetch(
+  return apiRequest<CodexTask[]>(
     `${API_BASE}/codex/tasks/import?session_id=${encodeURIComponent(sessionId)}`,
     {
       method: "POST",
       body: formData,
     },
   );
-  return handleResponse<CodexTask[]>(response);
 }
 export function downloadFile(content: string, filename: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType });

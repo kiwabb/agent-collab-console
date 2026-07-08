@@ -19,8 +19,7 @@ export function InteractionEmptyState({
   description,
   action,
 }: InteractionEmptyStateProps) {
-  const Icon =
-    tone === "loading" ? Loader2 : tone === "error" ? AlertCircle : Inbox;
+  const Icon = tone === "loading" ? Loader2 : tone === "error" ? AlertCircle : Inbox;
 
   return (
     <div
@@ -41,9 +40,7 @@ export function InteractionEmptyState({
       </div>
       <h2 className="text-base font-semibold text-foreground">{title}</h2>
       {description && (
-        <p className="mt-2 max-w-md text-sm leading-relaxed text-text-muted">
-          {description}
-        </p>
+        <p className="mt-2 max-w-md text-sm leading-relaxed text-text-muted">{description}</p>
       )}
       {action && <div className="mt-5">{action}</div>}
     </div>
@@ -51,11 +48,5 @@ export function InteractionEmptyState({
 }
 
 export function EmptyStateAction(props: React.ComponentProps<typeof Button>) {
-  return (
-    <Button
-      size="sm"
-      className="bg-brand text-black hover:bg-brand-strong"
-      {...props}
-    />
-  );
+  return <Button size="sm" className="bg-brand text-black hover:bg-brand-strong" {...props} />;
 }

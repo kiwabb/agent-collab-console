@@ -31,9 +31,11 @@ function parseLinesIntoHunks(chunk: string[]): DiffLine[] {
   for (const line of chunk) {
     if (line.startsWith("@@")) {
       const m = HUNK_RE.exec(line);
-      if (m) {
-        oldLine = Number(m[1]);
-        newLine = Number(m[2]);
+      const oldStart = m?.[1];
+      const newStart = m?.[2];
+      if (oldStart && newStart) {
+        oldLine = Number(oldStart);
+        newLine = Number(newStart);
       }
       result.push({ type: "hunk", oldLine: null, newLine: null, text: line });
       inHunk = true;
@@ -67,20 +69,23 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
   // Split into per-file blocks at "diff --git" boundaries.
   const blockStarts: number[] = [];
   for (let i = 0; i < rawLines.length; i++) {
-    if (rawLines[i].startsWith("diff --git ")) blockStarts.push(i);
+    const rawLine = rawLines[i];
+    if (rawLine?.startsWith("diff --git ")) blockStarts.push(i);
   }
 
   for (let b = 0; b < blockStarts.length; b++) {
     const start = blockStarts[b];
+    if (start == null) continue;
     const end = b + 1 < blockStarts.length ? blockStarts[b + 1] : rawLines.length;
     const block = rawLines.slice(start, end);
     const rawPatch = block.join("\n");
 
     const headerLine = block[0];
+    if (!headerLine) continue;
     // Extract paths from "diff --git a/<p> b/<q>"
     const gitMatch = /^diff --git a\/(.+) b\/(.+)$/.exec(headerLine);
-    let oldPath: string | null = gitMatch ? gitMatch[1] : null;
-    let newPath: string | null = gitMatch ? gitMatch[2] : null;
+    let oldPath: string | null = gitMatch?.[1] ?? null;
+    let newPath: string | null = gitMatch?.[2] ?? null;
 
     let isNew = false;
     let isDeleted = false;
@@ -89,13 +94,25 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
     // Walk meta-lines before first @@
     for (const line of block.slice(1)) {
       if (line.startsWith("@@")) break;
-      if (line.startsWith("new file mode")) { isNew = true; oldPath = null; }
-      else if (line.startsWith("deleted file mode")) { isDeleted = true; newPath = null; }
-      else if (/^Binary files/.test(line)) { isBinary = true; }
-      else if (line.startsWith("--- /dev/null")) { isNew = true; oldPath = null; }
-      else if (line.startsWith("+++ /dev/null")) { isDeleted = true; newPath = null; }
-      else if (line.startsWith("--- a/")) { oldPath = line.slice(6); }
-      else if (line.startsWith("+++ b/")) { newPath = line.slice(6); }
+      if (line.startsWith("new file mode")) {
+        isNew = true;
+        oldPath = null;
+      } else if (line.startsWith("deleted file mode")) {
+        isDeleted = true;
+        newPath = null;
+      } else if (/^Binary files/.test(line)) {
+        isBinary = true;
+      } else if (line.startsWith("--- /dev/null")) {
+        isNew = true;
+        oldPath = null;
+      } else if (line.startsWith("+++ /dev/null")) {
+        isDeleted = true;
+        newPath = null;
+      } else if (line.startsWith("--- a/")) {
+        oldPath = line.slice(6);
+      } else if (line.startsWith("+++ b/")) {
+        newPath = line.slice(6);
+      }
     }
 
     const lines = parseLinesIntoHunks(block);

@@ -8,7 +8,7 @@ import { PreferencesProvider } from "@/providers/PreferencesProvider";
 import { ToastProvider } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: "Agent Collaboration Workbench",
@@ -33,7 +33,10 @@ export default function RootLayout({
                 document.documentElement.dataset.theme = theme;
                 document.documentElement.classList.toggle("dark", theme === "dark");
                 document.documentElement.style.colorScheme = theme;
-                const prefs = JSON.parse(localStorage.getItem("agent-collab.preferences") || "{}");
+                let prefs = {};
+                try {
+                  prefs = JSON.parse(localStorage.getItem("agent-collab.preferences") || "{}") || {};
+                } catch {}
                 if (prefs.fontSize) document.documentElement.dataset.fontSize = prefs.fontSize;
                 if (prefs.compactMode) document.documentElement.dataset.compactMode = String(prefs.compactMode);
               } catch {}
@@ -41,7 +44,17 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body><ThemeProvider><PreferencesProvider><I18nProvider><TooltipProvider delay={200}><ToastProvider>{children}</ToastProvider></TooltipProvider></I18nProvider></PreferencesProvider></ThemeProvider></body>
+      <body>
+        <ThemeProvider>
+          <PreferencesProvider>
+            <I18nProvider>
+              <TooltipProvider delay={200}>
+                <ToastProvider>{children}</ToastProvider>
+              </TooltipProvider>
+            </I18nProvider>
+          </PreferencesProvider>
+        </ThemeProvider>
+      </body>
     </html>
   );
 }

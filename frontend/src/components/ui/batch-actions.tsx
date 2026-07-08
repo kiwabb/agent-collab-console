@@ -19,7 +19,6 @@ interface UseBatchSelectionOptions<T extends SelectableItem> {
 export function useBatchSelection<T extends SelectableItem>({
   items,
   onDelete,
-  onDeleteLabel = "Delete",
 }: UseBatchSelectionOptions<T>) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
@@ -48,10 +47,7 @@ export function useBatchSelection<T extends SelectableItem>({
     setSelectedIds(new Set());
   }, []);
 
-  const isSelected = useCallback(
-    (id: string) => selectedIds.has(id),
-    [selectedIds]
-  );
+  const isSelected = useCallback((id: string) => selectedIds.has(id), [selectedIds]);
 
   const handleBatchDelete = useCallback(async () => {
     if (!onDelete || selectedIds.size === 0) return;
@@ -105,12 +101,10 @@ export function BatchActionsBar({
     <div
       className={cn(
         "flex items-center gap-3 px-4 py-2.5 bg-brand/10 border border-brand/20 rounded-xl animate-in slide-in-from-top-2 duration-200",
-        className
+        className,
       )}
     >
-      <span className="text-xs font-bold text-brand">
-        {selectedCount} selected
-      </span>
+      <span className="text-xs font-bold text-brand">{selectedCount} selected</span>
       <div className="h-4 w-px bg-border-subtle" />
       <button
         type="button"
@@ -151,7 +145,12 @@ interface SelectableProps {
   className?: string;
 }
 
-export function Selectable({ checked, onChange, indeterminate = false, className }: SelectableProps) {
+export function Selectable({
+  checked,
+  onChange,
+  indeterminate = false,
+  className,
+}: SelectableProps) {
   return (
     <button
       type="button"
@@ -164,7 +163,7 @@ export function Selectable({ checked, onChange, indeterminate = false, className
       className={cn(
         "flex-shrink-0 transition-all active:scale-90",
         checked || indeterminate ? "text-brand" : "text-text-muted hover:text-foreground",
-        className
+        className,
       )}
     >
       {checked ? (

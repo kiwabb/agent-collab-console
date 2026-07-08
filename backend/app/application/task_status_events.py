@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 def build_task_status_event(
     task: object,
     status: str | None = None,
@@ -25,6 +26,9 @@ def build_task_status_event(
         "task_kind": getattr(task, "task_kind", None),
         "status": resolved_status,
         "execution_process_id": resolved_execution_process_id,
+        "trace_id": getattr(task, "trace_id", None),
+        "span_id": getattr(task, "span_id", None),
+        "parent_span_id": getattr(task, "parent_span_id", None),
     }
     event.update(extra)
     return event

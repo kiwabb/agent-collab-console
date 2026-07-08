@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from pydantic import BaseModel, Field, ValidationError
 
 from app.application.issue_artifact_documents import IssueArtifactDocuments
+from app.domain.models import CodexTask
+from app.json_safety import object_dict
+
+logger = logging.getLogger(__name__)
 
 
 class ArchitectWorkflowError(ValueError):
@@ -51,7 +56,7 @@ class ReviewReportDocument(BaseModel):
     risks_identified: list[str]
     # Deterministic diff-guard conclusion (verdict/missing/extra/...). Set by the
     # framework, not the LLM. Optional + default None keeps old payloads valid.
-    framework_guard: dict | None = None
+    framework_guard: dict[str, object] | None = None
 
 
 class ArchitectWorkflow:
@@ -85,15 +90,16 @@ class ArchitectWorkflow:
     def __init__(self) -> None:
         self._docs = IssueArtifactDocuments()
 
-    def build_prompt(self, task, workspace_title: str | None = None) -> str:
+    def build_prompt(self, task: CodexTask, workspace_title: str | None = None) -> str:
         project_name = workspace_title or "workspace-project"
         issue_id = task.issue_id or task.id
+        workspace_path = task.workspace_path or ""
 
         if getattr(task, "task_kind", "normal") == "review":
             return self._build_review_prompt(task, project_name, issue_id)
 
-        pm_artifacts = self._read_pm_artifacts(task.workspace_path, issue_id)
-        existing_design = self._read_existing_design_artifacts(task.workspace_path, issue_id)
+        pm_artifacts = self._read_pm_artifacts(workspace_path, issue_id)
+        existing_design = self._read_existing_design_artifacts(workspace_path, issue_id)
 
         requirement_text = pm_artifacts.get("requirement", "")
         prd_text = pm_artifacts.get("prd", "")
@@ -165,7 +171,9 @@ class ArchitectWorkflow:
             f"user_requirement:\n{task.prompt}"
         )
 
-    def persist_result(self, task, workspace_title: str | None = None) -> SystemDesignDocument:
+    def persist_result(
+        self, task: CodexTask, workspace_title: str | None = None
+    ) -> SystemDesignDocument | ReviewReportDocument:
         if not task.workspace_path:
             raise ArchitectWorkflowError("Task workspace_path is required for Architect artifacts")
         if not task.result or not task.result.strip():
@@ -176,7 +184,7 @@ class ArchitectWorkflow:
         try:
             from app.application.tolerant_json import tolerant_json_loads
 
-            payload = tolerant_json_loads(task.result)
+            payload = object_dict(tolerant_json_loads(task.result))
         except json.JSONDecodeError as exc:
             raise ArchitectWorkflowError(f"Architect output is not valid JSON: {exc}") from exc
 
@@ -279,8 +287,9 @@ class ArchitectWorkflow:
         if dev_set != impl_set:
             # AUTO-REPAIR: If counts match, assume dev_list titles were just paraphrased and align them to impl_titles
             if len(dev_list) == len(impl_titles):
-                print(
-                    f"DEBUG: Auto-aligning paraphrased development_task_list titles to match implementation_tasks for issue {design.issue_id}"
+                logger.debug(
+                    "auto-aligning paraphrased development task titles: issue_id=%s",
+                    design.issue_id,
                 )
                 design.development_task_list = impl_titles
                 return
@@ -319,10 +328,11 @@ class ArchitectWorkflow:
             artifacts["implementation_plan"] = impl_plan_path.read_text(encoding="utf-8")
         return artifacts
 
-    def _build_review_prompt(self, task, project_name: str, issue_id: str) -> str:
-        pm_artifacts = self._read_pm_artifacts(task.workspace_path, issue_id)
-        architect_artifacts = self._read_existing_design_artifacts(task.workspace_path, issue_id)
-        engineer_artifacts = self._read_engineer_artifacts(task.workspace_path, issue_id)
+    def _build_review_prompt(self, task: CodexTask, project_name: str, issue_id: str) -> str:
+        workspace_path = task.workspace_path or ""
+        pm_artifacts = self._read_pm_artifacts(workspace_path, issue_id)
+        architect_artifacts = self._read_existing_design_artifacts(workspace_path, issue_id)
+        engineer_artifacts = self._read_engineer_artifacts(workspace_path, issue_id)
 
         # Deterministic diff guard (B4 soft signal): give the reviewer the REAL
         # git diff plus the expected/actual file delta as ground truth. The hard
@@ -417,8 +427,8 @@ class ArchitectWorkflow:
 
         return "\n".join(parts)
 
-    def _normalize_payload_keys(self, payload: dict) -> dict:
-        normalized = {}
+    def _normalize_payload_keys(self, payload: dict[str, object]) -> dict[str, object]:
+        normalized: dict[str, object] = {}
         for key, value in payload.items():
             compact_key = "".join(ch for ch in str(key).lower() if ch.isalnum() or ch == "_")
             target_key = self.KEY_ALIASES.get(compact_key, self.KEY_ALIASES.get(str(key), key))

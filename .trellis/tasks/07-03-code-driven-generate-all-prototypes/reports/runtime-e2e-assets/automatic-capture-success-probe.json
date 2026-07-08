@@ -1,0 +1,37 @@
+{
+  "event_types": [
+    "scan_meta",
+    "candidate_start",
+    "candidate_capture",
+    "candidate_capture_done",
+    "prototype_done",
+    "all_done"
+  ],
+  "capture_done": [
+    {
+      "candidate_id": "next-app-router--settings",
+      "attempted_url": "http://localhost:4000/settings",
+      "final_url": "http://localhost:4000/settings",
+      "screenshot_path": "/Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/.agent-collab/prototypes/runtime-captures/settings-20260704T172215Z.png"
+    }
+  ],
+  "capture_failed": [],
+  "prototype_done": [
+    {
+      "candidate_id": "next-app-router--settings",
+      "prototype_id": "5ca1bf8f-f58e-41f4-ae9f-cd2af6e605c3",
+      "version_no": 5,
+      "disk_path": "/Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/.agent-collab/prototypes/5ca1bf8f-f58e-41f4-ae9f-cd2af6e605c3/v5/index.html",
+      "html_complete": true,
+      "html_chars": 17164
+    }
+  ],
+  "prototype_error": [],
+  "all_done": {
+    "created": 0,
+    "regenerated": 1,
+    "skipped": 0,
+    "failed": 0,
+    "unsupported": 0
+  }
+}

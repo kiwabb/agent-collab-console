@@ -1,6 +1,6 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, handleResponse } from "./fetch";
+import { API_BASE, apiJsonRequest, apiRequest } from "./fetch";
 
 export type KnowledgeSearchScope = "all" | "issues" | "artifacts";
 export type KnowledgeSearchMode = "fts" | "semantic" | "hybrid";
@@ -44,8 +44,7 @@ export async function searchKnowledge(opts: {
   if (opts.projectId) params.set("project_id", opts.projectId);
   if (opts.mode) params.set("mode", opts.mode);
   if (typeof opts.limit === "number") params.set("limit", String(opts.limit));
-  const response = await fetch(`${API_BASE}/codex/search?${params.toString()}`);
-  return handleResponse(response);
+  return apiRequest<KnowledgeSearchResponse>(`${API_BASE}/codex/search?${params.toString()}`);
 }
 export interface SimilarIssue {
   issue_id: string;
@@ -55,10 +54,9 @@ export interface SimilarIssue {
   source?: string;
 }
 export async function getSimilarIssues(issueId: string, k = 5): Promise<SimilarIssue[]> {
-  const response = await fetch(
+  const data = await apiRequest<{ items: SimilarIssue[] }>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/similar?k=${k}`,
   );
-  const data = await handleResponse<{ items: SimilarIssue[] }>(response);
   return data.items ?? [];
 }
 export interface EmbeddingStatus {
@@ -67,8 +65,7 @@ export interface EmbeddingStatus {
   provider_type: string | null;
 }
 export async function getEmbeddingStatus(): Promise<EmbeddingStatus> {
-  const response = await fetch(`${API_BASE}/codex/embedding/status`);
-  return handleResponse(response);
+  return apiRequest<EmbeddingStatus>(`${API_BASE}/codex/embedding/status`);
 }
 export async function triggerKnowledgeReindex(projectId?: string): Promise<{
   indexed_issues: number;
@@ -79,8 +76,12 @@ export async function triggerKnowledgeReindex(projectId?: string): Promise<{
   const url = projectId
     ? `${API_BASE}/codex/index/reindex?project_id=${encodeURIComponent(projectId)}`
     : `${API_BASE}/codex/index/reindex`;
-  const response = await fetch(url, { method: "POST" });
-  return handleResponse(response);
+  return apiRequest<{
+    indexed_issues: number;
+    indexed_artifacts: number;
+    embedded_issues: number;
+    embedded_artifacts: number;
+  }>(url, { method: "POST" });
 }
 export interface TeamNoteBlock {
   block_id: string;
@@ -103,37 +104,30 @@ export async function getTeamNotes(
 ): Promise<TeamNotesResponse> {
   const params = new URLSearchParams();
   if (includeDeleted) params.set("include_deleted", "true");
-  const response = await fetch(
+  return apiRequest<TeamNotesResponse>(
     `${API_BASE}/projects/${encodeURIComponent(projectId)}/team-notes?${params.toString()}`,
   );
-  return handleResponse(response);
 }
 export async function deleteTeamNotesBlock(projectId: string, blockId: string): Promise<void> {
-  const response = await fetch(
+  await apiRequest<void>(
     `${API_BASE}/projects/${encodeURIComponent(projectId)}/team-notes/${encodeURIComponent(blockId)}`,
     { method: "DELETE" },
   );
-  await handleResponse(response);
 }
 export async function restoreTeamNotesBlock(projectId: string, blockId: string): Promise<void> {
-  const response = await fetch(
+  await apiRequest<void>(
     `${API_BASE}/projects/${encodeURIComponent(projectId)}/team-notes/${encodeURIComponent(blockId)}/restore`,
     { method: "POST" },
   );
-  await handleResponse(response);
 }
 export async function pinTeamNotesBlock(
   projectId: string,
   blockId: string,
   pinned: boolean,
 ): Promise<void> {
-  const response = await fetch(
+  await apiJsonRequest<void>(
     `${API_BASE}/projects/${encodeURIComponent(projectId)}/team-notes/${encodeURIComponent(blockId)}/pin`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pinned }),
-    },
+    "POST",
+    { pinned },
   );
-  await handleResponse(response);
 }

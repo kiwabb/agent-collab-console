@@ -23,15 +23,18 @@ side — the *BenchmarkRun* row that survives a restart — is in
 running this run right now" record, which is fine to lose.
 """
 
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
 import asyncio
-import time  # noqa: F401
+import logging
 import traceback
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Optional  # noqa: F401, UP035
+from inspect import isawaitable
+
+logger = logging.getLogger(__name__)
 
 
 # Status lifecycle:
@@ -63,7 +66,12 @@ class Job:
     progress: float = 0.0
     # Free-form metadata the job producer wants to surface (e.g.
     # the candidate label for a benchmark run).
-    meta: dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, object] = field(default_factory=dict)
+
+
+type CompletionCallback[ResultT] = Callable[
+    [Job, ResultT | None, BaseException | None], object | Awaitable[object]
+]
 
 
 class JobRegistry:
@@ -73,7 +81,7 @@ class JobRegistry:
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
 
-    def create(self, kind: str, *, meta: dict[str, Any] | None = None) -> Job:
+    def create(self, kind: str, *, meta: dict[str, object] | None = None) -> Job:
         job = Job(
             id=f"job-{uuid.uuid4().hex[:8]}",
             kind=kind,
@@ -105,12 +113,12 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-async def start_job(
+async def start_job[ResultT](
     registry: JobRegistry,
     job: Job,
-    coro: Callable[[], Awaitable[Any]],
+    coro: Callable[[], Awaitable[ResultT]],
     *,
-    on_complete: Callable[[Job, Any | None, BaseException | None], Any] | None = None,
+    on_complete: CompletionCallback[ResultT] | None = None,
 ) -> None:
     """Schedule ``coro`` as a background asyncio task and update
     ``job`` as it goes.
@@ -125,14 +133,18 @@ async def start_job(
     job.started_at = _now()
     registry.update(job)
 
-    async def _maybe_await(cb: Any, *args: Any) -> None:
+    async def _maybe_await(
+        cb: CompletionCallback[ResultT],
+        result: ResultT | None,
+        exc: BaseException | None,
+    ) -> None:
         """Call a (possibly async) callback, swallowing any exception."""
         try:
-            ret = cb(*args)
-            if hasattr(ret, "__await__"):
+            ret = cb(job, result, exc)
+            if isawaitable(ret):
                 await ret
         except Exception:
-            pass
+            logger.debug("benchmark job callback failed: job_id=%s", job.id, exc_info=True)
 
     async def _runner() -> None:
         try:
@@ -143,14 +155,14 @@ async def start_job(
             job.error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
             registry.update(job)
             if on_complete is not None:
-                await _maybe_await(on_complete, job, None, exc)
+                await _maybe_await(on_complete, None, exc)
             return
         job.status = JOB_STATUS_COMPLETED
         job.completed_at = _now()
         job.progress = 1.0
         registry.update(job)
         if on_complete is not None:
-            await _maybe_await(on_complete, job, result, None)
+            await _maybe_await(on_complete, result, None)
 
     # Fire-and-forget. The task reference is dropped on the
     # floor — the coroutine holds its own state via the registry

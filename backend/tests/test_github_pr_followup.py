@@ -44,17 +44,21 @@ class _Store:
         self.saved_issues.append(issue)
 
     async def list_codex_issues(
-        self, project_id: str | None = None, **kwargs
+        self, session_id: str | None = None, project_id: str | None = None
     ) -> list[dict[str, object]]:
         issues = list(self.issues.values())
+        if session_id is not None:
+            issues = [issue for issue in issues if issue.session_id == session_id]
         if project_id is not None:
             issues = [issue for issue in issues if issue.project_id == project_id]
         return [issue.model_dump() for issue in issues]
 
     async def list_codex_tasks(
-        self, issue_id: str | None = None, **kwargs
+        self, session_id: str | None = None, issue_id: str | None = None
     ) -> list[dict[str, object]]:
         tasks = list(self.tasks.values())
+        if session_id is not None:
+            tasks = [task for task in tasks if task.session_id == session_id]
         if issue_id is not None:
             tasks = [task for task in tasks if task.issue_id == issue_id]
         return [task.model_dump() for task in tasks]
@@ -112,7 +116,7 @@ def _issue(issue_id: str, **overrides) -> CodexIssue:
         "updated_at": datetime(2026, 6, 8, 10, 0, 0),
     }
     data.update(overrides)
-    return CodexIssue(**data)
+    return CodexIssue.model_validate(data)
 
 
 def _task(
@@ -291,7 +295,7 @@ async def test_sweep_status_records_failure_and_reraises():
 
     class BrokenStore(_Store):
         async def list_codex_issues(
-            self, project_id: str | None = None, **kwargs
+            self, session_id: str | None = None, project_id: str | None = None
         ) -> list[dict[str, object]]:
             raise RuntimeError("database temporarily unavailable")
 
@@ -599,7 +603,9 @@ async def test_project_followup_endpoint_returns_best_effort_summary(monkeypatch
 
     assert payload["project_id"] == "project-1"
     assert payload["counts"] == {"failed": 1, "updated": 1}
-    assert [result["status"] for result in payload["results"]] == ["failed", "updated"]
+    results = payload["results"]
+    assert isinstance(results, list)
+    assert [result["status"] for result in results] == ["failed", "updated"]
 
 
 @pytest.mark.asyncio

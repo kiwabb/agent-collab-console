@@ -6,12 +6,15 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import TypedDict, cast
 
 import pytest
 
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
 from app.application.conductor_session_registry import ConductorSessionRegistry
 from app.application.self_improvement_apply_service import (
+    AppendMarkdownCandidate,
+    ApplyPlan,
     build_self_improvement_apply_plan,
     hash_apply_candidate_content,
 )
@@ -27,6 +30,18 @@ pytestmark = [
     pytest.mark.slow,
     pytest.mark.skipif(shutil.which("git") is None, reason="git binary not available"),
 ]
+
+
+class _ProjectPayload(TypedDict, total=False):
+    id: str
+    name: str
+    repo_path: str
+
+
+def _json_object(response) -> dict[str, object]:
+    body = response.json()
+    assert isinstance(body, dict)
+    return {str(key): value for key, value in body.items()}
 
 
 def _make_git_repo(path: Path) -> Path:
@@ -47,14 +62,16 @@ def _make_git_repo(path: Path) -> Path:
     return path
 
 
-def _create_project(client, tmp_path: Path, name: str = "self-improvement-api") -> dict:
+def _create_project(client, tmp_path: Path, name: str = "self-improvement-api") -> _ProjectPayload:
     repo = _make_git_repo(tmp_path / name)
     resp = client.post(
         "/api/projects",
         json={"name": name, "source": "local", "repo_path": str(repo)},
     )
     assert resp.status_code == 201, resp.text
-    return resp.json()
+    body = _json_object(resp)
+    assert isinstance(body.get("id"), str)
+    return cast(_ProjectPayload, body)
 
 
 def _proposal(
@@ -156,16 +173,29 @@ def _seed_application_event(event: SelfImprovementApplicationEvent) -> None:
     bootstrap_module.store.save_self_improvement_application_event(event)
 
 
-def _applications(client, project_id: str, proposal_id: str = "proposal-1") -> list[dict]:
-    return client.get(
-        f"/api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/applications"
-    ).json()["applications"]
+def _applications(
+    client, project_id: str, proposal_id: str = "proposal-1"
+) -> list[dict[str, object]]:
+    body = _json_object(
+        client.get(
+            f"/api/codex/projects/{project_id}/self-improvement-proposals/{proposal_id}/applications"
+        )
+    )
+    applications = body["applications"]
+    assert isinstance(applications, list)
+    assert all(isinstance(item, dict) for item in applications)
+    return [{str(key): value for key, value in item.items()} for item in applications]
+
+
+def _only_append_candidate(plan: ApplyPlan) -> AppendMarkdownCandidate:
+    assert len(plan["candidate_changes"]) == 1
+    candidate = plan["candidate_changes"][0]
+    assert candidate["kind"] == "append_markdown"
+    return candidate
 
 
 def _candidate_content_hash(proposal: SelfImprovementProposal) -> str:
-    candidate = build_self_improvement_apply_plan(proposal)["candidate_changes"][0]
-    content = candidate.get("content")
-    assert isinstance(content, str)
+    content = _only_append_candidate(build_self_improvement_apply_plan(proposal))["content"]
     return hash_apply_candidate_content(content)
 
 
@@ -564,8 +594,10 @@ def test_project_self_improvement_proposal_activate_task_can_start_conductor(
     assert [event["action"] for event in events] == ["start_conductor", "open_pr_task"]
     assert events[0]["status"] == "succeeded"
     assert events[0]["path"] == f"codex_issues/{activation['issue']['id']}"
-    assert events[0]["result"]["graph_id"] == "graph-1"
-    assert events[0]["result"]["started"] is True
+    start_result = events[0]["result"]
+    assert isinstance(start_result, dict)
+    assert start_result["graph_id"] == "graph-1"
+    assert start_result["started"] is True
 
 
 def test_project_self_improvement_proposal_activate_task_reuses_issue_when_starting_conductor_twice(
@@ -697,7 +729,9 @@ def test_project_self_improvement_proposal_activate_task_records_failed_start_ev
     events = _applications(client, project["id"])
     assert [event["action"] for event in events] == ["start_conductor", "open_pr_task"]
     assert events[0]["status"] == "failed"
-    assert "synthetic conductor start failure" in events[0]["error"]
+    event_error = events[0]["error"]
+    assert isinstance(event_error, str)
+    assert "synthetic conductor start failure" in event_error
 
 
 async def test_start_issue_conductor_graph_is_idempotent_while_session_is_alive(
@@ -732,7 +766,11 @@ async def test_start_issue_conductor_graph_is_idempotent_while_session_is_alive(
         assert first["already_running"] is False
         assert second["started"] is False
         assert second["already_running"] is True
-        assert second["graph"]["id"] == first["graph"]["id"]
+        first_graph = first["graph"]
+        second_graph = second["graph"]
+        assert isinstance(first_graph, dict)
+        assert isinstance(second_graph, dict)
+        assert second_graph["id"] == first_graph["id"]
         assert ConductorSessionRegistry.instance().is_alive(issue.id)
     finally:
         await ConductorSessionRegistry.instance().stop(issue.id)
@@ -944,7 +982,7 @@ def test_project_self_improvement_proposal_apply_project_memory_skips_existing_m
     proposal = _proposal(project["id"], target_kind="project_memory", status="accepted")
     _seed_proposal(proposal)
     plan = build_self_improvement_apply_plan(proposal)
-    content = plan["candidate_changes"][0]["content"]
+    content = _only_append_candidate(plan)["content"]
     memory_path = tmp_path / name / ".agent-collab" / "team_notes.md"
     memory_path.parent.mkdir()
     memory_path.write_text("Existing note\n\n" + content, encoding="utf-8")
@@ -1241,7 +1279,7 @@ def test_project_self_improvement_proposal_rollback_removes_memory_block_and_mar
     name = "self-improvement-rollback-success"
     project = _create_project(client, tmp_path, name=name)
     proposal = _proposal(project["id"], target_kind="project_memory", status="applied")
-    content = build_self_improvement_apply_plan(proposal)["candidate_changes"][0]["content"]
+    content = _only_append_candidate(build_self_improvement_apply_plan(proposal))["content"]
     _seed_proposal(proposal)
     memory_path = tmp_path / name / ".agent-collab" / "team_notes.md"
     memory_path.parent.mkdir()

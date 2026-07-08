@@ -5,7 +5,13 @@ import { Inbox } from "lucide-react";
 
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { CodexIssue, CodexTask, Project } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { IssueRow } from "./IssueRow";
@@ -55,7 +61,10 @@ export function IssueListPanel({
   }
 
   return (
-    <section data-density="operations-queue" className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border-subtle bg-surface/90">
+    <section
+      data-density="operations-queue"
+      className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border-subtle bg-surface/90"
+    >
       <div className="grid grid-cols-[minmax(0,1fr)_128px_156px_84px] gap-3 border-b border-border-subtle px-4 py-2.5 text-[10px] uppercase tracking-wider text-text-muted max-lg:hidden">
         <div>{t("workspace.console.table.task")}</div>
         <div>{t("workspace.console.table.status")}</div>
@@ -78,16 +87,19 @@ export function IssueListPanel({
           </div>
         )}
 
-
         {!isLoading && issues.length === 0 && (
           <div className="m-3 flex h-64 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border-subtle bg-surface-input/40 px-6 text-center">
             <Inbox size={28} className="text-text-muted" />
             <div>
               <p className="font-semibold text-foreground">
-                {allIssueCount === 0 ? t("workspace.console.emptyTitle") : t("workspace.console.emptyFilteredTitle")}
+                {allIssueCount === 0
+                  ? t("workspace.console.emptyTitle")
+                  : t("workspace.console.emptyFilteredTitle")}
               </p>
               <p className="mt-1 text-sm text-text-muted">
-                {allIssueCount === 0 ? t("workspace.console.emptyBody") : t("workspace.console.emptyFilteredBody")}
+                {allIssueCount === 0
+                  ? t("workspace.console.emptyBody")
+                  : t("workspace.console.emptyFilteredBody")}
               </p>
             </div>
             {allIssueCount > 0 && (
@@ -114,13 +126,20 @@ export function IssueListPanel({
         )}
       </div>
 
-      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t("issue.delete")}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-text-secondary">{t("issue.deleteConfirmBody")}</p>
-          {deleteTarget && <p className="text-sm font-semibold text-foreground">{deleteTarget.title}</p>}
+          {deleteTarget && (
+            <p className="text-sm font-semibold text-foreground">{deleteTarget.title}</p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={isDeleting}>
               {t("issue.cancel")}

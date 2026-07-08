@@ -65,6 +65,7 @@ export function buildAuditRoleGroups(items: AuditLog[]): AuditRoleGroup[] {
 
   for (const entry of ordered) {
     const role = roleKey(entry);
+    if (role === "system") continue;
     const existing = groups.get(role);
     const group = existing ?? {
       role,
@@ -80,7 +81,7 @@ export function buildAuditRoleGroups(items: AuditLog[]): AuditRoleGroup[] {
     if (!turn) {
       turn = {
         key: turnKey,
-        turnIndex: entry.turn_index,
+        turnIndex: entry.turn_index ?? null,
         conductorTaskId: entry.conductor_task_id,
         entries: [],
       };

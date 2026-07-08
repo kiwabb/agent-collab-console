@@ -1,55 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { at } from "./testAssertions";
 
 import {
   buildConversationMessages,
   buildTaskConversationDetail,
 } from "../src/lib/taskConversationDetailUtils";
-import type { CodexTask, CodexTaskMessage, ExecutionProcess } from "../src/lib/types";
+import type { CodexTaskMessage, ExecutionProcess } from "../src/lib/types";
 
-function makeTask(id: string, issueId: string | null, status: string): CodexTask {
+function executionProcessFixture(overrides: Partial<ExecutionProcess>): ExecutionProcess {
   return {
-    id,
-    session_id: "s1",
-    project_id: null,
-    issue_id: issueId,
-    phase: "dev",
-    title: `Task ${id}`,
-    prompt: "",
-    role: "engineer",
-    executor: "codex",
-    provider: null,
-    model: null,
-    status,
-    result: null,
-    parent_task_id: null,
-    task_kind: "task",
-    blocked_by_help_id: null,
-    workspace_path: null,
-    git_branch: null,
-    git_base_branch: null,
-    git_worktree_path: null,
-    git_merge_status: "open" as any,
-    git_last_commit_sha: null,
-    resume_session_id: null,
-    resume_message_id: null,
-    last_execution_process_id: null,
-    created_at: null,
-    updated_at: null,
-  };
-}
-
-function makeProcess(id: string, taskId: string, status: string): ExecutionProcess {
-  return {
-    id,
-    task_id: taskId,
-    session_id: "s1",
-    status,
+    id: "proc-1",
+    task_id: "task-1",
+    session_id: "sess-1",
+    status: "running",
     exit_code: null,
     started_at: null,
     completed_at: null,
-    created_at: null,
+    created_at: "2026-04-18T12:00:00Z",
     updated_at: null,
+    ...overrides,
   };
 }
 
@@ -94,9 +64,10 @@ test("buildConversationMessages includes assistant deltas from logs", () => {
   const result = buildConversationMessages(messages, logs);
 
   assert.equal(result.length, 2);
-  assert.equal(result[0]?.role, "user");
-  assert.equal(result[1]?.role, "assistant");
-  assert.equal(result[1]?.content, "你好");
+  assert.equal(at(result, 0, "conversation message").role, "user");
+  const assistantMessage = at(result, 1, "conversation message");
+  assert.equal(assistantMessage.role, "assistant");
+  assert.equal(assistantMessage.content, "你好");
 });
 
 test("buildConversationMessages does not duplicate codex final assistant text after deltas", () => {
@@ -163,8 +134,9 @@ test("buildConversationMessages does not duplicate codex final assistant text af
   const result = buildConversationMessages(messages, logs);
 
   assert.equal(result.length, 1);
-  assert.equal(result[0]?.role, "assistant");
-  assert.equal(result[0]?.content, "pong");
+  const assistantMessage = at(result, 0, "conversation message");
+  assert.equal(assistantMessage.role, "assistant");
+  assert.equal(assistantMessage.content, "pong");
 });
 
 test("buildConversationMessages keeps assistant replies from different execution processes separate", () => {
@@ -207,21 +179,23 @@ test("buildConversationMessages keeps assistant replies from different execution
   const result = buildConversationMessages(messages, logs);
 
   assert.equal(result.length, 2);
-  assert.equal(result[0]?.content, "pong");
-  assert.equal(result[1]?.content, "pong");
+  assert.equal(at(result, 0, "conversation message").content, "pong");
+  assert.equal(at(result, 1, "conversation message").content, "pong");
 });
 
 test("buildTaskConversationDetail derives merged logs and messages from execution process views", () => {
-  const proc1 = {
+  const taskMessages: CodexTaskMessage[] = [
+    {
+      id: "task-msg-1",
+      task_id: "task-1",
+      role: "user",
+      content: "original request",
+      execution_process_id: null,
+      created_at: "2026-04-18T12:00:00Z",
+    },
+  ];
+  const proc1 = executionProcessFixture({
     id: "proc-1",
-    task_id: "task-1",
-    session_id: "sess-1",
-    status: "running",
-    exit_code: null,
-    started_at: null,
-    completed_at: null,
-    created_at: "2026-04-18T12:00:00Z",
-    updated_at: null,
     messages: {
       "msg-1": {
         id: "msg-1",
@@ -235,22 +209,18 @@ test("buildTaskConversationDetail derives merged logs and messages from executio
     logs: [
       {
         id: "log-1",
+        session_id: "sess-1",
+        stream: "stdout",
         content: "first log",
+        task_id: "task-1",
+        execution_process_id: "proc-1",
         created_at: "2026-04-18T12:00:01Z",
       },
     ],
-  } as unknown as ExecutionProcess;
+  });
 
-  const proc2 = {
+  const proc2 = executionProcessFixture({
     id: "proc-2",
-    task_id: "task-1",
-    session_id: "sess-1",
-    status: "running",
-    exit_code: null,
-    started_at: null,
-    completed_at: null,
-    created_at: "2026-04-18T12:00:00Z",
-    updated_at: null,
     messages: {
       "msg-2": {
         id: "msg-2",
@@ -264,33 +234,41 @@ test("buildTaskConversationDetail derives merged logs and messages from executio
     logs: [
       {
         id: "log-2",
+        session_id: "sess-1",
+        stream: "stdout",
         content: "second log",
+        task_id: "task-1",
+        execution_process_id: "proc-2",
         created_at: "2026-04-18T12:00:02Z",
       },
     ],
-  } as unknown as ExecutionProcess;
+  });
 
-  const detail = buildTaskConversationDetail([], [proc1, proc2]);
+  const detail = buildTaskConversationDetail(taskMessages, [proc1, proc2]);
 
-  assert.equal(detail.messages.length, 2);
-  assert.equal(detail.logs.length, 2);
-  assert.equal((detail.messages[0] as CodexTaskMessage).content, "first reply");
-  assert.equal((detail.messages[1] as CodexTaskMessage).content, "second reply");
+  assert.deepEqual(
+    detail.logs.map((log) => log.id),
+    ["log-1", "log-2"],
+  );
+  assert.deepEqual(
+    detail.messages.map((message) => message.id),
+    ["task-msg-1", "msg-1", "msg-2"],
+  );
 });
 
+
 test("buildTaskConversationDetail tolerates process views without messages or logs", () => {
-  const detail = buildTaskConversationDetail([], [makeProcess("proc-1", "task-1", "running")]);
+  const detail = buildTaskConversationDetail([], [executionProcessFixture({ id: "proc-empty" })]);
 
   assert.deepEqual(detail.messages, []);
   assert.deepEqual(detail.logs, []);
 });
 
 test("buildTaskConversationDetail keeps task messages when execution process list is empty", () => {
-  const task = makeTask("task-1", "issue-1", "done");
   const taskMessages: CodexTaskMessage[] = [
     {
       id: "task-msg-1",
-      task_id: task.id,
+      task_id: "task-1",
       role: "assistant",
       content: "persisted reply",
       execution_process_id: null,
@@ -301,6 +279,6 @@ test("buildTaskConversationDetail keeps task messages when execution process lis
   const detail = buildTaskConversationDetail(taskMessages, []);
 
   assert.equal(detail.messages.length, 1);
-  assert.equal(detail.messages[0]?.content, "persisted reply");
+  assert.equal(at(detail.messages, 0, "conversation message").content, "persisted reply");
   assert.deepEqual(detail.logs, []);
 });

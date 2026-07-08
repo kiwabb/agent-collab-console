@@ -67,30 +67,37 @@ export function SwipeableCard({
       }
       setDirection(null);
     },
-    [direction, leftThreshold, rightThreshold, upThreshold, downThreshold, onSwipeLeft, onSwipeRight, onSwipeUp, onSwipeDown]
+    [
+      direction,
+      leftThreshold,
+      rightThreshold,
+      upThreshold,
+      downThreshold,
+      onSwipeLeft,
+      onSwipeRight,
+      onSwipeUp,
+      onSwipeDown,
+    ],
   );
 
   const handleDragStart = useCallback(() => {
     setIsSwiping(true);
   }, []);
 
-  const handleDrag = useCallback(
-    (_: MotionDragEvent, info: PanInfo) => {
-      const tx = info.offset.x;
-      const ty = info.offset.y;
-      const absX = Math.abs(tx);
-      const absY = Math.abs(ty);
+  const handleDrag = useCallback((_: MotionDragEvent, info: PanInfo) => {
+    const tx = info.offset.x;
+    const ty = info.offset.y;
+    const absX = Math.abs(tx);
+    const absY = Math.abs(ty);
 
-      if (absX > absY) {
-        if (tx < 0) setDirection("left");
-        else setDirection("right");
-      } else {
-        if (ty < 0) setDirection("up");
-        else setDirection("down");
-      }
-    },
-    []
-  );
+    if (absX > absY) {
+      if (tx < 0) setDirection("left");
+      else setDirection("right");
+    } else {
+      if (ty < 0) setDirection("up");
+      else setDirection("down");
+    }
+  }, []);
 
   if (!enabled) {
     return <div className={className}>{children}</div>;
@@ -132,7 +139,7 @@ export function SwipeableCard({
         whileTap={{ cursor: "grabbing" }}
         className={cn(
           "touch-none select-none cursor-grab active:cursor-grabbing",
-          isSwiping && "z-10"
+          isSwiping && "z-10",
         )}
       >
         {children}

@@ -94,6 +94,9 @@ export interface CodexSession {
   log_path: string | null;
   thread_id: string | null;
   claude_thread_id: string | null;
+  settings?: {
+    plan_first_pm?: boolean;
+  };
   messages: CodexMessage[];
 }
 
@@ -107,8 +110,8 @@ export interface Project {
   origin_url: string | null;
   setup_script: string | null;
   run_command: string | null;
-  created_at: string | null;
-  updated_at: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface GitBranch {
@@ -127,6 +130,39 @@ export type {
   PrototypeDetail,
   PrototypeVersion,
 } from "./types/prototypes";
+export type {
+  BenchmarkDiff,
+  BenchmarkDiffFixture,
+  BenchmarkJob,
+  BenchmarkJobStatus,
+  BenchmarkRun,
+  CalibrationItem,
+  CalibrationReport,
+} from "./types/benchmarks";
+export type {
+  IssueBudgetStatus,
+  IssueOrchestrationPolicy,
+  OrchestrationRecommendation,
+  OrchestrationSignal,
+} from "./types/issues";
+export type {
+  ProjectConductorAskResult,
+  ProjectConductorLoopResult,
+  ProjectConductorState,
+  ProjectConductorToolEvent,
+  ProjectPullResult,
+  ProjectRunLogLine,
+  ProjectRunLogsResponse,
+  ProjectRunStartReason,
+  ProjectRunStatus,
+  ProjectRemoteStatus,
+} from "./types/projects";
+export type {
+  CreateSkillRequest,
+  Skill,
+  SkillImportResult,
+  UpdateSkillRequest,
+} from "./types/skills";
 
 export type GitMergeStatus = "open" | "merged" | "abandoned";
 
@@ -145,8 +181,11 @@ export interface CodexIssue {
   git_worktree_path: string | null;
   git_merge_status: GitMergeStatus;
   git_last_commit_sha: string | null;
-  created_at: string | null;
-  updated_at: string | null;
+  github_pr_url?: string | null;
+  github_pr_state?: string | null;
+  budget_usd?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface IssuePhaseTransitionResult {
@@ -187,6 +226,17 @@ export interface CodexTask {
   resume_session_id: string | null;
   resume_message_id: string | null;
   last_execution_process_id: string | null;
+  last_run?: {
+    executor?: string | null;
+    provider?: string | null;
+    model?: string | null;
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    cache_read_tokens?: number | null;
+    total_cost_usd?: number | null;
+    duration_seconds?: number | null;
+    status?: string | null;
+  } | null;
   sequence_index?: number | null;
   sequence_group?: string | null;
   review_comment?: string | null;
@@ -269,25 +319,25 @@ export interface NormalizedEntry {
   id: string;
   type: NormalizedEntryType;
   label: string;
-  content?: string;
-  command?: string;
-  hidden?: boolean;
-  output?: string;
-  exitCode?: number;
-  status?: "running" | "success" | "failed";
-  variant?: string;
-  raw?: string;
-  executionProcessId?: string | null;
-  timestamp?: string;
-  itemId?: string | null;
+  content?: string | undefined;
+  command?: string | undefined;
+  hidden?: boolean | undefined;
+  output?: string | undefined;
+  exitCode?: number | undefined;
+  status?: "running" | "success" | "failed" | undefined;
+  variant?: string | undefined;
+  raw?: string | undefined;
+  executionProcessId?: string | null | undefined;
+  timestamp?: string | undefined;
+  itemId?: string | null | undefined;
   // Structured tool entry (when type === "tool")
-  toolName?: string;
-  toolUseId?: string;
-  category?: ToolCategory;
-  args?: Record<string, unknown>;
-  filePath?: string;
-  durationMs?: number;
-  isError?: boolean;
+  toolName?: string | undefined;
+  toolUseId?: string | undefined;
+  category?: ToolCategory | undefined;
+  args?: Record<string, unknown> | undefined;
+  filePath?: string | undefined;
+  durationMs?: number | undefined;
+  isError?: boolean | undefined;
 }
 
 // Execution processes state
@@ -432,6 +482,9 @@ export interface CreateIssueRequest {
   title: string;
   description?: string;
   base_branch?: string | null;
+  executor?: string | null;
+  provider?: string | null;
+  model?: string | null;
 }
 
 export interface UpdateIssuePhaseRequest {
@@ -464,7 +517,7 @@ export interface ResolveApprovalRequest {
 }
 
 export interface UpdateCodexTaskRequest {
-  executor?: "codex" | "claude";
+  executor?: string | null;
   provider?: string | null;
   model?: string | null;
 }
@@ -556,6 +609,7 @@ export interface Agent {
   default_model: string | null;
   artifact_subdir: string | null;
   persist_kind: string | null;
+  agent_tier: "managed" | "specialist" | "custom";
   triggers_replan_on_done: boolean;
   triggers_replan_on_fail: boolean;
   is_builtin: boolean;
@@ -613,6 +667,7 @@ export interface WorkflowNode {
   artifact_dir: string | null;
   retries: number;
   max_retries: number;
+  batch_key?: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string | null;

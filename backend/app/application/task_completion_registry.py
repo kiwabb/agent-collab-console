@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Callable  # noqa: UP035
+from typing import Callable  # noqa: UP035
 
 
 class TaskCompletionRegistry:
     """Process-singleton registry of in-flight conductor-dispatched tasks."""
 
     _instance: "TaskCompletionRegistry | None" = None  # noqa: UP037
+    _events: dict[str, asyncio.Event]
+    _results: dict[str, object]
+    _aliases: dict[str, str]
+    _pending: dict[str, tuple[object, float]]
 
     # Defensive buffer of results that arrived BEFORE their task was registered.
     # Bounded + time-pruned so a truly-never-registered task can't leak forever
@@ -26,11 +30,11 @@ class TaskCompletionRegistry:
     def __new__(cls) -> "TaskCompletionRegistry":  # noqa: UP037
         if cls._instance is None:
             obj = super().__new__(cls)
-            obj._events: dict[str, asyncio.Event] = {}
-            obj._results: dict[str, Any] = {}
-            obj._aliases: dict[str, str] = {}
+            obj._events = {}
+            obj._results = {}
+            obj._aliases = {}
             # task_id -> (result, monotonic_ts) for signal-before-register.
-            obj._pending: dict[str, tuple[Any, float]] = {}
+            obj._pending = {}
             cls._instance = obj
         return cls._instance
 
@@ -82,7 +86,7 @@ class TaskCompletionRegistry:
             for tid, _ in ordered[: len(self._pending) - self._PENDING_MAX]:
                 self._pending.pop(tid, None)
 
-    def signal(self, task_id: str, result: Any) -> None:
+    def signal(self, task_id: str, result: object) -> None:
         target_task_id = self._aliases.get(task_id, task_id)
         ev = self._events.get(target_task_id)
         if ev is None:
@@ -98,7 +102,7 @@ class TaskCompletionRegistry:
         self._results[target_task_id] = result
         ev.set()
 
-    async def wait_for(self, task_id: str, timeout: float = 600.0) -> Any:
+    async def wait_for(self, task_id: str, timeout: float = 600.0) -> object | None:
         ev = self._events.get(task_id)
         if ev is None:
             # If a result was buffered before registration, surface it now.
@@ -125,7 +129,7 @@ class TaskCompletionRegistry:
         hard_timeout: float,
         activity_age: Callable[[str], float | None] | None = None,
         poll: float = 15.0,
-    ) -> Any:
+    ) -> object | None:
         """Wait for completion without abandoning a task that is still working.
 
         A flat timeout wrongly gives up on a legitimately slow subagent (e.g. a

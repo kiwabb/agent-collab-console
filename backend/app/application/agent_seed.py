@@ -9,10 +9,17 @@ directly when the WORKFLOW_DAG_ENABLED flag flips on.
 from __future__ import annotations  # noqa: I001
 
 from datetime import datetime
+from typing import Protocol
 from uuid import uuid4
 
-from app.domain.models import Agent
 from app.application.agent_catalog.catalog import AgentCatalog, SPECIALIST_PREFIX
+from app.domain.models import Agent
+
+
+class AgentSeedStore(Protocol):
+    async def list_agents(self, *, workspace_id: str | None = None) -> list[Agent]: ...
+
+    async def save_agent(self, agent: Agent) -> None: ...
 
 
 # (role_key, name, description, artifact_subdir, persist_kind,
@@ -88,7 +95,7 @@ _BUILTIN_SPECS: list[tuple[str, str, str, str, str, bool, bool]] = [
 ]
 
 
-async def seed_builtin_agents(store) -> int:
+async def seed_builtin_agents(store: AgentSeedStore | None) -> int:
     """Ensure built-in agents exist. Returns count of newly created."""
     if store is None:
         return 0

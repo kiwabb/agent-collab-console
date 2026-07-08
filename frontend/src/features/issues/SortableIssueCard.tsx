@@ -14,9 +14,10 @@ interface SortableIssueCardProps {
   failedCount: number;
   waitingCount: number;
   onClick: () => void;
-  onUpdateIssue?: (id: string, updates: { title?: string; description?: string }) => void;
-  onPinIssue?: (id: string, isPinned: boolean) => void;
-  onDuplicateIssue?: (id: string) => void;
+  onUpdateIssue?:
+    ((id: string, updates: { title?: string; description?: string }) => void) | undefined;
+  onPinIssue?: ((id: string, isPinned: boolean) => void) | undefined;
+  onDuplicateIssue?: ((id: string) => void) | undefined;
 }
 
 export function SortableIssueCard({
@@ -31,14 +32,9 @@ export function SortableIssueCard({
   onPinIssue,
   onDuplicateIssue,
 }: SortableIssueCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: issue.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: issue.id,
+  });
 
   const style = {
     transform: CSS.Transform.toString(transform),

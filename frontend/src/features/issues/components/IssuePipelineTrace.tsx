@@ -1,14 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  BarChart3,
-  LayoutGrid,
-  Code2,
-  ShieldCheck,
-  Check,
-  type LucideIcon,
-} from "lucide-react";
+import { BarChart3, LayoutGrid, Code2, ShieldCheck, Check, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   getIssuePipelineStages,
@@ -57,11 +50,7 @@ export function IssuePipelineTrace({ issueId, reloadKey }: Props) {
   useBusEventEffect({
     match: busEventMatchers.all(
       busEventMatchers.issueId(issueId),
-      busEventMatchers.typeIn(
-        "issue_updated",
-        "task_status",
-        "workflow_node_updated",
-      ),
+      busEventMatchers.typeIn("issue_updated", "task_status", "workflow_node_updated"),
     ),
     onEvent: () => {
       void (async () => {
@@ -73,15 +62,11 @@ export function IssuePipelineTrace({ issueId, reloadKey }: Props) {
   });
 
   const stages = data?.stages ?? defaultStages();
-  const isAllDone =
-    stages.length > 0 && stages.every((s) => s.status === "done");
+  const isAllDone = stages.length > 0 && stages.every((s) => s.status === "done");
 
   return (
     <section
-      className={cn(
-        "enterprise-panel relative overflow-hidden rounded-[26px]",
-        "px-5 pt-5 pb-4",
-      )}
+      className={cn("enterprise-panel relative overflow-hidden rounded-[26px]", "px-5 pt-5 pb-4")}
       style={{
         background:
           "linear-gradient(180deg, color-mix(in srgb, var(--color-surface-raised) 92%, white 8%) 0%, var(--color-surface) 100%)",
@@ -91,11 +76,9 @@ export function IssuePipelineTrace({ issueId, reloadKey }: Props) {
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
-          backgroundImage:
-            "radial-gradient(rgba(255,255,255,0.045) 1px, transparent 1px)",
+          backgroundImage: "radial-gradient(rgba(255,255,255,0.045) 1px, transparent 1px)",
           backgroundSize: "18px 18px",
-          maskImage:
-            "radial-gradient(ellipse 90% 100% at 50% 50%, #000 30%, transparent 80%)",
+          maskImage: "radial-gradient(ellipse 90% 100% at 50% 50%, #000 30%, transparent 80%)",
           WebkitMaskImage:
             "radial-gradient(ellipse 90% 100% at 50% 50%, #000 30%, transparent 80%)",
         }}
@@ -111,23 +94,17 @@ export function IssuePipelineTrace({ issueId, reloadKey }: Props) {
             <>
               <span>
                 {t("issue.trace.startedAt")}{" "}
-                <b className="text-text-secondary font-medium">
-                  {fmtTime(data.started_at)}
-                </b>
+                <b className="text-text-secondary font-medium">{fmtTime(data.started_at)}</b>
               </span>
               <span className="text-text-faint">→</span>
               <span>
                 {data.completed_at ? (
                   <>
                     {t("issue.trace.completedAt")}{" "}
-                    <b className="text-text-secondary font-medium">
-                      {fmtTime(data.completed_at)}
-                    </b>
+                    <b className="text-text-secondary font-medium">{fmtTime(data.completed_at)}</b>
                   </>
                 ) : (
-                  <span className="text-status-running">
-                    {t("issue.trace.runningNow")}
-                  </span>
+                  <span className="text-status-running">{t("issue.trace.runningNow")}</span>
                 )}
               </span>
               {data.total_duration_seconds != null && (
@@ -152,9 +129,7 @@ export function IssuePipelineTrace({ issueId, reloadKey }: Props) {
           aria-hidden
           className="hidden sm:block absolute left-[12.5%] right-[12.5%] top-[30px] h-px"
           style={{
-            background: isAllDone
-              ? "var(--color-done-ring)"
-              : "var(--color-border-muted)",
+            background: isAllDone ? "var(--color-done-ring)" : "var(--color-border-muted)",
           }}
         />
         <div
@@ -162,9 +137,7 @@ export function IssuePipelineTrace({ issueId, reloadKey }: Props) {
           className="hidden sm:block absolute left-[12.5%] right-[12.5%] top-[30px] h-px opacity-35 pointer-events-none"
           style={{
             backgroundImage: `linear-gradient(90deg, ${
-              isAllDone
-                ? "var(--color-status-done)"
-                : "var(--color-text-muted)"
+              isAllDone ? "var(--color-status-done)" : "var(--color-text-muted)"
             } 50%, transparent 50%)`,
             backgroundSize: "8px 1px",
           }}
@@ -313,10 +286,7 @@ function stationTone(status: string): {
   }
 }
 
-function labelFallback(
-  status: string,
-  t: (key: string) => string,
-): string {
+function labelFallback(status: string, t: (key: string) => string): string {
   if (status === "running") return t("issue.trace.stageRunning");
   if (status === "failed") return t("issue.trace.stageFailed");
   if (status === "awaiting") return t("issue.trace.stageAwaiting");

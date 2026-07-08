@@ -7,11 +7,7 @@
  * have a single source of truth that does not depend on
  * React, hooks, or the network.
  */
-import type {
-  BenchmarkDiffFixture,
-  BenchmarkJobStatus,
-  BenchmarkRun,
-} from "@/lib/types";
+import type { BenchmarkDiffFixture, BenchmarkJobStatus } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Formatting
@@ -70,19 +66,18 @@ export function fmtTimestamp(iso: string | null | undefined): string {
  */
 export type DiffStatus = "improved" | "regressed" | "unchanged";
 
-export function classifyDelta(
-  delta: number,
-  tol = 0.05,
-): DiffStatus {
+export function classifyDelta(delta: number, tol = 0.05): DiffStatus {
   if (delta > tol) return "improved";
   if (delta < -tol) return "regressed";
   return "unchanged";
 }
 
 /** Count the regressed + improved per-fixture buckets for the summary line. */
-export function summarizeDiff(
-  fixtures: readonly BenchmarkDiffFixture[],
-): { improved: number; regressed: number; unchanged: number } {
+export function summarizeDiff(fixtures: readonly BenchmarkDiffFixture[]): {
+  improved: number;
+  regressed: number;
+  unchanged: number;
+} {
   let improved = 0;
   let regressed = 0;
   let unchanged = 0;
@@ -193,11 +188,7 @@ export function fmtCostTick(value: number): string {
 // ---------------------------------------------------------------------------
 
 /** Pick 5 evenly-spaced ticks across the log-scaled X axis. */
-export function pickLogTicks(
-  xMin: number,
-  xMax: number,
-  count = 5,
-): number[] {
+export function pickLogTicks(xMin: number, xMax: number, count = 5): number[] {
   if (xMin <= 0 || xMax <= 0 || xMin >= xMax) return [];
   const lo = Math.log10(xMin);
   const hi = Math.log10(xMax);
@@ -222,11 +213,7 @@ export function roundTick(value: number): number {
   return Math.round(value / 10 ** exp) * 10 ** exp;
 }
 
-export function pickLogTicksRounded(
-  xMin: number,
-  xMax: number,
-  count = 5,
-): number[] {
+export function pickLogTicksRounded(xMin: number, xMax: number, count = 5): number[] {
   return pickLogTicks(xMin, xMax, count).map(roundTick);
 }
 
@@ -237,6 +224,10 @@ export function pickLogTicksRounded(
 /** Human-friendly job status — used to render the spinner label. */
 export function jobStatusLabelKey(
   status: BenchmarkJobStatus,
-): "benchmark.status.pending" | "benchmark.status.running" | "benchmark.status.completed" | "benchmark.status.failed" {
+):
+  | "benchmark.status.pending"
+  | "benchmark.status.running"
+  | "benchmark.status.completed"
+  | "benchmark.status.failed" {
   return `benchmark.status.${status}` as const;
 }

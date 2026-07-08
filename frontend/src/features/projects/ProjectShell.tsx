@@ -46,16 +46,15 @@ export function ProjectShell({ projectId, project, children }: Props) {
               <h1 className="truncate text-2xl font-bold tracking-tight">
                 {project?.name ?? t("workspace.projectPage.titleFallback")}
               </h1>
-              <p className="truncate text-[12px] text-text-muted">
-                {project?.repo_path}
-              </p>
+              <p className="truncate text-[12px] text-text-muted">{project?.repo_path}</p>
             </div>
           </div>
           <nav className="flex flex-wrap gap-2" aria-label="Project sections">
             {navItems.map((item) => {
-              const active = item.href === workspacesHref
-                ? pathname === workspacesHref
-                : pathname?.startsWith(item.href);
+              const active =
+                item.href === workspacesHref
+                  ? pathname === workspacesHref
+                  : pathname?.startsWith(item.href);
               const Icon = item.icon;
               return (
                 <Link
@@ -77,9 +76,7 @@ export function ProjectShell({ projectId, project, children }: Props) {
           </nav>
         </div>
       </div>
-      <div className="mx-auto max-w-[1280px] space-y-5 px-8 py-6">
-        {children}
-      </div>
+      <div className="mx-auto max-w-[1280px] space-y-5 px-8 py-6">{children}</div>
     </div>
   );
 }

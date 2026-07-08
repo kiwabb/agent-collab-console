@@ -24,13 +24,16 @@ Environment knobs (all optional):
 """
 import asyncio  # noqa: E402
 import logging  # noqa: E402
+from collections.abc import Awaitable, Callable, Mapping, Sequence  # noqa: E402
 from datetime import datetime  # noqa: E402
+from typing import Literal, Protocol, cast  # noqa: E402
 
 from app.application import task_activity, timeouts  # noqa: E402
 from app.application.task_statuses import (  # noqa: E402
     is_task_active_status,
     is_task_failure_status,
 )
+from app.domain.models import CodexTask  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +43,30 @@ NUDGE_PROMPT = (
     "如果某些细节不确定，按合理默认值填，并在 risks 字段简短说明。"  # noqa: RUF001
 )
 
-async def _emit_stall_event(event_type: str, **fields) -> None:
+
+class StallWatchdogStore(Protocol):
+    async def list_codex_tasks(self) -> Sequence[object]: ...
+
+    async def load_codex_task(self, task_id: str) -> CodexTask | None: ...
+
+    async def save_codex_task(self, task: CodexTask) -> None: ...
+
+
+class StallProcessManager(Protocol):
+    async def terminate_task(self, task_id: str) -> None: ...
+
+
+class RunTaskWithUserContent(Protocol):
+    def __call__(
+        self, task_id: str, content: str, kind: Literal["chat", "refine"]
+    ) -> Awaitable[object]: ...
+
+
+class RefreshTaskResultFn(Protocol):
+    def __call__(self, task: CodexTask) -> Awaitable[None]: ...
+
+
+async def _emit_stall_event(event_type: str, **fields: object) -> None:
     """GAP I: structured stall lifecycle events on the global bus so stalls are
     countable per role/executor instead of grep-only. Best-effort."""
     try:
@@ -51,7 +77,11 @@ async def _emit_stall_event(event_type: str, **fields) -> None:
         logger.debug("stall event %s emit failed: %s", event_type, exc)
 
 
-async def _scan_once(store, process_manager, run_task_with_user_content) -> None:
+async def _scan_once(
+    store: StallWatchdogStore,
+    process_manager: StallProcessManager,
+    run_task_with_user_content: RunTaskWithUserContent,
+) -> None:
     threshold = timeouts.stall_threshold_s()
     cooldown = timeouts.stall_cooldown_s()
     now = datetime.now()
@@ -61,17 +91,19 @@ async def _scan_once(store, process_manager, run_task_with_user_content) -> None
         logger.warning("watchdog: failed to list tasks: %s", exc)
         return
 
-    def _field(t, name, default=None):
+    def _field(t: object, name: str, default: object | None = None) -> object | None:
         # list_codex_tasks returns dicts; load_codex_task returns CodexTask.
         # Support both transparently so the watchdog works regardless.
-        if isinstance(t, dict):
-            return t.get(name, default)
+        if isinstance(t, Mapping):
+            task_mapping = cast(Mapping[str, object], t)
+            return task_mapping.get(name, default)
         return getattr(t, name, default)
 
     for task in tasks:
-        task_id = _field(task, "id")
-        if not task_id:
+        task_id_value = _field(task, "id")
+        if not isinstance(task_id_value, str) or not task_id_value:
             continue
+        task_id = task_id_value
         status = _field(task, "status")
         if not is_task_active_status(status):
             # Not in flight — clean trackers so a future re-run starts fresh.
@@ -137,7 +169,7 @@ async def _scan_once(store, process_manager, run_task_with_user_content) -> None
                 run_task_with_user_content(
                     task_id,
                     NUDGE_PROMPT.format(silence_s=silence_s),
-                    kind="chat",
+                    "chat",
                 )
             )
         except asyncio.CancelledError:
@@ -170,7 +202,9 @@ async def _scan_once(store, process_manager, run_task_with_user_content) -> None
         )
 
 
-async def _recover_nudge_result(store, process_manager, task_id: str) -> bool:
+async def _recover_nudge_result(
+    store: StallWatchdogStore, process_manager: object, task_id: str
+) -> bool:
     """Persist a structured result the agent emitted in response to a nudge.
 
     Returns True if a usable result was recovered and the task marked done.
@@ -180,6 +214,7 @@ async def _recover_nudge_result(store, process_manager, task_id: str) -> bool:
     refresh = getattr(process_manager, "refresh_task_result", None)
     if not callable(refresh):
         return False
+    refresh_task_result = cast(RefreshTaskResultFn, refresh)
     try:
         task = await store.load_codex_task(task_id)
         status = getattr(task, "status", None)
@@ -189,7 +224,7 @@ async def _recover_nudge_result(store, process_manager, task_id: str) -> bool:
             return False
         # Promote so refresh_task_result extracts + persists from the nudge EP.
         task.status = "done"
-        await refresh(task)
+        await refresh_task_result(task)
         recovered = bool(task.result) and not is_unusable_result_text(task.result)
         if recovered:
             logger.info("watchdog: recovered nudge result for task %s — marked done", task_id)
@@ -204,7 +239,11 @@ async def _recover_nudge_result(store, process_manager, task_id: str) -> bool:
         return False
 
 
-async def run(store, get_process_manager, run_task_with_user_content) -> None:
+async def run(
+    store: StallWatchdogStore,
+    get_process_manager: Callable[[], StallProcessManager],
+    run_task_with_user_content: RunTaskWithUserContent,
+) -> None:
     """Long-running watchdog loop. Cancel via task.cancel() on shutdown."""
     if not timeouts.stall_watchdog_enabled():
         logger.info("stall watchdog disabled via CODEX_STALL_WATCHDOG=false")

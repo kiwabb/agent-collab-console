@@ -33,7 +33,11 @@ export function CommandCenterChatBar({ issueId, disabled, clarifyQuestion, onSen
       onSent?.();
       addToast({ type: "success", title: t("issue.command.chatSent") });
     } catch (err) {
-      addToast({ type: "error", title: t("issue.command.chatFailed"), message: err instanceof Error ? err.message : String(err) });
+      addToast({
+        type: "error",
+        title: t("issue.command.chatFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setSending(false);
     }
@@ -68,14 +72,23 @@ export function CommandCenterChatBar({ issueId, disabled, clarifyQuestion, onSen
             }
           }}
           rows={2}
-          placeholder={disabled ? t("issue.command.chatPausedPlaceholder") : clarifyQuestion ? t("issue.command.chatAnswerPlaceholder") : t("issue.command.chatPlaceholder")}
+          placeholder={
+            disabled
+              ? t("issue.command.chatPausedPlaceholder")
+              : clarifyQuestion
+                ? t("issue.command.chatAnswerPlaceholder")
+                : t("issue.command.chatPlaceholder")
+          }
           className="min-h-9 flex-1 resize-none rounded-md border border-transparent bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-text-muted focus:border-brand/40"
         />
         <Button
           onClick={() => void submit()}
           disabled={disabled || sending || !draft.trim()}
           data-density={sending ? "command-chat-send-thinking" : "command-chat-send"}
-          className={cn("gap-2 rounded-md bg-brand text-black hover:bg-brand-strong", sending && "motion-essential")}
+          className={cn(
+            "gap-2 rounded-md bg-brand text-black hover:bg-brand-strong",
+            sending && "motion-essential",
+          )}
         >
           {sending ? <AgentThinkingIndicator phase="thinking" size={14} /> : <Send size={14} />}
           {t("issue.command.send")}

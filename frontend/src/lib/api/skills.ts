@@ -1,6 +1,6 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, handleResponse } from "./fetch";
+import { API_BASE, apiJsonRequest, apiRequest } from "./fetch";
 import type { CreateSkillRequest, Skill, SkillImportResult, UpdateSkillRequest } from "../types";
 
 export async function listSkills(
@@ -10,20 +10,13 @@ export async function listSkills(
   if (opts.search) params.set("search", opts.search);
   if (opts.category) params.set("category", opts.category);
   const qs = params.toString();
-  const response = await fetch(`${API_BASE}/skills${qs ? `?${qs}` : ""}`);
-  return handleResponse(response);
+  return apiRequest<Skill[]>(`${API_BASE}/skills${qs ? `?${qs}` : ""}`);
 }
 export async function listSkillCategories(): Promise<string[]> {
-  const response = await fetch(`${API_BASE}/skills/categories`);
-  return handleResponse(response);
+  return apiRequest<string[]>(`${API_BASE}/skills/categories`);
 }
 export async function createSkillCategory(name: string): Promise<{ name: string }> {
-  const response = await fetch(`${API_BASE}/skills/categories`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  return handleResponse(response);
+  return apiJsonRequest<{ name: string }>(`${API_BASE}/skills/categories`, "POST", { name });
 }
 export async function deleteSkillCategory(name: string, force = false): Promise<void> {
   const url = new URL(
@@ -37,46 +30,32 @@ export async function deleteSkillCategory(name: string, force = false): Promise<
     throw new Error(text || `HTTP ${response.status}`);
   }
 }
-export async function createSkill(
-  body: CreateSkillRequest,
-): Promise<Skill> {
-  const response = await fetch(`${API_BASE}/skills`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse(response);
+export async function createSkill(body: CreateSkillRequest): Promise<Skill> {
+  return apiJsonRequest<Skill>(`${API_BASE}/skills`, "POST", body);
 }
-export async function updateSkill(
-  skillId: string,
-  body: UpdateSkillRequest,
-): Promise<Skill> {
-  const response = await fetch(`${API_BASE}/skills/${encodeURIComponent(skillId)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handleResponse(response);
+export async function updateSkill(skillId: string, body: UpdateSkillRequest): Promise<Skill> {
+  return apiJsonRequest<Skill>(`${API_BASE}/skills/${encodeURIComponent(skillId)}`, "PATCH", body);
 }
 export async function deleteSkill(skillId: string): Promise<{ deleted: string }> {
-  const response = await fetch(`${API_BASE}/skills/${encodeURIComponent(skillId)}`, {
+  return apiRequest<{ deleted: string }>(`${API_BASE}/skills/${encodeURIComponent(skillId)}`, {
     method: "DELETE",
   });
-  return handleResponse(response);
 }
-export async function importSkillsMarkdown(
-  files: File[],
-): Promise<SkillImportResult> {
+export async function importSkillsMarkdown(files: File[]): Promise<SkillImportResult> {
   const fd = new FormData();
   files.forEach((f) => fd.append("files", f));
-  const response = await fetch(`${API_BASE}/skills/import/md`, { method: "POST", body: fd });
-  return handleResponse(response);
+  return apiRequest<SkillImportResult>(`${API_BASE}/skills/import/md`, {
+    method: "POST",
+    body: fd,
+  });
 }
 export async function importSkillsExcel(file: File): Promise<SkillImportResult> {
   const fd = new FormData();
   fd.append("file", file);
-  const response = await fetch(`${API_BASE}/skills/import/excel`, { method: "POST", body: fd });
-  return handleResponse(response);
+  return apiRequest<SkillImportResult>(`${API_BASE}/skills/import/excel`, {
+    method: "POST",
+    body: fd,
+  });
 }
 export async function fetchSkillContent(url: string): Promise<string> {
   const response = await fetch(`${API_BASE}/skills/proxy?url=${encodeURIComponent(url)}`);
@@ -96,10 +75,8 @@ export async function translateSkillContent(
   text: string,
   target: "zh" | "en",
 ): Promise<TranslateSkillResult> {
-  const response = await fetch(`${API_BASE}/skills/translate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, target }),
+  return apiJsonRequest<TranslateSkillResult>(`${API_BASE}/skills/translate`, "POST", {
+    text,
+    target,
   });
-  return handleResponse(response);
 }

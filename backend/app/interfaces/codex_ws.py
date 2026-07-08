@@ -4,18 +4,48 @@ import asyncio  # noqa: I001, RUF100
 import contextlib
 import inspect
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Protocol, TypeVar, cast
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import Dict, Set  # noqa: UP035
 
 from app.bootstrap import codex_store
 from app.application import timeouts
 from app.application.task_statuses import is_task_terminal_status
+from app.domain.models import CodexTask, CodexTaskMessage, ExecutionProcess, LogEvent
 from app.interfaces.execution_process_views import build_execution_process_view
 
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+JsonFrame = dict[str, object]
+JsonPatch = list[JsonFrame]
+ExecutionProcessViews = dict[str, JsonFrame]
+WorkspaceState = dict[str, ExecutionProcessViews]
+T = TypeVar("T")
+
+
+class PendingApprovalManager(Protocol):
+    def get_pending_approvals(self) -> dict[str, JsonFrame]: ...
+
+
+class CodexProcessManagerFactory(Protocol):
+    def __call__(self) -> PendingApprovalManager | None: ...
+
+
+class WsSendChannel(Protocol):
+    async def send_json(self, data: object) -> None: ...
+
+    async def send_text(self, data: str) -> None: ...
+
+    async def close(self, code: int = 1000, reason: str = "") -> None: ...
+
+
+def _json_frame(value: object) -> JsonFrame:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
 
 
 # --- Per-subscriber backpressure ------------------------------------------
@@ -43,14 +73,14 @@ class WsSubscriber:
 
     __slots__ = ("ws", "queue", "_closed", "evict_code", "evict_reason")  # noqa: RUF023
 
-    def __init__(self, ws: WebSocket, maxsize: int):
+    def __init__(self, ws: WsSendChannel, maxsize: int) -> None:
         self.ws = ws
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self.queue: asyncio.Queue[object] = asyncio.Queue(maxsize=maxsize)
         self._closed = False
         self.evict_code = 1011  # non-1000 → frontend treats as non-clean → reconnect
         self.evict_reason = "overflow"
 
-    def try_put(self, frame) -> bool:
+    def try_put(self, frame: object) -> bool:
         """Non-blocking enqueue. Returns False (and evicts) if full/closed."""
         if self._closed:
             return False
@@ -103,7 +133,7 @@ class WsSubscriber:
                 await self.ws.close(code=self.evict_code, reason=self.evict_reason)
 
 
-def _fanout(subs: "Set[WsSubscriber] | None", frame) -> None:  # noqa: UP006, UP037
+def _fanout(subs: set[WsSubscriber] | None, frame: object) -> None:
     """Non-blocking broadcast: enqueue `frame` to every subscriber; drop any
     that overflow (they self-close and the client reconnects)."""
     if not subs:
@@ -115,29 +145,29 @@ def _fanout(subs: "Set[WsSubscriber] | None", frame) -> None:  # noqa: UP006, UP
 class ExecutionProcessWorkspaceStreamManager:
     """Manages WebSocket subscriptions for workspace-level execution processes."""
 
-    def __init__(self):
-        self._subscribers: Dict[str, Set[WsSubscriber]] = {}  # noqa: UP006
-        self._states: Dict[str, dict] = {}  # noqa: UP006
-        self._pending_events: Dict[str, list[dict]] = {}  # noqa: UP006
-        self._approval_states: Dict[str, dict] = {}  # noqa: UP006
+    def __init__(self) -> None:
+        self._subscribers: dict[str, set[WsSubscriber]] = {}
+        self._states: dict[str, WorkspaceState] = {}
+        self._pending_events: dict[str, list[JsonFrame]] = {}
+        self._approval_states: dict[str, JsonFrame] = {}
 
-    def subscribe(self, workspace_id: str, sub: WsSubscriber):
+    def subscribe(self, workspace_id: str, sub: WsSubscriber) -> None:
         self._subscribers.setdefault(workspace_id, set()).add(sub)
 
-    def unsubscribe(self, workspace_id: str, sub: WsSubscriber):
+    def unsubscribe(self, workspace_id: str, sub: WsSubscriber) -> None:
         subs = self._subscribers.get(workspace_id)
         if subs:
             subs.discard(sub)
             if not subs:
                 del self._subscribers[workspace_id]
 
-    def buffer_pending(self, workspace_id: str, event: dict):
+    def buffer_pending(self, workspace_id: str, event: JsonFrame) -> None:
         self._pending_events.setdefault(workspace_id, []).append(event)
 
-    def consume_pending_events(self, workspace_id: str) -> list[dict]:
+    def consume_pending_events(self, workspace_id: str) -> list[JsonFrame]:
         return self._pending_events.pop(workspace_id, [])
 
-    def restore_pending_events(self, workspace_id: str, events: list[dict]) -> None:
+    def restore_pending_events(self, workspace_id: str, events: list[JsonFrame]) -> None:
         if not events:
             return
         self._pending_events[workspace_id] = events + self._pending_events.get(
@@ -145,7 +175,7 @@ class ExecutionProcessWorkspaceStreamManager:
             [],
         )
 
-    async def publish_patch(self, workspace_id: str, patch: list):
+    async def publish_patch(self, workspace_id: str, patch: JsonPatch) -> None:
         """Publish JSON Patch and any pending events to all subscribers of a workspace."""
         subs = self._subscribers.get(workspace_id)
         if not subs:
@@ -159,7 +189,7 @@ class ExecutionProcessWorkspaceStreamManager:
 
         _fanout(subs, message)
 
-    async def publish_event(self, workspace_id: str, event: dict):
+    async def publish_event(self, workspace_id: str, event: JsonFrame) -> None:
         """Broadcast a single event immediately to all workspace subscribers."""
         subs = self._subscribers.get(workspace_id)
         if not subs:
@@ -170,20 +200,27 @@ class ExecutionProcessWorkspaceStreamManager:
 
     @staticmethod
     def _serialize_process(
-        process, task, messages, logs, pending_approval: dict | None = None
-    ) -> dict:
+        process: ExecutionProcess,
+        task: CodexTask | None,
+        messages: list[CodexTaskMessage],
+        logs: list[LogEvent],
+        pending_approval: JsonFrame | None = None,
+    ) -> JsonFrame:
         payload = build_execution_process_view(process, task, messages, logs)
         payload["pending_approval"] = pending_approval
         payload["awaiting_approval"] = pending_approval is not None
         return payload
 
     @staticmethod
-    async def _maybe_await(value):
+    async def _maybe_await(value: T | Awaitable[T]) -> T:
         if inspect.isawaitable(value):
-            return await value
+            return await cast(Awaitable[T], value)
         return value
 
-    async def _load_process_runtime(self, execution_process_id: str):
+    async def _load_process_runtime(
+        self,
+        execution_process_id: str,
+    ) -> tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]] | None:
         if codex_store is None:
             return None
         process = await self._maybe_await(codex_store.load_execution_process(execution_process_id))
@@ -206,11 +243,16 @@ class ExecutionProcessWorkspaceStreamManager:
         )
         return process, task, messages, logs
 
-    def _refresh_approval_state_from_runtime(self, workspace_id: str, process_ids: set[str]):
+    def _refresh_approval_state_from_runtime(
+        self,
+        workspace_id: str,
+        process_ids: set[str],
+    ) -> None:
         try:
             from app.bootstrap import get_codex_process_manager
 
-            mgr = get_codex_process_manager()
+            manager_factory = cast(CodexProcessManagerFactory, get_codex_process_manager)
+            mgr = manager_factory()
             pending = mgr.get_pending_approvals() if mgr is not None else {}
         except Exception:
             pending = {}
@@ -228,7 +270,7 @@ class ExecutionProcessWorkspaceStreamManager:
             else:
                 self._approval_states.pop(process_id, None)
 
-    async def get_state(self, workspace_id: str) -> dict:
+    async def get_state(self, workspace_id: str) -> WorkspaceState:
         processes = (
             await self._maybe_await(codex_store.list_execution_processes(session_id=workspace_id))
             if codex_store
@@ -250,7 +292,7 @@ class ExecutionProcessWorkspaceStreamManager:
         self._states[workspace_id] = {"execution_processes": execution_processes}
         return self._states[workspace_id]
 
-    async def _get_process_payload(self, execution_process_id: str) -> tuple[str, dict] | None:
+    async def _get_process_payload(self, execution_process_id: str) -> tuple[str, JsonFrame] | None:
         runtime_row = await self._load_process_runtime(execution_process_id)
         if runtime_row is None:
             return None
@@ -278,7 +320,7 @@ class ExecutionProcessWorkspaceStreamManager:
         workspace_id: str,
         task_id: str | None = None,
         execution_process_id: str | None = None,
-    ):
+    ) -> None:
         process_id = await self._resolve_execution_process_id(task_id, execution_process_id)
         if process_id is None:
             return
@@ -291,7 +333,7 @@ class ExecutionProcessWorkspaceStreamManager:
         existing_state = self._states.get(workspace_id, {"execution_processes": {}})
         existed = process_id in existing_state["execution_processes"]
         state = await self.get_state(workspace_id)
-        patch = [
+        patch: JsonPatch = [
             {
                 "op": "replace" if existed else "add",
                 "path": f"/execution_processes/{process_id}",
@@ -306,7 +348,7 @@ class ExecutionProcessWorkspaceStreamManager:
         workspace_id: str,
         execution_process_id: str | None = None,
         task_id: str | None = None,
-    ):
+    ) -> None:
         await self._publish_execution_process_view(
             workspace_id,
             task_id=task_id,
@@ -318,10 +360,10 @@ class ExecutionProcessWorkspaceStreamManager:
         workspace_id: str,
         task_id: str,
         status: str,
-        result: str = None,  # noqa: RUF013
+        result: str | None = None,
         execution_process_id: str | None = None,
-        fallback_event: dict | None = None,
-    ):
+        fallback_event: JsonFrame | None = None,
+    ) -> None:
         """Refresh a process view after task status changes and send task_status event."""
         from app.application.task_status_events import build_task_status_event
 
@@ -333,7 +375,7 @@ class ExecutionProcessWorkspaceStreamManager:
                 if codex_store
                 else None
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 "task_status task load failed; using fallback event: workspace_id=%s task_id=%s error=%s",
                 workspace_id,
@@ -342,9 +384,10 @@ class ExecutionProcessWorkspaceStreamManager:
             )
             task = None
         if task:
+            effective_status = getattr(task, "status", None) or status
             event = build_task_status_event(
                 task,
-                status=status,
+                status=effective_status,
                 result=result if result is not None else getattr(task, "result", None),
                 review_comment=getattr(task, "review_comment", None),
                 execution_process_id=execution_process_id,
@@ -372,7 +415,7 @@ class ExecutionProcessWorkspaceStreamManager:
                 execution_process_id=execution_process_id,
                 task_id=task_id,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 "task_status process refresh failed after event delivery: workspace_id=%s task_id=%s error=%s",
                 workspace_id,
@@ -381,8 +424,8 @@ class ExecutionProcessWorkspaceStreamManager:
             )
 
     async def add_task(
-        self, workspace_id: str, task: dict, execution_process_id: str | None = None
-    ):
+        self, workspace_id: str, task: JsonFrame, execution_process_id: str | None = None
+    ) -> None:
         """Forward task_created to WS subscribers so the frontend's RunDetail
         can react to new tasks (e.g. workflow stage transitions) without
         forcing a page refresh. The event itself doesn't mutate the
@@ -391,7 +434,7 @@ class ExecutionProcessWorkspaceStreamManager:
         """
         await self.publish_event(workspace_id, {"type": "task_created", "task": task})
 
-    async def remove_task(self, workspace_id: str, task_id: str):
+    async def remove_task(self, workspace_id: str, task_id: str) -> None:
         """Remove any process views associated with a deleted task."""
         state = await self.get_state(workspace_id)
         process_ids = [
@@ -401,23 +444,24 @@ class ExecutionProcessWorkspaceStreamManager:
         ]
         for process_id in process_ids:
             del state["execution_processes"][process_id]
+            patch: JsonPatch = [
+                {
+                    "op": "remove",
+                    "path": f"/execution_processes/{process_id}",
+                }
+            ]
             await self.publish_patch(
                 workspace_id,
-                [
-                    {
-                        "op": "remove",
-                        "path": f"/execution_processes/{process_id}",
-                    }
-                ],
+                patch,
             )
 
     async def add_message(
         self,
         workspace_id: str,
         task_id: str,
-        message: dict,
+        message: JsonFrame,
         execution_process_id: str | None = None,
-    ):
+    ) -> None:
         await self.publish_execution_process(
             workspace_id,
             execution_process_id=execution_process_id,
@@ -428,9 +472,9 @@ class ExecutionProcessWorkspaceStreamManager:
         self,
         workspace_id: str,
         task_id: str,
-        log: dict,
+        log: JsonFrame,
         execution_process_id: str | None = None,
-    ):
+    ) -> None:
         await self.publish_execution_process(
             workspace_id,
             execution_process_id=execution_process_id,
@@ -441,8 +485,8 @@ class ExecutionProcessWorkspaceStreamManager:
         self,
         workspace_id: str,
         execution_process_id: str,
-        approval: dict | None,
-    ):
+        approval: JsonFrame | None,
+    ) -> None:
         if approval is None:
             self._approval_states.pop(execution_process_id, None)
         else:
@@ -461,23 +505,23 @@ stream_manager = workspace_stream_manager
 class ExecutionProcessLogStreamManager:
     """Manages raw log WebSocket subscriptions for a single execution process."""
 
-    def __init__(self):
-        self._subscribers: Dict[str, Set[WsSubscriber]] = {}  # noqa: UP006
+    def __init__(self) -> None:
+        self._subscribers: dict[str, set[WsSubscriber]] = {}
 
-    def subscribe(self, process_id: str, sub: WsSubscriber):
+    def subscribe(self, process_id: str, sub: WsSubscriber) -> None:
         self._subscribers.setdefault(process_id, set()).add(sub)
 
-    def unsubscribe(self, process_id: str, sub: WsSubscriber):
+    def unsubscribe(self, process_id: str, sub: WsSubscriber) -> None:
         subs = self._subscribers.get(process_id)
         if subs:
             subs.discard(sub)
             if not subs:
                 del self._subscribers[process_id]
 
-    async def publish_log(self, process_id: str, log_payload: dict):
+    async def publish_log(self, process_id: str, log_payload: JsonFrame) -> None:
         _fanout(self._subscribers.get(process_id), log_payload)
 
-    async def publish_finished(self, process_id: str):
+    async def publish_finished(self, process_id: str) -> None:
         subs = self._subscribers.pop(process_id, None)
         if not subs:
             return
@@ -487,7 +531,7 @@ class ExecutionProcessLogStreamManager:
             sub.try_put({"finished": True})
             sub.close_after_flush(code=1000, reason="finished")
 
-    async def get_initial_logs(self, process_id: str) -> list[dict]:
+    async def get_initial_logs(self, process_id: str) -> list[JsonFrame]:
         if codex_store is None:
             return []
         process = await ExecutionProcessWorkspaceStreamManager._maybe_await(
@@ -503,7 +547,7 @@ class ExecutionProcessLogStreamManager:
                 limit=10000,
             )
         )
-        return [log.model_dump(mode="json") for log in logs]
+        return [_json_frame(log.model_dump(mode="json")) for log in logs]
 
 
 raw_log_stream_manager = ExecutionProcessLogStreamManager()
@@ -512,30 +556,30 @@ raw_log_stream_manager = ExecutionProcessLogStreamManager()
 class ExecutionProcessMessageStreamManager:
     """Manages task message WebSocket subscriptions for a single execution process."""
 
-    def __init__(self):
-        self._subscribers: Dict[str, Set[WsSubscriber]] = {}  # noqa: UP006
+    def __init__(self) -> None:
+        self._subscribers: dict[str, set[WsSubscriber]] = {}
 
-    def subscribe(self, process_id: str, sub: WsSubscriber):
+    def subscribe(self, process_id: str, sub: WsSubscriber) -> None:
         self._subscribers.setdefault(process_id, set()).add(sub)
 
-    def unsubscribe(self, process_id: str, sub: WsSubscriber):
+    def unsubscribe(self, process_id: str, sub: WsSubscriber) -> None:
         subs = self._subscribers.get(process_id)
         if subs:
             subs.discard(sub)
             if not subs:
                 del self._subscribers[process_id]
 
-    async def publish_message(self, process_id: str, message_payload: dict):
+    async def publish_message(self, process_id: str, message_payload: JsonFrame) -> None:
         _fanout(self._subscribers.get(process_id), message_payload)
 
-    async def publish_delta(self, process_id: str, delta_payload: dict):
+    async def publish_delta(self, process_id: str, delta_payload: JsonFrame) -> None:
         """Broadcast a token-level partial update to subscribers.
 
         Subscribers receive {"type": "message_delta", seq, delta_text, ...}.
         They distinguish from full messages by the "type" field."""
         _fanout(self._subscribers.get(process_id), {**delta_payload, "type": "message_delta"})
 
-    async def publish_finished(self, process_id: str):
+    async def publish_finished(self, process_id: str) -> None:
         subs = self._subscribers.pop(process_id, None)
         if not subs:
             return
@@ -543,7 +587,7 @@ class ExecutionProcessMessageStreamManager:
             sub.try_put({"finished": True})
             sub.close_after_flush(code=1000, reason="finished")
 
-    async def get_initial_messages(self, process_id: str) -> list[dict]:
+    async def get_initial_messages(self, process_id: str) -> list[JsonFrame]:
         if codex_store is None:
             return []
         process = await ExecutionProcessWorkspaceStreamManager._maybe_await(
@@ -557,14 +601,17 @@ class ExecutionProcessMessageStreamManager:
                 execution_process_id=process.id,
             )
         )
-        return [message.model_dump(mode="json") for message in messages]
+        return [_json_frame(message.model_dump(mode="json")) for message in messages]
 
 
 message_stream_manager = ExecutionProcessMessageStreamManager()
 
 
 async def _serve_subscriber(
-    websocket: WebSocket, subscribe, unsubscribe, sub: WsSubscriber
+    websocket: WebSocket,
+    subscribe: Callable[[], object],
+    unsubscribe: Callable[[], object],
+    sub: WsSubscriber,
 ) -> None:
     """Run a subscriber connection: a dedicated sender task drains the queue to
     the socket (sole writer) while a receiver task handles client ping → pong
@@ -575,7 +622,7 @@ async def _serve_subscriber(
     """
     subscribe()
 
-    async def receiver():
+    async def receiver() -> None:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
@@ -588,7 +635,7 @@ async def _serve_subscriber(
     except WebSocketDisconnect:
         pass
     except Exception:
-        pass
+        logger.debug("websocket subscriber loop failed", exc_info=True)
     finally:
         for task in (sender_task, receiver_task):
             task.cancel()
@@ -598,11 +645,11 @@ async def _serve_subscriber(
 
 
 async def _send_workspace_initial_snapshot(
-    websocket: WebSocket,
-    state: dict,
-    pending_events: list[dict] | None = None,
+    websocket: WsSendChannel,
+    state: WorkspaceState,
+    pending_events: list[JsonFrame] | None = None,
 ) -> bool:
-    initial_patch = [
+    initial_patch: JsonPatch = [
         {
             "op": "replace",
             "path": "/execution_processes",
@@ -610,7 +657,7 @@ async def _send_workspace_initial_snapshot(
         }
     ]
     try:
-        message = {"JsonPatch": initial_patch}
+        message: JsonFrame = {"JsonPatch": initial_patch}
         if pending_events:
             message["Events"] = pending_events
         await websocket.send_json(message)
@@ -622,7 +669,7 @@ async def _send_workspace_initial_snapshot(
 
 @router.websocket("/workspaces/{workspace_id}/execution_processes/ws")
 @router.websocket("/sessions/{workspace_id}/execution_processes/ws")
-async def execution_process_workspace_stream(websocket: WebSocket, workspace_id: str):
+async def execution_process_workspace_stream(websocket: WebSocket, workspace_id: str) -> None:
     """Stream execution-process workspace state via JSON Patch."""
     if codex_store is None:
         await websocket.close(code=500, reason="Store not available")
@@ -658,7 +705,7 @@ execution_process_stream = execution_process_workspace_stream
 
 
 @router.websocket("/execution-processes/{process_id}/logs/ws")
-async def execution_process_log_stream(websocket: WebSocket, process_id: str):
+async def execution_process_log_stream(websocket: WebSocket, process_id: str) -> None:
     """Stream raw log events for a single execution process."""
     if codex_store is None:
         await websocket.close(code=500, reason="Store not available")
@@ -691,7 +738,7 @@ async def execution_process_log_stream(websocket: WebSocket, process_id: str):
 
 
 @router.websocket("/execution-processes/{process_id}/messages/ws")
-async def execution_process_message_stream(websocket: WebSocket, process_id: str):
+async def execution_process_message_stream(websocket: WebSocket, process_id: str) -> None:
     """Stream task messages for a single execution process."""
     if codex_store is None:
         await websocket.close(code=500, reason="Store not available")

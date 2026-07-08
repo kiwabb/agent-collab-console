@@ -4,10 +4,7 @@ import fs from "node:fs";
 
 test("CommandPalette exposes action-oriented rows", () => {
   const source = fs.readFileSync(
-    new URL(
-      "../src/features/workbench/components/CommandPalette.tsx",
-      import.meta.url,
-    ),
+    new URL("../src/features/workbench/components/CommandPalette.tsx", import.meta.url),
     "utf8",
   );
 

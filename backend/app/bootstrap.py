@@ -1,9 +1,12 @@
 from __future__ import annotations  # noqa: I001
 
 import os  # noqa: I001, RUF100
+import logging
 import shlex
 import shutil
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, cast
 
 from app.application.session_service import SessionService
 from app.application.orchestration_service import OrchestrationService
@@ -16,15 +19,82 @@ from app.adapters.codex_cli_adapter import CodexCliAdapter
 from app.adapters.sqlite_store import SQLiteStore
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
 from app.application.codex_task_runner import CodexTaskRunner
-from app.application.help_orchestrator import HelpOrchestrator
-from app.application.role_workflow_service import RoleWorkflowService
+from app.application.help_orchestrator import HelpOrchestrator, HelpTaskRunner
+from app.application.role_workflow_service import RoleWorkflowService, RoleWorkflowStore
 from app.application.git_service import GitService
 from app.application.project_service import ProjectService
 from app.application.prototype_service import PrototypeService
+from app.application.runtime_prototype_capture import RuntimePrototypeCaptureService
 from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.application.skill_service import SkillService
-from app.application.worktree_manager import WorktreeManager
 from app.application import timeouts
+from app.application.worktree_manager import WorktreeManager
+from app.domain.models import CodexSession, CodexTask, LogEvent
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.application.codex_process_manager import CodexProcessManager
+
+
+RefreshTaskResult = Callable[[CodexTask], Awaitable[object]]
+AppendLogEventAsync = Callable[[LogEvent], Awaitable[None]]
+
+
+class MockCodexStore(Protocol):
+    async def load_codex_session(self, session_id: str) -> CodexSession | None: ...
+
+    async def save_codex_session(self, session: CodexSession) -> None: ...
+
+    async def load_codex_task(self, task_id: str) -> CodexTask | None: ...
+
+    async def save_codex_task(self, task: CodexTask) -> None: ...
+
+
+class MockLogStore(Protocol):
+    async def append_log_event(self, event: LogEvent) -> None: ...
+
+
+class MockEventBus(Protocol):
+    async def queue_log_event(self, event: LogEvent) -> None: ...
+
+    async def append(self, event: dict[str, object]) -> None: ...
+
+
+class RealProcessManagerFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        codex_store: object,
+        log_store: object,
+        data_dir: str,
+        event_bus: object,
+    ) -> CodexProcessManager: ...
+
+
+class MockProcessManagerFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        codex_store: object,
+        log_store: object,
+        data_dir: str | None = None,
+        event_bus: object | None = None,
+    ) -> MockCodexProcessManager: ...
+
+
+class TaskRunnerFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        codex_store: object,
+        event_bus: object,
+        process_manager_factory: Callable[[], object],
+        mock_manager_cls: type[MockCodexProcessManager],
+        refresh_task_result: RefreshTaskResult,
+        help_orchestrator_factory: object | None,
+        role_workflow_service: RoleWorkflowService,
+    ) -> CodexTaskRunner: ...
 
 
 # Workflow DAG feature flag. Default ON now that PR5 migrations and PR6
@@ -67,8 +137,8 @@ effective_store = async_store if async_store is not None else store
 # is set in main.py's lifespan startup, mirroring event_bus.set_loop.
 from app.application.audit_logger import audit_logger  # noqa: E402, I001, RUF100
 
-if effective_store is not None:
-    audit_logger.set_store(effective_store)
+if async_store is not None:
+    audit_logger.set_store(async_store)
 session_service = SessionService(store=effective_store)
 
 # Configure adapter: REAL_CLI=true makes the system actually invoke a CLI to
@@ -77,6 +147,8 @@ session_service = SessionService(store=effective_store)
 # generator. Set REAL_CLI=false for offline tests / demos.
 use_real_cli = timeouts.real_cli_enabled()
 
+worker_adapter: ClaudeCliAdapter | FakeClaudeAdapter
+master_adapter: CodexCliAdapter | FakeCodexAdapter
 if use_real_cli:
     # Real CLI adapters - commands configurable via CLAUDE_CMD and CODEX_CMD env vars
     # Values are space-separated shell commands. Defaults try the system
@@ -119,13 +191,17 @@ runtime_catalog_service = (
     RuntimeCatalogService(store=async_store) if async_store is not None else None
 )
 prototype_service = (
-    PrototypeService(store=async_store, runtime_catalog_service=runtime_catalog_service)
+    PrototypeService(
+        store=async_store,
+        runtime_catalog_service=runtime_catalog_service,
+        runtime_capture_service=RuntimePrototypeCaptureService(),
+    )
     if async_store is not None and runtime_catalog_service is not None
     else None
 )
 
 # Codex process manager - lazy imported to avoid pty dependency on import
-codex_process_manager = None
+codex_process_manager: CodexProcessManager | MockCodexProcessManager | None = None
 
 
 def check_codex_available() -> bool:
@@ -145,11 +221,17 @@ class MockCodexProcessManager:
     Used when CODEX_LAUNCH_ENABLED=false to isolate tests from real process spawning.
     """
 
-    def __init__(self, codex_store, log_store, data_dir=None, event_bus=None):
+    def __init__(
+        self,
+        codex_store: MockCodexStore,
+        log_store: MockLogStore | None,
+        data_dir: str | None = None,
+        event_bus: MockEventBus | None = None,
+    ) -> None:
         self.codex_store = codex_store
         self.log_store = log_store
-        self._processes = {}
-        self._data_dir = data_dir or "/tmp"
+        self._processes: dict[str, object] = {}
+        self._data_dir = data_dir or timeouts.DEFAULT_CODEX_DATA_DIR
         self._event_bus = event_bus
 
     def check_availability(self) -> bool:
@@ -158,7 +240,7 @@ class MockCodexProcessManager:
     def _get_log_path(self, session_id: str) -> str:
         return os.path.join(self._data_dir, f"mock_session_{session_id}.log")
 
-    async def launch(self, session_id: str):
+    async def launch(self, session_id: str) -> CodexSession:
         """Initialize session for per-turn model (no process spawned)."""
         session = await self.codex_store.load_codex_session(session_id)
         if session is None:
@@ -181,9 +263,9 @@ class MockCodexProcessManager:
         resume_session_id: str | None = None,
         resume_message_id: str | None = None,
         cwd: str | None = None,
-        env_overrides: dict | None = None,
-        command_args: list | None = None,
-        **_extra,
+        env_overrides: dict[str, str] | None = None,
+        command_args: list[str] | None = None,
+        **_extra: object,
     ) -> str:
         """In per-turn model: just log input and mark session done. No real process."""
         from app.application.process_runtime_common import is_workspace_console_task
@@ -226,12 +308,40 @@ class MockCodexProcessManager:
         self,
         session_id: str | None = None,
         input_text: str = "",
-        **kwargs,
+        wait: bool = True,
+        task_id: str | None = None,
+        executor: str = "codex",
+        provider: str | None = None,
+        model: str | None = None,
+        resume_session_id: str | None = None,
+        resume_message_id: str | None = None,
+        cwd: str | None = None,
+        env_overrides: dict[str, str] | None = None,
+        command_args: list[str] | None = None,
+        force_new_session: bool = False,
+        **legacy_kwargs: object,
     ) -> str:
         """Async version of write_input - delegates to write_input for mock."""
-        return await self.write_input(session_id, input_text, **kwargs)
+        if session_id is None:
+            raise ValueError("session_id is required")
+        return await self.write_input(
+            session_id,
+            input_text,
+            wait=wait,
+            task_id=task_id,
+            executor=executor,
+            provider=provider,
+            model=model,
+            resume_session_id=resume_session_id,
+            resume_message_id=resume_message_id,
+            cwd=cwd,
+            env_overrides=env_overrides,
+            command_args=command_args,
+            force_new_session=force_new_session,
+            **legacy_kwargs,
+        )
 
-    async def terminate(self, session_id: str):
+    async def terminate(self, session_id: str) -> CodexSession:
         """Set session back to idle (stops any in-progress turn)."""
         self._processes.pop(session_id, None)
         session = await self.codex_store.load_codex_session(session_id)
@@ -242,7 +352,7 @@ class MockCodexProcessManager:
         await self.codex_store.save_codex_session(session)
         return session
 
-    async def terminate_all(self):
+    async def terminate_all(self) -> list[str]:
         """Mark all sessions as idle and clear _processes."""
         terminated = []
         for session_id in list(self._processes.keys()):
@@ -250,10 +360,25 @@ class MockCodexProcessManager:
                 await self.terminate(session_id)
                 terminated.append(session_id)
             except Exception:
-                pass
+                logger.debug("mock process termination failed: session_id=%s", session_id, exc_info=True)
         return terminated
 
-    async def _append_log(self, session_id, stream, content, task_id: str | None = None):
+    async def terminate_task(self, task_id: str) -> None:
+        self._processes.pop(task_id, None)
+
+    async def resolve_approval(self, item_id: str, decision: str) -> bool:
+        return False
+
+    def get_pending_approvals(self) -> dict[str, dict[str, object]]:
+        return {}
+
+    async def _append_log(
+        self,
+        session_id: str,
+        stream: str,
+        content: str,
+        task_id: str | None = None,
+    ) -> None:
         from app.domain.models import LogEvent  # noqa: I001
         from uuid import uuid4
 
@@ -276,8 +401,9 @@ class MockCodexProcessManager:
             await self._event_bus.queue_log_event(event)
         # In mock mode, also persist directly to ensure test stability
         if self.log_store is not None:
-            if hasattr(self.log_store, "append_log_event_async"):
-                await self.log_store.append_log_event_async(event)
+            append_log_event_async = getattr(self.log_store, "append_log_event_async", None)
+            if callable(append_log_event_async):
+                await cast(AppendLogEventAsync, append_log_event_async)(event)
             else:
                 await self.log_store.append_log_event(event)
         self._publish_to_ws(session_id, event.id, stream, content, now.isoformat())
@@ -293,7 +419,14 @@ class MockCodexProcessManager:
                 }
             )
 
-    def _publish_to_ws(self, session_id, event_id, stream, content, created_at_iso):
+    def _publish_to_ws(
+        self,
+        session_id: str,
+        event_id: str,
+        stream: str,
+        content: str,
+        created_at_iso: str,
+    ) -> None:
         from app.interfaces.codex_ws import stream_manager
 
         stream_manager.buffer_pending(
@@ -306,27 +439,29 @@ class MockCodexProcessManager:
             },
         )
 
-    def buffer_pending(self, session_id, event):
+    def buffer_pending(self, session_id: str, event: dict[str, object]) -> None:
         from app.interfaces.codex_ws import stream_manager
 
         stream_manager.buffer_pending(session_id, event)
 
 
-def get_codex_process_manager():
+def get_codex_process_manager() -> CodexProcessManager | MockCodexProcessManager:
     global codex_process_manager
     if codex_process_manager is None:
         if timeouts.codex_launch_enabled():
             from app.application.codex_process_manager import CodexProcessManager
 
             data_dir = timeouts.codex_data_dir()
-            codex_process_manager = CodexProcessManager(
+            real_manager_factory = cast(RealProcessManagerFactory, CodexProcessManager)
+            codex_process_manager = real_manager_factory(
                 codex_store=codex_store,
                 log_store=codex_store,
                 data_dir=data_dir,
                 event_bus=event_bus,
             )
         else:
-            codex_process_manager = MockCodexProcessManager(
+            mock_manager_factory = cast(MockProcessManagerFactory, MockCodexProcessManager)
+            codex_process_manager = mock_manager_factory(
                 codex_store=codex_store, log_store=codex_store
             )
     return codex_process_manager
@@ -334,13 +469,14 @@ def get_codex_process_manager():
 
 task_runner = None
 help_orchestrator = None
-role_workflow_service = RoleWorkflowService(codex_store=codex_store)
+role_workflow_service = RoleWorkflowService(codex_store=cast(RoleWorkflowStore | None, codex_store))
 
 
-def get_task_runner(refresh_task_result):
+def get_task_runner(refresh_task_result: RefreshTaskResult) -> CodexTaskRunner:
     global task_runner
     if task_runner is None:
-        task_runner = CodexTaskRunner(
+        task_runner_factory = cast(TaskRunnerFactory, CodexTaskRunner)
+        task_runner = task_runner_factory(
             codex_store=codex_store,
             event_bus=event_bus,
             process_manager_factory=get_codex_process_manager,
@@ -353,12 +489,14 @@ def get_task_runner(refresh_task_result):
     return task_runner
 
 
-def get_help_orchestrator(refresh_task_result):
+def get_help_orchestrator(refresh_task_result: RefreshTaskResult) -> HelpOrchestrator:
     global help_orchestrator
     if help_orchestrator is None:
+        if async_store is None:
+            raise RuntimeError("Help orchestration requires the async SQLite store")
         help_orchestrator = HelpOrchestrator(
-            codex_store=codex_store,
+            codex_store=async_store,
             event_bus=event_bus,
-            task_runner=get_task_runner(refresh_task_result),
+            task_runner=cast(HelpTaskRunner, get_task_runner(refresh_task_result)),
         )
     return help_orchestrator

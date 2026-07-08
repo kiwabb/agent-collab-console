@@ -2,31 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/providers/I18nProvider";
-import type {
-  BenchmarkDiff,
-  BenchmarkJob,
-  BenchmarkRun,
-  CalibrationItem,
-  CalibrationReport,
-} from "@/lib/types";
+import type { BenchmarkDiff, BenchmarkJob, BenchmarkRun, CalibrationReport } from "@/lib/types";
 import {
-  getBaselineRun,
   getBenchmarkJob,
-  getBenchmarkRun,
-  getBenchmarkRunDiff,
-  getCalibrationReport,
-  listBenchmarkRuns,
-  setBaselineRun as apiSetBaseline,
   triggerBenchmarkRun,
   type TriggerBenchmarkResponse,
 } from "@/lib/api/benchmarks";
 import { cn } from "@/lib/utils";
 import {
-  classifyDelta,
   fmtPassAt1,
   fmtTimestamp,
   fmtUsd,
-  jobStatusLabelKey,
   pickLogTicksRounded,
   projectPoints,
   summarizeDiff,
@@ -148,9 +134,7 @@ export function TriggerForm({ onStarted, onError, onViewJob }: TriggerFormProps)
             onChange={(e) => setDryRun(e.target.checked)}
             className="size-4 rounded border-border-subtle/40 accent-brand"
           />
-          <span className="text-[12px] text-foreground">
-            {t("benchmark.trigger.dryRun")}
-          </span>
+          <span className="text-[12px] text-foreground">{t("benchmark.trigger.dryRun")}</span>
         </label>
       </div>
       <div className="px-5 py-3 border-t border-border-subtle/40 flex items-center gap-3">
@@ -159,9 +143,7 @@ export function TriggerForm({ onStarted, onError, onViewJob }: TriggerFormProps)
           disabled={submitting}
           className="px-4 py-2 rounded-md bg-brand text-white text-[12.5px] font-bold tracking-wide hover:opacity-90 disabled:opacity-50 transition"
         >
-          {submitting
-            ? t("benchmark.trigger.submitting")
-            : t("benchmark.trigger.submit")}
+          {submitting ? t("benchmark.trigger.submitting") : t("benchmark.trigger.submit")}
         </button>
         {lastJob && (
           <button
@@ -181,9 +163,10 @@ export function TriggerForm({ onStarted, onError, onViewJob }: TriggerFormProps)
 // Job poller
 // ---------------------------------------------------------------------------
 
-export function useBenchmarkJob(
-  jobId: string | null,
-): { job: BenchmarkJob | null; resultRef: string | null } {
+export function useBenchmarkJob(jobId: string | null): {
+  job: BenchmarkJob | null;
+  resultRef: string | null;
+} {
   const [job, setJob] = useState<BenchmarkJob | null>(null);
   useEffect(() => {
     if (!jobId) {
@@ -262,13 +245,27 @@ export function Leaderboard({
         <table className="w-full text-[12px]">
           <thead>
             <tr className="border-b border-border-subtle/40 bg-slate-900/20 text-text-muted">
-              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">{t("benchmark.leaderboard.col.label")}</th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">{t("benchmark.leaderboard.col.created")}</th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">{t("benchmark.leaderboard.col.status")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">{t("benchmark.leaderboard.col.passAt1")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">{t("benchmark.leaderboard.col.costPer")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">{t("benchmark.leaderboard.col.epochs")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider"> </th>
+              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.leaderboard.col.label")}
+              </th>
+              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.leaderboard.col.created")}
+              </th>
+              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.leaderboard.col.status")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.leaderboard.col.passAt1")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.leaderboard.col.costPer")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.leaderboard.col.epochs")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {" "}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -284,7 +281,9 @@ export function Leaderboard({
                 >
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-[12px] text-foreground">{r.label || r.id}</span>
+                      <span className="font-mono text-[12px] text-foreground">
+                        {r.label || r.id}
+                      </span>
                       {isBaseline && (
                         <span className="font-mono text-[9px] uppercase tracking-wider font-extrabold text-status-done bg-status-done/10 px-1.5 py-0.5 rounded">
                           {t("benchmark.leaderboard.baseline")}
@@ -293,7 +292,9 @@ export function Leaderboard({
                     </div>
                     <div className="font-mono text-[9px] text-text-faint">{r.id}</div>
                   </td>
-                  <td className="px-3 py-2.5 font-mono text-[11px] text-text-muted">{fmtTimestamp(r.created_at)}</td>
+                  <td className="px-3 py-2.5 font-mono text-[11px] text-text-muted">
+                    {fmtTimestamp(r.created_at)}
+                  </td>
                   <td className="px-3 py-2.5">
                     <StatusPill status={r.status} />
                   </td>
@@ -371,7 +372,10 @@ interface ScoreCostFrontierProps {
 export function ScoreCostFrontier({ runs, baseline, onPickRun }: ScoreCostFrontierProps) {
   const { t } = useI18n();
   const completed = runs.filter(
-    (r) => r.status === "completed" && r.cost_per_issue_usd != null && r.aggregate_pass_at_1 != null,
+    (r) =>
+      r.status === "completed" &&
+      typeof r.cost_per_issue_usd === "number" &&
+      typeof r.aggregate_pass_at_1 === "number",
   );
   if (completed.length < 2) {
     return (
@@ -388,13 +392,20 @@ export function ScoreCostFrontier({ runs, baseline, onPickRun }: ScoreCostFronti
     );
   }
 
-  const points: FrontierPoint[] = completed.map((r) => ({
-    runId: r.id,
-    label: r.label || r.id,
-    isBaseline: baseline?.id === r.id,
-    costPerIssueUsd: r.cost_per_issue_usd as number,
-    passAt1: r.aggregate_pass_at_1 as number,
-  }));
+  const points: FrontierPoint[] = completed.flatMap((r) => {
+    if (typeof r.cost_per_issue_usd !== "number" || typeof r.aggregate_pass_at_1 !== "number") {
+      return [];
+    }
+    return [
+      {
+        runId: r.id,
+        label: r.label || r.id,
+        isBaseline: baseline?.id === r.id,
+        costPerIssueUsd: r.cost_per_issue_usd,
+        passAt1: r.aggregate_pass_at_1,
+      },
+    ];
+  });
   const { projected, axis } = projectPoints(points, CHART_BOX);
   const ticks = pickLogTicksRounded(axis.xMin, axis.xMax, 4);
 
@@ -434,7 +445,9 @@ export function ScoreCostFrontier({ runs, baseline, onPickRun }: ScoreCostFronti
           />
           {/* y-axis labels (0%, 50%, 100%) */}
           {[0, 0.25, 0.5, 0.75, 1].map((p) => {
-            const y = CHART_BOX.padTop + (1 - p) * (CHART_BOX.height - CHART_BOX.padTop - CHART_BOX.padBottom);
+            const y =
+              CHART_BOX.padTop +
+              (1 - p) * (CHART_BOX.height - CHART_BOX.padTop - CHART_BOX.padBottom);
             return (
               <g key={p}>
                 <line
@@ -461,10 +474,7 @@ export function ScoreCostFrontier({ runs, baseline, onPickRun }: ScoreCostFronti
             const innerW = CHART_BOX.width - CHART_BOX.padLeft - CHART_BOX.padRight;
             const xMin = Math.log10(axis.xMin);
             const xMax = Math.log10(axis.xMax);
-            const tPos =
-              xMax - xMin < 0.01
-                ? 0.5
-                : (Math.log10(t) - xMin) / (xMax - xMin);
+            const tPos = xMax - xMin < 0.01 ? 0.5 : (Math.log10(t) - xMin) / (xMax - xMin);
             const x = CHART_BOX.padLeft + tPos * innerW;
             return (
               <g key={t}>
@@ -532,20 +542,8 @@ function FrontierDot({
   const tone = isBaseline ? "fill-status-done" : "fill-brand";
   return (
     <g onClick={onClick} className="cursor-pointer">
-      <circle
-        cx={p.px}
-        cy={p.py}
-        r={p.r + 4}
-        fill="transparent"
-      />
-      <circle
-        cx={p.px}
-        cy={p.py}
-        r={p.r}
-        className={tone}
-        stroke="white"
-        strokeWidth={1.5}
-      />
+      <circle cx={p.px} cy={p.py} r={p.r + 4} fill="transparent" />
+      <circle cx={p.px} cy={p.py} r={p.r} className={tone} stroke="white" strokeWidth={1.5} />
       <title>{`${p.label} (${p.runId})`}</title>
     </g>
   );
@@ -617,13 +615,20 @@ export function RunDiffPanel({ diff, loading }: RunDiffPanelProps) {
                 : "text-text-muted bg-surface-input/50 border-border-subtle/40",
           )}
         >
-          {t(`benchmark.diff.status${capitalize(diff.diff.aggregate_status)}` as Parameters<typeof t>[0])}
+          {t(
+            `benchmark.diff.status${capitalize(diff.diff.aggregate_status)}` as Parameters<
+              typeof t
+            >[0],
+          )}
         </span>
       </div>
       <div className="px-5 py-3 grid grid-cols-3 gap-3 text-[12px]">
         <SummaryStat
           label={t("benchmark.diff.aggregateLabel")}
-          value={fmtPassAt1(diff.candidate.aggregate_pass_at_1, diff.candidate.aggregate_pass_at_1_stderr)}
+          value={fmtPassAt1(
+            diff.candidate.aggregate_pass_at_1,
+            diff.candidate.aggregate_pass_at_1_stderr,
+          )}
         />
         <SummaryStat
           label={t("benchmark.diff.aggregateDelta")}
@@ -643,20 +648,36 @@ export function RunDiffPanel({ diff, loading }: RunDiffPanelProps) {
         <table className="w-full text-[12px]">
           <thead>
             <tr className="border-b border-border-subtle/40 bg-slate-900/20 text-text-muted">
-              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">{t("benchmark.diff.col.fixture")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">{t("benchmark.diff.col.candidate")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">{t("benchmark.diff.col.baseline")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">{t("benchmark.diff.col.delta")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">{t("benchmark.diff.col.status")}</th>
+              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.diff.col.fixture")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.diff.col.candidate")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.diff.col.baseline")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.diff.col.delta")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.diff.col.status")}
+              </th>
             </tr>
           </thead>
           <tbody>
             {diff.diff.per_fixture.map((f) => (
               <tr key={f.fixture_id} className="border-b border-border-subtle/30">
                 <td className="px-3 py-2 font-mono text-[11px] text-foreground">{f.fixture_id}</td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtPctShort(f.candidate_pass_at_1)}</td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-text-muted">{fmtPctShort(f.baseline_pass_at_1)}</td>
-                <td className={cn("px-3 py-2 text-right font-mono tabular-nums", toneFor(f.status))}>
+                <td className="px-3 py-2 text-right font-mono tabular-nums">
+                  {fmtPctShort(f.candidate_pass_at_1)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-text-muted">
+                  {fmtPctShort(f.baseline_pass_at_1)}
+                </td>
+                <td
+                  className={cn("px-3 py-2 text-right font-mono tabular-nums", toneFor(f.status))}
+                >
                   {f.delta >= 0 ? "+" : ""}
                   {(f.delta * 100).toFixed(1)}pp
                 </td>
@@ -683,7 +704,9 @@ function SummaryStat({
 }) {
   return (
     <div className="p-3 rounded-md bg-surface-input/30 border border-border-subtle/40">
-      <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-text-muted">{label}</div>
+      <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-text-muted">
+        {label}
+      </div>
       <div className={cn("text-[15px] font-mono font-black tabular-nums mt-1", tone)}>{value}</div>
     </div>
   );
@@ -762,8 +785,14 @@ export function CalibrationPanel({ report }: CalibrationPanelProps) {
       </div>
       <div className="px-5 py-3 grid grid-cols-3 gap-3 text-[12px]">
         <SummaryStat label={t("benchmark.calibration.pearson")} value={report.pearson.toFixed(3)} />
-        <SummaryStat label={t("benchmark.calibration.spearman")} value={report.spearman.toFixed(3)} />
-        <SummaryStat label={t("benchmark.calibration.weakest")} value={report.weakest_item ?? "—"} />
+        <SummaryStat
+          label={t("benchmark.calibration.spearman")}
+          value={report.spearman.toFixed(3)}
+        />
+        <SummaryStat
+          label={t("benchmark.calibration.weakest")}
+          value={report.weakest_item ?? "—"}
+        />
       </div>
       <div className="px-5 py-2 text-[11px] font-mono text-text-muted">
         {t("benchmark.calibration.floor", { floor: String(report.floor) })}
@@ -772,23 +801,39 @@ export function CalibrationPanel({ report }: CalibrationPanelProps) {
         <table className="w-full text-[12px]">
           <thead>
             <tr className="border-b border-border-subtle/40 bg-slate-900/20 text-text-muted">
-              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">{t("benchmark.calibration.col.id")}</th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">{t("benchmark.calibration.col.fixture")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">{t("benchmark.calibration.col.human")}</th>
-              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">{t("benchmark.calibration.col.judge")}</th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">{t("benchmark.calibration.col.note")}</th>
+              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.calibration.col.id")}
+              </th>
+              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.calibration.col.fixture")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.calibration.col.human")}
+              </th>
+              <th className="px-3 py-2 text-right font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.calibration.col.judge")}
+              </th>
+              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-wider">
+                {t("benchmark.calibration.col.note")}
+              </th>
             </tr>
           </thead>
           <tbody>
             {report.items.map((it) => (
               <tr key={it.id} className="border-b border-border-subtle/30">
                 <td className="px-3 py-2 font-mono text-[11px] text-foreground">{it.id}</td>
-                <td className="px-3 py-2 font-mono text-[11px] text-text-muted">{it.fixture_id ?? "—"}</td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtPctShort(it.human_score)}</td>
+                <td className="px-3 py-2 font-mono text-[11px] text-text-muted">
+                  {it.fixture_id ?? "—"}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums">
+                  {fmtPctShort(it.human_score)}
+                </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-text-faint">
                   {it.judge_score == null ? "—" : fmtPctShort(it.judge_score)}
                 </td>
-                <td className="px-3 py-2 text-[11px] text-text-muted max-w-md truncate">{it.note ?? ""}</td>
+                <td className="px-3 py-2 text-[11px] text-text-muted max-w-md truncate">
+                  {it.note ?? ""}
+                </td>
               </tr>
             ))}
           </tbody>

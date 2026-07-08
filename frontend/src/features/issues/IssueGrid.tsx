@@ -2,12 +2,26 @@
 
 import type { CodexIssue, GitBranch, RuntimeCatalog } from "@/lib/types";
 import { getProjectBranches } from "@/lib/api/projects";
-import { ListTodo, Plus, ChevronRight, MessageSquare, Trash2, Search, X, Clock } from "lucide-react";
+import {
+  ListTodo,
+  Plus,
+  ChevronRight,
+  MessageSquare,
+  Trash2,
+  Search,
+  X,
+  Clock,
+} from "lucide-react";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { cn } from "@/lib/utils";
+import { cn, safeJsonStringArray } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
-import { ExecutionConfigSelector, getFallbackConfig, type ExecutionConfigValue } from "@/components/runtime/ExecutionConfigSelector";
+import type { TranslationKey } from "@/lib/i18n";
+import {
+  ExecutionConfigSelector,
+  getFallbackConfig,
+  type ExecutionConfigValue,
+} from "@/components/runtime/ExecutionConfigSelector";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -30,25 +44,28 @@ const RECENT_SEARCHES_KEY = "agent-collab.recentSearches";
 const MAX_RECENT_SEARCHES = 5;
 
 function getRecentSearches(): string[] {
+  if (typeof window === "undefined") return [];
   try {
-    const stored = localStorage.getItem(RECENT_SEARCHES_KEY);
-    return stored ? JSON.parse(stored) : [];
+    const stored = window.localStorage.getItem(RECENT_SEARCHES_KEY);
+    return stored ? (safeJsonStringArray(stored) ?? []) : [];
   } catch {
     return [];
   }
 }
 
 function saveRecentSearch(query: string) {
+  if (typeof window === "undefined") return;
   const current = getRecentSearches();
   const filtered = current.filter((s) => s !== query);
   const updated = [query, ...filtered].slice(0, MAX_RECENT_SEARCHES);
-  localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
+  window.localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
 }
 
 function removeRecentSearch(query: string) {
+  if (typeof window === "undefined") return;
   const current = getRecentSearches();
   const updated = current.filter((s) => s !== query);
-  localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
+  window.localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
 }
 
 function formatRelativeTime(iso: string | null): string {
@@ -69,7 +86,6 @@ function formatRelativeTime(iso: string | null): string {
   return `${Math.floor(mon / 12)}y ago`;
 }
 
-
 interface IssueGridProps {
   issues: CodexIssue[];
   onSelect: (id: string) => void;
@@ -88,7 +104,16 @@ interface IssueGridProps {
   isLoading?: boolean;
 }
 
-export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, projectId, projectDefaultBranch, isLoading = false }: IssueGridProps) {
+export function IssueGrid({
+  issues,
+  onSelect,
+  onCreate,
+  onDelete,
+  catalog,
+  projectId,
+  projectDefaultBranch,
+  isLoading = false,
+}: IssueGridProps) {
   const { t } = useI18n();
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -97,13 +122,12 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
   const [recentSearches, setRecentSearches] = useState<string[]>(getRecentSearches);
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const defaultExecutionConfig = useMemo<ExecutionConfigValue>(() => getFallbackConfig(
-    catalog,
-    "codex",
-    null,
-    null,
-  ), [catalog]);
-  const [executionConfig, setExecutionConfig] = useState<ExecutionConfigValue>(defaultExecutionConfig);
+  const defaultExecutionConfig = useMemo<ExecutionConfigValue>(
+    () => getFallbackConfig(catalog, "codex", null, null),
+    [catalog],
+  );
+  const [executionConfig, setExecutionConfig] =
+    useState<ExecutionConfigValue>(defaultExecutionConfig);
   const [deleteTarget, setDeleteTarget] = useState<CodexIssue | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [branches, setBranches] = useState<GitBranch[]>([]);
@@ -128,7 +152,7 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
     return issues.filter(
       (issue) =>
         issue.title.toLowerCase().includes(query) ||
-        (issue.description && issue.description.toLowerCase().includes(query))
+        (issue.description && issue.description.toLowerCase().includes(query)),
     );
   }, [issues, searchQuery]);
 
@@ -178,17 +202,22 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5 }}
         >
-          <h2 className="text-3xl font-black tracking-tight text-foreground mb-2">{t("issue.issues")}</h2>
+          <h2 className="text-3xl font-black tracking-tight text-foreground mb-2">
+            {t("issue.issues")}
+          </h2>
           <p className="text-text-muted font-medium">{t("issue.gridSubtitle")}</p>
         </motion.div>
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.1 }}
             className="relative flex-1 sm:flex-none"
           >
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+            <Search
+              size={16}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted"
+            />
             <input
               ref={searchInputRef}
               type="text"
@@ -198,7 +227,7 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
               onBlur={() => setTimeout(() => setShowSearchDropdown(false), 200)}
               placeholder={t("issue.searchPlaceholder")}
               className="py-2 w-full sm:w-64 rounded-xl bg-surface-raised border border-border-subtle text-sm outline-none focus:border-brand transition-all focus:ring-2 focus:ring-brand/20"
-              style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem' }}
+              style={{ paddingLeft: "2.5rem", paddingRight: "2.5rem" }}
             />
             {searchQuery && (
               <button
@@ -210,7 +239,7 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
             )}
             <AnimatePresence>
               {showSearchDropdown && recentSearches.length > 0 && !searchQuery && (
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, y: 10, scale: 0.95 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -261,15 +290,12 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
         </div>
       </div>
 
-      <motion.div 
-        layout
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
-      >
+      <motion.div layout className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         <AnimatePresence mode="popLayout">
           {isLoading && (
             <>
               {[1, 2, 3].map((i) => (
-                <motion.div 
+                <motion.div
                   key={`skeleton-${i}`}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -355,10 +381,7 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
                 </div>
               )}
               <div className="flex gap-2 mt-auto pt-4">
-                <Button
-                  type="submit"
-                  className="flex-1"
-                >
+                <Button type="submit" className="flex-1">
                   {t("issue.create")}
                 </Button>
                 <Button
@@ -385,16 +408,21 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
             >
               <div className="flex items-start justify-between mb-4">
                 <div className="size-10 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center group-hover:bg-brand/5 group-hover:border-brand/20 transition-all">
-                  <MessageSquare size={18} className="text-text-muted group-hover:text-brand transition-colors" />
+                  <MessageSquare
+                    size={18}
+                    className="text-text-muted group-hover:text-brand transition-colors"
+                  />
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className={cn(
-                    "px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest border transition-colors",
-                    issue.current_phase === "completed"
-                      ? "bg-success/10 text-success border-success/20"
-                      : "bg-brand/10 text-brand border-brand/20"
-                  )}>
-                    {issue.current_phase.replace("_", " ")}
+                  <div
+                    className={cn(
+                      "px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest border transition-colors",
+                      issue.current_phase === "completed"
+                        ? "bg-success/10 text-success border-success/20"
+                        : "bg-brand/10 text-brand border-brand/20",
+                    )}
+                  >
+                    {t(`phase.${issue.current_phase}` as TranslationKey) || issue.current_phase.replace("_", " ")}
                   </div>
                   <Button
                     type="button"
@@ -416,7 +444,7 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
               <h3 className="text-[16px] font-bold text-foreground mb-2 line-clamp-2 group-hover:text-brand transition-colors">
                 {issue.title}
               </h3>
-              
+
               {issue.description && (
                 <p className="text-[12px] text-text-secondary line-clamp-2 mb-6 opacity-80 leading-relaxed group-hover:opacity-100 transition-opacity">
                   {issue.description}
@@ -426,16 +454,19 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
               <div className="mt-auto flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-text-muted">
                 <div className="flex items-center gap-1.5">
                   <div className="size-1 rounded-full bg-brand/30 transition-colors group-hover:bg-brand" />
-                  <span>Issue ID: {issue.id.slice(0, 8)}</span>
+                  <span>{t("issue.idLabel")}: {issue.id.slice(0, 8)}</span>
                 </div>
-                <ChevronRight size={14} className="ml-auto opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all text-brand" />
+                <ChevronRight
+                  size={14}
+                  className="ml-auto opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all text-brand"
+                />
               </div>
             </motion.div>
           ))}
         </AnimatePresence>
 
         {filteredIssues.length === 0 && !isCreating && searchQuery && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             className="col-span-full flex flex-col items-center justify-center py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20"
@@ -444,19 +475,16 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
               <Search size={32} className="text-text-muted/40" />
             </div>
             <p className="text-sm font-bold text-text-muted mb-6">
-              No results for &quot;{searchQuery}&quot;
+              {t("issue.searchNoResults", { query: searchQuery })}
             </p>
-            <Button
-              onClick={() => setSearchQuery("")}
-              className="flex items-center gap-2"
-            >
-              Clear Search
+            <Button onClick={() => setSearchQuery("")} className="flex items-center gap-2">
+              {t("issue.clearSearch")}
             </Button>
           </motion.div>
         )}
 
         {filteredIssues.length === 0 && !isCreating && !searchQuery && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             className="col-span-full flex flex-col items-center justify-center py-24 px-8 border-2 border-dashed border-border-subtle rounded-3xl bg-surface/20"
@@ -465,10 +493,7 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
               <ListTodo size={32} className="text-text-muted/40" />
             </div>
             <p className="text-sm font-bold text-text-muted mb-6">{t("issue.noIssues")}</p>
-            <Button
-              onClick={() => setIsCreating(true)}
-              className="flex items-center gap-2 px-6"
-            >
+            <Button onClick={() => setIsCreating(true)} className="flex items-center gap-2 px-6">
               <Plus size={16} />
               {t("issue.new")}
             </Button>
@@ -482,7 +507,9 @@ export function IssueGrid({ issues, onSelect, onCreate, onDelete, catalog, proje
             <DialogTitle>{t("issue.delete")}</DialogTitle>
             <DialogDescription className="space-y-3">
               <p>{t("issue.deleteConfirmBody")}</p>
-              {deleteTarget && <p className="text-foreground font-semibold">{deleteTarget.title}</p>}
+              {deleteTarget && (
+                <p className="text-foreground font-semibold">{deleteTarget.title}</p>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="sm:justify-end">

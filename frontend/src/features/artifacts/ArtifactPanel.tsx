@@ -9,7 +9,5 @@ interface ArtifactPanelProps {
 }
 
 export function ArtifactPanel({ artifacts, isLoading }: ArtifactPanelProps) {
-  return (
-    <VirtualizedArtifactList artifacts={artifacts} isLoading={isLoading} />
-  );
+  return <VirtualizedArtifactList artifacts={artifacts} isLoading={isLoading} />;
 }

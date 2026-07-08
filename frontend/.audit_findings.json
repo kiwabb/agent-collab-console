@@ -1,0 +1,974 @@
+[
+  {
+    "domain": "issues-tabs与phase",
+    "verified": [
+      {
+        "file": "src/features/issues/tabs/CollabFeedTab.tsx:1",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "整个 CollabFeedTab 没有引入 useI18n，全部 UI 文案硬编码英文，zh-CN 用户看到纯英文",
+        "suggestion": "引入 useI18n，把标题(L124)、空态两行(L151/153)、Refresh title(L140)、TYPE_CONFIG.label(L36-70) 迁入 i18n key，与同域 ArtifactsTab/TasksRunsTab 保持一致",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/tabs/CollabFeedTab.tsx:59",
+        "severity": "medium",
+        "category": "visual-consistency",
+        "issue": "specialist_call/specialist_result 用原生 Tailwind 浅色 bg-blue-50/bg-blue-100(L63/L69)，而全站为暗色主题(surface #0f1115)且同 TYPE_CONFIG 其它条目用语义 token(bg-surface-raised)，暗底上渲染出刺眼浅底",
+        "suggestion": "改用主题语义 token(如 text-brand/border-l-brand/bg-brand-muted 或新增 specialist 语义色)，避免固定浅色底破坏暗色一致性",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/tabs/TasksRunsTab.tsx:283",
+        "severity": "low",
+        "category": "responsive",
+        "issue": "三栏主体固定像素列 grid-cols-[220px_240px_1fr]，前两栏共 460px 不收缩，无 min-width/媒体查询兜底；窄容器(分栏/小窗)下内容区被挤窄或横向溢出",
+        "suggestion": "窄断点降级单栏/可折叠，或用 minmax()/百分比列宽，避免固定 460px 在窄容器压垮内容区",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/tabs/TasksRunsTab.tsx:445",
+        "severity": "medium",
+        "category": "interaction-feedback",
+        "issue": "停止运行二次确认用浏览器原生 window.confirm，而全库危险操作统一用 ConfirmDialog(DiffMergeTab、ProjectsPage、IssueBoard 等 10+ 处)；样式/交互不一致且原生弹窗不受主题控制",
+        "suggestion": "改用 ConfirmDialog(variant=destructive)呈现停止确认，保持危险操作确认的一致性",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/tabs/TasksRunsTab.tsx:285",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "大量列标题/视图切换/空态/按钮硬编码英文，与同文件已走 t() 的 toast/emptyTitle 混用",
+        "suggestion": "将 Tasks(L286)、Runs(L322)、View/Live/Assistant text/Raw stream(L365-401)、No runs yet/No task selected(L328-333)、Task has not run yet(L514)、composer 占位符(L599)及 Run/Starting…/Terminate/Sending…/Send/Refine/Rerun 等静态文案迁入 i18n key",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/tabs/ArtifactsTab.tsx:191",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "空态与部分工具栏文案硬编码英文，而同组件其它文字已用 t()",
+        "suggestion": "把 EmptyState 的 title/description(L193-194)、artifacts 计数标签(L132)、Refresh(L159) 迁入 i18n key",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/tabs/DagTab.tsx:226",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "no-graph 空态、工具栏标签与按钮硬编码英文，与文件内已用 t() 的 loading 文案混用",
+        "suggestion": "把空态提示(L229-230)、Start Conductor/Starting…(L246-249)、Graph/status/{nodes} nodes·{edges} edges(L267-304)、Re-run/Retry(L326-330) 迁入 i18n key",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/tabs/CollabFeedTab.tsx:131",
+        "severity": "low",
+        "category": "accessibility",
+        "issue": "刷新按钮为纯图标(RefreshCw/加载指示器)，只有 title=\"Refresh\" 无 aria-label 也无可见文字，屏幕阅读器可访问名不可靠",
+        "suggestion": "补 aria-label(并 i18n 化)，确保纯图标按钮有可靠可访问名",
+        "verdict": "CONFIRMED"
+      }
+    ]
+  },
+  {
+    "domain": "projects",
+    "verified": [
+      {
+        "file": "src/features/projects/ProjectWorkspacesPage.tsx:606",
+        "severity": "medium",
+        "category": "responsive",
+        "issue": "工作区表格用固定列宽网格 grid-cols-[1fr_120px_90px_1.6fr_120px_70px]，外层 section 与每行(731)都是 overflow-hidden，无 overflow-x-auto 包裹也无窄屏折叠；固定列合计 400px+两条流式列在窄屏溢出后被裁剪，最右 70px 操作列(编辑/删除)被切掉不可点。",
+        "suggestion": "给表格区包一层 overflow-x-auto 并对内层设 min-w-[720px]，或 md 以下改卡片堆叠，保证操作列可达。参考库内 overflow-x-auto 模式。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/projects/ProjectsPage.tsx:703",
+        "severity": "medium",
+        "category": "responsive",
+        "issue": "项目详情卡头部 `<div className=\"flex gap-2\">` 含 4 个带文字的 Button size=\"sm\"(检查更新/同步/修复/进入)，无 flex-wrap；CardHeader 为 flex-row justify-between，外层 md:grid-cols-[260px_1fr]，内容区变窄时按钮组会与左侧标题挤压或溢出。",
+        "suggestion": "给按钮组加 flex-wrap，或中等宽度下将部分按钮收进图标态/下拉，避免与标题争抢横向空间。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/projects/ProjectsPage.tsx:726",
+        "severity": "medium",
+        "category": "interaction-feedback",
+        "issue": "修复按钮 onClick 内联 async 调用 repairProject，但只有 aria-label/title，无 disabled 无 loading 态；相邻检查更新用 disabled={remoteChecking}+animate-spin、同步用 disabled={syncing}+animate-pulse，反馈不一致且可被重复点击。",
+        "suggestion": "引入 repairing 状态，disabled={repairing} 并给 Wrench 加 animate-spin，与同排按钮一致。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/projects/ProjectDashboard.tsx:118",
+        "severity": "medium",
+        "category": "interaction-feedback",
+        "issue": "创建工作区确认按钮仅 disabled={!newTitle.trim()}，handleCreate 为 async(await createWorkspace 后才 router.push)且组件无 creating/submitting in-flight 状态，请求期间快速双击可重复创建工作区。",
+        "suggestion": "新增 submitting 状态，请求期间 disabled={!newTitle.trim() || submitting} 并切 loading 文案，防重复提交。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/projects/CreateProjectDialog.tsx:169",
+        "severity": "medium",
+        "category": "accessibility",
+        "issue": "选择目录的两处纯图标按钮(size=\"icon\"，169-178 与 200-209)只提供 title 无 aria-label，内部 FolderOpen 图标也无 aria-label，屏幕阅读器读不到可访问名称。",
+        "suggestion": "给两个图标按钮加 aria-label={t(\"projects.browse\")}，与库内其它图标按钮(aria-label+title)保持一致。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/projects/BranchListView.tsx:25",
+        "severity": "medium",
+        "category": "overflow-truncation",
+        "issue": "分支名 span 处于 min-w-0 的 flex 容器里但自身无 truncate/min-w-0，右侧日期 span 为 whitespace-nowrap，长分支名会撑开行、把日期挤出或换行错位。",
+        "suggestion": "给分支名 span 加 truncate(保留父级 min-w-0)，并加 title={b.name} 便于悬停查看全名。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/projects/ProjectDashboard.tsx:181",
+        "severity": "low",
+        "category": "overflow-truncation",
+        "issue": "分支概览 li 为 flex justify-between items-center，内 span.font-mono 无 truncate 且 li 无 min-w-0，长分支名会把 current 标记挤出或换行错位。",
+        "suggestion": "li 加 min-w-0、分支名 span 加 truncate flex-1 min-w-0、current 标记 span 加 shrink-0。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/projects/components/ProjectConductorThreadDock.tsx:263",
+        "severity": "low",
+        "category": "visual-consistency",
+        "issue": "工具错误态用硬编码 text-red-500，与本域其它错误色语义 token 不一致(ProjectsPage 用 text-error@869，ProjectWorkspacesPage 用 text-status-failed)。",
+        "suggestion": "改用 text-status-failed 或 text-error 语义 token，保持错误色一致与主题可切换。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/projects/ProjectConductorPage.tsx:308",
+        "severity": "low",
+        "category": "overflow-truncation",
+        "issue": "ListBlock 的 warm/cold/hot 条目 li(309-313)全文渲染，无 line-clamp/max-h/overflow，长摘要生成很高卡片使右栏密度失控；同页 MemoryBlock 对文本用了 max-h-52 overflow-auto。",
+        "suggestion": "给条目正文加 line-clamp-4 或 max-h+overflow-auto，与 MemoryBlock 截断策略一致。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/projects/ProjectConductorPage.tsx:224",
+        "severity": "low",
+        "category": "overflow-truncation",
+        "issue": "问答 answer 用 pre + whitespace-pre-wrap 全量展示无 max-h/overflow，超长回答无限撑高操作区；同文件 MemoryBlock 的 pre 有 max-h-52 overflow-auto。",
+        "suggestion": "给该 pre 加 max-h-64 overflow-auto，与其它记忆块滚动约束一致。",
+        "verdict": "CONFIRMED"
+      }
+    ]
+  },
+  {
+    "domain": "issues-核心视图",
+    "verified": [
+      {
+        "file": "src/features/issues/IssueBoard.tsx:542",
+        "severity": "medium",
+        "category": "empty-loading-error-state",
+        "issue": "泳道空态整体 opacity-[0.03]（3% 不透明度），虚线框和 READY 文案几乎完全不可见，等同于没有空态提示",
+        "suggestion": "提升到可读的低强度（如 opacity-40 + text-text-muted）或复用库内统一 EmptyState 组件；当前 3% 用户实际看不到任何空态引导",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/IssueGrid.tsx:477",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "搜索无结果空态文案 `No results for \"{searchQuery}\"` 与按钮 `Clear Search` 硬编码英文，未走 t()，中文环境露英文；同页 t(\"issue.noIssues\")/t(\"issue.new\") 均已走 i18n",
+        "suggestion": "改为 t(\"issue.searchNoResults\", { query: searchQuery }) 与 t(\"issue.clearSearch\")，并在 en-US/zh-CN 补 key",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/IssueGrid.tsx:424",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "卡片 phase badge 直接展示原始字段 `issue.current_phase.replace(\"_\",\" \")`，未 i18n，且与 IssueBoard 第501行 t(phase.labelKey) 的本地化展示不一致，中文环境显示英文阶段名",
+        "suggestion": "统一走 t(`phase.${issue.current_phase}`)，值不在枚举内再兜底原始串",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/IssueBoard.tsx:599",
+        "severity": "medium",
+        "category": "visual-consistency",
+        "issue": "导入弹窗手写 fixed inset-0 遮罩 + div，未复用库内 Dialog 组件（IssueGrid 第503行、删除确认走 Dialog/ConfirmDialog），缺焦点陷阱/ESC 关闭/动画且样式重复",
+        "suggestion": "改用 Dialog/DialogContent，统一遮罩、关闭交互与无障碍焦点管理",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/IssueBoard.tsx:298",
+        "severity": "medium",
+        "category": "visual-consistency",
+        "issue": "assignee 筛选（298）、批量移动阶段（333）均用原生 <select>，与 IssueGrid 第360行使用的 Base UI Select 风格割裂，圆角/箭头/下拉外观不统一",
+        "suggestion": "替换为 src/components/ui/select 的 Select，保持全站下拉外观一致",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/IssueBoard.tsx:507",
+        "severity": "medium",
+        "category": "accessibility",
+        "issue": "泳道列头新增 Plus 按钮为纯图标，既无 title 也无 aria-label，屏幕阅读器读不出可访问名（同页 Download/Upload/CheckSquare/Columns 至少有 title 可提供可访问名，Plus 按钮两者皆无）",
+        "suggestion": "为 Plus 按钮补 aria-label（如 t(\"issue.create\")）",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/IssueGrid.tsx:456",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "卡片底部 `Issue ID: {id}` 前缀硬编码英文，未走 t()",
+        "suggestion": "抽成 t(\"issue.idLabel\") 或用图标+id 去掉英文前缀",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/components/IssueSideStack.tsx:205",
+        "severity": "low",
+        "category": "interaction-feedback",
+        "issue": "验收清单每条 li 带 cursor-pointer + hover:bg-surface-hover/50，暗示可点击，但整段无 onClick，属误导性交互反馈",
+        "suggestion": "不可交互则去掉 cursor-pointer 与 hover 背景；应可展开来源则补上点击行为",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/issues/IssueBoard.tsx:243",
+        "severity": "low",
+        "category": "responsive",
+        "issue": "看板头部操作区 flex items-center gap-3 无 flex-wrap，外层第224行 overflow-hidden，窄屏或批量态按钮增多时会被裁掉不可点",
+        "suggestion": "操作区加 flex-wrap 或窄屏折叠进 overflow 菜单",
+        "verdict": "PLAUSIBLE"
+      },
+      {
+        "file": "src/features/issues/components/TasksOverviewBar.tsx:248",
+        "severity": "low",
+        "category": "responsive",
+        "issue": "RunsListRow 用固定七列网格 grid-cols-[24px_140px_minmax(0,1fr)_90px_100px_80px_24px]，仅 summary 列可伸缩，其余定宽合计较大，容器变窄时次要列会拥挤/溢出",
+        "suggestion": "窄屏隐藏 token/cost 等次要列或改为可换行布局",
+        "verdict": "PLAUSIBLE"
+      }
+    ]
+  },
+  {
+    "domain": "workbench",
+    "verified": [
+      {
+        "file": "src/features/workbench/WorkbenchPage.tsx:1273",
+        "severity": "high",
+        "category": "responsive",
+        "issue": "任务执行 Sheet 的 SheetContent 是 w-[90vw]，内部 flex 里右侧执行面板固定 w-[500px] shrink-0，左侧 flex-1 min-w-0。窄屏（如平板/手机 90vw < 500px）下右侧硬占 500px，左侧任务详情/需求/产物被压到 0 宽，父 overflow-hidden 直接裁掉。TaskExecutionSheet.tsx:256 是完全相同模式。",
+        "suggestion": "右侧改百分比或 max-w，或窄屏下 flex-col lg:flex-row + w-full lg:w-[500px] 上下堆叠，保证左侧详情可见；两处一并修。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/HelloWorld.tsx:16",
+        "severity": "high",
+        "category": "visual-consistency",
+        "issue": "WorkbenchPage.tsx:1159 在 home 视图顶部渲染 <HelloWorld/>，组件内为硬编码大字号 <h1 class=\"text-4xl font-black text-brand\">Hello World</h1>，是遗留脚手架内容，出现在用户可见工作台首页。",
+        "suggestion": "从 home 视图移除 HelloWorld，或替换为走 t() 的真实欢迎/概览内容。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/WorkbenchPage.tsx:885",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "多处 toast 标题硬编码且中英混排、未走 t()：titleMap {auto:\"发送失败\",chat:\"对话失败\",refine:\"修订失败\"}(885-889)、\"已流转到测试阶段\"(794)、\"流转失败\"(798)、\"重跑失败\"(1341)，同时又有硬编码英文 \"Issue created\"(663)/\"Workspace deleted\"(620)/\"Task submitted for review\"(282)/\"Transitioned to Architecture\"(739) 等。",
+        "suggestion": "全部 toast 标题/消息改走 useI18n().t()，i18n 文件补齐 key，消除中英混排。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/WorkbenchPage.tsx:1148",
+        "severity": "medium",
+        "category": "interaction-feedback",
+        "issue": "重连成功时(232) connectionWarning 被设为 t(\"nav.reconnectSuccess\")=\"连接已恢复\"，但 banner 标题恒渲染 t(\"nav.coreOffline\")=\"核心离线\"，且容器仍是 warning 橙色(bg-warning/10)。结果重连成功瞬间出现「标题:核心离线 / 正文:连接已恢复」自相矛盾且仍告警橙。",
+        "suggestion": "重连成功用 success 语义(绿色+恢复标题)，标题随状态切换，不要恒为 coreOffline。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/WorkbenchPage.tsx:1132",
+        "severity": "medium",
+        "category": "accessibility",
+        "issue": "错误 banner 的关闭按钮用旋转 45° 的 RotateCcw(撤销/刷新)图标表示关闭，语义误导；且该纯图标按钮无 aria-label，屏读用户无法识别用途。",
+        "suggestion": "改用 X 图标表达关闭，并补 aria-label={t(...close)}。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/WorkbenchPage.tsx:905",
+        "severity": "medium",
+        "category": "accessibility",
+        "issue": "顶栏品牌区(logo+JACKMOUSE.AI)用带 onClick 的 div 承担「回首页」交互，非 button/link，无 role、无 tabIndex、无 onKeyDown，键盘/屏读用户无法触发。",
+        "suggestion": "改为 <button type=\"button\"> 或加 role=\"button\" tabIndex={0}+onKeyDown 并补 aria-label。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/AccountPopover.tsx:73",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "AccountPopover 内几乎所有文案硬编码英文、未走 t()：aria-label=\"Account\"(71)、\"Agent Collab Console\"(78)、\"backend unreachable\"/\"loading\"(85/90)、\"Tokens used\"/\"Estimated cost\"(96/102)、\"Switch to light/dark theme\"(114)、\"Settings · runtime · prefs\"(125)、\"Report an issue\"(134)；头像字母写死 \"Z\"(73)。与全站 i18n 体系不一致。",
+        "suggestion": "可见文案改走 t()；头像字母取当前用户/项目首字母而非写死 Z。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/AppStatusBar.tsx:84",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "底部状态栏文案硬编码英文且版本号写死:\"codex 0.1.0\"(84)、backendLabel=\"backend localhost:9000 ✓/reconnecting…/offline\"(59-64)、\"{n} running\"/\"{n} awaiting\"(89/91)、\"knowledge on/off\"(113)、\"Semantic search disabled — click to manage\"(103)。既缺 i18n 也有硬编码版本号可能失真(组件未从 health 读 version)。",
+        "suggestion": "文案走 t()，版本号从 backend health 读取；数量单位用可翻译模板。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/CommandPalette.tsx:390",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "命令面板底部说明与结果计数、以及 issue action 行标签硬编码英文、未走 t()：\"Enter to open · Esc to close · type review, failed, or an issue title\"(390)、\"result/results\"(392)、hint:\"Human review required\"+actionLabel:\"Review\"(211-213)。",
+        "suggestion": "以上文案改走 t() 并补 i18n key，与面板其余已翻译文案一致。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/WorkbenchPage.tsx:1241",
+        "severity": "low",
+        "category": "responsive",
+        "issue": "任务元信息行(role/phase/executor 三个 badge)用 flex items-center gap-4 无 flex-wrap，处在已受 w-[500px] 挤压的左侧 flex-1 min-w-0 面板中；executor 名称较长或窄屏时会横向溢出被父级 overflow-hidden 裁切。",
+        "suggestion": "加 flex-wrap gap-2，并给 badge 文本 truncate/min-w-0。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/AppSidebar.tsx:373",
+        "severity": "low",
+        "category": "overflow-truncation",
+        "issue": "侧栏每个工作区展开只渲染前 8 个 issue(issues.slice(0,8))，超过部分被静默丢弃，没有「还有 N 个/查看全部」提示，用户无法感知列表被截断。",
+        "suggestion": "截断时追加「查看全部(+N)」入口跳转 workspace 页，或提示剩余数量。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/AccountPopover.tsx:128",
+        "severity": "low",
+        "category": "visual-consistency",
+        "issue": "「Report an issue」链接 href=\"https://github.com/anthropics/claude-code/issues\"，与本项目(Agent Collab Console)无关，用户点开会到错误的第三方仓库。",
+        "suggestion": "改为本项目 issue 追踪地址，或移除该项。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/AccountPopover.tsx:52",
+        "severity": "low",
+        "category": "accessibility",
+        "issue": "AccountPopover 自实现 popover 仅监听 window mousedown 关闭(57)，无 Escape 键关闭、无 focus trap、无 aria-expanded/aria-haspopup/role=menu；触发按钮仅 aria-label=\"Account\" 无 expanded 状态。键盘/无障碍语义缺失。",
+        "suggestion": "复用库内 DropdownMenu/Popover(AppSidebar 已用)，获得 Escape 关闭、focus 管理与正确 ARIA。",
+        "verdict": "CONFIRMED"
+      }
+    ]
+  },
+  {
+    "domain": "agents-workspaces-audit",
+    "verified": [
+      {
+        "file": "src/features/workspaces/WorkspaceConsoleHeader.tsx:87",
+        "severity": "high",
+        "category": "i18n",
+        "issue": "队列汇总「{running} running · {awaiting} awaiting · {total} total」为硬编码英文模板，同页 filter/sort/newIssue/title 等标签全部走 t()，仅此汇总行漏翻，中文环境下显示英文。",
+        "suggestion": "改为 t(\"workspace.console.summary\", { running: counts.running, awaiting: counts.awaiting, total: counts.total }) 插值键，并补 en-US/zh-CN。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/agents/dock/AgentTimelinePanel.tsx:69",
+        "severity": "high",
+        "category": "i18n",
+        "issue": "时间线面板标题「Timeline · {N} entries」硬编码英文，未走 t()；同组件 persona name/blurb 已用 t(persona.nameKey/blurbKey)，此处不一致。",
+        "suggestion": "改为 t(\"agents.timeline.title\", { count: history.length }) 并补键。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/agents/dock/AgentTimelinePanel.tsx:73",
+        "severity": "high",
+        "category": "i18n",
+        "issue": "空态文案「No activity yet. {name} hasn't spoken.」硬编码英文，与同组件其余走 t() 的文案不一致，中文环境不翻译。",
+        "suggestion": "改为 t(\"agents.timeline.empty\", { name: translatedName }) 并补键。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/agents/dock/AgentTimelinePanel.tsx:30",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "relTime 返回「just now」「Ns ago」「Nm ago」「Nh ago」全硬编码英文相对时间；IssueRow.relTime 已把 now 文案外提为参数 (nowLabel)，此处未做。",
+        "suggestion": "参照 IssueRow.relTime 把文案外提为 t() 参数，或用统一相对时间格式化工具。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/agents/AgentCoordinationPanel.tsx:99",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "多处直接渲染后端原始状态枚举：line 99/154 的 proc.status、line 236 的 displayStatus（running/responding/completed/failed）裸露展示，未本地化，与页面其余走 t() 的状态标签风格不一致。line 267 hr.status 同问题。",
+        "suggestion": "用状态枚举到 t() 的映射（如 IssueRow 里的 workspace.console.status.* 或 StatusBadge/inferStatusKind）统一展示，避免裸露后端枚举。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/agents/AgentCoordinationPanel.tsx:176",
+        "severity": "medium",
+        "category": "visual-consistency",
+        "issue": "角色名用 role.replace(\"_\", \" \") 展示，JS replace 只替换首个下划线（engineer_frontend_x → 'engineer frontend_x'）；同域 IssueRow 用 getWorkspaceConsoleRoleLabel(currentRole) 做正式角色标签映射，两处不一致。",
+        "suggestion": "复用 getWorkspaceConsoleRoleLabel(role)（workspaceConsoleState.ts）统一角色标签；若坚持替换也应改用 replace(/_/g, \" \") 全局替换。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workspaces/IssueRow.tsx:119",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "根容器 aria-label=`Open issue ${issue.title}` 硬编码英文，屏幕阅读器在中文环境读到英文；同组件行内可见「打开」文案已用 t(\"workspace.console.openIssue\")，无障碍标签却未翻。",
+        "suggestion": "改为 aria-label={t(\"workspace.console.openIssueAria\", { title: issue.title })} 并补键。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/agents/AgentLibraryPage.tsx:125",
+        "severity": "medium",
+        "category": "information-density",
+        "issue": "Agent 列表用 4 列网格（name / default_executor / artifact_subdir / actions）却无列表头；executor 与 artifact_subdir 两列的值（含 \"—\" 占位）无任何列标签，用户无法判断中间两列含义。",
+        "suggestion": "加一行 grid 列头（executor / artifact 子目录），或给这两列各加图标+tooltip 说明。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/agents/AgentLibraryPage.tsx:128",
+        "severity": "low",
+        "category": "responsive",
+        "issue": "Agent 列表行用固定四列 grid-cols-[1fr_120px_160px_90px]，无 max-lg/max-md 降级（对比同域 IssueRow 有 max-lg:grid-cols-1），窄屏下 120+160+90px 固定列会挤压第一列。未实测实际渲染宽度，但缺响应式坍缩这一事实已确认。",
+        "suggestion": "增加窄屏断点降级（如 max-md:grid-cols-1 或堆叠/隐藏次要列），与 IssueRow 响应式策略保持一致。",
+        "verdict": "PLAUSIBLE"
+      },
+      {
+        "file": "src/features/agents/AgentCoordinationPanel.tsx:130",
+        "severity": "low",
+        "category": "information-density",
+        "issue": "Recent Activity 区最多渲染 5 条（slice(0,5)），但标题 t(\"agents.recent\") 及 UI 无「仅显示最近 5 条 / 共 N 条」提示，历史被静默截断。",
+        "suggestion": "在区标题旁加计数或「查看全部」入口，或明确标注仅展示最近 5 条。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/agents/AgentCoordinationPanel.tsx:144",
+        "severity": "low",
+        "category": "color-contrast",
+        "issue": "Recent Activity 行状态用颜色区分（completed=success/80、failed=error/80、其他=text-text-muted/60），非完成/失败态 muted/60 对比度极低且无图标。注：状态文本本身即枚举字面（proc.status），故并非'仅靠颜色'传达——原报告该前提不准；真正有效的问题是 muted/60 低对比度与缺图标辅助。",
+        "suggestion": "提升 muted 态对比度，并可为状态补形状/图标（CheckCircle/XCircle/Clock）辅助区分。",
+        "verdict": "PLAUSIBLE"
+      }
+    ]
+  },
+  {
+    "domain": "prototype",
+    "verified": [
+      {
+        "file": "src/features/prototype/ProjectPrototypesPage.tsx:950",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "Loader label 硬编码 \"Loading…\" 未走 t()，中文界面显示英文。共 3 处：ProjectPrototypesPage.tsx:950、:995，PrototypeCanvas.tsx:252。",
+        "suggestion": "改为 label={t(\"workspace.loading\")}（已存在，值 \"加载中…\"）或新增 prototype.loading 键，三处统一。库内 TeamNotesEditor 已用 label={t(\"teamNotes.loading\")}。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/prototype/PrototypeCanvas.tsx:205",
+        "severity": "medium",
+        "category": "visual-consistency",
+        "issue": "删除原型这一破坏性操作用原生 window.confirm，与同域「全量重生成」用的 <ConfirmDialog> 不一致；原生 confirm 脱离设计系统且无法样式化危险态。",
+        "suggestion": "改用 ConfirmDialog（variant=\"destructive\"，与 ProjectPrototypesPage.tsx:1009 的 batch 确认保持一致）。注意组件 variant 取值为 destructive|warning|default，无 danger。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/prototype/ProjectPrototypesPage.tsx:899",
+        "severity": "medium",
+        "category": "responsive",
+        "issue": "主区域用固定 280px 侧栏两列网格且无任何断点：grid-cols-[280px_minmax(0,1fr)]，窄屏侧栏不折叠，canvas 被压窄致 iframe 预览不可用。",
+        "suggestion": "加断点：grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]。库内同类布局带断点（ProjectsPage.tsx:630 grid-cols-1 md:grid-cols-[260px_1fr]）。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/prototype/ProjectPrototypesPage.tsx:1046",
+        "severity": "medium",
+        "category": "information-density",
+        "issue": "扫描列表里 action=unsupported 的候选 checkbox 被禁用（行 1055），但列表行只渲染 title/route/primary_source_path/source_hash，从不展示 unsupported_reason，用户无从得知为何不可选；该字段仅在 scan_meta 处理写入 message（行 399）。",
+        "suggestion": "在扫描列表中对 action==='unsupported' 的行展示 candidate.unsupported_reason（灰色小字或 tooltip）。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/prototype/PrototypeCanvas.tsx:232",
+        "severity": "low",
+        "category": "interaction-feedback",
+        "issue": "删除按钮 onClick 触发的 handleDelete 为异步（await deletePrototype），但按钮无 loading/disabled 状态，请求进行中可重复点击触发多次删除请求且无进行中反馈。",
+        "suggestion": "加删除中的本地 loading state，请求期间 disabled 按钮。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/prototype/ProjectPrototypesPage.tsx:1281",
+        "severity": "low",
+        "category": "accessibility",
+        "issue": "运行时 base URL 的 Input 仅有 placeholder，无 label/aria-label，屏幕阅读器无法得知用途。同弹窗内 Textarea 均带 aria-label（行 1140、1185）。",
+        "suggestion": "补 aria-label（可复用 prototype.generateFromCode.runtimeBaseUrlPlaceholder 或新增 label 键）。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/prototype/ProjectPrototypesPage.tsx:873",
+        "severity": "low",
+        "category": "overflow-truncation",
+        "issue": "header 中 repo_path 用 font-mono 且无 truncate/break-all，长仓库路径（无空格断点）可能撑破/溢出头部。父 div 有 min-w-0 但 <p> 自身无处理。",
+        "suggestion": "加 truncate（配 title 属性）或 break-all。",
+        "verdict": "CONFIRMED"
+      }
+    ]
+  },
+  {
+    "domain": "inbox-approvals-tasks",
+    "verified": [
+      {
+        "file": "src/features/tasks/TaskBoard.tsx:275",
+        "severity": "high",
+        "category": "interaction-feedback",
+        "issue": "看板/表格视图切换是死交互：viewMode 状态(275行)和 Kanban/Table2 两个切换按钮(412-431行)都在，按钮 onClick 会 setViewMode 并按 viewMode 高亮，但整个渲染树无一处按 viewMode 分支——Swimlanes(450行起)无条件渲染，viewMode 只用于两个按钮自身的 className 判断。table 视图永远不出现，点 Table2 按钮除按钮自身变色外无任何效果。",
+        "suggestion": "要么实现 viewMode===\"table\" 时的表格渲染分支，要么移除该 toggle 按钮，避免呈激活态却无内容变化的死交互。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/approvals/ApprovalsPage.tsx:211",
+        "severity": "high",
+        "category": "i18n",
+        "issue": "整个 Approvals 页 UI 文案几乎全部硬编码英文：h1 \"Approvals\"+副标题(211-214)、\"Refresh\"(229/230)、6 个 tab 标签 All/Issues/Task reviews/Agent questions/QA passed/Tool calls(237-254)、\"Loading…\"(258)、\"Inbox zero\"/\"Nothing is waiting…\"(264-265)、RowCard 的 Approve/Reject/Open(516/529/535)、AnswerInline placeholder(564)、以及全部 toast title 与 Section 标题。文件已 import useI18n 但仅在 582行用了一次 t(\"approvals.sendAnswer\")。与 InboxDashboard 大量走 t() 的规范严重不一致，中文环境此页全英文。",
+        "suggestion": "把所有可见字符串抽到 i18n 词表并统一走 useI18n().t()。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/approvals/ApprovalsPage.tsx:257",
+        "severity": "medium",
+        "category": "empty-loading-error-state",
+        "issue": "加载失败会误显示成功空态。load 的 catch(53-58)只 addToast，无 error 状态标记；finally 把 loading 置 false，数据数组仍为空 → total===0(105行) → 渲染绿色 CheckCircle2 + \"Inbox zero / Nothing is waiting\"(259-266)。接口失败与真正无待办无法区分，被伪装成成功空态。",
+        "suggestion": "新增 error 状态，失败时渲染独立错误态(错误图标+重试按钮)，不复用成功空态。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/approvals/ApprovalDialog.tsx:30",
+        "severity": "medium",
+        "category": "layout",
+        "issue": "关闭按钮定位错乱。卡片容器(30行)className 无 relative，父层(29行)是 fixed inset-0 全屏遮罩，关闭按钮(76-82行)用 absolute top-3 right-3——会相对最近的定位祖先即那个全屏 fixed 遮罩定位，导致 × 跑到整个视口右上角而非对话框右上角。该组件确实被 WorkbenchPage.tsx(1450行)渲染，非死代码。",
+        "suggestion": "给 30 行卡片容器加 relative，使关闭按钮相对卡片定位。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/inbox/InboxDashboard.tsx:157",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "同页 i18n 混排不一致：DonutCard/ActivityCard/各卡标题均走 t(\"inbox.*\")，但 hero 标题 <h1>Inbox</h1>(157)、副标题 project(s)/workspace(s)/last activity 拼接(159-162)、以及 6 个 KpiCard 的 label=\"Total\"/\"Running\"/\"Awaiting\"/\"Done\"/\"Failed\"/\"Merged\"(223-261)全部硬编码英文。中文环境下页头与 KPI 区仍是英文。",
+        "suggestion": "把 hero 标题、副标题拼接与 6 个 KPI label 抽到 i18n key(可复用已有 inbox.status.*)。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/approvals/ApprovalsPage.tsx:236",
+        "severity": "low",
+        "category": "responsive",
+        "issue": "顶部 tab 容器(236行)className \"flex items-center gap-1 border-b\" 无 flex-wrap 也无 overflow-x-auto，其下 6 个 TabBtn(237-254)每个带文字+数字 Pill，TabBtn 用 -mb-px + border-b-2 依赖单行对齐。窄屏(平板/分栏)下会横向溢出或被挤压，下划线基线也可能断。属实但实际溢出程度需渲染验证。",
+        "suggestion": "给 tab 容器加 overflow-x-auto(配 no-scrollbar)或 flex-wrap，保证窄屏不溢出、下划线对齐不断。",
+        "verdict": "PLAUSIBLE"
+      },
+      {
+        "file": "src/features/tasks/TaskBoard.tsx:173",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "任务卡状态直接展示后端原始串。rawStatus(120行 task.status || process?.status || \"pending\")在 172-174 行直接渲染，未做 replace(/_/g,\" \") 也未走 t() 映射，展示如 awaiting_review/responding 的下划线英文串(CSS uppercase 不去下划线)，与同卡已本地化的角色/时间不一致；对比 ApprovalsPage 277 行对同类 status 做了 .replace(/_/g,\" \")。",
+        "suggestion": "对 rawStatus 走状态 label 映射(t() 或至少 replace 下划线+首字母大写)，与其它页面统一。",
+        "verdict": "CONFIRMED"
+      }
+    ]
+  },
+  {
+    "domain": "runs与workflow",
+    "verified": [
+      {
+        "file": "src/features/runs/RunDetail.tsx:354",
+        "severity": "medium",
+        "category": "layout",
+        "issue": "阶段推进/提交按钮使用了不存在的 `flex-2` 工具类。Tailwind v4 只有 flex-1，无 flex-2；globals.css 也无 `.flex-2` 自定义。该类为空类不生效，出现在 354/378/405/430/441 五处，与相邻 flex-1 的 rerun 按钮的宽度比例意图落空。",
+        "suggestion": "改为 Tailwind 任意值语法 `flex-[2]` 或 `grow-[2]`，或统一为 flex-1。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/runs/RunDetail.tsx:469",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "Stop Task / Delete Session 两个 TooltipContent 文案硬编码英文未走 t()；且 i18n 已存在 `run.delete`(zh=\"删除会话\") 键却未被使用。中文环境下这两个操作提示始终显示英文。",
+        "suggestion": "改为 {t(\"run.delete\")} 并新增 run.stopTask 键（i18n 中确认无 stopTask/run.stop 键）。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/runs/RunDetail.tsx:901",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "StatusBadge 直接渲染后端原始 status 字符串 `<span>{status}</span>`，未翻译且带下划线。map 仅用于配色不翻译文案，awaiting_review 会原样显示为 snake_case，与同文件 QaReportBadge 走 t() 的做法不一致。",
+        "suggestion": "建立 status→i18n key 映射（含 running/completed/failed/awaiting_review 等）再展示。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workflow/AgentDagNode.tsx:390",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "DAG 节点状态文案 humanStatus 返回硬编码英文(Waiting/Up next/Running/Done/Failed 等，393-413 行)，ROLE_LABEL 也硬编码英文(Conductor/PM/Architect/FE Engineer 等，59-67 行)，而同组件 roleTagline 走 t()(99 行)，同一张卡片中英文混排。",
+        "suggestion": "ROLE_LABEL 与 humanStatus 的展示文案改为 i18n key。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/runs/components/RunRecoveryPanel.tsx:16",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "整个 RunRecoveryPanel 未引入 useI18n，标题 `Recovery actions` 与说明 `Choose a safe next step for this run.` 硬编码英文，与 runs 域其它组件全走 t() 的规范不一致。",
+        "suggestion": "接入 useI18n，标题/描述改用 t() key；action.label/detail 若为运行时英文文案需在来源处一并处理。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workflow/ConductorLogPanel.tsx:176",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "relTime 相对时间文案硬编码英文(just now / Xs ago / Xm ago / Xh ago，176-183 行)，被 969/1015/1035/1083 行的时间戳直接使用，在 thread/log/turns 等多处大量展示，中文环境下与周边翻译文案混排。",
+        "suggestion": "relTime 改为接收 t() 或返回参数化 i18n key。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/runs/AgentLiveTimeline.tsx:92",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "流式助手气泡的 `Assistant` 标签硬编码(92 行)，而 RunDetail 同类流式气泡用 t(\"task.assistantOutput\")(656 行)，两处助手标签一处英文一处走翻译。",
+        "suggestion": "统一改为 {t(\"task.assistantOutput\")} 或复用同一 key。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/runs/RunDetail.tsx:463",
+        "severity": "medium",
+        "category": "accessibility",
+        "issue": "Stop Task 图标按钮唯一子元素是 AgentThinkingIndicator，其根 span 内所有 glyph 子元素均 aria-hidden 且无 label 文本，按钮无可读文字也无 aria-label；仅靠 Tooltip 不构成可访问名称，屏幕阅读器会念出空 button。相邻 Delete 按钮同样只有 Trash2 图标无 aria-label(473-478 行)。",
+        "suggestion": "给两个 TooltipTrigger 加 aria-label(如 t(\"run.stopTask\")/t(\"run.delete\"))。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/runs/RunDetail.tsx:625",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "消息角色标签直接渲染原始 role 字符串 `{msg.role}`(624-626 行，uppercase 展示 assistant/user)，未翻译。",
+        "suggestion": "映射为 i18n 文案后再展示。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/runs/AgentLiveTimeline.tsx:479",
+        "severity": "low",
+        "category": "empty-loading-error-state",
+        "issue": "时间线底部错误提示用 10px 极小字号裸放(479 行 `text-[10px] text-error`)，无图标/背景色块，而组件顶部的 disconnected/awaiting 提示均用 error/warning 色块+图标的醒目卡片(380/391 行)，风格不一致，流错误易被忽略。",
+        "suggestion": "把该 error 包成带图标的 error 色块或提升字号。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workflow/AgentDagNode.tsx:211",
+        "severity": "low",
+        "category": "overflow-truncation",
+        "issue": "节点工具 chip(212-217 行)无 max-width/truncate/title，卡片固定 w-[170px] overflow-hidden(114 行)，长工具名(如 MCP 全限定名)会被静默裁切，无 tooltip 看不到完整名称。",
+        "suggestion": "给 chip 加 max-w-full truncate 并加 title={tool}。",
+        "verdict": "CONFIRMED"
+      }
+    ]
+  },
+  {
+    "domain": "skills与benchmarks",
+    "verified": [
+      {
+        "file": "src/app/benchmarks/page.tsx:204",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "Diff 标签页未选择 run 时的空态提示是硬编码英文字符串，未走 t()，中文界面下显示英文",
+        "suggestion": "新增 i18n key（如 benchmark.diff.pickRun）在 en-US/zh-CN 词表中定义，替换硬编码字符串",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/app/benchmarks/page.tsx:62",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "setBaseline 失败时把开发者态英文错误码 'setBaselineRun failed' 直接 setError，随后在第 158 行错误横幅原样渲染给用户",
+        "suggestion": "改为 t() 词条描述用户可理解的失败原因，函数名不应出现在 UI（finding 定位到 157/158 是渲染处，实际赋值在第 62 行）",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/benchmarks/BenchmarksPage.tsx:563",
+        "severity": "medium",
+        "category": "empty-loading-error-state",
+        "issue": "RunDiffPanel 的 loading 态(563-568)和空态(570-576)复用同一 benchmark.empty（'No data.'）文案，无 Skeleton/spinner，用户无法区分加载中与真无数据",
+        "suggestion": "loading 态用独立加载文案或 Skeleton/AgentThinkingIndicator（skills 页已用），空态保留 benchmark.empty",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/benchmarks/BenchmarksPage.tsx:757",
+        "severity": "medium",
+        "category": "empty-loading-error-state",
+        "issue": "CalibrationPanel 无 report 时直接显示 'No data.'，无法区分加载中与无标定数据；page.tsx calibration 初始为 null 异步填充且无 loading 标志位，首屏必然闪现该态",
+        "suggestion": "为 calibration 增加 loading 状态区分加载/空态，或用 Skeleton 占位",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/benchmarks/BenchmarksPage.tsx:421",
+        "severity": "medium",
+        "category": "responsive",
+        "issue": "Score×cost 前沿图 SVG 用固定 width=480/height=280 且无 viewBox/preserveAspectRatio，位于 flex justify-center 且父列为 grid 1fr，窄屏时不自适应会溢出或留白",
+        "suggestion": "改用 viewBox=`0 0 480 280` + className=\"w-full h-auto\" 让图随容器缩放",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/benchmarks/BenchmarksPage.tsx:236",
+        "severity": "low",
+        "category": "accessibility",
+        "issue": "Leaderboard 刷新按钮只有一个 ↻ 字符作为可见内容，无 aria-label/title，屏幕阅读器读不出用途",
+        "suggestion": "加 aria-label 或 title（如 benchmark.leaderboard.refresh）；对比 skills 页图标按钮均带 title",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/benchmarks/BenchmarksPage.tsx:834",
+        "severity": "low",
+        "category": "overflow-truncation",
+        "issue": "Calibration 表 note 列用 max-w-md truncate 截断但无 title 属性，长 note 截断后无法悬停查看全文",
+        "suggestion": "加 title={it.note ?? \"\"} 让截断文本可悬停查看，或改 line-clamp 多行",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/skills/SkillsLibraryPage.tsx:619",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "粘贴保存后的 toast message 拼接硬编码英文 'failed'，中文界面下中英混排",
+        "suggestion": "用 t() 词条或改为纯数字/图标表达失败数",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/skills/SkillsLibraryPage.tsx:632",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "导入完成 toast message 拼接硬编码英文 'skipped'，中文界面混排",
+        "suggestion": "用 t() 词条描述跳过数量",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/skills/SkillsLibraryPage.tsx:541",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "技能列表项复选框 aria-label 用硬编码英文模板 `select ${s.name}`，未走 t()，屏幕阅读器在中文界面读英文前缀",
+        "suggestion": "用 t() 带参数词条，如 t(\"skills.select.aria\", { name: s.name })",
+        "verdict": "CONFIRMED"
+      }
+    ]
+  },
+  {
+    "domain": "其它页面",
+    "verified": [
+      {
+        "file": "src/features/knowledge/KnowledgePage.tsx:262",
+        "severity": "high",
+        "category": "accessibility",
+        "issue": "知识搜索结果整行用 <li onClick> 跳转（issues 行 262-266、artifacts 行 287-291），不是 button/link，缺 role、tabIndex、onKeyDown，键盘和读屏用户无法打开结果。",
+        "suggestion": "改用 <button type=\"button\"> 包裹整行（参考同域 ArtifactsHubPage.tsx:150），或补 role=\"button\" tabIndex={0} onKeyDown 处理 Enter/Space。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/settings/SettingsPage.tsx:274",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "字号卡片描述是两个 key 拼接 {t(\"settings.fontSize\")} / {t(\"settings.fontSize.medium\")} 渲染出 \"字号 / 中\"，像占位符；其它卡片（theme/language）用的是完整的 themeDesc/languageDesc 描述句。i18n.ts 中不存在 settings.fontSizeDesc。",
+        "suggestion": "新增并使用 settings.fontSizeDesc 描述 key，替换 key 拼接。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/settings/SettingsPage.tsx:252",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "语言选项副标题三元 {locale === option.value ? t(\"settings.language.zh\") : t(\"settings.language.en\")} 只看是否选中、不看 option.value；英文(en-US)被选中时副标题会显示\"中文\"。",
+        "suggestion": "副标题应根据 option.value 派生各语言 native 名，或去掉这行误导性副标题。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/artifacts/ArtifactsHubPage.tsx:175",
+        "severity": "medium",
+        "category": "overflow-truncation",
+        "issue": "产物文件名 <span font-mono truncate>（:175）与 issue 标题 <div truncate>（:156-157）都截断但无 title/tooltip，长路径截后无法看全名。",
+        "suggestion": "给截断元素加 title={artifactPath(a)} / title={issue.title}，或用 Tooltip 悬停看全名。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/knowledge/KnowledgePage.tsx:186",
+        "severity": "low",
+        "category": "visual-consistency",
+        "issue": "项目筛选用原生 <select> 手搓样式（:186-197），TeamNotesEditor:79 亦同；库内已有 components/ui/select.tsx（Base UI Select），圆角/边框/箭头与其它页面下拉不统一。",
+        "suggestion": "统一改用 Base UI Select 组件，或抽出共享样式避免各页各写。",
+        "verdict": "PLAUSIBLE"
+      },
+      {
+        "file": "src/features/knowledge/TeamNotesEditor.tsx:92",
+        "severity": "low",
+        "category": "visual-consistency",
+        "issue": "\"显示已删除\" 用浏览器原生未定制 checkbox（:92-96 无任何 className），与企业化视觉（enterprise-card/圆角/brand 色）割裂。",
+        "suggestion": "换用统一 Checkbox/Switch 组件，或至少加 accent-color/尺寸样式对齐主题。",
+        "verdict": "PLAUSIBLE"
+      },
+      {
+        "file": "src/features/knowledge/KnowledgePage.tsx:184",
+        "severity": "low",
+        "category": "interaction-feedback",
+        "issue": "搜索框加载态仅在右侧显示裸 \"…\" 字符（:184），反馈弱；同文件 reindex 按钮已用 AgentThinkingIndicator，视觉不一致。",
+        "suggestion": "换成带动效的 spinner/Loader，与同域加载反馈保持一致。",
+        "verdict": "PLAUSIBLE"
+      },
+      {
+        "file": "src/features/knowledge/KnowledgePage.tsx:186",
+        "severity": "low",
+        "category": "accessibility",
+        "issue": "知识页项目筛选 select（:186）无任何 label/aria-label，读屏无法得知用途；搜索 input（:178）仅有 placeholder。grep 确认 knowledge/ 目录零 aria-label，对比 ResumePageActions:47 的 select 有 aria-label。",
+        "suggestion": "给 project select 补 aria-label={t(...)}，搜索 input 也补 aria-label 更稳妥。",
+        "verdict": "CONFIRMED"
+      }
+    ]
+  },
+  {
+    "domain": "app-shell与布局",
+    "verified": [
+      {
+        "file": "src/app/page.tsx:7",
+        "severity": "high",
+        "category": "visual-consistency",
+        "issue": "首页会同时渲染两个「Hello World」脚手架占位块，泄漏到生产界面",
+        "suggestion": "删除 page.tsx:7 的 `<HelloWorld />` 与 WorkbenchPage.tsx:1159 的第二处 `<HelloWorld className=\"mb-8\" />`；HelloWorld 是脚手架占位组件，不应出现在正式 UI",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/AppSidebar.tsx:252",
+        "severity": "medium",
+        "category": "i18n",
+        "issue": "zh-CN 下 WORKSPACE 分区标题与其下的 Folder 导航行译文完全撞车，均为「工作区」，标题与子项同名导致层级含义混淆",
+        "suggestion": "把分区标题 sidebar.workspace 改为更抽象的组名，或把导航行 sidebar.workspaces 改为「全部工作区/工作区列表」（注：i18n.ts 内联的 baseDictionaries 曾用「工作区列表」，但被 zh-CN.ts:1306 的「工作区」覆盖）",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/AppSidebar.tsx:179",
+        "severity": "medium",
+        "category": "information-density",
+        "issue": "WORKSPACE 分区计数徽标（收件箱/需求/审批）只统计已展开/激活加载过的工作区，未展开的工作区不计入，展示的是误导性的部分计数",
+        "suggestion": "计数应由后端聚合接口提供真实总量（代码注释亦承认『We don't yet have a real backend for these』），或在数据未完整加载时隐藏徽标并给占位，避免展示不完整数字",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/AppSidebar.tsx:373",
+        "severity": "low",
+        "category": "overflow-truncation",
+        "issue": "工作区展开后的 issue 列表硬截断为前 8 条（issues.slice(0, 8)），超出部分被静默丢弃，无「查看更多」或剩余数量提示",
+        "suggestion": "在列表末尾追加「还有 N 条 / 查看全部」入口并链接到该工作区页面，避免信息被无声隐藏",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/features/workbench/components/AppSidebar.tsx:242",
+        "severity": "medium",
+        "category": "responsive",
+        "issue": "侧栏 aside 为 overflow-hidden，唯一可滚动区是 SESSIONS(flex-1 overflow-auto)；短屏下 SESSIONS 压到 0 后，项目选择器+12 行固定 WORKSPACE 区+底部 Settings/Help 条的固有高度超出容器，底部固定条会被裁剪不可见",
+        "suggestion": "把 overflow-auto 提到同时包裹 WORKSPACE 与 SESSIONS 的父级，或给 WORKSPACE 区加 min-h-0 + overflow-auto，确保底部固定条在任何视口高度都可达（结构断言已核实，具体裁剪需实机矮视口渲染确认）",
+        "verdict": "PLAUSIBLE"
+      },
+      {
+        "file": "src/features/workbench/components/AppSidebar.tsx:194",
+        "severity": "low",
+        "category": "interaction-feedback",
+        "issue": "项目切换器 DropdownMenuTrigger 显式设为 cursor-default，可点击的下拉入口缺少指针手型交互暗示",
+        "suggestion": "改为 cursor-pointer 匹配可点击语义（注：cursor-default 在本库 dropdown-menu/select 等 Base UI 菜单项 primitive 中是既有约定，全库 cursor-pointer 45 处 / cursor-default 9 处且多为库内菜单项，故此为轻微且部分主观的一致性问题）",
+        "verdict": "PLAUSIBLE"
+      }
+    ]
+  },
+  {
+    "domain": "ui组件库与全局主题",
+    "verified": [
+      {
+        "file": "src/components/ui/toast.tsx:69",
+        "severity": "high",
+        "category": "accessibility",
+        "issue": "全局 Toast 容器 (line 69 <div className=\"fixed bottom-6 right-6 z-[100] ... pointer-events-none\">) 无 aria-live/role，单条 toast 也无 role；关闭按钮 (line 85-90 <button onClick={() => removeToast(...)}><X size={14}/></button>) 无 aria-label。ToastProvider 在 layout.tsx 全局挂载且被 30+ 处 useToast 调用，是活跃的高频反馈组件，屏幕阅读器用户完全听不到成功/错误提示。",
+        "suggestion": "容器加 aria-live=\"polite\" role=\"region\"，error 类型 toast 用 role=\"alert\"/aria-live=\"assertive\"；关闭按钮补 aria-label。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/button.tsx:13",
+        "severity": "medium",
+        "category": "interaction-feedback",
+        "issue": "default 变体 hover 背景被限定在锚点上下文 (line 13 \"bg-primary text-primary-foreground [a]:hover:bg-primary/80\")，而 outline/secondary/ghost/destructive 均为无前缀 hover:bg-*。ButtonPrimitive 渲染为 <button>（line 45/69），故主 CTA 按钮 hover 时无背景反馈，与其它变体不一致。存在 whileTap 缩放反馈可部分弥补，但悬停态仍缺失。Button 全库高频使用。",
+        "suggestion": "给 default 补普通 hover，如 \"hover:bg-primary/90 [a]:hover:bg-primary/80\"。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/empty-state.tsx:254",
+        "severity": "medium",
+        "category": "color-contrast",
+        "issue": "空态描述 (line 254 text-xs text-text-muted/60) 实测对比度约 2.7:1（muted #7f8a99 @60% over 背景 #0b0b0c），低于 WCAG AA 4.5:1。EmptyState 被多个页面使用。注意：原发现称标题 text-text-muted 也过暗，但标题满不透明度实测约 5.6:1，已达标——问题仅在 /60 的描述文字。",
+        "suggestion": "描述去掉 /60（用 text-text-muted 或更亮的 text-text-secondary），确保小字号达标。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/empty-state.tsx:253",
+        "severity": "low",
+        "category": "visual-consistency",
+        "issue": "库内两套空态组件视觉规格不一致：empty-state.tsx 标题 text-text-muted、外层 gap-4 p-8（line 249/253）；interaction-empty-state.tsx 标题 text-base font-semibold text-foreground、外层 enterprise-card min-h-[220px] rounded-3xl px-6 py-10（line 27/41）。二者均在不同页面被使用，同类空态观感割裂。属真实不一致，但『应统一』偏设计偏好。",
+        "suggestion": "统一空态标题层级/色板/容器，或共享同一底层样式。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/virtualized-artifact-list.tsx:57",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "formatRelativeTime 硬编码英文缩写 (line 57-60 `${diffSec}s ago` / `${diffMin}m ago` / `${diffHour}h ago` / `${diffDay}d ago`)，而组件其余部分均走 useI18n().t()。VirtualizedArtifactList 被 ArtifactPanel.tsx 实际使用，zh 用户在产物列表看到英文相对时间，与本地化其余文案不一致。",
+        "suggestion": "相对时间走 t()/Intl.RelativeTimeFormat 按 locale 输出。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/loader.tsx:81",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "full 变体加载文案回退硬编码英文 (line 80-81 {label || \"Loading\"})，未传 label 时显示英文。Loader 被多页面使用；仅 full 变体的默认回退受影响。",
+        "suggestion": "回退走 t()（如 common.loading），或强制调用方传 label。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/approval-card.tsx:58",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "文案硬编码英文属实：title=\"Approval requested\"(line 27)、Approve·⌘↵(58)、Deny(61)、Edit(63)，无 useI18n。但 ApprovalCard 在整个 src 内零引用（dead code，从未渲染），故『zh 用户看到英文』的实际展示影响当前不成立——属组件库潜在缺陷而非现网展示问题，已相应下调严重度。",
+        "suggestion": "若启用该组件，接入 useI18n() 走 t() key；否则考虑删除未用组件。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/executor-toggle.tsx:29",
+        "severity": "low",
+        "category": "accessibility",
+        "issue": "分段切换两个 <button>(line 29/41) 选中态仅靠 bg-brand 传达，无 aria-pressed/role，属真实 a11y 缺陷。但 ExecutorToggle 在 src 内零引用（dead code，从未渲染），当前无实际用户影响，已下调严重度。",
+        "suggestion": "若启用，加 aria-pressed 或 role=\"radiogroup\"，并加非颜色辅助（ring/图标）；否则删除未用组件。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/batch-actions.tsx:107",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "硬编码英文属实：{selectedCount} selected(107)、Deselect all/Select all(114)、deleteLabel=\"Delete\"(95)、Deleting...(135)；清除按钮 (117-125) 纯图标无 aria-label。但 BatchActionsBar 在 src 内零引用（dead code，从未渲染），当前无实际展示影响，已下调严重度。",
+        "suggestion": "若启用，文案走 t() 且清除按钮补 aria-label；否则删除未用组件。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/backend-status-badge.tsx:19",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "硬编码英文属实：Reconnecting(19)、tooltip \"Realtime WebSocket dropped — using polling fallback. HTTP is OK.\"(23)、Backend offline(40)。但 BackendStatusBadge 在 src 内零引用（dead code，从未渲染），当前无实际展示影响，已下调严重度。",
+        "suggestion": "若启用，文案走 t()；否则删除未用组件。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/VirtualizedList.tsx:119",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "直接展示未本地化 rawStatus (line 117-119) 且 \"REWORK REQUIRED\"/\"BLOCKED\" 硬编码 (line 134) 属实。但 VirtualizedTaskList 在 src 内零引用（dead code，从未渲染），当前无实际展示影响，已下调严重度。",
+        "suggestion": "若启用，status 走状态映射 + t()；否则删除未用组件。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/error-boundary.tsx:62",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "硬编码英文属实：\"Something went wrong\"(62)、\"Error Details\"(74)、Retry(100/174)、\"Technical Details\"(156)。但 ErrorBoundary 与 AsyncBoundary 在 src 内零引用（dead code，从未渲染），当前无实际展示影响，已下调严重度。",
+        "suggestion": "若启用，默认文案走 t()（类组件包 HOC 注入 t）；否则删除未用组件。",
+        "verdict": "CONFIRMED"
+      },
+      {
+        "file": "src/components/ui/expanded-task-card.tsx:103",
+        "severity": "low",
+        "category": "i18n",
+        "issue": "SwipeToDelete 背景提示 \"Delete\" 硬编码英文 (line 103) 属实。但 expanded-task-card/SwipeToDelete 在 src 内零引用（dead code，从未渲染），当前无实际展示影响。",
+        "suggestion": "若启用，走 t()（如 common.delete）；否则删除未用组件。",
+        "verdict": "CONFIRMED"
+      }
+    ]
+  }
+]

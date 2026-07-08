@@ -16,11 +16,34 @@ import asyncio
 import json
 import logging
 import threading
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable  # noqa: UP035
+from typing import Callable, Protocol  # noqa: UP035
+
+from app.json_safety import JsonObject, object_dict, string_value
 
 logger = logging.getLogger(__name__)
+
+
+class SyncJsonRpcWriter(Protocol):
+    def write(self, data: bytes) -> object: ...
+
+    def flush(self) -> object: ...
+
+
+class SyncJsonRpcReader(Protocol):
+    def readline(self) -> bytes: ...
+
+
+class JsonRpcEventBus(Protocol):
+    def append(self, event: JsonObject) -> object: ...
+
+
+async def _append_event(event_bus: JsonRpcEventBus, payload: JsonObject) -> None:
+    result = event_bus.append(payload)
+    if isinstance(result, Awaitable):
+        await result
 
 
 class PendingResponse:
@@ -37,20 +60,110 @@ class JsonRpcMessage:
 
     type: str  # "request", "response", "error", "notification"
     method: str | None = None
-    request_id: Any = None
-    params: dict | None = None
-    result: Any = None
-    error: dict | None = None
+    request_id: object | None = None
+    params: JsonObject | None = None
+    result: object | None = None
+    error: JsonObject | None = None
     raw: str = ""
+
+
+def _json_rpc_request_payload(
+    method: str, params: JsonObject | None = None, request_id: int | None = None
+) -> JsonObject:
+    payload: JsonObject = {
+        "jsonrpc": "2.0",
+        "method": method,
+    }
+    if request_id is not None:
+        payload["id"] = request_id
+    if params is not None:
+        payload["params"] = params
+    return payload
+
+
+def _json_rpc_response_payload(request_id: object | None, result: object) -> JsonObject:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": result,
+    }
+
+
+def _parse_json_rpc_message(line: str) -> JsonRpcMessage | None:
+    """Parse one JSON-RPC line using the same rules for sync and async peers."""
+    if not line.startswith("{"):
+        return None
+    try:
+        data: object = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    if "error" in data and "id" in data:
+        return JsonRpcMessage(
+            type="error",
+            request_id=data.get("id"),
+            error=object_dict(data.get("error")),
+            raw=line,
+        )
+    if "id" in data and "result" in data:
+        return JsonRpcMessage(
+            type="response",
+            request_id=data.get("id"),
+            result=data.get("result"),
+            raw=line,
+        )
+    if "id" in data and "method" in data:
+        return JsonRpcMessage(
+            type="request",
+            request_id=data.get("id"),
+            method=string_value(data.get("method")),
+            params=object_dict(data.get("params")),
+            raw=line,
+        )
+    if "method" in data:
+        return JsonRpcMessage(
+            type="notification",
+            method=string_value(data.get("method")),
+            params=object_dict(data.get("params")),
+            raw=line,
+        )
+    return None
+
+
+def _server_request_from_message(msg: JsonRpcMessage) -> ServerRequest:
+    method = msg.method or ""
+    params = msg.params or {}
+
+    if method == "file_change/request_approval":
+        return FileChangeRequestApproval(
+            request_id=msg.request_id,
+            method=method,
+            params=params,
+            item_id=string_value(params.get("item_id")),
+        )
+    if method == "command_execution/request_approval":
+        return CommandExecutionRequestApproval(
+            request_id=msg.request_id,
+            method=method,
+            params=params,
+            item_id=string_value(params.get("item_id")),
+        )
+    return ServerRequest(
+        request_id=msg.request_id,
+        method=method,
+        params=params,
+    )
 
 
 @dataclass
 class ServerRequest:
     """Base class for server-initiated requests from Codex."""
 
-    request_id: Any
+    request_id: object | None
     method: str
-    params: dict
+    params: JsonObject
 
 
 @dataclass
@@ -80,11 +193,11 @@ class Decision(str, Enum):  # noqa: UP042
 class JsonRpcCallbacks:
     """Callbacks for handling JSON-RPC events. Override as needed."""
 
-    on_notification: Callable[[str, dict], Any] | None = None  # Returns True to stop reading
-    on_server_request: Callable[[ServerRequest], Any] | None = None  # Returns response or None
-    on_response: Callable[[Any, Any], None] | None = None
-    on_error: Callable[[Any, dict], None] | None = None
-    on_raw_line: Callable[[str], Any] | None = None
+    on_notification: Callable[[str, JsonObject], object] | None = None  # Returns True to stop reading
+    on_server_request: Callable[[ServerRequest], object] | None = None  # Returns response or None
+    on_response: Callable[[object | None, object | None], None] | None = None
+    on_error: Callable[[object | None, JsonObject], None] | None = None
+    on_raw_line: Callable[[str], object] | None = None
 
 
 class JsonRpcPeer:
@@ -97,24 +210,29 @@ class JsonRpcPeer:
     - Handling server-initiated requests (approvals)
     """
 
-    def __init__(self, stdin, stdout, callbacks: JsonRpcCallbacks | None = None):
+    def __init__(
+        self,
+        stdin: SyncJsonRpcWriter,
+        stdout: SyncJsonRpcReader,
+        callbacks: JsonRpcCallbacks | None = None,
+    ) -> None:
         self._stdin = stdin
         self._stdout = stdout
         self._callbacks = callbacks or JsonRpcCallbacks()
-        self._pending: dict[Any, threading.Event] = {}
-        self._pending_results: dict[Any, Any] = {}
-        self._pending_errors: dict[Any, dict] = {}
+        self._pending: dict[object, threading.Event] = {}
+        self._pending_results: dict[object, object | None] = {}
+        self._pending_errors: dict[object, JsonObject] = {}
         self._id_counter = 0
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._reader_thread: threading.Thread | None = None
 
-    def start(self):
+    def start(self) -> None:
         """Start the reader thread."""
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader_thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the reader thread and signal shutdown."""
         self._shutdown.set()
         if self._reader_thread:
@@ -126,35 +244,22 @@ class JsonRpcPeer:
             self._id_counter += 1
             return self._id_counter
 
-    def send(self, method: str, params: dict | None = None, request_id: int | None = None) -> bool:
+    def send(
+        self, method: str, params: JsonObject | None = None, request_id: int | None = None
+    ) -> bool:
         """Send a JSON-RPC request or notification."""
-        if request_id is None:
-            # Notification (no id)
-            payload = {
-                "jsonrpc": "2.0",
-                "method": method,
-            }
-            if params is not None:
-                payload["params"] = params
-        else:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": method,
-            }
-            if params is not None:
-                payload["params"] = params
-
         try:
-            raw = json.dumps(payload)
+            raw = json.dumps(_json_rpc_request_payload(method, params, request_id))
             self._stdin.write(raw.encode("utf-8") + b"\n")
             self._stdin.flush()
             return True
         except (BrokenPipeError, OSError) as e:
-            print(f"[JSON-RPC] Failed to send: {e}", flush=True)
+            logger.warning("json-rpc send failed: error=%s", e)
             return False
 
-    def request(self, method: str, params: dict | None = None, timeout: float = 600) -> Any:
+    def request(
+        self, method: str, params: JsonObject | None = None, timeout: float = 600
+    ) -> object | None:
         """
         Send a JSON-RPC request and wait for response.
 
@@ -184,10 +289,8 @@ class JsonRpcPeer:
                 self._pending_results.pop(request_id, None)
                 self._pending_errors.pop(request_id, None)
 
-    def _reader_loop(self):
+    def _reader_loop(self) -> None:
         """Main loop that reads and dispatches JSON-RPC messages."""
-        import sys
-
         try:
             while not self._shutdown.is_set():
                 raw_line = self._stdout.readline()
@@ -217,8 +320,8 @@ class JsonRpcPeer:
                 elif msg.type == "notification":
                     self._handle_notification(msg)
 
-        except Exception as e:
-            print(f"[JSON-RPC] Reader error: {e}", file=sys.stderr, flush=True)
+        except Exception:
+            logger.exception("json-rpc reader loop failed")
         finally:
             self._shutdown.set()
             # Signal all pending waiters
@@ -228,45 +331,9 @@ class JsonRpcPeer:
 
     def _parse_message(self, line: str) -> JsonRpcMessage | None:
         """Parse a JSON-RPC message from a raw line."""
-        if not line.startswith("{"):
-            return None
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            return None
+        return _parse_json_rpc_message(line)
 
-        if "error" in data and "id" in data:
-            return JsonRpcMessage(
-                type="error",
-                request_id=data.get("id"),
-                error=data.get("error"),
-                raw=line,
-            )
-        elif "id" in data and "result" in data:
-            return JsonRpcMessage(
-                type="response",
-                request_id=data.get("id"),
-                result=data.get("result"),
-                raw=line,
-            )
-        elif "id" in data and "method" in data:
-            return JsonRpcMessage(
-                type="request",
-                request_id=data.get("id"),
-                method=data.get("method"),
-                params=data.get("params"),
-                raw=line,
-            )
-        elif "method" in data:
-            return JsonRpcMessage(
-                type="notification",
-                method=data.get("method"),
-                params=data.get("params"),
-                raw=line,
-            )
-        return None
-
-    def _handle_response(self, msg: JsonRpcMessage):
+    def _handle_response(self, msg: JsonRpcMessage) -> None:
         """Handle an incoming JSON-RPC response."""
         if self._callbacks.on_response:
             self._callbacks.on_response(msg.request_id, msg.result)
@@ -276,17 +343,17 @@ class JsonRpcPeer:
                 self._pending_results[msg.request_id] = msg.result
                 self._pending[msg.request_id].set()
 
-    def _handle_error(self, msg: JsonRpcMessage):
+    def _handle_error(self, msg: JsonRpcMessage) -> None:
         """Handle an incoming JSON-RPC error response."""
         if self._callbacks.on_error:
-            self._callbacks.on_error(msg.request_id, msg.error)
+            self._callbacks.on_error(msg.request_id, msg.error or {})
 
         with self._lock:
             if msg.request_id in self._pending:
-                self._pending_errors[msg.request_id] = msg.error
+                self._pending_errors[msg.request_id] = msg.error or {}
                 self._pending[msg.request_id].set()
 
-    def _handle_request(self, msg: JsonRpcMessage):
+    def _handle_request(self, msg: JsonRpcMessage) -> None:
         """Handle an incoming JSON-RPC request from the server."""
         response = None
         if self._callbacks.on_server_request:
@@ -297,7 +364,7 @@ class JsonRpcPeer:
         if response is not None and msg.request_id is not None:
             self.send_response(msg.request_id, response)
 
-    def _handle_notification(self, msg: JsonRpcMessage):
+    def _handle_notification(self, msg: JsonRpcMessage) -> None:
         """Handle an incoming JSON-RPC notification."""
         if self._callbacks.on_notification:
             should_stop = self._callbacks.on_notification(msg.method or "", msg.params or {})
@@ -306,44 +373,17 @@ class JsonRpcPeer:
 
     def _create_server_request(self, msg: JsonRpcMessage) -> ServerRequest:
         """Create a ServerRequest object from a JSON-RPC request."""
-        method = msg.method or ""
-        params = msg.params or {}
+        return _server_request_from_message(msg)
 
-        if method == "file_change/request_approval":
-            return FileChangeRequestApproval(
-                request_id=msg.request_id,
-                method=method,
-                params=params,
-                item_id=params.get("item_id", ""),
-            )
-        elif method == "command_execution/request_approval":
-            return CommandExecutionRequestApproval(
-                request_id=msg.request_id,
-                method=method,
-                params=params,
-                item_id=params.get("item_id", ""),
-            )
-        else:
-            return ServerRequest(
-                request_id=msg.request_id,
-                method=method,
-                params=params,
-            )
-
-    def send_response(self, request_id: Any, result: Any) -> bool:
+    def send_response(self, request_id: object | None, result: object) -> bool:
         """Send a JSON-RPC response."""
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": result,
-        }
         try:
-            raw = json.dumps(payload)
+            raw = json.dumps(_json_rpc_response_payload(request_id, result))
             self._stdin.write(raw.encode("utf-8") + b"\n")
             self._stdin.flush()
             return True
         except (BrokenPipeError, OSError) as e:
-            print(f"[JSON-RPC] Failed to send response: {e}", flush=True)
+            logger.warning("json-rpc send response failed: error=%s", e)
             return False
 
 
@@ -362,13 +402,13 @@ class AppServerClient:
 
     def __init__(
         self,
-        codex_store,
-        log_store,
-        event_bus=None,
-        notification_callback: Callable[[str, dict], Any] | None = None,
+        codex_store: object,
+        log_store: object,
+        event_bus: JsonRpcEventBus | None = None,
+        notification_callback: Callable[[str, JsonObject], object] | None = None,
         auto_approve: bool = True,
         plan_mode: bool = False,
-    ):
+    ) -> None:
         self._codex_store = codex_store
         self._log_store = log_store
         self._event_bus = event_bus
@@ -381,14 +421,19 @@ class AppServerClient:
         # Pending approval requests awaiting user decision (for manual approval mode)
         self._pending_approvals: dict[str, ServerRequest] = {}
         # Callback to invoke when an approval is needed (set by CodexProcessManager)
-        self._approval_callback: Callable[[str, ServerRequest], Any] | None = None
+        self._approval_callback: Callable[[str, ServerRequest], object] | None = None
 
-    def attach_peer(self, peer: JsonRpcPeer | AsyncJsonRpcPeer):
+    def attach_peer(self, peer: JsonRpcPeer | AsyncJsonRpcPeer) -> None:
         """Attach a JsonRpcPeer or AsyncJsonRpcPeer to this client."""
         self._peer = peer
         existing_callbacks = peer._callbacks or JsonRpcCallbacks()
         self._callbacks = self._create_callbacks(existing_callbacks)
         peer._callbacks = self._callbacks
+
+    def _require_peer(self) -> JsonRpcPeer | AsyncJsonRpcPeer:
+        if self._peer is None:
+            raise RuntimeError("JSON-RPC peer is not attached")
+        return self._peer
 
     def _create_callbacks(
         self, existing_callbacks: JsonRpcCallbacks | None = None
@@ -403,13 +448,13 @@ class AppServerClient:
             on_raw_line=existing_callbacks.on_raw_line,
         )
 
-    async def initialize(self) -> dict:
+    async def initialize(self) -> JsonObject:
         """
         Send initialize request to Codex app-server.
 
         Returns the InitializeResponse.
         """
-        params = {
+        params: JsonObject = {
             "clientInfo": {
                 "name": "agent-collab-console",
                 "version": "1.0.0",
@@ -418,20 +463,22 @@ class AppServerClient:
                 "experimentalApi": True,
             },
         }
-        if isinstance(self._peer, AsyncJsonRpcPeer):
-            result = await self._peer.request("initialize", params)
+        peer = self._require_peer()
+        if isinstance(peer, AsyncJsonRpcPeer):
+            result = await peer.request("initialize", params)
         else:
-            result = self._peer.request("initialize", params)
-        return result or {}
+            result = peer.request("initialize", params)
+        return object_dict(result)
 
     async def initialized(self) -> bool:
         """Send initialized notification."""
-        if isinstance(self._peer, AsyncJsonRpcPeer):
-            return await self._peer.send("initialized")
+        peer = self._require_peer()
+        if isinstance(peer, AsyncJsonRpcPeer):
+            return await peer.send("initialized")
         else:
-            return self._peer.send("initialized")
+            return peer.send("initialized")
 
-    async def thread_start(self, prompt: str | None = None) -> dict:
+    async def thread_start(self, prompt: str | None = None) -> JsonObject:
         """
         Start a new thread.
 
@@ -440,23 +487,26 @@ class AppServerClient:
 
         Returns the ThreadStartResponse with thread_id.
         """
-        params = {}
+        params: JsonObject = {}
         if prompt:
             params["input"] = [{"type": "text", "text": prompt, "text_elements": []}]
 
-        if isinstance(self._peer, AsyncJsonRpcPeer):
-            result = await self._peer.request("thread/start", params)
+        peer = self._require_peer()
+        if isinstance(peer, AsyncJsonRpcPeer):
+            result = await peer.request("thread/start", params)
         else:
-            result = self._peer.request("thread/start", params)
+            result = peer.request("thread/start", params)
 
-        if result:
-            if "thread_id" in result:
-                self._thread_id = result["thread_id"]
-            elif "thread" in result and "id" in result["thread"]:
-                self._thread_id = result["thread"]["id"]
-        return result or {}
+        result_obj = object_dict(result)
+        thread_id = string_value(result_obj.get("thread_id"))
+        thread = object_dict(result_obj.get("thread"))
+        if thread_id:
+            self._thread_id = thread_id
+        elif string_value(thread.get("id")):
+            self._thread_id = string_value(thread.get("id"))
+        return result_obj
 
-    async def thread_fork(self, thread_id: str) -> dict:
+    async def thread_fork(self, thread_id: str) -> JsonObject:
         """
         Fork an existing thread to create a new session.
 
@@ -465,20 +515,23 @@ class AppServerClient:
 
         Returns the ThreadForkResponse with new thread_id.
         """
-        params = {"threadId": thread_id}
-        if isinstance(self._peer, AsyncJsonRpcPeer):
-            result = await self._peer.request("thread/fork", params)
+        params: JsonObject = {"threadId": thread_id}
+        peer = self._require_peer()
+        if isinstance(peer, AsyncJsonRpcPeer):
+            result = await peer.request("thread/fork", params)
         else:
-            result = self._peer.request("thread/fork", params)
+            result = peer.request("thread/fork", params)
 
-        if result:
-            if "thread_id" in result:
-                self._thread_id = result["thread_id"]
-            elif "thread" in result and "id" in result["thread"]:
-                self._thread_id = result["thread"]["id"]
-        return result or {}
+        result_obj = object_dict(result)
+        new_thread_id = string_value(result_obj.get("thread_id"))
+        thread = object_dict(result_obj.get("thread"))
+        if new_thread_id:
+            self._thread_id = new_thread_id
+        elif string_value(thread.get("id")):
+            self._thread_id = string_value(thread.get("id"))
+        return result_obj
 
-    async def turn_start(self, prompt: str, thread_id: str | None = None) -> dict:
+    async def turn_start(self, prompt: str, thread_id: str | None = None) -> JsonObject:
         """
         Start a turn with user input.
 
@@ -492,16 +545,16 @@ class AppServerClient:
         if not tid:
             raise ValueError("No thread_id available. Call thread_start or thread_fork first.")
 
-        params = {
+        params: JsonObject = {
             "threadId": tid,
             "input": [{"type": "text", "text": prompt, "text_elements": []}],
         }
-        if isinstance(self._peer, AsyncJsonRpcPeer):
-            return await self._peer.request("turn/start", params) or {}
-        else:
-            return self._peer.request("turn/start", params) or {}
+        peer = self._require_peer()
+        if isinstance(peer, AsyncJsonRpcPeer):
+            return object_dict(await peer.request("turn/start", params))
+        return object_dict(peer.request("turn/start", params))
 
-    async def _on_notification(self, method: str, params: dict) -> bool:
+    async def _on_notification(self, method: str, params: JsonObject) -> bool:
         """
         Handle incoming notifications.
 
@@ -511,17 +564,12 @@ class AppServerClient:
 
         # Log all notifications
         if self._event_bus:
-            payload = {
+            payload: JsonObject = {
                 "type": "notification",
                 "method": method,
                 "params": params,
             }
-            if hasattr(self._event_bus, "append") and asyncio.iscoroutinefunction(
-                self._event_bus.append
-            ):
-                await self._event_bus.append(payload)
-            else:
-                self._event_bus.append(payload)
+            await _append_event(self._event_bus, payload)
 
         if self._notification_callback:
             if asyncio.iscoroutinefunction(self._notification_callback):
@@ -533,7 +581,7 @@ class AppServerClient:
 
         return False
 
-    async def _on_server_request(self, request: ServerRequest) -> dict | None:
+    async def _on_server_request(self, request: ServerRequest) -> JsonObject | None:
         """
         Handle server-initiated requests (approvals).
 
@@ -544,17 +592,12 @@ class AppServerClient:
 
         # Log the approval request
         if self._event_bus:
-            payload = {
+            payload: JsonObject = {
                 "type": "server_request",
                 "method": request.method,
                 "params": request.params,
             }
-            if hasattr(self._event_bus, "append") and asyncio.iscoroutinefunction(
-                self._event_bus.append
-            ):
-                await self._event_bus.append(payload)
-            else:
-                self._event_bus.append(payload)
+            await _append_event(self._event_bus, payload)
 
         # Auto-approve for Phase 1
         if self._auto_approve:
@@ -580,7 +623,7 @@ class AppServerClient:
 
         return None
 
-    def set_approval_callback(self, callback: Callable[[str, ServerRequest], Any]):
+    def set_approval_callback(self, callback: Callable[[str, ServerRequest], object]) -> None:
         """Set callback to invoke when an approval request is received."""
         self._approval_callback = callback
 
@@ -596,27 +639,27 @@ class AppServerClient:
         """
         request = self._pending_approvals.pop(item_id, None)
         if request is None:
-            print(f"[JSON-RPC] No pending approval found for item_id={item_id}", flush=True)
+            logger.warning("json-rpc approval missing: item_id=%s", item_id)
             return False
 
-        response = {"decision": decision}
+        response: JsonObject = {"decision": decision}
         if self._peer:
             if isinstance(self._peer, AsyncJsonRpcPeer):
                 await self._peer.send_response(request.request_id, response)
             else:
                 self._peer.send_response(request.request_id, response)
-            print(f"[JSON-RPC] Resolved approval {item_id} with decision={decision}", flush=True)
+            logger.info("json-rpc approval resolved: item_id=%s decision=%s", item_id, decision)
         return True
 
     def get_pending_approvals(self) -> dict[str, ServerRequest]:
         """Return all pending approval requests."""
         return self._pending_approvals.copy()
 
-    def _on_response(self, request_id: Any, result: Any):
+    def _on_response(self, request_id: object | None, result: object | None) -> None:
         """Handle incoming responses."""
         logger.debug("[JSON-RPC] Response %s: %s", request_id, result)
 
-    def _on_error(self, request_id: Any, error: dict):
+    def _on_error(self, request_id: object | None, error: JsonObject) -> None:
         """Handle incoming error responses."""
         logger.debug("[JSON-RPC] Error %s: %s", request_id, error)
 
@@ -640,23 +683,23 @@ class AsyncJsonRpcPeer:
         stdin: asyncio.StreamWriter,
         stdout: asyncio.StreamReader,
         callbacks: JsonRpcCallbacks | None = None,
-    ):
+    ) -> None:
         self._stdin = stdin
         self._stdout = stdout
         self._callbacks = callbacks or JsonRpcCallbacks()
-        self._pending: dict[Any, asyncio.Event] = {}
-        self._pending_results: dict[Any, Any] = {}
-        self._pending_errors: dict[Any, dict] = {}
+        self._pending: dict[object, asyncio.Event] = {}
+        self._pending_results: dict[object, object | None] = {}
+        self._pending_errors: dict[object, JsonObject] = {}
         self._id_counter = 0
         self._lock = asyncio.Lock()
         self._shutdown = asyncio.Event()
-        self._reader_task: asyncio.Task | None = None
+        self._reader_task: asyncio.Task[None] | None = None
 
-    async def start(self):
+    async def start(self) -> None:
         """Start the async reader task."""
         self._reader_task = asyncio.create_task(self._async_reader_loop())
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop the reader task and signal shutdown."""
         self._shutdown.set()
         if self._reader_task:
@@ -672,35 +715,21 @@ class AsyncJsonRpcPeer:
             return self._id_counter
 
     async def send(
-        self, method: str, params: dict | None = None, request_id: int | None = None
+        self, method: str, params: JsonObject | None = None, request_id: int | None = None
     ) -> bool:
         """Send a JSON-RPC request or notification."""
-        if request_id is None:
-            payload = {
-                "jsonrpc": "2.0",
-                "method": method,
-            }
-            if params is not None:
-                payload["params"] = params
-        else:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": method,
-            }
-            if params is not None:
-                payload["params"] = params
-
         try:
-            raw = json.dumps(payload)
+            raw = json.dumps(_json_rpc_request_payload(method, params, request_id))
             self._stdin.write(raw.encode("utf-8") + b"\n")
             await self._stdin.drain()
             return True
         except (BrokenPipeError, OSError) as e:
-            print(f"[AsyncJSON-RPC] Failed to send: {e}", flush=True)
+            logger.warning("async json-rpc send failed: error=%s", e)
             return False
 
-    async def request(self, method: str, params: dict | None = None, timeout: float = 600) -> Any:
+    async def request(
+        self, method: str, params: JsonObject | None = None, timeout: float = 600
+    ) -> object | None:
         """Send a JSON-RPC request and wait for response."""
         request_id = await self.next_request_id()
         evt = asyncio.Event()
@@ -726,10 +755,8 @@ class AsyncJsonRpcPeer:
                 self._pending_results.pop(request_id, None)
                 self._pending_errors.pop(request_id, None)
 
-    async def _async_reader_loop(self):
+    async def _async_reader_loop(self) -> None:
         """Async main loop that reads and dispatches JSON-RPC messages."""
-        import sys
-
         try:
             while not self._shutdown.is_set():
                 try:
@@ -770,8 +797,8 @@ class AsyncJsonRpcPeer:
 
         except asyncio.CancelledError:
             pass
-        except Exception as e:
-            print(f"[AsyncJSON-RPC] Reader error: {e}", file=sys.stderr, flush=True)
+        except Exception:
+            logger.exception("async json-rpc reader loop failed")
         finally:
             self._shutdown.set()
             async with self._lock:
@@ -780,39 +807,9 @@ class AsyncJsonRpcPeer:
 
     def _parse_message(self, line: str) -> JsonRpcMessage | None:
         """Parse a JSON-RPC message from a line."""
-        try:
-            parsed = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
-            return None
+        return _parse_json_rpc_message(line)
 
-        if not isinstance(parsed, dict):
-            return None
-
-        msg_type = None
-        if "result" in parsed:
-            msg_type = "response"
-        elif "error" in parsed:
-            msg_type = "error"
-        elif "method" in parsed:
-            msg_id = parsed.get("id")
-            if msg_id is None:  # noqa: SIM108
-                msg_type = "notification"
-            else:
-                msg_type = "request"
-        else:
-            return None
-
-        return JsonRpcMessage(
-            type=msg_type,
-            method=parsed.get("method"),
-            request_id=parsed.get("id"),
-            params=parsed.get("params"),
-            result=parsed.get("result"),
-            error=parsed.get("error"),
-            raw=line,
-        )
-
-    async def _handle_response(self, msg: JsonRpcMessage):
+    async def _handle_response(self, msg: JsonRpcMessage) -> None:
         """Handle incoming response."""
         if self._callbacks.on_response:
             self._callbacks.on_response(msg.request_id, msg.result)
@@ -821,71 +818,42 @@ class AsyncJsonRpcPeer:
                 self._pending_results[msg.request_id] = msg.result
                 self._pending[msg.request_id].set()
 
-    async def _handle_error(self, msg: JsonRpcMessage):
+    async def _handle_error(self, msg: JsonRpcMessage) -> None:
         """Handle incoming error response."""
         if self._callbacks.on_error:
-            self._callbacks.on_error(msg.request_id, msg.error)
+            self._callbacks.on_error(msg.request_id, msg.error or {})
         async with self._lock:
             if msg.request_id in self._pending:
-                self._pending_errors[msg.request_id] = msg.error
+                self._pending_errors[msg.request_id] = msg.error or {}
                 self._pending[msg.request_id].set()
 
-    async def _handle_request(self, msg: JsonRpcMessage):
+    async def _handle_request(self, msg: JsonRpcMessage) -> None:
         """Handle incoming request from server."""
         if self._callbacks.on_server_request:
             cb = self._callbacks.on_server_request
-            # Create a proper ServerRequest object
-            method = msg.method or ""
-            params = msg.params or {}
-            if method == "file_change/request_approval":
-                request = FileChangeRequestApproval(
-                    request_id=msg.request_id,
-                    method=method,
-                    params=params,
-                    item_id=params.get("item_id", ""),
-                )
-            elif method == "command_execution/request_approval":
-                request = CommandExecutionRequestApproval(
-                    request_id=msg.request_id,
-                    method=method,
-                    params=params,
-                    item_id=params.get("item_id", ""),
-                )
-            else:
-                request = ServerRequest(
-                    request_id=msg.request_id,
-                    method=method,
-                    params=params,
-                )
-
-            if asyncio.iscoroutinefunction(cb):
-                response = await cb(request)
-            else:
-                response = cb(request)
+            response = cb(_server_request_from_message(msg))
+            if isinstance(response, Awaitable):
+                response = await response
             if response is not None:
                 await self.send_response(msg.request_id, response)
 
-    async def send_response(self, request_id: Any, result: Any) -> bool:
+    async def send_response(self, request_id: object | None, result: object) -> bool:
         """Send a JSON-RPC response."""
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": result,
-        }
         try:
-            raw = json.dumps(payload)
+            raw = json.dumps(_json_rpc_response_payload(request_id, result))
             self._stdin.write(raw.encode("utf-8") + b"\n")
             await self._stdin.drain()
             return True
         except (BrokenPipeError, OSError) as e:
-            print(f"[AsyncJSON-RPC] Failed to send response: {e}", flush=True)
+            logger.warning("async json-rpc send response failed: error=%s", e)
             return False
 
-    async def _handle_notification(self, msg: JsonRpcMessage):
+    async def _handle_notification(self, msg: JsonRpcMessage) -> None:
         """Handle incoming notification."""
         if self._callbacks.on_notification:
             cb = self._callbacks.on_notification
-            if asyncio.iscoroutinefunction(cb):
-                await cb(msg.method or "", msg.params or {})
-            else:
-                cb(msg.method or "", msg.params or {})
+            should_stop = cb(msg.method or "", msg.params or {})
+            if isinstance(should_stop, Awaitable):
+                should_stop = await should_stop
+            if should_stop:
+                self._shutdown.set()

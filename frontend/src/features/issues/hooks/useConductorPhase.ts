@@ -29,7 +29,10 @@ const PHASE_THRESHOLDS: Record<string, { warn: number; danger: number }> = {
   streaming_llm: { warn: 120_000, danger: Number.POSITIVE_INFINITY },
 };
 
-export function getPhaseSeverity(phase: string | null, durationMs: number | null): "ok" | "warn" | "danger" {
+export function getPhaseSeverity(
+  phase: string | null,
+  durationMs: number | null,
+): "ok" | "warn" | "danger" {
   if (!phase || durationMs == null) return "ok";
   const threshold = PHASE_THRESHOLDS[phase];
   if (!threshold) return "ok";
@@ -71,7 +74,8 @@ export function useConductorPhase(issueId: string): ConductorPhaseView {
     onEvent: (event) => {
       if (event.type === "conductor_state_violation") {
         const fromPhase = "from_phase" in event ? event.from_phase : null;
-        const toPhase = "to_phase" in event && typeof event.to_phase === "string" ? event.to_phase : "unknown";
+        const toPhase =
+          "to_phase" in event && typeof event.to_phase === "string" ? event.to_phase : "unknown";
         addToast({
           type: "warning",
           title: t("conductor.toastStateViolation"),

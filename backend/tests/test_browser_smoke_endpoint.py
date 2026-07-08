@@ -1,5 +1,4 @@
 """FastAPI integration test for the /api/browser-smoke endpoint."""
-import pytest
 
 
 def test_browser_smoke_returns_ok_true(client):

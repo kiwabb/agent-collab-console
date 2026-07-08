@@ -15,8 +15,10 @@ repairs, then attempts json.loads. If everything fails it raises the original
 JSONDecodeError so callers can surface the parse error.
 """
 import json  # noqa: E402
+import logging  # noqa: E402
 import re  # noqa: E402
-from typing import Any  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_first_json_object(text: str) -> str | None:
@@ -94,7 +96,7 @@ def _repair(text: str) -> str:
     return repaired
 
 
-def tolerant_json_loads(s: str) -> Any:
+def tolerant_json_loads(s: str) -> object:
     """Best-effort json.loads tolerant to common LLM JSON-output mistakes.
 
     Pipeline:
@@ -144,7 +146,7 @@ def tolerant_json_loads(s: str) -> Any:
         if repaired_str:
             return json.loads(repaired_str)
     except Exception:  # noqa: BLE001, RUF100
-        pass
+        logger.debug("json repair failed for extracted candidate", exc_info=True)
 
     # Last resort: json-repair on the full (un-extracted) stripped text.
     try:
@@ -154,7 +156,7 @@ def tolerant_json_loads(s: str) -> Any:
         if repaired_str:
             return json.loads(repaired_str)
     except Exception:  # noqa: BLE001, RUF100
-        pass
+        logger.debug("json repair failed for full text", exc_info=True)
 
     # Surface the *original* strict error for the most informative location info.
     raise first_exc

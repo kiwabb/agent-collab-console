@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 
+def _list_items(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
 def format_qa_failure_narrative(
-    plan: dict | None,
+    plan: dict[str, object] | None,
     *,
     qa_report_relpath: str | None = None,
 ) -> str:
@@ -15,13 +19,13 @@ def format_qa_failure_narrative(
         return "QA 验证失败（报告不可读）"  # noqa: RUF001
 
     status = plan.get("status", "failed")
-    bugs = plan.get("bugs_found") or []
-    gaps = plan.get("test_gaps") or []
-    risks = plan.get("risks") or []
-    commands = plan.get("commands_run") or []
+    bugs = _list_items(plan.get("bugs_found"))
+    gaps = _list_items(plan.get("test_gaps"))
+    risks = _list_items(plan.get("risks"))
+    commands = _list_items(plan.get("commands_run"))
     recommendation = plan.get("final_recommendation") or ""
 
-    def bullets(items: list) -> list[str]:
+    def bullets(items: list[object]) -> list[str]:
         return [f"  - {x}" for x in items] if items else ["  （无）"]  # noqa: RUF001
 
     lines: list[str] = [

@@ -35,21 +35,16 @@ jobs:
           pip install ruff mypy
 
       - name: Ruff check
-        # Phase 5: hard gate (baseline is 0; new code cannot introduce violations).
         run: ruff check .
 
-      - name: Ruff format check
-        # Phase 1: baseline informational. Phase 5 turn into a hard gate.
-        run: ruff format --check . || true
+      - name: Mypy
+        run: mypy app benchmark tests --show-error-codes --no-pretty
 
-      - name: Mypy (baseline)
-        # Phase 1: mypy is informational. Phase 5 burn-down turns it into
-        # a hard gate. continue-on-error so a non-zero baseline doesn't
-        # block every PR.
-        run: mypy app || true
+      - name: Import smoke
+        run: python -c "from app.main import app"
 
       - name: Run tests
-        run: pytest
+        run: pytest -q --tb=short --disable-warnings
 
   frontend:
     name: Frontend quality
@@ -71,15 +66,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Prettier check
-        # Phase 1: baseline informational. Phase 5 turn into a hard gate.
-        run: npx prettier --check 'src/**/*.{ts,tsx}' || true
+      - name: Audit dependencies
+        run: npm audit --registry=https://registry.npmjs.org
 
       - name: Typecheck
-        run: npx tsc --noEmit --pretty false
+        run: npm run typecheck
 
       - name: Test
-        run: npm run test
+        run: npm test
 
       - name: Lint
         run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Format check
+        run: npm run format:check

@@ -116,10 +116,41 @@ release it before the await and re-acquire on the next call.
   needs a list view that joins two tables, the store method
   owns the join — the application layer never iterates rows
   in a loop and re-queries.
+- **Assuming a fallback store method is always async.** Most
+  production paths use `AsyncSQLiteStore`, but legacy/session
+  services can be wired with the sync `SQLiteStore` in tests or
+  fallback boot paths. A service that intentionally accepts both
+  must route store method results through a small `_maybe_await`
+  helper instead of blindly writing `await store.save_foo(...)`.
+  Services that only support async stores should type that
+  dependency narrowly and fail at wiring time.
 - **`is` comparisons on string status values.** A row's
   `status` is a `str`; `row.status is "Completed"` is
   always False. Use `==` and the project's enum-style status
   set, or use a typed `Literal` on the dataclass.
+- **Changing SQLite row column checks to `key in row`.**
+  `sqlite3.Row` and `aiosqlite.Row` membership does not mean
+  "column name exists" in the same way a dict does. Legacy-row
+  compatibility code that needs to ask whether a selected column
+  exists must use the store-local `_row_has_key(row, "column")`
+  helper, which intentionally checks `row.keys()` in one
+  documented place.
+
+  Wrong:
+
+  ```python
+  # This can check row values rather than column names.
+  if "workflow_node_id" in row:
+      value = row["workflow_node_id"]
+  ```
+
+  Correct:
+
+  ```python
+  if _row_has_key(row, "workflow_node_id"):
+      value = row["workflow_node_id"]
+  ```
+
 - **Logging a row's content at `INFO` in a recovery path.** A
   recovered conductor row can carry the full task prompt; log
   the row id, not the body. The audit log captures the body

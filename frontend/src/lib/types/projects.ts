@@ -90,9 +90,9 @@ export type ProjectPullReason =
 export interface ProjectPullResult {
   success: boolean;
   branch: string;
-  new_sha?: string;
-  behind_before?: number;
-  reason?: ProjectPullReason;
+  new_sha?: string | undefined;
+  behind_before?: number | undefined;
+  reason?: ProjectPullReason | undefined;
 }
 
 export interface ProjectConductorState {

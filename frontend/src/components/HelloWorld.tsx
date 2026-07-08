@@ -10,12 +10,10 @@ export function HelloWorld({ className }: HelloWorldProps) {
     <div
       className={cn(
         "flex items-center justify-center p-6 rounded-2xl bg-brand/5 border border-brand/20",
-        className
+        className,
       )}
     >
-      <h1 className="text-4xl font-black tracking-tight text-brand">
-        Hello World
-      </h1>
+      <h1 className="text-4xl font-black tracking-tight text-brand">Hello World</h1>
     </div>
   );
 }

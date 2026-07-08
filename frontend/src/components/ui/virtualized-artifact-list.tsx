@@ -3,7 +3,28 @@
 import { useRef, useState, useMemo, useEffect, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Artifact } from "@/lib/types";
-import { FileText, ListTodo, Bug, FileJson, ChevronDown, ChevronRight, Package, Copy, Check, Download, ZoomIn, ZoomOut, Maximize2, Minimize2, WrapText, Search, Hash, GitCompare, X } from "lucide-react";
+import { safeJsonParse } from "@/lib/utils";
+import {
+  FileText,
+  ListTodo,
+  Bug,
+  FileJson,
+  ChevronDown,
+  ChevronRight,
+  Package,
+  Copy,
+  Check,
+  Download,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Minimize2,
+  WrapText,
+  Search,
+  Hash,
+  GitCompare,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 import { motion, AnimatePresence } from "framer-motion";
@@ -50,10 +71,7 @@ function detectLanguage(content: string, filename?: string): string {
     if (filename.endsWith(".css")) return "css";
     if (filename.endsWith(".html") || filename.endsWith(".xml")) return "xml";
   }
-  try {
-    JSON.parse(content);
-    return "json";
-  } catch {}
+  if (safeJsonParse(content) !== null) return "json";
   if (content.includes("function") || content.includes("const ") || content.includes("let ")) {
     return "javascript";
   }
@@ -79,7 +97,14 @@ interface HighlightedCodeProps {
   previousContent?: string;
 }
 
-export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, showLineNumbers = false, previousContent }: HighlightedCodeProps) {
+export function HighlightedCode({
+  code,
+  language,
+  zoom = 100,
+  wordWrap = true,
+  showLineNumbers = false,
+  previousContent,
+}: HighlightedCodeProps) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
@@ -158,7 +183,9 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
     return (
       <div className="flex gap-2 font-mono text-[12px] p-5">
         <div className="flex-1">
-          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">{t("ui.previous")}</div>
+          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">
+            {t("ui.previous")}
+          </div>
           {prevLines.map((line, i) => (
             <div key={i} className={cn("py-0.5 pr-4", line && "bg-red-500/10 text-red-400/70")}>
               <span className="text-text-muted/30 mr-3 select-none">{i + 1}</span>
@@ -167,7 +194,9 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
           ))}
         </div>
         <div className="flex-1">
-          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">{t("ui.current")}</div>
+          <div className="text-text-muted/50 mb-2 uppercase tracking-wider text-[10px] font-black">
+            {t("ui.current")}
+          </div>
           {lines.map((line, i) => (
             <div key={i} className={cn("py-0.5 pr-4", line && "bg-green-500/10 text-green-400/70")}>
               <span className="text-text-muted/30 mr-3 select-none">{i + 1}</span>
@@ -182,21 +211,45 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
   return (
     <div className="relative group/code">
       <div className="absolute top-3 right-3 flex items-center gap-1 z-10 opacity-0 group-hover/code:opacity-100 transition-opacity">
-        <button onClick={() => setLineNumbersOn(l => !l)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.toggleLineNumbers")}>
+        <button
+          onClick={() => setLineNumbersOn((l) => !l)}
+          className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all"
+          aria-label={t("ui.toggleLineNumbers")}
+        >
           <Hash size={14} className={cn("text-text-muted", lineNumbersOn && "text-brand")} />
         </button>
-        <button onClick={() => setShowSearch(s => !s)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.search")}>
+        <button
+          onClick={() => setShowSearch((s) => !s)}
+          className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all"
+          aria-label={t("ui.search")}
+        >
           <Search size={14} className={cn("text-text-muted", showSearch && "text-brand")} />
         </button>
         {previousContent && (
-          <button onClick={() => setShowDiff(d => !d)} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.toggleDiffView")}>
+          <button
+            onClick={() => setShowDiff((d) => !d)}
+            className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all"
+            aria-label={t("ui.toggleDiffView")}
+          >
             <GitCompare size={14} className={cn("text-text-muted", showDiff && "text-brand")} />
           </button>
         )}
-        <button onClick={handleCopy} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.copyCode")}>
-          {copied ? <Check size={14} className="text-success" /> : <Copy size={14} className="text-text-muted" />}
+        <button
+          onClick={handleCopy}
+          className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all"
+          aria-label={t("ui.copyCode")}
+        >
+          {copied ? (
+            <Check size={14} className="text-success" />
+          ) : (
+            <Copy size={14} className="text-text-muted" />
+          )}
         </button>
-        <button onClick={handleDownload} className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all" aria-label={t("ui.downloadArtifact")}>
+        <button
+          onClick={handleDownload}
+          className="p-1.5 rounded-lg bg-surface-raised border border-border-subtle hover:bg-surface-hover transition-all"
+          aria-label={t("ui.downloadArtifact")}
+        >
           <Download size={14} className="text-text-muted" />
         </button>
       </div>
@@ -211,8 +264,20 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
             className="bg-transparent text-[12px] w-40 outline-none text-text-primary placeholder:text-text-muted/50"
             autoFocus
           />
-          {searchQuery && <span className="text-[10px] text-text-muted">{t("ui.matchCount", { count: searchMatches.length })}</span>}
-          <button onClick={() => { setShowSearch(false); setSearchQuery(""); }} className="p-0.5 hover:bg-surface-hover rounded"><X size={12} className="text-text-muted" /></button>
+          {searchQuery && (
+            <span className="text-[10px] text-text-muted">
+              {t("ui.matchCount", { count: searchMatches.length })}
+            </span>
+          )}
+          <button
+            onClick={() => {
+              setShowSearch(false);
+              setSearchQuery("");
+            }}
+            className="p-0.5 hover:bg-surface-hover rounded"
+          >
+            <X size={12} className="text-text-muted" />
+          </button>
         </div>
       )}
       {lineNumbersOn && (
@@ -226,16 +291,23 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
             className="bg-transparent text-[11px] w-10 outline-none text-text-primary font-mono"
           />
           {jumpToLine && (
-            <button onClick={() => setJumpToLine("")} className="p-0.5 hover:bg-surface-hover rounded"><X size={10} className="text-text-muted" /></button>
+            <button
+              onClick={() => setJumpToLine("")}
+              className="p-0.5 hover:bg-surface-hover rounded"
+            >
+              <X size={10} className="text-text-muted" />
+            </button>
           )}
         </div>
       )}
-      {showDiff ? renderDiff() : (
+      {showDiff ? (
+        renderDiff()
+      ) : (
         <code
           className={cn(
             "text-[12px] leading-relaxed [&_.hljs-keyword]:text-pink-400 [&_.hljs-string]:text-green-400 [&_.hljs-number]:text-orange-400 [&_.hljs-comment]:text-gray-500 [&_.hljs-attr]:text-cyan-400 [&_.hljs-title]:text-blue-400 [&_.hljs-built_in]:text-purple-400 [&_.hljs-literal]:text-orange-400 [&_.hljs-type]:text-cyan-300 [&_.hljs-params]:text-yellow-300 [&_.hljs-meta]:text-gray-400",
             "whitespace-pre-wrap font-mono bg-background/60 p-5 rounded-xl border border-border-subtle max-h-80 overflow-y-auto no-scrollbar selection:bg-brand/30 block",
-            lineNumbersOn && "pl-12"
+            lineNumbersOn && "pl-12",
           )}
           style={{ fontSize: `${zoom}%`, whiteSpace: wordWrap ? "pre-wrap" : "pre" }}
           dangerouslySetInnerHTML={{ __html: highlighted }}
@@ -247,8 +319,8 @@ export function HighlightedCode({ code, language, zoom = 100, wordWrap = true, s
 
 interface VirtualizedArtifactListProps {
   artifacts: Artifact[];
-  isLoading?: boolean;
-  maxHeight?: string;
+  isLoading?: boolean | undefined;
+  maxHeight?: string | undefined;
 }
 
 interface ArtifactSection {
@@ -262,7 +334,11 @@ type FlatArtifactItem =
   | { type: "header"; data: ArtifactSection; index: number }
   | { type: "item"; data: Artifact; index: number };
 
-export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100%" }: VirtualizedArtifactListProps) {
+export function VirtualizedArtifactList({
+  artifacts,
+  isLoading,
+  maxHeight = "100%",
+}: VirtualizedArtifactListProps) {
   const { t } = useI18n();
   const parentRef = useRef<HTMLDivElement>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -270,29 +346,99 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
   const [wordWrap, setWordWrap] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const productArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "product"), [artifacts]);
-  const architectureArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "architecture"), [artifacts]);
-  const developmentArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "development"), [artifacts]);
-  const testingArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "testing"), [artifacts]);
+  const productArtifacts = useMemo(
+    () => artifacts.filter((a) => a.kind === "product"),
+    [artifacts],
+  );
+  const architectureArtifacts = useMemo(
+    () => artifacts.filter((a) => a.kind === "architecture"),
+    [artifacts],
+  );
+  const developmentArtifacts = useMemo(
+    () => artifacts.filter((a) => a.kind === "development"),
+    [artifacts],
+  );
+  const testingArtifacts = useMemo(
+    () => artifacts.filter((a) => a.kind === "testing"),
+    [artifacts],
+  );
   const planArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "plan"), [artifacts]);
-  const execArtifacts = useMemo(() => artifacts.filter((a) => a.kind === "execution_result"), [artifacts]);
-  const otherArtifacts = useMemo(() => artifacts.filter(
-    (a) => !["product", "architecture", "development", "testing", "plan", "execution_result"].includes(a.kind)
-  ), [artifacts]);
+  const execArtifacts = useMemo(
+    () => artifacts.filter((a) => a.kind === "execution_result"),
+    [artifacts],
+  );
+  const otherArtifacts = useMemo(
+    () =>
+      artifacts.filter(
+        (a) =>
+          ![
+            "product",
+            "architecture",
+            "development",
+            "testing",
+            "plan",
+            "execution_result",
+          ].includes(a.kind),
+      ),
+    [artifacts],
+  );
 
-  const allSections = useMemo<ArtifactSection[]>(() => [
-    { id: "product", label: t("artifacts.product"), icon: <FileJson size={12} className="text-warning" />, items: productArtifacts },
-    { id: "architecture", label: t("artifacts.architecture"), icon: <FileText size={12} className="text-brand" />, items: architectureArtifacts },
-    { id: "development", label: t("artifacts.development"), icon: <ListTodo size={12} className="text-success" />, items: developmentArtifacts },
-    { id: "testing", label: t("artifacts.testing"), icon: <Bug size={12} className="text-error" />, items: testingArtifacts },
-    { id: "plan", label: t("artifacts.strategy"), icon: <ListTodo size={12} className="text-success" />, items: planArtifacts },
-    { id: "execution_result", label: t("artifacts.runtime"), icon: <Package size={12} className="text-brand" />, items: execArtifacts },
-    { id: "other", label: t("artifacts.general"), items: otherArtifacts },
-  ].filter(section => section.items.length > 0), [t, productArtifacts, architectureArtifacts, developmentArtifacts, testingArtifacts, planArtifacts, execArtifacts, otherArtifacts]);
+  const allSections = useMemo<ArtifactSection[]>(
+    () =>
+      [
+        {
+          id: "product",
+          label: t("artifacts.product"),
+          icon: <FileJson size={12} className="text-warning" />,
+          items: productArtifacts,
+        },
+        {
+          id: "architecture",
+          label: t("artifacts.architecture"),
+          icon: <FileText size={12} className="text-brand" />,
+          items: architectureArtifacts,
+        },
+        {
+          id: "development",
+          label: t("artifacts.development"),
+          icon: <ListTodo size={12} className="text-success" />,
+          items: developmentArtifacts,
+        },
+        {
+          id: "testing",
+          label: t("artifacts.testing"),
+          icon: <Bug size={12} className="text-error" />,
+          items: testingArtifacts,
+        },
+        {
+          id: "plan",
+          label: t("artifacts.strategy"),
+          icon: <ListTodo size={12} className="text-success" />,
+          items: planArtifacts,
+        },
+        {
+          id: "execution_result",
+          label: t("artifacts.runtime"),
+          icon: <Package size={12} className="text-brand" />,
+          items: execArtifacts,
+        },
+        { id: "other", label: t("artifacts.general"), items: otherArtifacts },
+      ].filter((section) => section.items.length > 0),
+    [
+      t,
+      productArtifacts,
+      architectureArtifacts,
+      developmentArtifacts,
+      testingArtifacts,
+      planArtifacts,
+      execArtifacts,
+      otherArtifacts,
+    ],
+  );
 
   const flatItems = useMemo(() => {
     const items: FlatArtifactItem[] = [];
-    allSections.forEach((section, sectionIdx) => {
+    allSections.forEach((section) => {
       items.push({ type: "header", data: section, index: items.length });
       section.items.forEach((artifact) => {
         items.push({ type: "item", data: artifact, index: items.length });
@@ -341,7 +487,12 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
   }
 
   return (
-    <div className={cn("flex flex-col h-full overflow-hidden", isFullscreen && "fixed inset-0 z-50 bg-background")}>
+    <div
+      className={cn(
+        "flex flex-col h-full overflow-hidden",
+        isFullscreen && "fixed inset-0 z-50 bg-background",
+      )}
+    >
       <div className="p-5 border-b border-border-subtle bg-surface/50 shrink-0">
         <div className="flex items-center justify-between">
           <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-text-muted">
@@ -349,7 +500,7 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
           </h2>
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setZoom(z => Math.max(50, z - 10))}
+              onClick={() => setZoom((z) => Math.max(50, z - 10))}
               className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors"
               aria-label={t("ui.zoomOut")}
             >
@@ -357,7 +508,7 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
             </button>
             <span className="text-[10px] font-mono text-text-muted w-10 text-center">{zoom}%</span>
             <button
-              onClick={() => setZoom(z => Math.min(200, z + 10))}
+              onClick={() => setZoom((z) => Math.min(200, z + 10))}
               className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors"
               aria-label={t("ui.zoomIn")}
             >
@@ -365,24 +516,35 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
             </button>
             <div className="w-px h-4 bg-border-subtle mx-1" />
             <button
-              onClick={() => setWordWrap(w => !w)}
-              className={cn("p-1.5 rounded-lg transition-colors", wordWrap ? "bg-surface-raised" : "hover:bg-surface-raised")}
+              onClick={() => setWordWrap((w) => !w)}
+              className={cn(
+                "p-1.5 rounded-lg transition-colors",
+                wordWrap ? "bg-surface-raised" : "hover:bg-surface-raised",
+              )}
               aria-label={t("ui.toggleWordWrap")}
             >
               <WrapText size={14} className={cn("text-text-muted", wordWrap && "text-brand")} />
             </button>
             <button
-              onClick={() => setIsFullscreen(f => !f)}
+              onClick={() => setIsFullscreen((f) => !f)}
               className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors"
               aria-label={isFullscreen ? t("ui.exitFullscreen") : t("ui.enterFullscreen")}
             >
-              {isFullscreen ? <Minimize2 size={14} className="text-text-muted" /> : <Maximize2 size={14} className="text-text-muted" />}
+              {isFullscreen ? (
+                <Minimize2 size={14} className="text-text-muted" />
+              ) : (
+                <Maximize2 size={14} className="text-text-muted" />
+              )}
             </button>
           </div>
         </div>
       </div>
 
-      <div ref={parentRef} className="flex-1 overflow-y-auto" style={{ maxHeight: isFullscreen ? "calc(100vh - 60px)" : maxHeight }}>
+      <div
+        ref={parentRef}
+        className="flex-1 overflow-y-auto"
+        style={{ maxHeight: isFullscreen ? "calc(100vh - 60px)" : maxHeight }}
+      >
         <div
           style={{ height: `${virtualizer.getTotalSize()}px`, width: "100%", position: "relative" }}
         >
@@ -418,8 +580,6 @@ export function VirtualizedArtifactList({ artifacts, isLoading, maxHeight = "100
 
             const artifact = item.data;
             const isExpanded = expandedId === artifact.id;
-            const label = artifact.name || artifact.kind;
-
             return (
               <div
                 key={artifact.id}
@@ -464,8 +624,10 @@ function ArtifactItem({
 }) {
   const label = artifact.name || artifact.kind;
   const language = detectLanguage(
-    typeof artifact.content === "string" ? artifact.content : JSON.stringify(artifact.content, null, 2),
-    artifact.name
+    typeof artifact.content === "string"
+      ? artifact.content
+      : JSON.stringify(artifact.content, null, 2),
+    artifact.name,
   );
 
   return (
@@ -475,7 +637,7 @@ function ArtifactItem({
         "mx-3 my-1.5 rounded-2xl border transition-all duration-300 overflow-hidden",
         isExpanded
           ? "border-brand/40 bg-surface-raised shadow-lg shadow-brand/5"
-          : "border-border-subtle bg-surface/20 hover:border-border-strong hover:bg-surface/40"
+          : "border-border-subtle bg-surface/20 hover:border-border-strong hover:bg-surface/40",
       )}
     >
       <button
@@ -483,10 +645,14 @@ function ArtifactItem({
         className="w-full flex items-center justify-between px-5 py-4 text-[13px] font-bold text-text-secondary hover:text-foreground transition-all group"
       >
         <div className="flex items-center gap-3.5 truncate">
-          <div className={cn(
-            "size-2 rounded-full transition-all",
-            isExpanded ? "bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)]" : "bg-surface-input border border-border-strong"
-          )} />
+          <div
+            className={cn(
+              "size-2 rounded-full transition-all",
+              isExpanded
+                ? "bg-brand shadow-[0_0_8px_rgba(122,157,204,0.6)]"
+                : "bg-surface-input border border-border-strong",
+            )}
+          />
           <span className="truncate tracking-tight">{label}</span>
           <span className="text-[9px] font-mono uppercase text-text-muted/50 bg-surface-raised px-1.5 py-0.5 rounded border border-border-subtle">
             {language}
@@ -500,7 +666,10 @@ function ArtifactItem({
         {isExpanded ? (
           <ChevronDown size={16} className="text-brand" />
         ) : (
-          <ChevronRight size={16} className="opacity-20 group-hover:opacity-100 transition-opacity" />
+          <ChevronRight
+            size={16}
+            className="opacity-20 group-hover:opacity-100 transition-opacity"
+          />
         )}
       </button>
       <AnimatePresence>
@@ -514,9 +683,19 @@ function ArtifactItem({
           >
             <div className="px-5 pb-5 pt-0">
               {typeof artifact.content === "string" ? (
-                <HighlightedCode code={artifact.content} language={language} zoom={zoom} wordWrap={wordWrap} />
+                <HighlightedCode
+                  code={artifact.content}
+                  language={language}
+                  zoom={zoom}
+                  wordWrap={wordWrap}
+                />
               ) : (
-                <HighlightedCode code={JSON.stringify(artifact.content, null, 2)} language="json" zoom={zoom} wordWrap={wordWrap} />
+                <HighlightedCode
+                  code={JSON.stringify(artifact.content, null, 2)}
+                  language="json"
+                  zoom={zoom}
+                  wordWrap={wordWrap}
+                />
               )}
             </div>
           </motion.div>

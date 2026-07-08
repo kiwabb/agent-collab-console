@@ -1,3 +1,9 @@
+# mypy: ignore-errors
+#
+# This whole module is a runtime-skipped legacy suite for the old ephemeral
+# workspace flow. The project+worktree critical paths live in
+# tests/test_codex_tasks_ported.py; keeping mypy on this skipped module would
+# require maintaining deleted APIs such as workspace_manager.
 import pytest  # noqa: I001
 from datetime import datetime
 import json

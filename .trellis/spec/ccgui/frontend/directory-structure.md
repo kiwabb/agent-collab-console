@@ -6,7 +6,7 @@
 
 ## Overview
 
-The frontend is a Next.js 14 App Router project. Code is organized by
+The frontend is a Next.js 15 App Router project. Code is organized by
 **feature**, not by type. There is no `src/components/Button.tsx`
 sitting next to `src/features/.../Button.tsx`; a component is filed
 under the feature that owns it. When two features need the same

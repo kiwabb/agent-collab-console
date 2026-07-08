@@ -55,11 +55,13 @@ export function deriveLatestFailure(
     return (successfulByRole.get(candidate.role) ?? -1) <= failedAt;
   });
 
-  return stillOpen.sort((a, b) => {
-    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return bTime - aTime;
-  })[0] ?? null;
+  return (
+    stillOpen.sort((a, b) => {
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return bTime - aTime;
+    })[0] ?? null
+  );
 }
 
 export function useLatestFailure(tasks: CodexTask[], timeline: DecisionTimelineItem[]) {

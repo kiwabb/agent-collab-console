@@ -1,11 +1,10 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, dedupedFetch, handleResponse } from "./fetch";
+import { API_BASE, apiDedupedRequest, apiRequest, apiRequestOr } from "./fetch";
 import type { CodexStats, IssueBudgetStatus, IssueOrchestrationPolicy } from "../types";
 
 export async function getCodexStats(): Promise<CodexStats> {
-  const response = await fetch(`${API_BASE}/codex/stats`);
-  return handleResponse<CodexStats>(response);
+  return apiRequest<CodexStats>(`${API_BASE}/codex/stats`);
 }
 export interface CodexCostStats {
   input_tokens: number;
@@ -29,8 +28,7 @@ export async function getCodexCostStats(
   if (opts.issueId) params.set("issue_id", opts.issueId);
   if (opts.workspaceId) params.set("workspace_id", opts.workspaceId);
   const qs = params.toString();
-  const response = await dedupedFetch(`${API_BASE}/codex/cost-stats${qs ? `?${qs}` : ""}`);
-  return handleResponse<CodexCostStats>(response);
+  return apiDedupedRequest<CodexCostStats>(`${API_BASE}/codex/cost-stats${qs ? `?${qs}` : ""}`);
 }
 /**
  * Per-issue budget snapshot from `GET /codex/issues/{id}/budget`.
@@ -38,25 +36,25 @@ export async function getCodexCostStats(
  * Returns `null` on any failure (404 / 503 / network) so callers can render a
  * graceful "no data" branch without exception plumbing.
  */
-export async function getIssueBudget(
-  issueId: string,
-): Promise<IssueBudgetStatus | null> {
-  const response = await dedupedFetch(`${API_BASE}/codex/issues/${issueId}/budget`);
-  if (!response.ok) {
-    console.error(`getIssueBudget(${issueId}) failed: HTTP ${response.status}`);
-    return null;
-  }
-  return response.json() as Promise<IssueBudgetStatus>;
+export async function getIssueBudget(issueId: string): Promise<IssueBudgetStatus | null> {
+  return apiRequestOr<IssueBudgetStatus | null>(
+    `${API_BASE}/codex/issues/${issueId}/budget`,
+    null,
+    {
+      dedupe: true,
+      errorMessage: (status) => `getIssueBudget(${issueId}) failed: HTTP ${status}`,
+    },
+  );
 }
 export async function getIssueOrchestrationPolicy(
   issueId: string,
 ): Promise<IssueOrchestrationPolicy | null> {
-  const response = await dedupedFetch(
+  return apiRequestOr<IssueOrchestrationPolicy | null>(
     `${API_BASE}/codex/issues/${encodeURIComponent(issueId)}/orchestration-policy`,
+    null,
+    {
+      dedupe: true,
+      errorMessage: (status) => `getIssueOrchestrationPolicy(${issueId}) failed: HTTP ${status}`,
+    },
   );
-  if (!response.ok) {
-    console.error(`getIssueOrchestrationPolicy(${issueId}) failed: HTTP ${response.status}`);
-    return null;
-  }
-  return response.json() as Promise<IssueOrchestrationPolicy>;
 }

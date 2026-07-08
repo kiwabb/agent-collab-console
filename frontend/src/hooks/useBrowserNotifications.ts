@@ -136,8 +136,10 @@ function diffAndNotify(
     }
     if (before.status === after.status) continue;
 
-    const becameAttention = ATTENTION_STATUSES.has(after.status) && !ATTENTION_STATUSES.has(before.status);
-    const becameTerminal = TERMINAL_STATUSES.has(after.status) && !TERMINAL_STATUSES.has(before.status);
+    const becameAttention =
+      ATTENTION_STATUSES.has(after.status) && !ATTENTION_STATUSES.has(before.status);
+    const becameTerminal =
+      TERMINAL_STATUSES.has(after.status) && !TERMINAL_STATUSES.has(before.status);
     if (!becameAttention && !becameTerminal) continue;
 
     if (permission === "granted" && typeof Notification !== "undefined") {

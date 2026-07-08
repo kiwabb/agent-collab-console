@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.websocket("/ws/events")
-async def global_events_ws(websocket: WebSocket):
+async def global_events_ws(websocket: WebSocket) -> None:
     await websocket.accept()
     queue = event_bus.subscribe()
     last_event_id = websocket.query_params.get("last_event_id")
@@ -30,7 +30,7 @@ async def global_events_ws(websocket: WebSocket):
                 "reason": "buffer_overflow",
             },
         }
-        sent_event_ids.add(gap["event_id"])
+        sent_event_ids.add("resume-gap")
         async with send_lock:
             await websocket.send_json(gap)
     else:
@@ -42,7 +42,7 @@ async def global_events_ws(websocket: WebSocket):
 
     last_pong_at = asyncio.get_running_loop().time()
 
-    async def sender():
+    async def sender() -> None:
         while True:
             envelope = await queue.get()
             event_id = str(envelope.get("event_id") or "")
@@ -53,14 +53,14 @@ async def global_events_ws(websocket: WebSocket):
             async with send_lock:
                 await websocket.send_json(envelope)
 
-    async def receiver():
+    async def receiver() -> None:
         nonlocal last_pong_at
         while True:
             message = await websocket.receive_text()
             if message == "pong":
                 last_pong_at = asyncio.get_running_loop().time()
 
-    async def heartbeat():
+    async def heartbeat() -> None:
         nonlocal last_pong_at
         while True:
             await asyncio.sleep(30)
@@ -78,7 +78,7 @@ async def global_events_ws(websocket: WebSocket):
                 await websocket.close(code=1011, reason="pong timeout")
                 return
 
-    tasks = [
+    tasks: list[asyncio.Task[None]] = [
         asyncio.create_task(sender()),
         asyncio.create_task(receiver()),
         asyncio.create_task(heartbeat()),

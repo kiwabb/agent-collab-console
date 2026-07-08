@@ -128,25 +128,25 @@ export interface NormalizedEntry {
   id: string;
   type: NormalizedEntryType;
   label: string;
-  content?: string;
-  command?: string;
-  hidden?: boolean;
-  output?: string;
-  exitCode?: number;
-  status?: "running" | "success" | "failed";
-  variant?: string;
-  raw?: string;
-  executionProcessId?: string | null;
-  timestamp?: string;
-  itemId?: string | null;
+  content?: string | undefined;
+  command?: string | undefined;
+  hidden?: boolean | undefined;
+  output?: string | undefined;
+  exitCode?: number | undefined;
+  status?: "running" | "success" | "failed" | undefined;
+  variant?: string | undefined;
+  raw?: string | undefined;
+  executionProcessId?: string | null | undefined;
+  timestamp?: string | undefined;
+  itemId?: string | null | undefined;
   // Structured tool entry (when type === "tool")
-  toolName?: string;
-  toolUseId?: string;
-  category?: ToolCategory;
-  args?: Record<string, unknown>;
-  filePath?: string;
-  durationMs?: number;
-  isError?: boolean;
+  toolName?: string | undefined;
+  toolUseId?: string | undefined;
+  category?: ToolCategory | undefined;
+  args?: Record<string, unknown> | undefined;
+  filePath?: string | undefined;
+  durationMs?: number | undefined;
+  isError?: boolean | undefined;
 }
 
 // Execution processes state

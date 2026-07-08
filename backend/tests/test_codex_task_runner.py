@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import cast
 
 import pytest
 
-from app.application.codex_task_runner import CodexTaskRunner
+from app.application.codex_task_runner import CodexTaskRunner, TaskRunnerStore
 from app.domain.models import CodexTask, HelpRequest
 
 
@@ -56,11 +57,10 @@ async def test_help_child_completion_skips_resume_failed_request_with_case_and_s
         prompt="Please investigate",
         status=" Resume_Failed ",
         created_at=now,
-        updated_at=now,
     )
     orchestrator = _HelpOrchestrator()
     runner = CodexTaskRunner.__new__(CodexTaskRunner)
-    runner.codex_store = _Store(help_request)
+    runner.codex_store = cast(TaskRunnerStore, _Store(help_request))
     runner._help_orchestrator_factory = lambda: orchestrator
 
     await runner._complete_help_child_if_needed(task)

@@ -91,7 +91,9 @@ def test_runtime_catalog_update_preserves_omitted_api_key(client):
 
     import app.bootstrap as bootstrap_module
 
+    assert bootstrap_module.store is not None
     stored = bootstrap_module.store.load_runtime_catalog()
+    assert stored is not None
     assert stored.executors[0].api_key == secret
 
 
@@ -347,6 +349,9 @@ class TestRuntimeCatalogService:
         env = service._get_executor_env_overrides(executor)
         assert env["ANTHROPIC_BASE_URL"] == "https://example.com"
         assert env["ANTHROPIC_API_KEY"] == "sk-test"
+        assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+        assert env["DISABLE_TELEMETRY"] == "1"
+        assert env["DISABLE_ERROR_REPORTING"] == "1"
 
     def test_env_overrides_key_without_endpoint(self, service, monkeypatch):
         """Catalog key but no endpoint -> inject key only (CLI uses default endpoint)."""
@@ -378,6 +383,9 @@ class TestRuntimeCatalogService:
         )
         env = service._get_executor_env_overrides(executor)
         assert env["ANTHROPIC_BASE_URL"] == "https://gateway.example.com"
+        assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+        assert env["DISABLE_TELEMETRY"] == "1"
+        assert env["DISABLE_ERROR_REPORTING"] == "1"
         assert "ANTHROPIC_API_KEY" not in env
 
 

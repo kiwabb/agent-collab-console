@@ -8,8 +8,8 @@ import app.application.conductor_tools as ct
 from app.application import task_dispatcher
 from app.application.role_concurrency import RoleConcurrencyLimiter
 from app.application.task_completion_registry import TaskCompletionRegistry
-from app.domain.models import CodexIssue, CodexTask
-from app.domain.models import WorkflowGraph, WorkflowNode
+from app.domain.models import CodexIssue, CodexTask, WorkflowGraph, WorkflowNode
+from app.json_safety import object_dict
 
 
 @pytest.fixture(autouse=True)
@@ -130,13 +130,13 @@ async def test_dispatch_subagent_timeout_terminates_task_and_marks_node_failed(m
         issue_id="issue-1",
     )
 
-    result = await registry.tools["dispatch_subagent"](
-        {"role": "engineer", "prompt": "Fix timeout"}
+    result = object_dict(
+        await registry.tools["dispatch_subagent"]({"role": "engineer", "prompt": "Fix timeout"})
     )
 
     assert result["task_id"] == "task-timeout"
     assert result["role"] == "engineer"
-    assert "subagent timed out" in result["error"]
+    assert "subagent timed out" in str(result.get("error") or "")
     assert process_manager.terminated == ["task-timeout"]
     assert store.saved_tasks[-1].status == "failed"
     assert "subagent timed out" in (store.saved_tasks[-1].result or "")

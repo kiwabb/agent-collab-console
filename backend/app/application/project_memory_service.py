@@ -28,11 +28,13 @@ Two failure modes are explicitly tolerated:
   - Filesystem write error → log and continue (memory is best-effort, never
     a reason to fail an issue).
 """
-import json  # noqa: E402
 import logging  # noqa: E402
+from collections.abc import Awaitable, Callable, Mapping, Sequence  # noqa: E402
 from datetime import datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any  # noqa: E402, F401
+from typing import Protocol  # noqa: E402
+
+from app.json_safety import object_list, parse_json_object  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,49 @@ MEMORY_BYTES_CAP = 16_000
 DISTILL_TRIGGER_BLOCKS = 5
 KEEP_RECENT_BLOCKS = 2
 DISTILLED_HEADER = "## ⚙️ Distilled lessons (auto-curated)"
+
+
+class ProjectMemoryDbCursor(Protocol):
+    async def fetchone(self) -> Sequence[object] | None: ...
+
+    async def fetchall(self) -> list[Sequence[object]]: ...
+
+
+class ProjectMemoryDbConnection(Protocol):
+    async def execute(
+        self, sql: str, parameters: Sequence[object] = ()
+    ) -> ProjectMemoryDbCursor: ...
+
+    async def commit(self) -> None: ...
+
+
+class ProjectMemoryGraph(Protocol):
+    issue_id: str
+    status: str
+
+
+class ProjectMemoryIssue(Protocol):
+    id: str
+    title: str
+    project_id: str | None
+    git_worktree_path: str | None
+
+
+class ProjectMemoryProject(Protocol):
+    repo_path: str
+
+
+class ProjectMemoryStore(Protocol):
+    async def load_workflow_graph(self, graph_id: str) -> ProjectMemoryGraph | None: ...
+
+    async def load_codex_issue(self, issue_id: str) -> ProjectMemoryIssue | None: ...
+
+    async def load_project(self, project_id: str) -> ProjectMemoryProject | None: ...
+
+    async def _get_conn(self) -> ProjectMemoryDbConnection: ...
+
+
+ProjectMemoryLlmRunner = Callable[[str], Awaitable[object]]
 
 
 class ProjectMemoryService:
@@ -186,7 +231,6 @@ class ProjectMemoryService:
         qa = self._read_json(worktree_path, issue_id, "qa/qa_plan.json")
 
         # An engineer report's file name embeds the task id so we glob.
-        engineer_report = None
         engineer_changed_files: list[str] = []
         if worktree_path:
             engineer_dir = Path(worktree_path) / "issues" / issue_id / "engineer"
@@ -194,7 +238,6 @@ class ProjectMemoryService:
                 for impl_md in sorted(engineer_dir.glob("implementation-*.md")):
                     text = self._safe_read_text(impl_md)
                     if text:
-                        engineer_report = engineer_report or {"path": str(impl_md.name)}
                         engineer_changed_files.extend(_parse_changed_files_section(text))
 
         intent = "feature"
@@ -211,29 +254,29 @@ class ProjectMemoryService:
         ]
 
         if prd:
-            goals = prd.get("product_goals") or []
+            goals = _text_list(prd.get("product_goals"))
             if goals:
                 lines.append("**Product goals:**")
                 lines.extend([f"- {g}" for g in goals[:3]])
                 lines.append("")
 
         if design:
-            constraints = design.get("constraints") or []
-            chosen = design.get("design_choices") or design.get("decisions") or []
+            constraints = _text_list(design.get("constraints"))
+            chosen = _text_list(design.get("design_choices") or design.get("decisions"))
             if constraints or chosen:
                 lines.append("**Architecture notes (carry forward):**")
-                for c in (constraints or [])[:3]:
+                for c in constraints[:3]:
                     lines.append(f"- constraint: {c}")
-                for c in (chosen or [])[:3]:
+                for c in chosen[:3]:
                     lines.append(f"- decision: {c}")
                 lines.append("")
 
         if impl_plan:
-            tasks = impl_plan.get("tasks") or impl_plan.get("subtasks") or []
+            tasks = object_list(impl_plan.get("tasks") or impl_plan.get("subtasks"))
             if tasks:
                 lines.append("**Implementation tasks pursued:**")
                 for t in tasks[:5]:
-                    title = t.get("title") if isinstance(t, dict) else str(t)
+                    title = _text(t.get("title")) if isinstance(t, Mapping) else str(t)
                     if title:
                         lines.append(f"- {title}")
                 lines.append("")
@@ -245,10 +288,10 @@ class ProjectMemoryService:
             lines.append("")
 
         if qa:
-            verdict = qa.get("status", "unknown")
-            commands = qa.get("commands_run") or []
-            recommended = qa.get("recommended_commands") or []
-            bugs = qa.get("bugs_found") or []
+            verdict = _text(qa.get("status"), default="unknown")
+            commands = _text_list(qa.get("commands_run"))
+            recommended = _text_list(qa.get("recommended_commands"))
+            bugs = _text_list(qa.get("bugs_found"))
             lines.append(f"**QA verdict:** `{verdict}`")
             if recommended:
                 lines.append("**Verification commands worth keeping:**")
@@ -272,7 +315,9 @@ class ProjectMemoryService:
             return None
         return "\n".join(lines).rstrip() + "\n"
 
-    def _read_json(self, worktree_path: str | None, issue_id: str, relpath: str) -> dict | None:
+    def _read_json(
+        self, worktree_path: str | None, issue_id: str, relpath: str
+    ) -> dict[str, object] | None:
         if not worktree_path:
             return None
         p = Path(worktree_path) / "issues" / issue_id / relpath
@@ -281,13 +326,7 @@ class ProjectMemoryService:
         text = self._safe_read_text(p)
         if not text:
             return None
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            return None
-        if isinstance(data, dict):
-            return data
-        return None
+        return parse_json_object(text)
 
     @staticmethod
     def _safe_read_text(p: Path) -> str | None:
@@ -337,7 +376,9 @@ class ProjectMemoryService:
         blocks = [b for b in self._split_into_blocks(content) if not b.startswith(DISTILLED_HEADER)]
         return len(blocks) > DISTILL_TRIGGER_BLOCKS
 
-    async def maybe_distill(self, project_repo_path: str | None, llm_runner) -> Path | None:
+    async def maybe_distill(
+        self, project_repo_path: str | None, llm_runner: ProjectMemoryLlmRunner
+    ) -> Path | None:
         """If team_notes.md has grown past the threshold and an llm_runner
         is supplied, distill the older blocks into ≤5 evergreen lessons
         and rewrite the file. Returns the path on success, None otherwise.
@@ -426,19 +467,25 @@ def _parse_changed_files_section(impl_md_text: str) -> list[str]:
     return files
 
 
+def _text(value: object, *, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
+def _text_list(value: object) -> list[str]:
+    return [str(item) for item in object_list(value) if item is not None]
+
+
 # Module-level singleton for convenience; the service is stateless.
 project_memory = ProjectMemoryService()
 
 
-async def record_project_memory(graph_id: str, store) -> None:
+async def record_project_memory(graph_id: str, store: ProjectMemoryStore) -> None:
     """Standalone async function for recording project memory after a graph completes.
 
     Extracts from WorkflowScheduler._record_project_memory for use by the
     Conductor-driven issue loop (run_issue_conductor_loop).
     """
     try:
-        from app.domain.models import WorkflowGraph  # noqa: F401
-
         graph = await store.load_workflow_graph(graph_id)
         if graph is None:
             return
@@ -447,11 +494,9 @@ async def record_project_memory(graph_id: str, store) -> None:
             return
         project_repo_path = None
         if issue.project_id:
-            load_project = getattr(store, "load_project", None)
-            if callable(load_project):
-                proj = await load_project(issue.project_id)
-                if proj is not None:
-                    project_repo_path = proj.repo_path
+            proj = await store.load_project(issue.project_id)
+            if proj is not None:
+                project_repo_path = proj.repo_path
         project_memory.record_issue_completion(
             project_repo_path,
             issue_id=issue.id,
@@ -480,7 +525,12 @@ async def record_project_memory(graph_id: str, store) -> None:
                         )
                         await conn.commit()
                     except Exception:  # noqa: BLE001, RUF100
-                        pass
+                        logger.debug(
+                            "team notes stale block cleanup failed: project_id=%s block_id=%s",
+                            issue.project_id,
+                            stale_id,
+                            exc_info=True,
+                        )
         except Exception as exc:  # noqa: BLE001, RUF100
             logger.debug("team_notes_state reconcile skipped: %s", exc)
     except Exception as exc:  # noqa: BLE001, RUF100

@@ -2,31 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { getProjectResume, importProjectResumePdf, saveProjectResume } from "../src/lib/api";
-
-type FetchCall = {
-  input: RequestInfo | URL;
-  init?: RequestInit;
-};
-
-function withMockFetch(responseBody: unknown, run: (calls: FetchCall[]) => Promise<void>) {
-  const originalFetch = globalThis.fetch;
-  const calls: FetchCall[] = [];
-
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ input, init });
-    return new Response(JSON.stringify(responseBody), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }) as typeof fetch;
-
-  return run(calls).finally(() => {
-    globalThis.fetch = originalFetch;
-  });
-}
+import { jsonRequestBody, withMockJsonFetch } from "./fetchTestUtils";
+import { at } from "./testAssertions";
 
 test("getProjectResume hits the project resume endpoint", async () => {
-  await withMockFetch(
+  await withMockJsonFetch(
     {
       project_id: "project-1",
       markdown: "# Jane",
@@ -40,14 +20,15 @@ test("getProjectResume hits the project resume endpoint", async () => {
 
       assert.equal(result.markdown, "# Jane");
       assert.equal(calls.length, 1);
-      assert.equal(String(calls[0].input), "/api/projects/project-1/resume");
-      assert.equal(calls[0].init, undefined);
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/projects/project-1/resume");
+      assert.equal(call.init, undefined);
     },
   );
 });
 
 test("saveProjectResume sends markdown with PUT", async () => {
-  await withMockFetch(
+  await withMockJsonFetch(
     {
       project_id: "project-1",
       markdown: "# Jane",
@@ -61,15 +42,16 @@ test("saveProjectResume sends markdown with PUT", async () => {
 
       assert.equal(result.exists, true);
       assert.equal(calls.length, 1);
-      assert.equal(String(calls[0].input), "/api/projects/project-1/resume");
-      assert.equal(calls[0].init?.method, "PUT");
-      assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { markdown: "# Jane" });
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/projects/project-1/resume");
+      assert.equal(call.init?.method, "PUT");
+      assert.deepEqual(jsonRequestBody(call), { markdown: "# Jane" });
     },
   );
 });
 
 test("importProjectResumePdf posts multipart form data", async () => {
-  await withMockFetch(
+  await withMockJsonFetch(
     {
       project_id: "project-1",
       markdown: "# Imported",
@@ -85,10 +67,11 @@ test("importProjectResumePdf posts multipart form data", async () => {
 
       assert.equal(result.source_filename, "resume.pdf");
       assert.equal(calls.length, 1);
-      assert.equal(String(calls[0].input), "/api/projects/project-1/resume/import-pdf");
-      assert.equal(calls[0].init?.method, "POST");
-      assert.ok(calls[0].init?.body instanceof FormData);
-      assert.equal((calls[0].init?.body as FormData).get("file"), file);
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/projects/project-1/resume/import-pdf");
+      assert.equal(call.init?.method, "POST");
+      assert.ok(call.init?.body instanceof FormData);
+      assert.equal((call.init?.body as FormData).get("file"), file);
     },
   );
 });

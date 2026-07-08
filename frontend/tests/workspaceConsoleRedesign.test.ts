@@ -1,13 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
-const SRC_ROOT = join(process.cwd(), "src");
-
-function readSource(relativePath: string): string {
-  return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
-}
+import { readCompactSource as readSource } from "./sourceTestUtils";
 
 test("workspace console is a scheduler surface that opens issue detail rows", () => {
   const consoleSource = readSource("features/workspaces/WorkspaceConsole.tsx");
@@ -40,12 +33,21 @@ test("workspace console uses dense operations queue chrome", () => {
 test("workspace operations queue loading uses dispatch motion", () => {
   const panelSource = readSource("features/workspaces/IssueListPanel.tsx");
 
-  assert.match(panelSource, /import \{ AgentThinkingIndicator \} from "@\/components\/ui\/AgentThinkingIndicator";/);
+  assert.match(
+    panelSource,
+    /import \{ AgentThinkingIndicator \} from "@\/components\/ui\/AgentThinkingIndicator";/,
+  );
   assert.match(panelSource, /data-density="workspace-console-dispatch-loading"/);
-  assert.match(panelSource, /className="motion-essential relative flex h-48 min-h-0 items-center justify-center gap-2 overflow-hidden text-sm font-semibold text-text-muted"/);
+  assert.match(
+    panelSource,
+    /className="motion-essential relative flex h-48 min-h-0 items-center justify-center gap-2 overflow-hidden text-sm font-semibold text-text-muted"/,
+  );
   assert.match(panelSource, /<AgentThinkingIndicator phase="dispatching" size=\{16\} \/>/);
   assert.match(panelSource, /animate-shimmer-sweep/);
-  assert.doesNotMatch(panelSource, /<Loader variant="card" label=\{t\("workspace\.console\.loading"\)\}/);
+  assert.doesNotMatch(
+    panelSource,
+    /<Loader variant="card" label=\{t\("workspace\.console\.loading"\)\}/,
+  );
 });
 
 test("workspace console marks running issue rows with scheduling motion", () => {
@@ -65,7 +67,10 @@ test("workspace console header marks active queue totals with scheduling motion"
   const headerSource = readSource("features/workspaces/WorkspaceConsoleHeader.tsx");
 
   assert.match(headerSource, /const isQueueScheduling = counts\.running > 0/);
-  assert.match(headerSource, /data-density=\{isQueueScheduling \? "workspace-console-active-summary" : "workspace-console-summary"\}/);
+  assert.match(
+    headerSource,
+    /data-density=\{isQueueScheduling \? "workspace-console-active-summary" : "workspace-console-summary"\}/,
+  );
   assert.match(headerSource, /isQueueScheduling && "motion-essential"/);
   assert.match(headerSource, /<AgentThinkingIndicator phase="dispatching" size=\{12\}/);
   assert.match(headerSource, /animate-shimmer-sweep/);
@@ -75,8 +80,14 @@ test("workspace console header marks active queue totals with scheduling motion"
 test("workspace console running filter uses dispatch motion for live work", () => {
   const headerSource = readSource("features/workspaces/WorkspaceConsoleHeader.tsx");
 
-  assert.match(headerSource, /const isRunningFilterLive = filter === "running" && counts\.running > 0/);
-  assert.match(headerSource, /data-density=\{isRunningFilterLive \? "workspace-console-running-filter" : "workspace-console-filter"\}/);
+  assert.match(
+    headerSource,
+    /const isRunningFilterLive = filter === "running" && counts\.running > 0/,
+  );
+  assert.match(
+    headerSource,
+    /data-density=\{isRunningFilterLive \? "workspace-console-running-filter" : "workspace-console-filter"\}/,
+  );
   assert.match(headerSource, /isRunningFilterLive && "motion-essential"/);
   assert.match(headerSource, /<AgentThinkingIndicator phase="dispatching" size=\{10\}/);
   assert.match(headerSource, /isRunningFilterLive && \(/);

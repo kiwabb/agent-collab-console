@@ -31,7 +31,9 @@ export function FileDiffCard({ file, mode, defaultExpanded = true, forcedExpande
       await navigator.clipboard.writeText(file.rawPatch);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {/* ignore */}
+    } catch {
+      /* ignore */
+    }
   }
 
   return (
@@ -48,17 +50,26 @@ export function FileDiffCard({ file, mode, defaultExpanded = true, forcedExpande
         <span className="font-mono text-xs truncate flex-1">{path}</span>
 
         {file.isNew && (
-          <Badge variant="outline" className="text-success border-success/50 text-[10px] px-1.5 py-0 shrink-0">
+          <Badge
+            variant="outline"
+            className="text-success border-success/50 text-[10px] px-1.5 py-0 shrink-0"
+          >
             {t("task.diff.fileNew")}
           </Badge>
         )}
         {file.isDeleted && (
-          <Badge variant="outline" className="text-error border-error/50 text-[10px] px-1.5 py-0 shrink-0">
+          <Badge
+            variant="outline"
+            className="text-error border-error/50 text-[10px] px-1.5 py-0 shrink-0"
+          >
             {t("task.diff.fileDeleted")}
           </Badge>
         )}
         {file.isBinary && (
-          <Badge variant="outline" className="text-muted-foreground text-[10px] px-1.5 py-0 shrink-0">
+          <Badge
+            variant="outline"
+            className="text-muted-foreground text-[10px] px-1.5 py-0 shrink-0"
+          >
             {t("task.diff.fileBinary")}
           </Badge>
         )}
@@ -75,21 +86,20 @@ export function FileDiffCard({ file, mode, defaultExpanded = true, forcedExpande
           size="sm"
           variant="ghost"
           className="h-5 w-5 p-0 shrink-0"
-          onClick={(e) => { e.stopPropagation(); copyPatch(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            copyPatch();
+          }}
           title={t("task.diff.copyPatch")}
         >
-          {copied
-            ? <Check size={11} className="text-success" />
-            : <Copy size={11} />}
+          {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
         </Button>
       </div>
 
       {/* Diff body — horizontal scroll per-file, vertical scroll on parent */}
       {expanded && !file.isBinary && (
         <div className="overflow-x-auto w-full">
-          {mode === "split"
-            ? <SplitView lines={file.lines} />
-            : <UnifiedView lines={file.lines} />}
+          {mode === "split" ? <SplitView lines={file.lines} /> : <UnifiedView lines={file.lines} />}
         </div>
       )}
     </div>
@@ -102,7 +112,9 @@ function UnifiedView({ lines }: { lines: DiffLine[] }) {
   return (
     <table className="w-full border-collapse font-mono text-xs leading-5">
       <tbody>
-        {lines.map((line, i) => <UnifiedRow key={i} line={line} />)}
+        {lines.map((line, i) => (
+          <UnifiedRow key={i} line={line} />
+        ))}
       </tbody>
     </table>
   );
@@ -126,18 +138,21 @@ function UnifiedRow({ line }: { line: DiffLine }) {
     );
   }
 
-  const rowCls =
-    line.type === "add" ? "bg-success/10" :
-    line.type === "del" ? "bg-error/10" :
-    "";
+  const rowCls = line.type === "add" ? "bg-success/10" : line.type === "del" ? "bg-error/10" : "";
   const marker =
-    line.type === "add" ? <span className="text-success">+</span> :
-    line.type === "del" ? <span className="text-error">−</span> :
-    <span className="text-muted-foreground/50"> </span>;
+    line.type === "add" ? (
+      <span className="text-success">+</span>
+    ) : line.type === "del" ? (
+      <span className="text-error">−</span>
+    ) : (
+      <span className="text-muted-foreground/50"> </span>
+    );
   const textCls =
-    line.type === "add" ? "text-success/90" :
-    line.type === "del" ? "text-error/90" :
-    "text-foreground/80";
+    line.type === "add"
+      ? "text-success/90"
+      : line.type === "del"
+        ? "text-error/90"
+        : "text-foreground/80";
 
   return (
     <tr className={rowCls}>
@@ -148,7 +163,8 @@ function UnifiedRow({ line }: { line: DiffLine }) {
         {line.newLine ?? ""}
       </td>
       <td className={`pl-1 whitespace-pre-wrap break-all ${textCls}`}>
-        {marker}{line.text}
+        {marker}
+        {line.text}
       </td>
     </tr>
   );
@@ -157,14 +173,14 @@ function UnifiedRow({ line }: { line: DiffLine }) {
 /* ── Split view ── */
 
 type SplitRow =
-  | { kind: "hunk"; text: string }
-  | { kind: "pair"; left: DiffLine | null; right: DiffLine | null };
+  { kind: "hunk"; text: string } | { kind: "pair"; left: DiffLine | null; right: DiffLine | null };
 
 function buildSplitRows(lines: DiffLine[]): SplitRow[] {
   const rows: SplitRow[] = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
+    if (!line) break;
     if (line.type === "hunk" || line.type === "meta") {
       rows.push({ kind: "hunk", text: line.text });
       i++;
@@ -178,8 +194,18 @@ function buildSplitRows(lines: DiffLine[]): SplitRow[] {
 
     const dels: DiffLine[] = [];
     const adds: DiffLine[] = [];
-    while (i < lines.length && lines[i].type === "del") { dels.push(lines[i]); i++; }
-    while (i < lines.length && lines[i].type === "add") { adds.push(lines[i]); i++; }
+    while (i < lines.length) {
+      const deletion = lines[i];
+      if (!deletion || deletion.type !== "del") break;
+      dels.push(deletion);
+      i++;
+    }
+    while (i < lines.length) {
+      const addition = lines[i];
+      if (!addition || addition.type !== "add") break;
+      adds.push(addition);
+      i++;
+    }
 
     const max = Math.max(dels.length, adds.length);
     for (let k = 0; k < max; k++) {
@@ -199,7 +225,9 @@ function SplitView({ lines }: { lines: DiffLine[] }) {
             return (
               <tr key={i} className="bg-brand/5">
                 <td className="w-10 select-none" />
-                <td className="pl-2 text-brand/80 whitespace-pre-wrap break-all" colSpan={3}>{row.text}</td>
+                <td className="pl-2 text-brand/80 whitespace-pre-wrap break-all" colSpan={3}>
+                  {row.text}
+                </td>
               </tr>
             );
           }
@@ -230,19 +258,24 @@ function SplitCell({ line, side }: { line: DiffLine | null; side: "left" | "righ
   const bgCls = isAdd ? "bg-success/10" : isDel ? "bg-error/10" : "";
   const textCls = isAdd ? "text-success/90" : isDel ? "text-error/90" : "text-foreground/80";
   const lineNum = side === "left" ? (line.oldLine ?? line.newLine) : (line.newLine ?? line.oldLine);
-  const marker = isAdd
-    ? <span className="text-success">+</span>
-    : isDel
-      ? <span className="text-error">−</span>
-      : <span className="text-muted-foreground/50"> </span>;
+  const marker = isAdd ? (
+    <span className="text-success">+</span>
+  ) : isDel ? (
+    <span className="text-error">−</span>
+  ) : (
+    <span className="text-muted-foreground/50"> </span>
+  );
 
   return (
     <>
       <td className={`w-10 text-right pr-2 pl-1 text-muted-foreground/60 select-none ${bgCls}`}>
         {lineNum ?? ""}
       </td>
-      <td className={`pl-1 whitespace-pre-wrap break-all border-r border-border ${bgCls} ${textCls}`}>
-        {marker}{line.text}
+      <td
+        className={`pl-1 whitespace-pre-wrap break-all border-r border-border ${bgCls} ${textCls}`}
+      >
+        {marker}
+        {line.text}
       </td>
     </>
   );

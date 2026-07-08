@@ -153,9 +153,15 @@ export function useIssueBudget(
       if (!mountedRef.current) return;
       const next = readBudgetSteeringEvent(event);
       if (!next) return;
-      setBudget((prev) =>
-        prev && next.spent_usd < prev.spent_usd ? prev : next,
-      );
+      // Race protection against the 30s poll: the WS payload was computed
+      // by the conductor at threshold-crossing time T, but a poll that
+      // landed in the meantime carries a slightly fresher snapshot at
+      // T+epsilon (with higher spent_usd). If we already have a larger
+      // value, the WS event is stale and must not regress the meter.
+      // `spent_usd` is monotonically non-decreasing in this codebase
+      // (no refunds, no budget edits — Q4 in the task PRD is read-only),
+      // so a lower event value can only mean "stale, ignore".
+      setBudget((prev) => (prev && next.spent_usd < prev.spent_usd ? prev : next));
     },
   });
 

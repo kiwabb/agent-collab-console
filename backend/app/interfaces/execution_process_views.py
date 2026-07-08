@@ -8,7 +8,7 @@ def build_execution_process_view(
     task: CodexTask | None,
     messages: list[CodexTaskMessage],
     logs: list[LogEvent],
-) -> dict:
+) -> dict[str, object]:
     # Calculate duration in seconds if both started_at and completed_at are present
     duration_seconds = None
     if process.started_at and process.completed_at:
