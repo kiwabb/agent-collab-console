@@ -39,6 +39,7 @@ from app.domain.models import (
     PlanDetails,
     Project,
     ProjectConductorState,
+    ProjectEnvVar,
     ProjectMemoryEmbedding,
     Prototype,
     PrototypeVersion,
@@ -1045,6 +1046,21 @@ class AsyncSQLiteStore:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_status ON self_improvement_proposals(status)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_events_project_created ON self_improvement_application_events(project_id, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_self_improvement_events_proposal_created ON self_improvement_application_events(proposal_id, created_at)")
+        # --- Project env vars ---
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS project_env_vars (
+                project_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                value TEXT NOT NULL,
+                secret INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT '',
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(project_id, name),
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_project_env_vars_project_id ON project_env_vars(project_id)")
         # Audit log filter/pagination indexes (PR3 read API will lean on these).
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_issue_created ON audit_log(issue_id, created_at)")
@@ -1634,6 +1650,100 @@ class AsyncSQLiteStore:
         await self._ensure_db()
         conn = await self._get_conn()
         await conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        await conn.commit()
+
+    # --- Project env vars CRUD ---
+
+    async def save_project_env_var(
+        self,
+        project_id: str,
+        name: str,
+        value: str,
+        *,
+        secret: bool = False,
+        source: str = "",
+    ) -> None:
+        """Insert or replace a single environment variable for a project.
+
+        Callers MUST encrypt `value` before calling this method when ``secret=True``.
+        This method does NOT perform encryption — it stores the value as given.
+        """
+        await self._ensure_db()
+        conn = await self._get_conn()
+        now = self._format_datetime(datetime.now())
+        await conn.execute(
+            "INSERT OR REPLACE INTO project_env_vars "
+            "(project_id, name, value, secret, source, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM project_env_vars WHERE project_id=? AND name=?), ?), ?)",
+            (
+                project_id,
+                name,
+                value,
+                1 if secret else 0,
+                source,
+                project_id,
+                name,
+                now,
+                now,
+            ),
+        )
+        await conn.commit()
+
+    async def load_project_env_vars(self, project_id: str) -> list[ProjectEnvVar]:
+        """Return all stored env vars for a project."""
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM project_env_vars WHERE project_id = ? ORDER BY name",
+            (project_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            ProjectEnvVar(
+                project_id=r["project_id"],
+                name=r["name"],
+                value=r["value"],
+                secret=bool(r["secret"]),
+                source=r["source"] or "",
+                created_at=self._parse_datetime(r["created_at"]),
+                updated_at=self._parse_datetime(r["updated_at"]),
+            )
+            for r in rows
+        ]
+
+    async def load_project_env_var(
+        self, project_id: str, name: str
+    ) -> ProjectEnvVar | None:
+        """Return a single stored env var, or None."""
+        await self._ensure_db()
+        conn = await self._get_conn()
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM project_env_vars WHERE project_id = ? AND name = ?",
+            (project_id, name),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return ProjectEnvVar(
+            project_id=row["project_id"],
+            name=row["name"],
+            value=row["value"],
+            secret=bool(row["secret"]),
+            source=row["source"] or "",
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=self._parse_datetime(row["updated_at"]),
+        )
+
+    async def delete_project_env_var(self, project_id: str, name: str) -> None:
+        """Remove a single env var from the store."""
+        await self._ensure_db()
+        conn = await self._get_conn()
+        await conn.execute(
+            "DELETE FROM project_env_vars WHERE project_id = ? AND name = ?",
+            (project_id, name),
+        )
         await conn.commit()
 
     # --- Prototype CRUD ---

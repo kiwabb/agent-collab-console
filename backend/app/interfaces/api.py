@@ -234,6 +234,24 @@ class CodexApiStore(Protocol):
 
     async def load_project(self, project_id: str) -> Project | None: ...
     async def list_projects(self) -> list[Project]: ...
+    async def load_project_env_vars(
+        self, project_id: str
+    ) -> list["ProjectEnvVar"]: ...
+    async def load_project_env_var(
+        self, project_id: str, name: str
+    ) -> "ProjectEnvVar | None": ...
+    async def save_project_env_var(
+        self,
+        project_id: str,
+        name: str,
+        value: str,
+        *,
+        secret: bool = False,
+        source: str = "",
+    ) -> None: ...
+    async def delete_project_env_var(
+        self, project_id: str, name: str
+    ) -> None: ...
     async def append_project_audit(
         self,
         *,
@@ -3242,6 +3260,32 @@ async def _load_project_for_run(project_id: str) -> Project:
 @router.post("/projects/{project_id}/run/start")
 async def start_project_run(project_id: str) -> object:
     project = await _load_project_for_run(project_id)
+
+    # --- .env materialization (Agent-driven, see env_materializer.py) ---
+    from app.application.env_materializer import materialize_env_file
+
+    store = _require_codex_store()
+    stored_vars = await store.load_project_env_vars(project_id)
+    if stored_vars:
+        # We have stored env vars → materialize .env. Agent env_vars are
+        # empty here; the stored values are the truth source. The agent
+        # would have contributed defaults when it first ran.
+        result = await materialize_env_file(
+            project_id=project_id,
+            repo_path=project.repo_path,
+            agent_env_vars=[],  # stored values are the truth; agent defaults already merged
+            stored_vars=stored_vars,
+        )
+        if not result.valid:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "env_incomplete",
+                    "errors": [e.to_dict() for e in result.errors],
+                    "message": "项目环境变量未完整配置。请在「环境配置」面板填写所有必填项后再启动。",
+                },
+            )
+
     try:
         return await project_run_manager.start(
             project.id,
@@ -3271,6 +3315,102 @@ async def get_project_run_status(project_id: str) -> object:
 async def get_project_run_logs(project_id: str, after: int = 0) -> object:
     await _load_project_for_run(project_id)
     return project_run_manager.get_logs(project_id, after=after)
+
+
+# --- Project env vars endpoints (Agent-driven env config) ---
+
+@router.get("/projects/{project_id}/env")
+async def get_project_env_vars(project_id: str) -> object:
+    """List stored env vars for a project. Secret values are NOT returned as
+    plaintext — only ``is_set: true`` is indicated."""
+    project = await _load_project_for_run(project_id)
+    store = _require_codex_store()
+    stored = await store.load_project_env_vars(project.id)
+    env_entries: list[dict[str, object]] = []
+    for sv in stored:
+        entry: dict[str, object] = {
+            "name": sv.name,
+            "secret": sv.secret,
+            "source": sv.source or "",
+            "is_set": bool(sv.value.strip()) if sv.value else False,
+        }
+        if not sv.secret:
+            entry["value"] = sv.value
+        env_entries.append(entry)
+    return {"env_vars": env_entries}
+
+
+@router.put("/projects/{project_id}/env")
+async def put_project_env_vars(project_id: str, body: JsonObject) -> object:
+    """Save one or more env vars for a project. Accepts either a single var or
+    ``{vars: [{name, value, secret?, source?}]}``. Secret values are encrypted
+    before storage."""
+    project = await _load_project_for_run(project_id)
+    store = _require_codex_store()
+
+    # Accept both {name, value, ...} and {vars: [...]}
+    raw_vars: list[dict[str, object]] = []
+    if isinstance(body.get("vars"), list):
+        raw_vars = cast("list[dict[str, object]]", body["vars"])
+    elif isinstance(body.get("name"), str):
+        raw_vars = [body]
+
+    if not raw_vars:
+        raise HTTPException(status_code=422, detail="No variables provided")
+
+    from app.application.env_crypto import encrypt, is_configured
+    from app.application.env_materializer import is_secret_name
+
+    saved: list[str] = []
+    for rv in raw_vars:
+        name = str(rv.get("name", "")).strip()
+        if not name:
+            continue
+        value = str(rv.get("value", ""))
+        secret = bool(rv.get("secret", False)) or is_secret_name(name)
+        source = str(rv.get("source", "user"))
+
+        # Encrypt secret values
+        stored_value = value
+        if secret and value.strip():
+            if not is_configured():
+                raise HTTPException(
+                    status_code=500,
+                    detail="CONSOLE_ENCRYPTION_KEY 未配置，无法存储密钥类变量。请管理员配置后重试。",
+                )
+            stored_value = encrypt(value)
+
+        await store.save_project_env_var(
+            project.id,
+            name,
+            stored_value,
+            secret=secret,
+            source=source,
+        )
+        saved.append(name)
+
+    # After saving, materialize .env if there are stored vars
+    from app.application.env_materializer import materialize_env_file
+
+    all_stored = await store.load_project_env_vars(project.id)
+    if all_stored:
+        await materialize_env_file(
+            project_id=project.id,
+            repo_path=project.repo_path,
+            agent_env_vars=[],
+            stored_vars=all_stored,
+        )
+
+    return {"saved": saved}
+
+
+@router.delete("/projects/{project_id}/env/{name}")
+async def delete_project_env_var(project_id: str, name: str) -> object:
+    """Delete a single env var for a project."""
+    await _load_project_for_run(project_id)
+    store = _require_codex_store()
+    await store.delete_project_env_var(project_id, name)
+    return {"deleted": name}
 
 
 @router.get("/codex/projects/{project_id}/self-improvement-proposals")

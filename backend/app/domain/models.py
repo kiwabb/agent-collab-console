@@ -125,6 +125,23 @@ class Prototype(BaseModel):
     updated_at: datetime | None = None
 
 
+class ProjectEnvVar(BaseModel):
+    """A single project-level environment variable stored by the console.
+
+    Secret values (``secret=True``) are stored as ciphertext via the
+    ``env_crypto`` module and never returned as plaintext through the API.
+    Non-secret values (ports, hosts, URLs) are stored in plaintext.
+    """
+
+    project_id: str
+    name: str  # e.g. APP_PORT, OPENAI_API_KEY
+    value: str  # plaintext for non-secret, ciphertext for secret
+    secret: bool = False
+    source: str = ""  # "agent" | "user" | "compose" | "env_example"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class PrototypeVersion(BaseModel):
     """A stored HTML iteration of a prototype."""
 
@@ -806,6 +823,26 @@ class SelfImprovementApplicationEvent:
     result_json: str = "{}"
     error: str | None = None
     created_at: datetime | None = None
+
+
+@dataclass
+class ProjectEnvVar:
+    """Per-project environment variable value.
+
+    Each row stores one variable's value for a project. ``secret=True`` values
+    are stored as ciphertext (encrypted via ``env_crypto``); non-secret values
+    (ports, hosts) are stored as plaintext. The store layer does not encrypt or
+    decrypt — callers are responsible for calling ``env_crypto.encrypt/decrypt``
+    before save / after load.
+    """
+
+    project_id: str
+    name: str
+    value: str
+    secret: bool = False
+    source: str = ""  # "agent", "user", "compose", etc.
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 AgentMessageType = Literal["handoff", "critique", "clarification", "answer", "specialist_call", "specialist_result"]

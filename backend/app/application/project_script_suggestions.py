@@ -31,6 +31,15 @@ class ProjectScriptVerification(BaseModel):
     logs: list[str] = Field(default_factory=list)
 
 
+class EnvVarEntry(BaseModel):
+    """A single environment variable inferred by the Operations Engineer agent."""
+
+    name: str
+    value: str | None = None  # null = needs user input
+    secret: bool = False
+    source: str = ""  # where the agent inferred this from
+
+
 class ProjectScriptSuggestion(BaseModel):
     setup_script: str
     run_command: str
@@ -38,6 +47,7 @@ class ProjectScriptSuggestion(BaseModel):
     access_url: str | None = None
     notes: list[str] = Field(default_factory=list)
     verification: ProjectScriptVerification | None = None
+    env_vars: list[EnvVarEntry] = Field(default_factory=list)
 
 
 _CONTEXT_FILES = [
@@ -126,7 +136,10 @@ def build_project_script_suggestion_prompt(
             '  "setup_script": "one-time setup command(s), or empty string",',
             '  "run_command": "long-running local dev command, or empty string",',
             '  "access_url": "http://localhost:port if discoverable, or null",',
-            '  "notes": ["short operational notes, verification assumptions, or risks"]',
+            '  "notes": ["short operational notes, verification assumptions, or risks"],',
+            '  "env_vars": [',
+            '    {"name": "VAR_NAME", "value": "inferred_default_or_null", "secret": false, "source": "where you found this"}',
+            '  ]',
             "}",
             "",
             "Rules:",
@@ -140,6 +153,18 @@ def build_project_script_suggestion_prompt(
             "- Keep commands safe and non-destructive. Do not include rm -rf, git reset, git clean, database drops, or migrations.",
             "- If a command is not discoverable from evidence, return an empty string for that field.",
             "- No markdown fences, no comments, no explanation.",
+            "",
+            "Environment variable analysis (env_vars):",
+            "- Inspect docker-compose.yml / compose.yml for ${VAR} references and env_file: declarations.",
+            "- Read .env.example files (root, frontend/, backend/, or any subdirectory) for expected variable names.",
+            "- Read README.md for documented ports, hosts, and configuration instructions.",
+            "- Each env_vars entry: name (required), value (inferred default or null), secret (boolean), source (brief).",
+            "- Infer sensible defaults for non-secret vars (ports like 3000, 8000, 8080; hosts like 0.0.0.0; URL bases) from README, compose ports, Dockerfile EXPOSE, or package.json scripts.",
+            "- If a var appears in compose with ${VAR:-default}, use that default as value.",
+            "- If a var appears in compose as plain ${VAR} with no default, infer from README/Dockerfile/context or set value to null.",
+            "- Secret detection: if the variable name contains KEY, SECRET, TOKEN, PASSWORD, or API_KEY (case-insensitive), set secret=true and value MUST be null. NEVER invent values for secret variables.",
+            "- If no env_vars are discoverable, return an empty array [].",
+            "- env_vars is optional; old clients ignore it. Always include the field (even if empty).",
         ]
     )
 
@@ -176,6 +201,37 @@ def _read_string_list(data: dict[str, object], key: str) -> list[str]:
     return out
 
 
+def _read_env_vars(data: dict[str, object]) -> list[EnvVarEntry]:
+    # Accept multiple field names: env_vars, envVars, environment, env
+    for key in ("env_vars", "envVars", "environment", "env"):
+        raw = data.get(key)
+        if isinstance(raw, list):
+            entries: list[EnvVarEntry] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                name = _read_string(item, ("name", "key", "var"))
+                if not name:
+                    continue
+                value_raw = item.get("value")
+                value: str | None = None
+                if isinstance(value_raw, str) and value_raw.strip():
+                    value = value_raw.strip()
+                elif value_raw is not None and not isinstance(value_raw, str):
+                    # Non-string truthy values (numbers, booleans) -> stringify
+                    value = str(value_raw)
+                secret = item.get("secret")
+                secret_bool: bool = (
+                    isinstance(secret, bool) and secret
+                ) or (
+                    isinstance(secret, str) and secret.strip().lower() in ("true", "1", "yes")
+                )
+                source = _read_string(item, ("source", "description", "note", "reason", "from"))
+                entries.append(EnvVarEntry(name=name, value=value, secret=secret_bool, source=source))
+            return entries
+    return []
+
+
 def parse_project_script_suggestion(raw_text: str) -> ProjectScriptSuggestion | None:
     json_text = _extract_json_object(raw_text)
     if not json_text:
@@ -191,6 +247,7 @@ def parse_project_script_suggestion(raw_text: str) -> ProjectScriptSuggestion | 
         ),
         access_url=_read_string(parsed, ("access_url", "accessUrl", "url")) or None,
         notes=_read_string_list(parsed, "notes"),
+        env_vars=_read_env_vars(parsed),
     )
 
 

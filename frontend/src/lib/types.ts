@@ -376,12 +376,47 @@ export interface UpdateProjectRequest {
   run_command?: string;
 }
 
+export interface ProjectEnvVarEntry {
+  name: string;
+  value: string | null;
+  secret: boolean;
+  source: string;
+}
+
+export interface ProjectEnvVarDisplay {
+  name: string;
+  secret: boolean;
+  source: string;
+  is_set: boolean;
+  value?: string; // only for non-secret vars
+}
+
+export interface ProjectEnvListResponse {
+  env_vars: ProjectEnvVarDisplay[];
+}
+
+export interface ProjectEnvPutBody {
+  name: string;
+  value: string;
+  secret?: boolean;
+  source?: string;
+}
+
+export interface ProjectEnvPutBatchBody {
+  vars: ProjectEnvPutBody[];
+}
+
+export interface ProjectEnvPutResponse {
+  saved: string[];
+}
+
 export interface ProjectScriptSuggestionResponse {
   setup_script: string;
   run_command: string;
   agent_name: string;
   access_url: string | null;
   notes: string[];
+  env_vars?: ProjectEnvVarEntry[];
   verification: {
     status: "verified" | "started" | "failed" | "skipped";
     message: string;

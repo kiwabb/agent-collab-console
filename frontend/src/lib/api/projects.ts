@@ -215,3 +215,31 @@ export async function startProjectConductorLoop(
 export async function getProjectAudit(projectId: string, limit = 10): Promise<ProjectAuditEntry[]> {
   return apiRequest<ProjectAuditEntry[]>(`${API_BASE}/projects/${projectId}/audit?limit=${limit}`);
 }
+
+export async function getProjectEnvVars(projectId: string): Promise<{
+  env_vars: Array<{
+    name: string;
+    secret: boolean;
+    source: string;
+    is_set: boolean;
+    value?: string;
+  }>;
+}> {
+  return apiRequest(`${API_BASE}/projects/${projectId}/env`);
+}
+
+export async function putProjectEnvVars(
+  projectId: string,
+  body: { name: string; value: string; secret?: boolean; source?: string } | { vars: Array<{ name: string; value: string; secret?: boolean; source?: string }> },
+): Promise<{ saved: string[] }> {
+  return apiJsonRequest(`${API_BASE}/projects/${projectId}/env`, "PUT", body);
+}
+
+export async function deleteProjectEnvVar(
+  projectId: string,
+  name: string,
+): Promise<{ deleted: string }> {
+  return apiRequest(`${API_BASE}/projects/${projectId}/env/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}

@@ -513,6 +513,46 @@ class RoleWorkflowService:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("project script update events failed: %s", exc, exc_info=True)
         task.result = suggestion.model_dump_json()
+
+        # Persist agent-inferred env_vars to project_env_vars (user-stored values win).
+        if project_id and suggestion.env_vars:
+            try:
+                from app.application.env_materializer import is_secret_name
+                from app.application.env_crypto import encrypt, is_configured as _crypto_ready
+
+                for ev in suggestion.env_vars:
+                    # Skip if user already set this var (user wins over agent).
+                    existing = await self.codex_store.load_project_env_var(
+                        project_id, ev.name
+                    )
+                    if existing is not None:
+                        continue
+
+                    secret = ev.secret or is_secret_name(ev.name)
+                    value = ev.value
+                    if secret and value is not None:
+                        logger.warning(
+                            "Agent supplied value for secret var %s — discarding", ev.name
+                        )
+                        value = None
+                    stored_value = value or ""
+                    if secret and stored_value.strip():
+                        if _crypto_ready():
+                            stored_value = encrypt(stored_value)
+                        else:
+                            stored_value = ""  # Can't encrypt → treat as unset
+
+                    await self.codex_store.save_project_env_var(
+                        project_id,
+                        ev.name,
+                        stored_value,
+                        secret=secret,
+                        source=ev.source or "agent",
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to persist agent env_vars for project %s", project_id, exc_info=True
+                )
         note_lines = [
             "[OPERATIONS SCRIPT UPDATED]",
             f"setup_script: {suggestion.setup_script or '(empty)'}",
