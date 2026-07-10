@@ -157,6 +157,91 @@ release it before the await and re-acquire on the next call.
   under the gated prompt-logging flag.
 ---
 
+## Scenario: Prototype Code-Scan Removal With Legacy Provenance
+
+### 1. Scope / Trigger
+
+- Trigger: changing prototype creation, prototype list/get/iteration/regeneration,
+  the prototype SQLite schema, or the frontend `Prototype` contract.
+- Code-scan generation is removed, but prototypes created by that retired flow
+  remain normal user data and must stay usable without a migration.
+
+### 2. Signatures
+
+- Retained model fields: `source_kind: Literal["manual", "code"]`,
+  `source_ref`, `source_hash`, and `source_meta_json`.
+- Retained store APIs: `save_prototype`, `load_prototype`, and
+  `list_prototypes`.
+- Retained SQLite columns: `prototypes.source_kind`, `source_ref`,
+  `source_hash`, and `source_meta_json`.
+- Retained index: `idx_prototypes_project_source`.
+- Removed HTTP paths:
+  `GET /api/projects/{project_id}/prototypes/code-candidates` and
+  `GET /api/projects/{project_id}/prototypes/generate-from-code/stream`.
+- Removed dedicated store APIs: `load_prototype_by_source`,
+  `list_code_prototypes`, and `update_prototype_source_metadata`.
+
+### 3. Contracts
+
+- Manual creation writes `source_kind="manual"` and does not invoke source
+  discovery or browser capture.
+- A persisted `source_kind="code"` row remains visible through the normal list
+  and get APIs and supports iteration and regenerate-all.
+- The backend and frontend `Prototype` shapes retain all four provenance
+  fields, even though the frontend no longer renders a source badge/reference.
+- Removing code-scan does not drop columns, drop the provenance index, rewrite
+  historical rows, or add a schema migration.
+- The two removed routes are absent from OpenAPI and requests return `404`.
+
+### 4. Validation & Error Matrix
+
+- Legacy code prototype list/get -> return the row with provenance unchanged.
+- Legacy code prototype iteration/regenerate-all -> create the next normal
+  version and preserve prototype provenance.
+- Manual prototype creation -> persist `source_kind="manual"`.
+- Request to either retired route -> `404`; no compatibility shim.
+- Missing legacy provenance values -> preserve existing nullable-field behavior;
+  do not synthesize scanner metadata.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a historical code prototype is listed, iterated, and regenerated while
+  `source_hash` and `source_meta_json` round-trip unchanged.
+- Base: a new manual prototype uses the ordinary create/stream flow.
+- Bad: filtering `list_prototypes` to manual rows, which hides user data.
+- Bad: dropping `source_*` fields or SQLite columns as part of removing the
+  scanner, which turns a feature removal into an API/data migration.
+
+### 6. Tests Required
+
+- Service regression: persist a legacy code prototype, then assert list, get,
+  iterate, regenerate-all, and provenance round-trip behavior.
+- API regression: assert both retired paths are absent from OpenAPI and return
+  `404`.
+- Frontend regression: manual creation and regenerate-all readers remain, while
+  code-scan API/types/UI identifiers have no active-source matches.
+- Run the prototype service/API tests without a `slow` marker on the legacy
+  compatibility test so the default pytest gate collects it.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+# Removing a feature must not silently delete its historical data contract.
+await conn.execute("ALTER TABLE prototypes DROP COLUMN source_kind")
+```
+
+Correct:
+
+```python
+# Remove scanner-only queries; normal CRUD still loads legacy provenance.
+async def list_prototypes(self, project_id: str) -> list[Prototype]:
+    ...
+```
+
+---
+
 ## Scenario: Durable Conductor Runner Leases
 
 ### 1. Scope / Trigger

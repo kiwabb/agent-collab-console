@@ -1,18 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Code2, Loader2, Plus, RefreshCw, X } from "lucide-react";
+import { Check, Loader2, Plus, RefreshCw, X } from "lucide-react";
 
 import {
   createPrototype,
-  getGenerateFromCodeStreamUrl,
   getPrototype,
   getRegenerateAllStreamUrl,
-  listPrototypeCodeCandidates,
   listPrototypes,
-  MAX_CANDIDATE_QUERY_TEXT_CHARS,
 } from "@/lib/api/prototypes";
-import type { Project, Prototype, PrototypeCodeCandidate, PrototypeDetail } from "@/lib/types";
+import type { Project, Prototype, PrototypeDetail } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { useToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
@@ -31,21 +28,11 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-import {
-  buildCodeCandidateBriefOverrides,
-  buildSelectedCodeCandidateInstructions,
-  countModifiedCodeCandidateBriefs,
-  isCodeCandidateBriefModified,
-} from "./codeCandidateBriefs";
 import { PrototypeCanvas } from "./PrototypeCanvas";
 import {
   parseSseRecord,
-  readCodeCandidateAction,
-  readCodeGenerationSummary,
   readFailedPrototypeItems,
-  readPrototypeCodeCandidates,
   readSseErrorMessage,
-  readSseNullableString,
   readSseNumber,
   readSseString,
   readSseStringArray,
@@ -74,39 +61,6 @@ interface RegenState {
   failedCount: number;
 }
 
-type CodeItemStatus =
-  | "pending"
-  | "capturing"
-  | "capture_failed"
-  | "skipped"
-  | "generating"
-  | "done"
-  | "failed"
-  | "unsupported";
-
-interface CodeGenItem {
-  candidateId: string;
-  title: string;
-  route: string;
-  sourcePath: string;
-  action: PrototypeCodeCandidate["action"];
-  status: CodeItemStatus;
-  prototypeId?: string | null | undefined;
-  versionNo?: number | undefined;
-  message?: string | undefined;
-}
-
-interface CodeGenState {
-  total: number;
-  items: Record<string, CodeGenItem>;
-  done: boolean;
-  created: number;
-  regenerated: number;
-  skipped: number;
-  failed: number;
-  unsupported: number;
-}
-
 const INITIAL_REGEN: RegenState = {
   total: 0,
   items: {},
@@ -115,16 +69,6 @@ const INITIAL_REGEN: RegenState = {
   failedCount: 0,
 };
 
-const INITIAL_CODE_GEN: CodeGenState = {
-  total: 0,
-  items: {},
-  done: false,
-  created: 0,
-  regenerated: 0,
-  skipped: 0,
-  failed: 0,
-  unsupported: 0,
-};
 /**
  * Project-level prototype design tool page (PRD 06-23).
  *
@@ -163,21 +107,6 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
   const [progressOpen, setProgressOpen] = useState(false);
   const [regen, setRegen] = useState<RegenState>(INITIAL_REGEN);
   const sourceRef = useRef<EventSource | null>(null);
-  const [codeScanOpen, setCodeScanOpen] = useState(false);
-  const [codeCandidates, setCodeCandidates] = useState<PrototypeCodeCandidate[] | null>(null);
-  const [codeScanLoading, setCodeScanLoading] = useState(false);
-  const [codeProgressOpen, setCodeProgressOpen] = useState(false);
-  const [codeGen, setCodeGen] = useState<CodeGenState>(INITIAL_CODE_GEN);
-  const [selectedCodeCandidateIds, setSelectedCodeCandidateIds] = useState<string[]>([]);
-  const [codeInstruction, setCodeInstruction] = useState("");
-  const [codeCandidateInstructions, setCodeCandidateInstructions] = useState<
-    Record<string, string>
-  >({});
-  const [codeCandidateBriefs, setCodeCandidateBriefs] = useState<Record<string, string>>({});
-  const [expandedCodeBriefIds, setExpandedCodeBriefIds] = useState<string[]>([]);
-  const [useRuntimeEvidence, setUseRuntimeEvidence] = useState(false);
-  const [runtimeBaseUrl, setRuntimeBaseUrl] = useState("http://localhost:4000");
-  const codeSourceRef = useRef<EventSource | null>(null);
 
   const refetchList = useCallback(async () => {
     try {
@@ -293,10 +222,6 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
         sourceRef.current.close();
         sourceRef.current = null;
       }
-      if (codeSourceRef.current) {
-        codeSourceRef.current.close();
-        codeSourceRef.current = null;
-      }
     };
   }, []);
 
@@ -308,332 +233,6 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
     const handle = window.setTimeout(() => setProgressOpen(false), 1200);
     return () => window.clearTimeout(handle);
   }, [regen.done, progressOpen]);
-
-  useEffect(() => {
-    if (!codeGen.done || !codeProgressOpen) return;
-    const handle = window.setTimeout(() => setCodeProgressOpen(false), 1400);
-    return () => window.clearTimeout(handle);
-  }, [codeGen.done, codeProgressOpen]);
-
-  const openCodeScan = useCallback(async () => {
-    setCodeScanOpen(true);
-    setCodeScanLoading(true);
-    setCodeCandidates(null);
-    try {
-      const result = await listPrototypeCodeCandidates(projectId);
-      setCodeCandidates(result.candidates);
-      setSelectedCodeCandidateIds(
-        result.candidates
-          .filter((candidate) => candidate.action === "create" || candidate.action === "regenerate")
-          .map((candidate) => candidate.id),
-      );
-      setCodeCandidateInstructions({});
-      setCodeCandidateBriefs(
-        Object.fromEntries(
-          result.candidates.map((candidate) => [candidate.id, candidate.editable_brief]),
-        ),
-      );
-      setExpandedCodeBriefIds([]);
-    } catch (err) {
-      addToast({
-        type: "error",
-        title: t("prototype.generateFromCode.scanFailed"),
-        message: err instanceof Error ? err.message : String(err),
-      });
-      setCodeCandidates([]);
-      setSelectedCodeCandidateIds([]);
-      setCodeCandidateInstructions({});
-      setCodeCandidateBriefs({});
-      setExpandedCodeBriefIds([]);
-    } finally {
-      setCodeScanLoading(false);
-    }
-  }, [projectId, addToast, t]);
-
-  const startCodeGeneration = useCallback(() => {
-    setCodeScanOpen(false);
-    setCodeGen(INITIAL_CODE_GEN);
-    setCodeProgressOpen(true);
-
-    if (codeSourceRef.current) {
-      codeSourceRef.current.close();
-      codeSourceRef.current = null;
-    }
-    const candidateBriefOverrides = buildCodeCandidateBriefOverrides(
-      codeCandidates ?? [],
-      selectedCodeCandidateIds,
-      codeCandidateBriefs,
-    );
-    const selectedCandidateInstructions = buildSelectedCodeCandidateInstructions(
-      selectedCodeCandidateIds,
-      codeCandidateInstructions,
-    );
-    const source = new EventSource(
-      getGenerateFromCodeStreamUrl(projectId, {
-        candidateIds: selectedCodeCandidateIds,
-        instruction: codeInstruction,
-        candidateInstructions: selectedCandidateInstructions,
-        candidateBriefOverrides,
-        useRuntimeEvidence,
-        runtimeBaseUrl,
-      }),
-    );
-    codeSourceRef.current = source;
-
-    source.addEventListener("scan_meta", (ev) => {
-      const data = parseSseRecord(ev);
-      if (!data) return;
-      const count = readSseNumber(data, "count");
-      const candidates = readPrototypeCodeCandidates(data, "candidates");
-      if (count === null || !candidates) return;
-      const items: Record<string, CodeGenItem> = {};
-      for (const candidate of candidates) {
-        items[candidate.id] = {
-          candidateId: candidate.id,
-          title: candidate.title,
-          route: candidate.route,
-          sourcePath: candidate.primary_source_path,
-          action: candidate.action,
-          status: candidate.action === "unsupported" ? "unsupported" : "pending",
-          prototypeId: candidate.prototype_id,
-          message: candidate.unsupported_reason ?? undefined,
-        };
-      }
-      setCodeGen((s) => ({ ...s, total: count, items }));
-    });
-
-    source.addEventListener("candidate_start", (ev) => {
-      const data = parseSseRecord(ev);
-      if (!data) return;
-      const candidateId = readSseString(data, "candidate_id");
-      const title = readSseString(data, "title");
-      const route = readSseString(data, "route");
-      const action = readCodeCandidateAction(data, "action");
-      if (!candidateId || !title || !route || !action) return;
-      setCodeGen((s) => {
-        const cur = s.items[candidateId];
-        return {
-          ...s,
-          items: {
-            ...s.items,
-            [candidateId]: {
-              candidateId,
-              title: cur?.title ?? title,
-              route: cur?.route ?? route,
-              sourcePath: cur?.sourcePath ?? "",
-              action,
-              status: action === "unsupported" ? "unsupported" : "generating",
-              prototypeId: cur?.prototypeId,
-              message: cur?.message,
-            },
-          },
-        };
-      });
-    });
-
-    source.addEventListener("candidate_capture", (ev) => {
-      const data = parseSseRecord(ev);
-      const candidateId = data ? readSseString(data, "candidate_id") : null;
-      if (!candidateId) return;
-      setCodeGen((s) => {
-        const cur = s.items[candidateId];
-        if (!cur) return s;
-        return {
-          ...s,
-          items: {
-            ...s.items,
-            [candidateId]: { ...cur, status: "capturing" },
-          },
-        };
-      });
-    });
-
-    source.addEventListener("candidate_capture_done", (ev) => {
-      const data = parseSseRecord(ev);
-      const candidateId = data ? readSseString(data, "candidate_id") : null;
-      if (!candidateId) return;
-      setCodeGen((s) => {
-        const cur = s.items[candidateId];
-        if (!cur) return s;
-        return {
-          ...s,
-          items: {
-            ...s.items,
-            [candidateId]: { ...cur, status: "generating" },
-          },
-        };
-      });
-    });
-
-    source.addEventListener("candidate_capture_failed", (ev) => {
-      const data = parseSseRecord(ev);
-      if (!data) return;
-      const candidateId = readSseString(data, "candidate_id");
-      const message = readSseString(data, "message");
-      if (!candidateId || !message) return;
-      setCodeGen((s) => {
-        const cur = s.items[candidateId];
-        if (!cur) return s;
-        return {
-          ...s,
-          items: {
-            ...s.items,
-            [candidateId]: {
-              ...cur,
-              status: "capture_failed",
-              message,
-            },
-          },
-        };
-      });
-    });
-
-    source.addEventListener("candidate_skip", (ev) => {
-      const data = parseSseRecord(ev);
-      if (!data) return;
-      const candidateId = readSseString(data, "candidate_id");
-      const prototypeId = readSseNullableString(data, "prototype_id");
-      if (!candidateId || prototypeId === undefined) return;
-      setCodeGen((s) => {
-        const cur = s.items[candidateId];
-        if (!cur) return s;
-        return {
-          ...s,
-          skipped: s.skipped + 1,
-          items: {
-            ...s.items,
-            [candidateId]: { ...cur, status: "skipped", prototypeId },
-          },
-        };
-      });
-    });
-
-    source.addEventListener("prototype_created", (ev) => {
-      const data = parseSseRecord(ev);
-      if (!data) return;
-      const candidateId = readSseString(data, "candidate_id");
-      const prototypeId = readSseString(data, "prototype_id");
-      if (!candidateId || !prototypeId) return;
-      setCodeGen((s) => {
-        const cur = s.items[candidateId];
-        if (!cur) return s;
-        return {
-          ...s,
-          items: {
-            ...s.items,
-            [candidateId]: { ...cur, prototypeId },
-          },
-        };
-      });
-    });
-
-    source.addEventListener("prototype_done", (ev) => {
-      const data = parseSseRecord(ev);
-      if (!data) return;
-      const candidateId = readSseString(data, "candidate_id");
-      const prototypeId = readSseString(data, "prototype_id");
-      const versionNo = readSseNumber(data, "version_no");
-      if (!candidateId || !prototypeId || versionNo === null) return;
-      setCodeGen((s) => {
-        const cur = s.items[candidateId];
-        if (!cur) return s;
-        return {
-          ...s,
-          items: {
-            ...s.items,
-            [candidateId]: {
-              ...cur,
-              status: "done",
-              prototypeId,
-              versionNo,
-            },
-          },
-        };
-      });
-    });
-
-    source.addEventListener("prototype_error", (ev) => {
-      const data = parseSseRecord(ev);
-      if (!data) return;
-      const candidateId = readSseString(data, "candidate_id");
-      const prototypeId = readSseNullableString(data, "prototype_id");
-      const message = readSseString(data, "message");
-      if (!candidateId || prototypeId === undefined || !message) return;
-      setCodeGen((s) => {
-        const cur = s.items[candidateId];
-        if (!cur) return s;
-        return {
-          ...s,
-          items: {
-            ...s.items,
-            [candidateId]: {
-              ...cur,
-              status: cur.status === "unsupported" ? "unsupported" : "failed",
-              prototypeId: prototypeId ?? cur.prototypeId,
-              message,
-            },
-          },
-        };
-      });
-    });
-
-    source.addEventListener("all_done", (ev) => {
-      const data = parseSseRecord(ev);
-      const summary = data ? readCodeGenerationSummary(data) : null;
-      if (summary) {
-        setCodeGen((s) => ({ ...s, ...summary, done: true }));
-        source.close();
-        if (codeSourceRef.current === source) codeSourceRef.current = null;
-        addToast({
-          type: summary.failed > 0 ? "warning" : "success",
-          title: t("prototype.generateFromCode.dialogTitle"),
-          message: t("prototype.generateFromCode.summary", {
-            created: summary.created,
-            regenerated: summary.regenerated,
-            skipped: summary.skipped,
-            failed: summary.failed,
-          }),
-        });
-        void refetchList().then((list) => {
-          const firstPrototype = list[0];
-          if (!activeId && firstPrototype) setActiveId(firstPrototype.id);
-          if (activeId)
-            void getPrototype(activeId)
-              .then(setDetail)
-              .catch(() => {});
-        });
-      } else {
-        source.close();
-        if (codeSourceRef.current === source) codeSourceRef.current = null;
-        setCodeGen((s) => ({ ...s, done: true }));
-      }
-    });
-
-    source.addEventListener("error", () => {
-      if (codeSourceRef.current !== source) return;
-      source.close();
-      codeSourceRef.current = null;
-      setCodeGen((s) => ({ ...s, done: true }));
-      addToast({
-        type: "error",
-        title: t("prototype.generateFromCode.dialogTitle"),
-        message: t("prototype.toast.iterateFailed"),
-      });
-    });
-  }, [
-    projectId,
-    selectedCodeCandidateIds,
-    codeInstruction,
-    codeCandidateInstructions,
-    codeCandidateBriefs,
-    codeCandidates,
-    useRuntimeEvidence,
-    runtimeBaseUrl,
-    addToast,
-    t,
-    refetchList,
-    activeId,
-  ]);
 
   const startBatch = useCallback(() => {
     setConfirmRegenOpen(false);
@@ -831,37 +430,9 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
 
   const hasPrototypes = prototypes !== null && prototypes.length > 0;
   const batchRunning = progressOpen && !regen.done;
-  const codeRunning = codeProgressOpen && !codeGen.done;
   const sortedItems = useMemo(() => {
     return Object.values(regen.items).sort((a, b) => a.title.localeCompare(b.title));
   }, [regen.items]);
-  const sortedCodeItems = useMemo(() => {
-    return Object.values(codeGen.items).sort((a, b) => a.route.localeCompare(b.route));
-  }, [codeGen.items]);
-  const codeCandidateCounts = useMemo(() => {
-    const counts = { create: 0, regenerate: 0, skip: 0, unsupported: 0 };
-    for (const candidate of codeCandidates ?? []) counts[candidate.action] += 1;
-    return counts;
-  }, [codeCandidates]);
-  const selectedCodeCandidateSet = useMemo(
-    () => new Set(selectedCodeCandidateIds),
-    [selectedCodeCandidateIds],
-  );
-  const selectedCodeCandidateCount = selectedCodeCandidateIds.length;
-  const selectableCodeCandidateIds = useMemo(
-    () =>
-      (codeCandidates ?? [])
-        .filter((candidate) => candidate.action !== "unsupported")
-        .map((candidate) => candidate.id),
-    [codeCandidates],
-  );
-  const modifiedCodeCandidateBriefCount = useMemo(() => {
-    return countModifiedCodeCandidateBriefs(
-      codeCandidates ?? [],
-      selectedCodeCandidateIds,
-      codeCandidateBriefs,
-    );
-  }, [codeCandidates, codeCandidateBriefs, selectedCodeCandidateIds]);
 
   return (
     <section className="flex h-full flex-col gap-4">
@@ -877,17 +448,8 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
           <Button
             variant="secondary"
             size="sm"
-            onClick={openCodeScan}
-            disabled={codeScanLoading || codeRunning || batchRunning}
-          >
-            <Code2 size={14} className={cn(codeScanLoading && "animate-pulse")} />
-            {t("prototype.generateFromCode.button")}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
             onClick={() => setConfirmRegenOpen(true)}
-            disabled={!hasPrototypes || batchRunning || codeRunning}
+            disabled={!hasPrototypes || batchRunning}
             title={!hasPrototypes ? t("prototype.regenerateAll.disabledHint") : undefined}
           >
             <RefreshCw size={14} className={cn(batchRunning && "animate-spin")} />
@@ -965,19 +527,11 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
                           : "border-transparent bg-surface-base text-text-muted hover:text-foreground",
                       )}
                     >
-                      <div className="flex items-center gap-2">
-                        <div className="min-w-0 flex-1 truncate font-semibold">{p.title}</div>
-                        <SourceBadge prototype={p} t={t} />
-                      </div>
-                      <div className="mt-1 flex items-center gap-2 text-[11px] text-text-muted/80">
-                        <span>
-                          {p.current_version > 0
-                            ? `v${p.current_version}`
-                            : t("prototype.noVersionsYet")}
-                        </span>
-                        {p.source_kind === "code" && p.source_ref && (
-                          <span className="min-w-0 truncate font-mono">{p.source_ref}</span>
-                        )}
+                      <div className="truncate font-semibold">{p.title}</div>
+                      <div className="mt-1 text-[11px] text-text-muted/80">
+                        {p.current_version > 0
+                          ? `v${p.current_version}`
+                          : t("prototype.noVersionsYet")}
                       </div>
                     </button>
                   </li>
@@ -1015,350 +569,6 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
         variant="warning"
         onConfirm={startBatch}
       />
-
-      <Dialog open={codeScanOpen} onOpenChange={setCodeScanOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{t("prototype.generateFromCode.scanTitle")}</DialogTitle>
-            <DialogDescription>
-              {codeCandidates
-                ? t("prototype.generateFromCode.scanSummary", {
-                    count: codeCandidates.length,
-                    create: codeCandidateCounts.create,
-                    regenerate: codeCandidateCounts.regenerate,
-                    skip: codeCandidateCounts.skip,
-                  })
-                : t("prototype.generateFromCode.scanSubtitle")}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[56vh] overflow-auto rounded-lg border border-border-subtle">
-            {codeScanLoading ? (
-              <div className="flex items-center gap-2 p-4 text-sm text-text-muted">
-                <Loader2 size={14} className="animate-spin" />
-                {t("prototype.generateFromCode.scanLoading")}
-              </div>
-            ) : !codeCandidates || codeCandidates.length === 0 ? (
-              <div className="p-4 text-sm text-text-muted">
-                {t("prototype.generateFromCode.noCandidates")}
-              </div>
-            ) : (
-              <ul className="divide-y divide-border-subtle">
-                {codeCandidates.map((candidate) => (
-                  <li
-                    key={candidate.id}
-                    className="grid grid-cols-[auto_1fr_auto] gap-3 p-3 text-sm"
-                  >
-                    <input
-                      type="checkbox"
-                      className="mt-1 size-4 rounded border-border-subtle bg-surface-input accent-brand"
-                      checked={selectedCodeCandidateSet.has(candidate.id)}
-                      disabled={candidate.action === "unsupported"}
-                      aria-label={candidate.title}
-                      onChange={(event) => {
-                        setSelectedCodeCandidateIds((current) =>
-                          event.target.checked
-                            ? Array.from(new Set([...current, candidate.id]))
-                            : current.filter((id) => id !== candidate.id),
-                        );
-                      }}
-                    />
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="truncate font-medium">{candidate.title}</span>
-                        <span className="rounded-full border border-border-subtle px-2 py-0.5 text-[10px] uppercase text-text-muted">
-                          {t(`prototype.generateFromCode.action.${candidate.action}`)}
-                        </span>
-                        {isCodeCandidateBriefModified(candidate, codeCandidateBriefs) && (
-                          <span
-                            className="rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[10px] uppercase text-brand"
-                            title={t("prototype.generateFromCode.briefModified")}
-                            aria-label={t("prototype.generateFromCode.briefModified")}
-                          >
-                            {t("prototype.generateFromCode.briefModified")}
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-1 font-mono text-xs text-text-muted">
-                        {candidate.route}
-                      </div>
-                      <div className="mt-1 truncate font-mono text-[11px] text-text-muted/70">
-                        {candidate.primary_source_path}
-                      </div>
-                    </div>
-                    <div className="font-mono text-[10px] text-text-muted/70">
-                      {candidate.source_hash.slice(0, 18)}
-                    </div>
-                    <div className="col-span-3">
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-[11px] text-text-muted/70">
-                          {t("prototype.generateFromCode.editBriefHint")}
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            disabled={candidate.action === "unsupported"}
-                            onClick={() => {
-                              setExpandedCodeBriefIds((current) =>
-                                current.includes(candidate.id)
-                                  ? current.filter((id) => id !== candidate.id)
-                                  : [...current, candidate.id],
-                              );
-                            }}
-                          >
-                            {expandedCodeBriefIds.includes(candidate.id)
-                              ? t("prototype.generateFromCode.hideBrief")
-                              : t("prototype.generateFromCode.editBrief")}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            disabled={
-                              candidate.action === "unsupported" ||
-                              (codeCandidateBriefs[candidate.id] ?? "") === candidate.editable_brief
-                            }
-                            onClick={() => {
-                              setCodeCandidateBriefs((current) => ({
-                                ...current,
-                                [candidate.id]: candidate.editable_brief,
-                              }));
-                            }}
-                          >
-                            {t("prototype.generateFromCode.resetBrief")}
-                          </Button>
-                        </div>
-                      </div>
-                      {expandedCodeBriefIds.includes(candidate.id) && (
-                        <div className="mb-2 space-y-1">
-                          <Textarea
-                            rows={6}
-                            className="font-mono text-xs"
-                            maxLength={MAX_CANDIDATE_QUERY_TEXT_CHARS}
-                            value={codeCandidateBriefs[candidate.id] ?? candidate.editable_brief}
-                            aria-label={t("prototype.generateFromCode.editBriefAriaLabel")}
-                            disabled={
-                              candidate.action === "unsupported" ||
-                              !selectedCodeCandidateSet.has(candidate.id)
-                            }
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setCodeCandidateBriefs((current) => ({
-                                ...current,
-                                [candidate.id]: value,
-                              }));
-                            }}
-                            onInput={(event) => {
-                              const value = event.currentTarget.value;
-                              setCodeCandidateBriefs((current) => ({
-                                ...current,
-                                [candidate.id]: value,
-                              }));
-                            }}
-                            placeholder={t("prototype.generateFromCode.editBriefPlaceholder")}
-                          />
-                          <p className="text-right font-mono text-[10px] text-text-muted/60">
-                            {isCodeCandidateBriefModified(candidate, codeCandidateBriefs) && (
-                              <span
-                                className="mr-2 text-brand"
-                                title={t("prototype.generateFromCode.briefModified")}
-                                aria-label={t("prototype.generateFromCode.briefModified")}
-                              >
-                                {t("prototype.generateFromCode.briefModified")}
-                              </span>
-                            )}
-                            {t("prototype.generateFromCode.editBriefLimit", {
-                              current: (
-                                codeCandidateBriefs[candidate.id] ?? candidate.editable_brief
-                              ).length,
-                              max: MAX_CANDIDATE_QUERY_TEXT_CHARS,
-                            })}
-                          </p>
-                        </div>
-                      )}
-                      <div className="space-y-1">
-                        <Textarea
-                          rows={2}
-                          maxLength={MAX_CANDIDATE_QUERY_TEXT_CHARS}
-                          value={codeCandidateInstructions[candidate.id] ?? ""}
-                          aria-label={t("prototype.generateFromCode.candidateInstructionAriaLabel")}
-                          disabled={
-                            candidate.action === "unsupported" ||
-                            !selectedCodeCandidateSet.has(candidate.id)
-                          }
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setCodeCandidateInstructions((current) => ({
-                              ...current,
-                              [candidate.id]: value,
-                            }));
-                          }}
-                          placeholder={t(
-                            "prototype.generateFromCode.candidateInstructionPlaceholder",
-                          )}
-                        />
-                        <p className="text-right font-mono text-[10px] text-text-muted/60">
-                          {t("prototype.generateFromCode.candidateInstructionLimit", {
-                            current: (codeCandidateInstructions[candidate.id] ?? "").length,
-                            max: MAX_CANDIDATE_QUERY_TEXT_CHARS,
-                          })}
-                        </p>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          {codeCandidates && codeCandidates.length > 0 && (
-            <div className="space-y-2 rounded-lg border border-border-subtle bg-surface-base/70 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs text-text-muted">
-                  {t("prototype.generateFromCode.selectedCount", {
-                    selected: selectedCodeCandidateCount,
-                    total: selectableCodeCandidateIds.length,
-                  })}
-                </span>
-                {modifiedCodeCandidateBriefCount > 0 && (
-                  <span
-                    className="rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[10px] uppercase text-brand"
-                    title={t("prototype.generateFromCode.modifiedBriefCount", {
-                      count: modifiedCodeCandidateBriefCount,
-                    })}
-                    aria-label={t("prototype.generateFromCode.modifiedBriefCount", {
-                      count: modifiedCodeCandidateBriefCount,
-                    })}
-                  >
-                    {t("prototype.generateFromCode.modifiedBriefCount", {
-                      count: modifiedCodeCandidateBriefCount,
-                    })}
-                  </span>
-                )}
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setSelectedCodeCandidateIds(selectableCodeCandidateIds)}
-                  >
-                    {t("prototype.generateFromCode.selectAll")}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setSelectedCodeCandidateIds([])}
-                  >
-                    {t("prototype.generateFromCode.clearSelection")}
-                  </Button>
-                </div>
-              </div>
-              <Textarea
-                rows={3}
-                value={codeInstruction}
-                onChange={(event) => setCodeInstruction(event.target.value)}
-                placeholder={t("prototype.generateFromCode.instructionPlaceholder")}
-              />
-              <p className="text-[11px] text-text-muted/70">
-                {t("prototype.generateFromCode.instructionHint")}
-              </p>
-              <label className="flex items-start gap-2 rounded-md border border-border-subtle bg-surface-raised/50 p-2 text-xs text-text-muted">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4 rounded border-border-subtle bg-surface-input accent-brand"
-                  checked={useRuntimeEvidence}
-                  onChange={(event) => setUseRuntimeEvidence(event.target.checked)}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block font-medium text-foreground">
-                    {t("prototype.generateFromCode.runtimeToggle")}
-                  </span>
-                  <span>{t("prototype.generateFromCode.runtimeHint")}</span>
-                </span>
-              </label>
-              {useRuntimeEvidence && (
-                <Input
-                  value={runtimeBaseUrl}
-                  onChange={(event) => setRuntimeBaseUrl(event.target.value)}
-                  placeholder={t("prototype.generateFromCode.runtimeBaseUrlPlaceholder")}
-                />
-              )}
-            </div>
-          )}
-          <DialogFooter showCloseButton>
-            <Button variant="secondary" onClick={() => setCodeScanOpen(false)}>
-              {t("prototype.createCancel")}
-            </Button>
-            <Button
-              onClick={startCodeGeneration}
-              disabled={codeScanLoading || !codeCandidates || selectedCodeCandidateCount === 0}
-            >
-              {t("prototype.generateFromCode.startButton")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={codeProgressOpen}
-        onOpenChange={(open) => codeGen.done && setCodeProgressOpen(open)}
-      >
-        <DialogContent className="sm:max-w-2xl" showCloseButton={codeGen.done}>
-          <DialogHeader>
-            <DialogTitle>{t("prototype.generateFromCode.dialogTitle")}</DialogTitle>
-            <DialogDescription>
-              {codeGen.total > 0
-                ? t("prototype.generateFromCode.progressSummary", {
-                    done:
-                      codeGen.created +
-                      codeGen.regenerated +
-                      codeGen.skipped +
-                      codeGen.failed +
-                      codeGen.unsupported,
-                    total: codeGen.total,
-                  })
-                : t("prototype.generateFromCode.scanLoading")}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[60vh] overflow-auto">
-            {sortedCodeItems.length === 0 ? (
-              <div className="flex items-center gap-2 py-6 text-sm text-text-muted">
-                <Loader2 size={14} className="animate-spin" />
-                {t("prototype.generateFromCode.status.pending")}
-              </div>
-            ) : (
-              <ul className="flex flex-col divide-y divide-border-subtle">
-                {sortedCodeItems.map((item) => (
-                  <li
-                    key={item.candidateId}
-                    className="grid grid-cols-[auto_1fr] gap-3 py-2 text-sm"
-                  >
-                    <CodeStatusGlyph status={item.status} />
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="truncate font-medium">{item.title || item.route}</span>
-                        <span className="rounded-full border border-border-subtle px-2 py-0.5 text-[10px] uppercase text-text-muted">
-                          {t(`prototype.generateFromCode.action.${item.action}`)}
-                        </span>
-                      </div>
-                      <div className="font-mono text-xs text-text-muted">{item.route}</div>
-                      <div className="truncate text-xs text-text-muted/80">
-                        {codeStatusLabel(item, t)}
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <DialogFooter showCloseButton={codeGen.done}>
-            {codeGen.done && (
-              <Button onClick={() => setCodeProgressOpen(false)}>{t("issue.close")}</Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={progressOpen} onOpenChange={handleProgressOpenChange}>
         <DialogContent className="sm:max-w-lg" showCloseButton={regen.done}>
@@ -1428,64 +638,6 @@ function StatusGlyph({ status }: { status: RegenItemStatus }) {
   );
 }
 
-function SourceBadge({
-  prototype,
-  t,
-}: {
-  prototype: Prototype;
-  t: (key: string, params?: Record<string, string | number>) => string;
-}) {
-  const isCode = prototype.source_kind === "code";
-  return (
-    <span
-      className={cn(
-        "shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase",
-        isCode
-          ? "border-brand/40 bg-brand/10 text-brand"
-          : "border-border-subtle bg-surface-raised text-text-muted",
-      )}
-    >
-      {isCode ? t("prototype.source.code") : t("prototype.source.manual")}
-    </span>
-  );
-}
-
-function CodeStatusGlyph({ status }: { status: CodeItemStatus }) {
-  if (status === "done" || status === "skipped") {
-    return (
-      <span className="mt-0.5 flex size-5 items-center justify-center rounded-full bg-status-success/15 text-status-success">
-        <Check size={12} />
-      </span>
-    );
-  }
-  if (status === "failed" || status === "unsupported") {
-    return (
-      <span className="mt-0.5 flex size-5 items-center justify-center rounded-full bg-status-failed/15 text-status-failed">
-        <X size={12} />
-      </span>
-    );
-  }
-  if (status === "generating" || status === "capturing") {
-    return (
-      <span className="mt-0.5 flex size-5 items-center justify-center text-brand">
-        <Loader2 size={14} className="animate-spin" />
-      </span>
-    );
-  }
-  if (status === "capture_failed") {
-    return (
-      <span className="mt-0.5 flex size-5 items-center justify-center rounded-full border border-status-awaiting/40 text-status-awaiting">
-        <span className="size-1.5 rounded-full bg-current" />
-      </span>
-    );
-  }
-  return (
-    <span className="mt-0.5 flex size-5 items-center justify-center rounded-full border border-border-subtle text-text-muted/60">
-      <span className="size-1.5 rounded-full bg-current" />
-    </span>
-  );
-}
-
 function statusLabel(
   item: RegenItem,
   t: (key: string, params?: Record<string, string | number>) => string,
@@ -1502,30 +654,4 @@ function statusLabel(
     return t("prototype.regenerateAll.statusStreaming");
   }
   return t("prototype.regenerateAll.statusPending");
-}
-
-function codeStatusLabel(
-  item: CodeGenItem,
-  t: (key: string, params?: Record<string, string | number>) => string,
-): string {
-  if (item.status === "done") {
-    return item.versionNo !== undefined
-      ? t("prototype.generateFromCode.status.doneVersion", { version: item.versionNo })
-      : t("prototype.generateFromCode.status.done");
-  }
-  if (item.status === "skipped") return t("prototype.generateFromCode.status.skipped");
-  if (item.status === "failed") {
-    return t("prototype.generateFromCode.status.failed", { message: item.message ?? "" });
-  }
-  if (item.status === "unsupported") {
-    return t("prototype.generateFromCode.status.unsupported");
-  }
-  if (item.status === "capturing") return t("prototype.generateFromCode.status.capturing");
-  if (item.status === "capture_failed") {
-    return t("prototype.generateFromCode.status.captureFailed", {
-      message: item.message ?? "",
-    });
-  }
-  if (item.status === "generating") return t("prototype.generateFromCode.status.generating");
-  return t("prototype.generateFromCode.status.pending");
 }

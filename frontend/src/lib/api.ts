@@ -156,16 +156,12 @@ export {
 export {
   createPrototype,
   deletePrototype,
-  getGenerateFromCodeStreamUrl,
   getPrototype,
   getPrototypeStreamUrl,
   getPrototypeVersion,
   getRegenerateAllStreamUrl,
-  listPrototypeCodeCandidates,
   listPrototypes,
-  MAX_CANDIDATE_QUERY_TEXT_CHARS,
 } from "./api/prototypes";
-export type { RuntimePrototypeEvidenceInput } from "./api/prototypes";
 
 export { getProjectResume, importProjectResumePdf, saveProjectResume } from "./api/resume";
 export type { ProjectResume, ProjectResumeImport } from "./api/resume";

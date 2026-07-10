@@ -1816,24 +1816,6 @@ class AsyncSQLiteStore:
             row = await cur.fetchone()
         return self._prototype_from_row(row) if row else None
 
-    async def load_prototype_by_source(
-        self, project_id: str, source_ref: str
-    ) -> Prototype | None:
-        await self._ensure_db()
-        conn = await self._get_conn()
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-            """
-            SELECT id, project_id, title, framework, current_version, source_kind,
-                   source_ref, source_hash, source_meta_json, created_at, updated_at
-            FROM prototypes
-            WHERE project_id = ? AND source_kind = 'code' AND source_ref = ?
-            """,
-            (project_id, source_ref),
-        ) as cur:
-            row = await cur.fetchone()
-        return self._prototype_from_row(row) if row else None
-
     async def list_prototypes(self, project_id: str) -> list[Prototype]:
         await self._ensure_db()
         conn = await self._get_conn()
@@ -1850,46 +1832,6 @@ class AsyncSQLiteStore:
         ) as cur:
             rows = await cur.fetchall()
         return [self._prototype_from_row(row) for row in rows]
-
-    async def list_code_prototypes(self, project_id: str) -> list[Prototype]:
-        await self._ensure_db()
-        conn = await self._get_conn()
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-            """
-            SELECT id, project_id, title, framework, current_version, source_kind,
-                   source_ref, source_hash, source_meta_json, created_at, updated_at
-            FROM prototypes
-            WHERE project_id = ? AND source_kind = 'code'
-            ORDER BY updated_at DESC, created_at DESC, title ASC
-            """,
-            (project_id,),
-        ) as cur:
-            rows = await cur.fetchall()
-        return [self._prototype_from_row(row) for row in rows]
-
-    async def update_prototype_source_metadata(
-        self,
-        prototype_id: str,
-        source_hash: str,
-        source_meta_json: str | None,
-    ) -> None:
-        await self._ensure_db()
-        conn = await self._get_conn()
-        await conn.execute(
-            """
-            UPDATE prototypes
-            SET source_hash = ?, source_meta_json = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                source_hash,
-                source_meta_json,
-                self._format_datetime(datetime.now()),
-                prototype_id,
-            ),
-        )
-        await conn.commit()
 
     async def delete_prototype(self, prototype_id: str) -> None:
         await self._ensure_db()

@@ -287,8 +287,8 @@ setBudget((prev) => (prev && next.spent_usd < prev.spent_usd ? prev : next));
   stream; terminal frames still close the `EventSource` when the previous
   behavior did so.
 - Feature-specific payload shapes that include domain types, such as
-  `PrototypeCodeCandidate[]`, need a type guard that validates required fields
-  and literal unions before returning the domain type.
+  regenerate-all `failed` prototype items, need a type guard that validates
+  required fields before returning the domain type.
 - Keep generated/transport constants and typed URL builders in
   `frontend/src/lib/api/<domain>.ts`; keep SSE event-shape narrowing next to
   the consuming feature unless a second feature imports it.
@@ -303,8 +303,8 @@ setBudget((prev) => (prev && next.spent_usd < prev.spent_usd ? prev : next));
   returns `null`; the handler drops the frame.
 - Required field missing or wrong primitive type -> field reader returns
   `null` / `undefined`; the handler drops the frame.
-- Unknown literal union member, such as an unsupported code-candidate `action`
-  -> candidate guard returns `null`.
+- Unknown literal union members on feature-specific SSE frames, or malformed
+  regenerate-all `failed` items -> the corresponding guard returns `null`.
 - Terminal `all_done` malformed -> close the one-shot stream and mark progress
   done when that matches the previous lifecycle behavior.
 

@@ -14,7 +14,6 @@ dependencies = [
     "pypdf>=5.0.0",
     "python-multipart>=0.0.9",
     "httpx>=0.27.0",
-    "playwright>=1.51.0",
 ]
 
 [project.optional-dependencies]
@@ -138,7 +137,6 @@ module = [
     "app.application.help_event_parser",
     "app.application.help_orchestrator",
     "app.application.intent_classifier",
-    "app.application.code_prototype_discovery",
     "app.application.orchestration_service",
     "app.application.issue_artifact_documents",
     "app.application.json_rpc_client",
@@ -162,7 +160,6 @@ module = [
     "app.application.review_guard",
     "app.application.role_concurrency",
     "app.application.role_workflow_service",
-    "app.application.runtime_prototype_capture",
     "app.application.runtime_catalog_service",
     "app.application.self_improvement_proposal_scheduler",
     "app.application.self_improvement_apply_service",

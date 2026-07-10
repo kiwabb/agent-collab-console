@@ -206,42 +206,6 @@ const enUS = {
   "prototype.regenerateAll.summaryWithFailures":
     "Batch complete: {ok} succeeded, {failed} failed (see above)",
   "prototype.regenerateAll.dialogTitle": "Batch regenerate",
-  "prototype.source.manual": "Manual",
-  "prototype.source.code": "Code",
-  "prototype.generateFromCode.button": "Generate from code",
-  "prototype.generateFromCode.scanTitle": "Scan code pages",
-  "prototype.generateFromCode.scanSubtitle":
-    "Find supported React and Next page entries before generation starts.",
-  "prototype.generateFromCode.scanLoading": "Scanning project source…",
-  "prototype.generateFromCode.scanFailed": "Scan failed",
-  "prototype.generateFromCode.noCandidates": "No supported page candidates found.",
-  "prototype.generateFromCode.scanSummary":
-    "{count} candidates · {create} new · {regenerate} changed · {skip} unchanged",
-  "prototype.generateFromCode.selectedCount": "{selected}/{total} generatable candidates selected",
-  "prototype.generateFromCode.selectAll": "Select all",
-  "prototype.generateFromCode.clearSelection": "Clear",
-  "prototype.generateFromCode.instructionPlaceholder":
-    "Optional: add design guidance for this run, e.g. mobile-first, emphasize alert states, or stay close to the existing console.",
-  "prototype.generateFromCode.instructionHint":
-    "Guidance is appended to the selected candidates' generation briefs; unchanged generated candidates are regenerated when guidance is provided.",
-  "prototype.generateFromCode.candidateInstructionPlaceholder":
-    "Optional: guidance for this page only, e.g. keep approval-list density, emphasize empty states, or optimize mobile layout.",
-  "prototype.generateFromCode.startButton": "Generate prototypes",
-  "prototype.generateFromCode.dialogTitle": "Generate from code",
-  "prototype.generateFromCode.progressSummary": "{done}/{total} candidates processed",
-  "prototype.generateFromCode.summary":
-    "Code generation complete: {created} created, {regenerated} regenerated, {skipped} skipped, {failed} failed",
-  "prototype.generateFromCode.action.create": "Create",
-  "prototype.generateFromCode.action.regenerate": "Changed",
-  "prototype.generateFromCode.action.skip": "Skip",
-  "prototype.generateFromCode.action.unsupported": "Unsupported",
-  "prototype.generateFromCode.status.pending": "Pending",
-  "prototype.generateFromCode.status.generating": "Generating…",
-  "prototype.generateFromCode.status.skipped": "Skipped unchanged source",
-  "prototype.generateFromCode.status.done": "Done",
-  "prototype.generateFromCode.status.doneVersion": "Done · v{version}",
-  "prototype.generateFromCode.status.failed": "Failed: {message}",
-  "prototype.generateFromCode.status.unsupported": "Unsupported",
   "projectConductor.title": "Project Conductor",
   "projectConductor.subtitle":
     "Long-lived project runtime with hot, warm, cold, and pinned memory.",

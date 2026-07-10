@@ -468,27 +468,11 @@
         "verdict": "CONFIRMED"
       },
       {
-        "file": "src/features/prototype/ProjectPrototypesPage.tsx:1046",
-        "severity": "medium",
-        "category": "information-density",
-        "issue": "扫描列表里 action=unsupported 的候选 checkbox 被禁用（行 1055），但列表行只渲染 title/route/primary_source_path/source_hash，从不展示 unsupported_reason，用户无从得知为何不可选；该字段仅在 scan_meta 处理写入 message（行 399）。",
-        "suggestion": "在扫描列表中对 action==='unsupported' 的行展示 candidate.unsupported_reason（灰色小字或 tooltip）。",
-        "verdict": "CONFIRMED"
-      },
-      {
         "file": "src/features/prototype/PrototypeCanvas.tsx:232",
         "severity": "low",
         "category": "interaction-feedback",
         "issue": "删除按钮 onClick 触发的 handleDelete 为异步（await deletePrototype），但按钮无 loading/disabled 状态，请求进行中可重复点击触发多次删除请求且无进行中反馈。",
         "suggestion": "加删除中的本地 loading state，请求期间 disabled 按钮。",
-        "verdict": "CONFIRMED"
-      },
-      {
-        "file": "src/features/prototype/ProjectPrototypesPage.tsx:1281",
-        "severity": "low",
-        "category": "accessibility",
-        "issue": "运行时 base URL 的 Input 仅有 placeholder，无 label/aria-label，屏幕阅读器无法得知用途。同弹窗内 Textarea 均带 aria-label（行 1140、1185）。",
-        "suggestion": "补 aria-label（可复用 prototype.generateFromCode.runtimeBaseUrlPlaceholder 或新增 label 键）。",
         "verdict": "CONFIRMED"
       },
       {

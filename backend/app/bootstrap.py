@@ -24,7 +24,6 @@ from app.application.role_workflow_service import RoleWorkflowService, RoleWorkf
 from app.application.git_service import GitService
 from app.application.project_service import ProjectService
 from app.application.prototype_service import PrototypeService
-from app.application.runtime_prototype_capture import RuntimePrototypeCaptureService
 from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.application.skill_service import SkillService
 from app.application import timeouts
@@ -194,7 +193,6 @@ prototype_service = (
     PrototypeService(
         store=async_store,
         runtime_catalog_service=runtime_catalog_service,
-        runtime_capture_service=RuntimePrototypeCaptureService(),
     )
     if async_store is not None and runtime_catalog_service is not None
     else None

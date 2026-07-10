@@ -122,14 +122,7 @@ export interface GitBranch {
   last_commit_sha: string | null;
 }
 
-export type {
-  Prototype,
-  PrototypeCodeCandidate,
-  PrototypeCodeCandidateAction,
-  PrototypeCodeCandidatesResponse,
-  PrototypeDetail,
-  PrototypeVersion,
-} from "./types/prototypes";
+export type { Prototype, PrototypeDetail, PrototypeVersion } from "./types/prototypes";
 export type {
   BenchmarkDiff,
   BenchmarkDiffFixture,
