@@ -1300,3 +1300,51 @@ Implemented project resume markdown storage and PDF import, fixed runtime catalo
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: Remove code-scan prototype generation
+
+**Date**: 2026-07-11
+**Task**: Remove code-scan prototype generation
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Removed source scanning and runtime browser capture prototype generation end to end while preserving manual creation, iteration, regenerate-all, and legacy prototype provenance contracts.
+
+### Main Changes
+
+- Removed backend source discovery, runtime browser capture, code-scan routes,
+  dedicated store methods, and the Python Playwright dependency.
+- Removed the frontend code-scan entry, dialogs, API/types/SSE readers, source
+  badges, translations, obsolete tests, and audit findings.
+- Preserved manual creation, iteration, regenerate-all, preview/version flows,
+  and legacy `Prototype.source_*` plus SQLite provenance storage.
+- Added legacy compatibility and removed-route regressions and documented the
+  retained provenance contract in the backend database spec.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b73ea0df` | (see git log) |
+
+### Testing
+
+- [OK] Backend prototype service/API tests: 32 passed; targeted Ruff and import
+  smoke passed.
+- [OK] Frontend targeted tests, prototype source hygiene, typecheck, lint,
+  targeted Prettier, and production build passed.
+- [OK] HTTP smoke: prototype page returned 200, legacy code prototypes listed,
+  and both retired routes returned 404 and were absent from OpenAPI.
+- [INFO] Full backend and frontend suites retain unrelated pre-existing
+  failures; no failure references the code-scan removal paths.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
