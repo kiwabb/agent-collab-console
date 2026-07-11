@@ -9,12 +9,14 @@
   ],
   "pinned_qa_commands": [
     {
-      "command": "cd backend && .venv/bin/python -m pytest tests/test_issue_budget_endpoint.py -v 2>&1 | tail -20",
+      "argv": ["{python}", "-m", "pytest", "tests/test_issue_budget_endpoint.py", "-v"],
+      "cwd": "backend",
       "description": "Run the budget endpoint tests; expect all 3+ branches to pass",
       "timeout_s": 60
     },
     {
-      "command": "cd backend && .venv/bin/python -m pytest tests/test_issue_budget_endpoint.py -v --co 2>&1 | grep -v '::' | grep -c 'slow' || echo 0",
+      "argv": ["{python}", "-c", "from pathlib import Path; text = Path('tests/test_issue_budget_endpoint.py').read_text(); assert '@pytest.mark.slow' not in text"],
+      "cwd": "backend",
       "description": "Confirm none of the new tests are collected under @pytest.mark.slow",
       "timeout_s": 30
     }

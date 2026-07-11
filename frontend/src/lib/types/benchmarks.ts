@@ -15,6 +15,7 @@ export interface BenchmarkRun {
   epoch_count: number;
   fixture_ids: string[];
   is_baseline: boolean;
+  is_synthetic: boolean;
   status: "running" | "completed" | "failed";
   notes: string | null;
   aggregate_pass_at_1: number | null;

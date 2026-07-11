@@ -9,12 +9,14 @@
   ],
   "pinned_qa_commands": [
     {
-      "command": "grep -q '\"issue.side.budgetOf\":' frontend/src/lib/i18n.ts && grep -q '\"issue.side.budgetRemaining\":' frontend/src/lib/i18n.ts && grep -c '\"issue.side.budgetOf\":' frontend/src/lib/i18n.ts | grep -q '^2$' && grep -c '\"issue.side.budgetRemaining\":' frontend/src/lib/i18n.ts | grep -q '^2$'",
+      "argv": ["{python}", "-c", "from pathlib import Path; text = Path('frontend/src/lib/i18n.ts').read_text(); assert text.count('\\\"issue.side.budgetOf\\\":') == 2; assert text.count('\\\"issue.side.budgetRemaining\\\":') == 2"],
+      "cwd": ".",
       "description": "Both keys present in both locales (each grep count must be 2)",
       "timeout_s": 10
     },
     {
-      "command": "cd frontend && npm test 2>&1 | tail -8",
+      "argv": ["npm", "test"],
+      "cwd": "frontend",
       "description": "Frontend tests must still pass (i18n coverage test enforces parity)",
       "timeout_s": 120
     }

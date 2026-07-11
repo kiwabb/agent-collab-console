@@ -53,6 +53,7 @@ class BenchmarkRun:
     epoch_count: int
     fixture_ids: list[str]  # stored as JSON
     is_baseline: bool
+    is_synthetic: bool
     status: str  # "running" | "completed" | "failed"
     notes: str | None = None
     # Aggregate (filled in on completion):
@@ -138,6 +139,7 @@ class InMemoryStore:
             epoch_count=run.epoch_count,
             fixture_ids=list(run.fixture_ids),
             is_baseline=run.is_baseline,
+            is_synthetic=run.is_synthetic,
             status=run.status,
             notes=run.notes,
             aggregate_pass_at_1=run.aggregate_pass_at_1,
@@ -173,6 +175,8 @@ class InMemoryStore:
 
     def create_run(self, run: BenchmarkRun) -> None:
         with self._lock:
+            if run.is_baseline and run.is_synthetic:
+                raise ValueError("synthetic benchmark runs cannot be baselines")
             if run.id in self._runs:
                 raise ValueError(f"run {run.id!r} already exists")
             self._runs[run.id] = self._snapshot_run(run)
@@ -180,6 +184,8 @@ class InMemoryStore:
 
     def update_run(self, run: BenchmarkRun) -> None:
         with self._lock:
+            if run.is_baseline and run.is_synthetic:
+                raise ValueError("synthetic benchmark runs cannot be baselines")
             if run.id not in self._runs:
                 raise ValueError(f"run {run.id!r} does not exist")
             self._runs[run.id] = self._snapshot_run(run)
@@ -204,6 +210,8 @@ class InMemoryStore:
         with self._lock:
             if run_id not in self._runs:
                 raise ValueError(f"run {run_id!r} does not exist")
+            if self._runs[run_id].is_synthetic:
+                raise ValueError("synthetic benchmark runs cannot be baselines")
             # Clear the prior baseline row's flag (the snapshot model
             # means we need to overwrite the stored row, not the
             # caller's local copy).
@@ -247,6 +255,7 @@ CREATE TABLE IF NOT EXISTS benchmark_run (
     epoch_count INTEGER NOT NULL,
     fixture_ids TEXT NOT NULL,
     is_baseline INTEGER NOT NULL DEFAULT 0,
+    is_synthetic INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL,
     notes TEXT,
     aggregate_pass_at_1 REAL,
@@ -297,6 +306,7 @@ def _row_to_run(row: sqlite3.Row) -> BenchmarkRun:
         epoch_count=row["epoch_count"],
         fixture_ids=json.loads(row["fixture_ids"]),
         is_baseline=bool(row["is_baseline"]),
+        is_synthetic=bool(row["is_synthetic"]),
         status=row["status"],
         notes=row["notes"],
         aggregate_pass_at_1=row["aggregate_pass_at_1"],
@@ -352,6 +362,11 @@ class SqliteStore:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(benchmark_run)")}
+        if "is_synthetic" not in columns:
+            self._conn.execute(
+                "ALTER TABLE benchmark_run ADD COLUMN is_synthetic INTEGER NOT NULL DEFAULT 0"
+            )
         self._conn.commit()
 
     def close(self) -> None:
@@ -376,6 +391,7 @@ class SqliteStore:
             r.epoch_count,
             json.dumps(r.fixture_ids),
             1 if r.is_baseline else 0,
+            1 if r.is_synthetic else 0,
             r.status,
             r.notes,
             r.aggregate_pass_at_1,
@@ -388,6 +404,8 @@ class SqliteStore:
         )
 
     def create_run(self, run: BenchmarkRun) -> None:
+        if run.is_baseline and run.is_synthetic:
+            raise ValueError("synthetic benchmark runs cannot be baselines")
         # SQLite raises IntegrityError on duplicate id, but the
         # in-memory store raises ValueError — keep the API uniform.
         existing = self._conn.execute(
@@ -401,23 +419,25 @@ class SqliteStore:
                 INSERT INTO benchmark_run (
                     id, created_at, label, catalog_snapshot,
                     orchestrator_version, epoch_count, fixture_ids,
-                    is_baseline, status, notes,
+                    is_baseline, is_synthetic, status, notes,
                     aggregate_pass_at_1, aggregate_pass_at_1_stderr,
                     cost_total_usd, cost_per_issue_usd,
                     total_input_tokens, total_output_tokens,
                     total_duration_s
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._run_params(run),
             )
 
     def update_run(self, run: BenchmarkRun) -> None:
+        if run.is_baseline and run.is_synthetic:
+            raise ValueError("synthetic benchmark runs cannot be baselines")
         with self._conn:
             cur = self._conn.execute(
                 """
                 UPDATE benchmark_run SET
                     label = ?, catalog_snapshot = ?, orchestrator_version = ?,
-                    epoch_count = ?, fixture_ids = ?, is_baseline = ?,
+                    epoch_count = ?, fixture_ids = ?, is_baseline = ?, is_synthetic = ?,
                     status = ?, notes = ?,
                     aggregate_pass_at_1 = ?, aggregate_pass_at_1_stderr = ?,
                     cost_total_usd = ?, cost_per_issue_usd = ?,
@@ -432,6 +452,7 @@ class SqliteStore:
                     run.epoch_count,
                     json.dumps(run.fixture_ids),
                     1 if run.is_baseline else 0,
+                    1 if run.is_synthetic else 0,
                     run.status,
                     run.notes,
                     run.aggregate_pass_at_1,
@@ -463,10 +484,12 @@ class SqliteStore:
         # Validate existence first; the partial unique index would
         # also catch this but the message is opaque.
         existing = self._conn.execute(
-            "SELECT 1 FROM benchmark_run WHERE id = ?", (run_id,)
+            "SELECT is_synthetic FROM benchmark_run WHERE id = ?", (run_id,)
         ).fetchone()
         if existing is None:
             raise ValueError(f"run {run_id!r} does not exist")
+        if bool(existing["is_synthetic"]):
+            raise ValueError("synthetic benchmark runs cannot be baselines")
         with self._conn:
             # Clear any existing baseline first (the partial unique
             # index would block two baselines anyway, but being
@@ -545,6 +568,7 @@ def make_run_row(
     fixture_ids: list[str],
     epoch_count: int,
     is_baseline: bool = False,
+    is_synthetic: bool = False,
     status: str = "running",
     notes: str | None = None,
     catalog_snapshot: str | None = None,
@@ -563,6 +587,7 @@ def make_run_row(
         epoch_count=epoch_count,
         fixture_ids=list(fixture_ids),
         is_baseline=is_baseline,
+        is_synthetic=is_synthetic,
         status=status,
         notes=notes,
     )

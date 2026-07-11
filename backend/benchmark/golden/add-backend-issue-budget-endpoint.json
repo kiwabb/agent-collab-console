@@ -9,12 +9,14 @@
   ],
   "pinned_qa_commands": [
     {
-      "command": "cd backend && .venv/bin/python -c \"import urllib.request, json, urllib.error; r = urllib.request.urlopen('http://localhost:9000/api/codex/issues/does-not-exist/budget'); r.read()\" 2>&1 | grep -q '404' || (cd backend && .venv/bin/python -c \"import urllib.request, urllib.error; try: urllib.request.urlopen('http://localhost:9000/api/codex/issues/does-not-exist/budget').read(); except urllib.error.HTTPError as e: assert e.code == 404\")",
+      "argv": ["{python}", "-c", "from fastapi import FastAPI; from fastapi.testclient import TestClient; from app.interfaces.api import router; app = FastAPI(); app.include_router(router); r = TestClient(app).get('/api/codex/issues/does-not-exist/budget'); assert r.status_code == 404, r.text"],
+      "cwd": "backend",
       "description": "404 path check via HTTPError",
       "timeout_s": 30
     },
     {
-      "command": "cd backend && .venv/bin/python -c \"from app.application.budget_service import IssueBudgetStatus; s = IssueBudgetStatus(issue_id='i', spent_usd=1.0, budget_usd=2.0, budget_source='issue', soft_warn_ratio=0.8); d = s.to_dict(); assert set(d.keys()) == {'issue_id','spent_usd','budget_usd','remaining_usd','used_ratio','soft_warn','over_budget','soft_warn_ratio','has_ceiling','budget_source'}; assert d['has_ceiling'] is True; assert d['remaining_usd'] == 1.0; assert d['used_ratio'] == 0.5\"",
+      "argv": ["{python}", "-c", "from app.application.budget_service import IssueBudgetStatus; s = IssueBudgetStatus(issue_id='i', spent_usd=1.0, budget_usd=2.0, budget_source='issue', soft_warn_ratio=0.8); d = s.to_dict(); assert set(d.keys()) == {'issue_id','spent_usd','budget_usd','remaining_usd','used_ratio','soft_warn','over_budget','soft_warn_ratio','has_ceiling','budget_source'}; assert d['has_ceiling'] is True; assert d['remaining_usd'] == 1.0; assert d['used_ratio'] == 0.5"],
+      "cwd": "backend",
       "description": "Sanity-check the to_dict() shape (does not require a live server)",
       "timeout_s": 30
     }

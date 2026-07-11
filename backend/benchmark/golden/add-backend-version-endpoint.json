@@ -9,7 +9,8 @@
   ],
   "pinned_qa_commands": [
     {
-      "command": "cd backend && .venv/bin/python -c \"import urllib.request, json; r = urllib.request.urlopen('http://localhost:9000/api/codex/version'); body = json.loads(r.read()); assert r.status == 200; assert 'version' in body; assert body['version'] is None or isinstance(body['version'], str)\"",
+      "argv": ["{python}", "-c", "from fastapi import FastAPI; from fastapi.testclient import TestClient; from app.interfaces.api import router; app = FastAPI(); app.include_router(router); r = TestClient(app).get('/api/codex/version'); body = r.json(); assert r.status_code == 200; assert 'version' in body; assert body['version'] is None or isinstance(body['version'], str)"],
+      "cwd": "backend",
       "description": "Fetch /api/codex/version and assert the field is present and string-or-null",
       "timeout_s": 30
     }

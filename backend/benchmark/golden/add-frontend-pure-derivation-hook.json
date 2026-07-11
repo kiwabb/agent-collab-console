@@ -9,12 +9,14 @@
   ],
   "pinned_qa_commands": [
     {
-      "command": "cd frontend && npm test 2>&1 | tail -10",
+      "argv": ["npm", "test"],
+      "cwd": "frontend",
       "description": "Frontend tests must pass and include the new budgetMeter test",
       "timeout_s": 120
     },
     {
-      "command": "cd frontend && grep -q 'export function deriveBudgetMeterState' src/features/issues/components/BudgetMeter.tsx",
+      "argv": ["{python}", "-c", "from pathlib import Path; text = Path('src/features/issues/components/BudgetMeter.tsx').read_text(); assert 'export function deriveBudgetMeterState' in text"],
+      "cwd": "frontend",
       "description": "The derivation function is exported",
       "timeout_s": 5
     }

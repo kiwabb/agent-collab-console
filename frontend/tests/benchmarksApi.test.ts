@@ -22,6 +22,9 @@ test("triggerBenchmarkRun posts a typed JSON payload through the shared API help
         epochs: 2,
         fixture_ids: ["fixture-a"],
         is_baseline: true,
+        dry_run: false,
+        project_id: "project-1",
+        workspace_id: "workspace-1",
       });
 
       assert.deepEqual(result, {
@@ -38,6 +41,9 @@ test("triggerBenchmarkRun posts a typed JSON payload through the shared API help
         epochs: 2,
         fixture_ids: ["fixture-a"],
         is_baseline: true,
+        dry_run: false,
+        project_id: "project-1",
+        workspace_id: "workspace-1",
       });
     },
   );

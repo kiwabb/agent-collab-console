@@ -173,6 +173,7 @@ class SerializedRun(TypedDict):
     epoch_count: int
     fixture_ids: list[str]
     is_baseline: bool
+    is_synthetic: bool
     status: str
     notes: str | None
     aggregate_pass_at_1: float | None
@@ -292,6 +293,22 @@ async def trigger_run(body: TriggerRunPayload) -> TriggerRunResponse:
     workspace_id = req.workspace_id
     dry_run = req.dry_run
 
+    if dry_run and is_baseline:
+        raise HTTPException(
+            status_code=422,
+            detail="synthetic dry runs cannot be baselines",
+        )
+    if not dry_run and (
+        project_id is None
+        or not project_id.strip()
+        or workspace_id is None
+        or not workspace_id.strip()
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="project_id and workspace_id are required for real benchmark runs",
+        )
+
     job = registry.create(
         "benchmark_run",
         meta={
@@ -299,17 +316,17 @@ async def trigger_run(body: TriggerRunPayload) -> TriggerRunResponse:
             "epochs": epochs,
             "fixture_ids": fixture_ids,
             "is_baseline": is_baseline,
+            "dry_run": dry_run,
         },
     )
 
     async def _coro() -> str:
-        # Build the executor. Dry-run uses FakeExecutor so
-        # the API can be exercised in a dev env without
-        # spending on real CLI cycles.
         executor: IssueExecutor
-        if dry_run or not (project_id and workspace_id):
+        if dry_run:
             executor = FakeExecutor()
         else:
+            assert project_id is not None
+            assert workspace_id is not None
             executor = RealConductorExecutor(project_id=project_id, workspace_id=workspace_id)
         progress_cb = make_progress_updater(registry, job)  # noqa: F841
         # total_epochs is also written to meta so the leaderboard
@@ -322,14 +339,13 @@ async def trigger_run(body: TriggerRunPayload) -> TriggerRunResponse:
                 epochs=epochs,
                 fixture_ids=fixture_ids,
                 is_baseline=is_baseline,
+                is_synthetic=dry_run,
                 max_budget_usd=max_budget_usd,
             )
         )
         return run_row.id
 
-    async def _on_complete(
-        j: Job, _result: object | None, _exc: BaseException | None
-    ) -> None:
+    async def _on_complete(j: Job, _result: object | None, _exc: BaseException | None) -> None:
         # Re-fetch the latest job from the registry (it may
         # have been mutated by progress callbacks).
         latest = registry.get(j.id) or j
@@ -357,9 +373,7 @@ async def trigger_run(body: TriggerRunPayload) -> TriggerRunResponse:
     }
 
 
-def _serialize_run(
-    run: BenchmarkRun, epochs: list[BenchmarkEpoch] | None = None
-) -> SerializedRun:
+def _serialize_run(run: BenchmarkRun, epochs: list[BenchmarkEpoch] | None = None) -> SerializedRun:
     return {
         "id": run.id,
         "created_at": run.created_at,
@@ -368,6 +382,7 @@ def _serialize_run(
         "epoch_count": run.epoch_count,
         "fixture_ids": list(run.fixture_ids),
         "is_baseline": run.is_baseline,
+        "is_synthetic": run.is_synthetic,
         "status": run.status,
         "notes": run.notes,
         "aggregate_pass_at_1": run.aggregate_pass_at_1,
@@ -461,7 +476,10 @@ def set_baseline(run_id: str) -> SetBaselineResponse:
     run = store.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"run {run_id!r} not found")
-    store.set_baseline(run_id)
+    try:
+        store.set_baseline(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True, "run_id": run_id}
 
 

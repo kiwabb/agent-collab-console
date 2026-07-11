@@ -8,6 +8,7 @@ tasks (no issue_id) also get a worktree, scoped to the task itself.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import shutil
 from datetime import datetime
@@ -15,6 +16,11 @@ from pathlib import Path
 from typing import TypedDict
 
 from app.application.git_service import GitError, GitService
+from app.application.project_command import (
+    ProjectCommandError,
+    build_project_child_env,
+    parse_project_setup_commands,
+)
 from app.application.worktree_claude_hooks import inject_worktree_claude_hooks
 from app.domain.models import CodexIssue, CodexTask, Project
 
@@ -67,6 +73,7 @@ class AgentMergeSummary(TypedDict):
 
 
 _SAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+logger = logging.getLogger(__name__)
 
 
 def _slugify(text: str, max_len: int = 24) -> str:
@@ -132,6 +139,10 @@ class WorktreeManager:
         lock = await self._lock_for(f"issue:{issue.id}")
         async with lock:
             if issue.git_worktree_path and issue.git_branch:
+                await self._link_trusted_frontend_dependencies(
+                    project,
+                    Path(issue.git_worktree_path),
+                )
                 return (
                     issue.git_branch,
                     issue.git_worktree_path,
@@ -141,6 +152,7 @@ class WorktreeManager:
             base = base_branch or project.default_branch
             worktree = _worktree_path(project, "issue", issue.id)
             if worktree.exists() and await self.git.is_git_repo(worktree):
+                await self._link_trusted_frontend_dependencies(project, worktree)
                 return branch, str(worktree), base
             if worktree.exists():
                 raise WorktreeError(f"worktree path exists but is not a git repo: {worktree}")
@@ -153,6 +165,7 @@ class WorktreeManager:
             await inject_worktree_claude_hooks(worktree)
             if project.setup_script:
                 await self._run_setup(project.setup_script, worktree)
+            await self._link_trusted_frontend_dependencies(project, worktree)
             return branch, str(worktree), base
 
     async def cleanup_issue_worktree(self, project: Project, issue: CodexIssue) -> None:
@@ -285,6 +298,7 @@ class WorktreeManager:
             base = issue.git_branch
             worktree = _worktree_path(project, "swarm", f"{issue.id}-{agent_key}")
             if worktree.exists() and await self.git.is_git_repo(worktree):
+                await self._link_trusted_frontend_dependencies(project, worktree)
                 return branch, str(worktree), base
             if worktree.exists():
                 raise WorktreeError(f"worktree path exists but is not a git repo: {worktree}")
@@ -297,6 +311,7 @@ class WorktreeManager:
             await inject_worktree_claude_hooks(worktree)
             if project.setup_script:
                 await self._run_setup(project.setup_script, worktree)
+            await self._link_trusted_frontend_dependencies(project, worktree)
             return branch, str(worktree), base
 
     async def cleanup_agent_worktree(
@@ -613,6 +628,10 @@ class WorktreeManager:
         lock = await self._lock_for(f"chat:{task.id}")
         async with lock:
             if task.git_worktree_path and task.git_branch:
+                await self._link_trusted_frontend_dependencies(
+                    project,
+                    Path(task.git_worktree_path),
+                )
                 return (
                     task.git_branch,
                     task.git_worktree_path,
@@ -622,6 +641,7 @@ class WorktreeManager:
             base = project.default_branch
             worktree = _worktree_path(project, "chat", task.id)
             if worktree.exists() and await self.git.is_git_repo(worktree):
+                await self._link_trusted_frontend_dependencies(project, worktree)
                 return branch, str(worktree), base
             if worktree.exists():
                 raise WorktreeError(f"worktree path exists but is not a git repo: {worktree}")
@@ -634,6 +654,7 @@ class WorktreeManager:
             await inject_worktree_claude_hooks(worktree)
             if project.setup_script:
                 await self._run_setup(project.setup_script, worktree)
+            await self._link_trusted_frontend_dependencies(project, worktree)
             return branch, str(worktree), base
 
     async def cleanup_chat_task_worktree(self, project: Project, task: CodexTask) -> None:
@@ -649,6 +670,81 @@ class WorktreeManager:
 
     # ---- Shared helpers ----
 
+    async def _link_trusted_frontend_dependencies(
+        self,
+        project: Project,
+        worktree: Path,
+    ) -> bool:
+        """Reuse the primary repo's ignored frontend dependencies in a worktree.
+
+        Git worktrees intentionally omit ignored ``node_modules`` directories.
+        Linking this one dependency tree keeps frontend agents usable without
+        copying project secrets or the rest of the primary working tree.
+        """
+        primary_root = Path(project.repo_path).resolve()
+        worktree_root = worktree.resolve()
+        if primary_root == worktree_root:
+            raise WorktreeError("worktree dependency target must be isolated from the primary repo")
+        if not worktree_root.is_dir():
+            raise WorktreeError(f"worktree dependency target does not exist: {worktree_root}")
+
+        source_path = primary_root / "frontend" / "node_modules"
+        if not source_path.exists() and not source_path.is_symlink():
+            return False
+        source = source_path.resolve()
+        if not source.is_relative_to(primary_root):
+            raise WorktreeError(
+                "trusted primary frontend dependencies resolve outside the project repo"
+            )
+        if not source.is_dir():
+            raise WorktreeError("trusted primary frontend/node_modules is not a directory")
+
+        target_parent = worktree_root / "frontend"
+        if not target_parent.exists():
+            return False
+        resolved_parent = target_parent.resolve()
+        if not resolved_parent.is_relative_to(worktree_root):
+            raise WorktreeError("worktree frontend directory resolves outside the worktree")
+        if not resolved_parent.is_dir():
+            raise WorktreeError("worktree frontend path is not a directory")
+
+        target = target_parent / "node_modules"
+        if target.is_symlink():
+            raise WorktreeError("worktree has an unexpected frontend/node_modules symlink")
+        if target.exists():
+            if not target.is_dir():
+                raise WorktreeError("worktree frontend/node_modules is not a directory")
+            return False
+
+        ignored = await self.git._run(
+            ["check-ignore", "-q", "--no-index", "--", "frontend/node_modules/"],
+            cwd=worktree_root,
+            check=False,
+        )
+        if ignored.returncode != 0:
+            logger.info(
+                "Skipping frontend dependency link because frontend/node_modules is not ignored: %s",
+                worktree_root,
+            )
+            return False
+
+        entries: list[tuple[Path, Path]] = []
+        for entry in source.iterdir():
+            resolved_entry = entry.resolve()
+            if not resolved_entry.is_relative_to(primary_root):
+                raise WorktreeError(
+                    "trusted frontend dependency entry resolves outside the project repo"
+                )
+            entries.append((entry, resolved_entry))
+
+        target.mkdir()
+        for entry, resolved_entry in entries:
+            (target / entry.name).symlink_to(
+                resolved_entry,
+                target_is_directory=resolved_entry.is_dir(),
+            )
+        return True
+
     async def _cleanup_path(self, repo_path: str, worktree_path: str) -> None:
         try:  # noqa: SIM105
             await self.git.remove_worktree(repo_path, worktree_path)
@@ -659,36 +755,41 @@ class WorktreeManager:
             shutil.rmtree(path, ignore_errors=True)
 
     async def _run_setup(self, script: str, cwd: Path) -> None:
-        import os
-
-        # Inherit a curated slice of the parent process env so commands like
-        # `npm install` (needs PATH, HOME, possibly NPM_TOKEN, etc.) can find
-        # their tools. The intentional drop list keeps Python/codex internals
-        # from leaking into the user's setup shell.
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in {"CODEX_LAUNCH_ENABLED", "CODEX_WORKSPACE_ROOT", "SQLITE_DB_PATH"}
-        }
-        proc = await asyncio.create_subprocess_shell(
-            script,
-            cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600.0)
-        except asyncio.TimeoutError as exc:  # noqa: UP041
-            proc.kill()
-            await proc.wait()
-            raise WorktreeError("setup_script timed out after 600s") from exc
-        if proc.returncode != 0:
-            # Show the tail of stderr (then stdout) so the toast has the actual
-            # error rather than the first lines of an autoreloader banner.
-            combined = (
-                stderr.decode("utf-8", errors="replace").strip()
-                or stdout.decode("utf-8", errors="replace").strip()
-            )
-            tail = "\n".join(combined.splitlines()[-30:])
-            raise WorktreeError(f"setup_script failed (rc={proc.returncode}):\n{tail}")
+            commands = parse_project_setup_commands(script, cwd)
+        except ProjectCommandError as exc:
+            logger.warning("setup script refused: cwd=%s reason=%s", cwd, exc.reason)
+            raise WorktreeError(f"setup_script refused: {exc.reason}") from exc
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 600.0
+        for command in commands:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *command.argv,
+                    cwd=str(command.cwd),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=build_project_child_env(),
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                raise WorktreeError("setup_script process could not start") from exc
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                proc.kill()
+                await proc.wait()
+                raise WorktreeError("setup_script timed out after 600s")
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=remaining)
+            except asyncio.TimeoutError as exc:  # noqa: UP041
+                proc.kill()
+                await proc.wait()
+                raise WorktreeError("setup_script timed out after 600s") from exc
+            if proc.returncode != 0:
+                combined = (
+                    stderr.decode("utf-8", errors="replace").strip()
+                    or stdout.decode("utf-8", errors="replace").strip()
+                )
+                tail = "\n".join(combined.splitlines()[-30:])
+                raise WorktreeError(f"setup_script failed (rc={proc.returncode}):\n{tail}")

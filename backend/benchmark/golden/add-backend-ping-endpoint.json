@@ -9,7 +9,8 @@
   ],
   "pinned_qa_commands": [
     {
-      "command": "cd backend && .venv/bin/python -c \"import urllib.request, json, time; t0 = time.time(); r = urllib.request.urlopen('http://localhost:9000/api/codex/ping'); body = json.loads(r.read()); assert r.status == 200; assert body['pong'] is True; assert isinstance(body['ts'], (int, float)); assert abs(body['ts'] - t0) < 5.0; assert isinstance(body['latency_ms'], (int, float)) and body['latency_ms'] >= 0\"",
+      "argv": ["{python}", "-c", "import time; from fastapi import FastAPI; from fastapi.testclient import TestClient; from app.interfaces.api import router; app = FastAPI(); app.include_router(router); t0 = time.time(); r = TestClient(app).get('/api/codex/ping'); body = r.json(); assert r.status_code == 200; assert body['pong'] is True; assert isinstance(body['ts'], (int, float)); assert abs(body['ts'] - t0) < 5.0; assert isinstance(body['latency_ms'], (int, float)) and body['latency_ms'] >= 0"],
+      "cwd": "backend",
       "description": "Fetch /api/codex/ping and assert pong, ts, latency_ms",
       "timeout_s": 30
     }

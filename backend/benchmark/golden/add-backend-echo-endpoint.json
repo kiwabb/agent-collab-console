@@ -9,7 +9,8 @@
   ],
   "pinned_qa_commands": [
     {
-      "command": "cd backend && .venv/bin/python -c \"import urllib.request, json; r = urllib.request.urlopen('http://localhost:9000/api/codex/echo'); assert r.status == 200; assert r.headers['content-type'].startswith('application/json'); assert json.loads(r.read()) == {'echo': True}\"",
+      "argv": ["{python}", "-c", "from fastapi import FastAPI; from fastapi.testclient import TestClient; from app.interfaces.api import router; app = FastAPI(); app.include_router(router); r = TestClient(app).get('/api/codex/echo'); assert r.status_code == 200; assert r.headers['content-type'].startswith('application/json'); assert r.json() == {'echo': True}"],
+      "cwd": "backend",
       "description": "Fetch /api/codex/echo and assert the shape",
       "timeout_s": 30
     }

@@ -105,15 +105,20 @@ def test_execution_no_results_treated_as_failure():
     assert s.metadata == {"reason": "no_qa_results"}
 
 
-def test_execution_does_not_count_expected_nonzero_as_pass():
-    """The scorer is intentionally simple: exit_code == 0 is pass.
-    A pinned command with expected_exit_code=2 that returns 2 is
-    STILL scored as failure here. The match-with-expected logic is
-    the runner's job (PR2); PR1 just provides the raw pass-rate."""
-    artifacts = _artifacts(qa_results=[CommandResult(command="a", exit_code=2, duration_s=0.1)])
+def test_execution_counts_matching_expected_nonzero_as_pass():
+    artifacts = _artifacts(
+        qa_results=[
+            CommandResult(
+                command="a",
+                exit_code=2,
+                expected_exit_code=2,
+                duration_s=0.1,
+            )
+        ]
+    )
     s = ExecutionScorer().score(artifacts)
-    assert s.value == 0.0
-    assert s.passed is False
+    assert s.value == 1.0
+    assert s.passed is True
 
 
 # ---------------------------------------------------------------------------

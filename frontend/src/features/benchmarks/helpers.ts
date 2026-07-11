@@ -8,6 +8,46 @@
  * React, hooks, or the network.
  */
 import type { BenchmarkDiffFixture, BenchmarkJobStatus } from "@/lib/types";
+import type { TriggerBenchmarkBody } from "@/lib/api/benchmarks";
+
+export function benchmarkTargetError(
+  dryRun: boolean,
+  projectId: string,
+  workspaceId: string,
+): "project_required" | "workspace_required" | null {
+  if (dryRun) return null;
+  if (!projectId) return "project_required";
+  if (!workspaceId) return "workspace_required";
+  return null;
+}
+
+interface BenchmarkTriggerValues {
+  label: string;
+  epochs: number;
+  dryRun: boolean;
+  projectId: string;
+  workspaceId: string;
+  maxBudgetUsd: number | undefined;
+}
+
+export function buildBenchmarkTriggerBody(values: BenchmarkTriggerValues): TriggerBenchmarkBody {
+  const selectionError = benchmarkTargetError(values.dryRun, values.projectId, values.workspaceId);
+  if (selectionError) throw new Error(selectionError);
+
+  const common = {
+    label: values.label || undefined,
+    epochs: values.epochs,
+    max_budget_usd: values.maxBudgetUsd,
+  };
+  return values.dryRun
+    ? { ...common, dry_run: true }
+    : {
+        ...common,
+        dry_run: false,
+        project_id: values.projectId,
+        workspace_id: values.workspaceId,
+      };
+}
 
 // ---------------------------------------------------------------------------
 // Formatting

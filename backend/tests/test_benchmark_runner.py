@@ -14,6 +14,8 @@ orchestration contract:
 from __future__ import annotations  # noqa: I001
 
 import json
+import sys
+from types import SimpleNamespace
 from typing import Iterable  # noqa: F401, UP035
 
 import pytest
@@ -22,9 +24,12 @@ from benchmark.runner import (
     BenchmarkRunner,
     ExecutorResult,  # noqa: F401
     FakeExecutor,
+    RealConductorExecutor,
     RunOptions,
     _is_benchmark_runtime_store,
 )
+from benchmark.golden_schema import GoldenIssue, PinnedCommand
+from benchmark.scorers_impl import ExecutionScorer
 from benchmark.store import (
     BenchmarkEpoch,  # noqa: F401
     BenchmarkRun,  # noqa: F401
@@ -43,7 +48,17 @@ def _ok_artifacts(fixture_id: str) -> IssueArtifacts:
     return IssueArtifacts(
         issue_id=f"codex-{fixture_id}",
         prd_acceptance_criteria=["the endpoint exists", "returns 200"],
-        qa_results=[CommandResult(command="x", exit_code=0, duration_s=0.1)],
+        qa_results=[
+            CommandResult(
+                command="python3 -c 'print(1)'",
+                argv=["python3", "-c", "print(1)"],
+                cwd="backend",
+                exit_code=0,
+                expected_exit_code=0,
+                duration_s=0.1,
+                stdout_tail="1\n",
+            )
+        ],
         completed_engineer_tasks=[
             "Add the endpoint",
             "Returns 200",
@@ -80,6 +95,21 @@ def _mixed_results() -> dict[str, list[IssueArtifacts]]:
 
 
 class _AsyncRuntimeStore:
+    def __init__(self):
+        self.graph = None
+
+    async def load_codex_workspace(self, workspace_id: str):
+        return None
+
+    async def load_project(self, project_id: str):
+        return None
+
+    async def load_workflow_graph_for_issue(self, issue_id: str):
+        return self.graph
+
+    async def save_workflow_graph(self, graph, nodes=None, edges=None):
+        self.graph = graph
+
     async def list_codex_tasks(
         self,
         session_id: str | None = None,
@@ -95,6 +125,21 @@ class _AsyncRuntimeStore:
 
 
 class _SyncRuntimeStore:
+    def __init__(self):
+        self.graph = None
+
+    def load_codex_workspace(self, workspace_id: str):
+        return None
+
+    def load_project(self, project_id: str):
+        return None
+
+    def load_workflow_graph_for_issue(self, issue_id: str):
+        return self.graph
+
+    def save_workflow_graph(self, graph, nodes=None, edges=None):
+        self.graph = graph
+
     def list_codex_tasks(
         self,
         session_id: str | None = None,
@@ -116,6 +161,323 @@ def test_benchmark_runtime_store_guard_accepts_async_store() -> None:
 def test_benchmark_runtime_store_guard_rejects_sync_or_missing_store() -> None:
     assert _is_benchmark_runtime_store(_SyncRuntimeStore()) is False
     assert _is_benchmark_runtime_store(None) is False
+
+
+def _fixture_with_commands(commands: list[PinnedCommand]) -> GoldenIssue:
+    return GoldenIssue(
+        id="structured.commands",
+        title="Run structured benchmark commands",
+        description="Execute every pinned command inside the isolated issue worktree.",
+        acceptance_criteria=["Every structured command result is captured"],
+        pinned_qa_commands=commands,
+    )
+
+
+@pytest.mark.asyncio
+async def test_real_executor_runs_pinned_argv_in_issue_worktree(tmp_path):
+    worktree = tmp_path / "issue-worktree"
+    command_cwd = worktree / "nested"
+    command_cwd.mkdir(parents=True)
+    fixture = _fixture_with_commands(
+        [
+            PinnedCommand(
+                argv=[
+                    "{python}",
+                    "-c",
+                    "from pathlib import Path; print(Path.cwd().name); print('first', file=__import__('sys').stderr)",
+                ],
+                cwd="nested",
+            ),
+            PinnedCommand(
+                argv=["{python}", "-c", "raise SystemExit(7)"],
+                cwd=".",
+                expected_exit_code=7,
+            ),
+        ]
+    )
+    executor = RealConductorExecutor(project_id="project-1", workspace_id="workspace-1")
+
+    results = await executor._run_pinned_commands(fixture, str(worktree))
+
+    assert [result.exit_code for result in results] == [0, 7]
+    assert results[0].cwd == "nested"
+    assert results[0].argv == [sys.executable, "-c", fixture.pinned_qa_commands[0].argv[2]]
+    assert results[0].stdout_tail == "nested\n"
+    assert results[0].stderr_tail == "first\n"
+    assert results[1].expected_exit_code == 7
+    score = ExecutionScorer().score(IssueArtifacts(issue_id="issue-1", qa_results=results))
+    assert score.passed is True
+    assert score.value == 1.0
+
+
+@pytest.mark.asyncio
+async def test_real_executor_refuses_symlink_cwd_that_escapes_worktree(tmp_path):
+    worktree = tmp_path / "issue-worktree"
+    outside = tmp_path / "outside"
+    worktree.mkdir()
+    outside.mkdir()
+    (worktree / "escape").symlink_to(outside, target_is_directory=True)
+    fixture = _fixture_with_commands(
+        [PinnedCommand(argv=["{python}", "-c", "print('must not run')"], cwd="escape")]
+    )
+    executor = RealConductorExecutor(project_id="project-1", workspace_id="workspace-1")
+
+    results = await executor._run_pinned_commands(fixture, str(worktree))
+
+    assert len(results) == 1
+    assert results[0].exit_code == 126
+    assert "outside the issue worktree" in results[0].stderr_tail
+
+
+@pytest.mark.asyncio
+async def test_real_executor_confirms_fixture_criteria_and_checks_after_conductor_error(
+    tmp_path,
+    monkeypatch,
+):
+    import app.application.conductor_main_loop as conductor_module
+    import app.bootstrap as bootstrap_module
+    import app.interfaces.api as api_module
+
+    worktree = tmp_path / "issue-worktree"
+    worktree.mkdir()
+
+    class Store(_AsyncRuntimeStore):
+        async def load_codex_workspace(self, workspace_id: str):
+            return SimpleNamespace(id=workspace_id, project_id="project-1")
+
+        async def load_project(self, project_id: str):
+            return SimpleNamespace(id=project_id, repo_path=str(tmp_path / "primary"))
+
+    captured = {}
+
+    async def create_issue(request):
+        captured["request"] = request
+        return SimpleNamespace(
+            id="benchmark-issue",
+            project_id="project-1",
+            git_worktree_path=str(worktree),
+        )
+
+    async def fail_conductor(*_args, **kwargs):
+        captured["dispatcher"] = kwargs.get("task_dispatcher_fn")
+        (worktree / "implemented").write_text("done")
+        raise RuntimeError("conductor stopped after editing")
+
+    monkeypatch.setattr(bootstrap_module, "codex_store", Store())
+    monkeypatch.setattr(api_module, "create_codex_issue", create_issue)
+    monkeypatch.setattr(conductor_module, "run_issue_conductor_loop", fail_conductor)
+    fixture = _fixture_with_commands(
+        [
+            PinnedCommand(
+                argv=[
+                    "{python}",
+                    "-c",
+                    "from pathlib import Path; print('checked'); raise SystemExit(0 if Path('implemented').exists() else 1)",
+                ]
+            )
+        ]
+    )
+
+    result = await RealConductorExecutor(
+        project_id="project-1",
+        workspace_id="workspace-1",
+    ).execute(fixture, 0)
+
+    request = captured["request"]
+    assert request.acceptance_criteria == fixture.acceptance_criteria
+    assert request.acceptance_criteria_confirmed is True
+    assert result.error == "RuntimeError: conductor stopped after editing"
+    assert captured["dispatcher"] is not None
+    assert isinstance(bootstrap_module.codex_store, Store)
+    assert bootstrap_module.codex_store.graph is not None
+    assert bootstrap_module.codex_store.graph.issue_id == "benchmark-issue"
+    assert result.artifacts.precondition_results[0].exit_code == 1
+    assert result.artifacts.qa_results[0].exit_code == 0
+    assert result.artifacts.qa_results[0].stdout_tail == "checked\n"
+
+
+@pytest.mark.asyncio
+async def test_real_executor_treats_non_done_conductor_result_as_epoch_error(
+    tmp_path,
+    monkeypatch,
+):
+    import app.application.conductor_main_loop as conductor_module
+    import app.bootstrap as bootstrap_module
+    import app.interfaces.api as api_module
+
+    worktree = tmp_path / "issue-worktree"
+    worktree.mkdir()
+
+    class Store(_AsyncRuntimeStore):
+        async def load_codex_workspace(self, workspace_id: str):
+            return SimpleNamespace(id=workspace_id, project_id="project-1")
+
+        async def load_project(self, project_id: str):
+            return SimpleNamespace(id=project_id, repo_path=str(tmp_path / "primary"))
+
+    async def create_issue(_request):
+        return SimpleNamespace(
+            id="benchmark-issue",
+            project_id="project-1",
+            git_worktree_path=str(worktree),
+        )
+
+    async def blocked_conductor(*_args, **_kwargs):
+        (worktree / "implemented").write_text("done")
+        return SimpleNamespace(status="blocked")
+
+    monkeypatch.setattr(bootstrap_module, "codex_store", Store())
+    monkeypatch.setattr(api_module, "create_codex_issue", create_issue)
+    monkeypatch.setattr(conductor_module, "run_issue_conductor_loop", blocked_conductor)
+    fixture = _fixture_with_commands(
+        [
+            PinnedCommand(
+                argv=[
+                    "{python}",
+                    "-c",
+                    "from pathlib import Path; raise SystemExit(0 if Path('implemented').exists() else 1)",
+                ]
+            )
+        ]
+    )
+
+    result = await RealConductorExecutor(
+        project_id="project-1",
+        workspace_id="workspace-1",
+    ).execute(fixture, 0)
+
+    assert result.error == "conductor finished with status 'blocked'"
+    assert result.artifacts.precondition_results[0].exit_code == 1
+    assert result.artifacts.qa_results[0].exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_real_executor_refuses_fixture_that_passes_before_conductor(
+    tmp_path,
+    monkeypatch,
+):
+    import app.application.conductor_main_loop as conductor_module
+    import app.bootstrap as bootstrap_module
+    import app.interfaces.api as api_module
+
+    worktree = tmp_path / "issue-worktree"
+    worktree.mkdir()
+
+    class Store(_AsyncRuntimeStore):
+        async def load_codex_workspace(self, workspace_id: str):
+            return SimpleNamespace(id=workspace_id, project_id="project-1")
+
+        async def load_project(self, project_id: str):
+            return SimpleNamespace(id=project_id, repo_path=str(tmp_path / "primary"))
+
+    async def create_issue(_request):
+        return SimpleNamespace(
+            id="benchmark-issue",
+            project_id="project-1",
+            git_worktree_path=str(worktree),
+        )
+
+    conductor_called = False
+
+    async def conductor(*_args, **_kwargs):
+        nonlocal conductor_called
+        conductor_called = True
+        return SimpleNamespace(status="done")
+
+    monkeypatch.setattr(bootstrap_module, "codex_store", Store())
+    monkeypatch.setattr(api_module, "create_codex_issue", create_issue)
+    monkeypatch.setattr(conductor_module, "run_issue_conductor_loop", conductor)
+    fixture = _fixture_with_commands([PinnedCommand(argv=["{python}", "-c", "print('done')"])])
+
+    result = await RealConductorExecutor(
+        project_id="project-1",
+        workspace_id="workspace-1",
+    ).execute(fixture, 0)
+
+    assert conductor_called is False
+    assert result.error is not None
+    assert "already passes before the Conductor runs" in result.error
+    assert result.artifacts.precondition_results[0].exit_code == 0
+    assert result.artifacts.qa_results == []
+
+
+def test_real_executor_accepts_only_trusted_frontend_dependency_links(tmp_path):
+    primary = tmp_path / "primary"
+    worktree = tmp_path / "worktree"
+    dependencies = primary / "frontend" / "node_modules"
+    (dependencies / "vite").mkdir(parents=True)
+    (dependencies / ".bin").mkdir()
+    (primary / ".env").write_text("SECRET=must-not-copy")
+    linked = worktree / "frontend" / "node_modules"
+    linked.mkdir(parents=True)
+    for entry in dependencies.iterdir():
+        (linked / entry.name).symlink_to(
+            entry.resolve(),
+            target_is_directory=entry.is_dir(),
+        )
+    fixture = _fixture_with_commands([PinnedCommand(argv=["npm", "test"], cwd="frontend")])
+
+    RealConductorExecutor._prepare_trusted_dependencies(
+        fixture=fixture,
+        primary_repo_path=str(primary),
+        worktree_path=str(worktree),
+    )
+
+    assert linked.is_dir()
+    assert linked.is_symlink() is False
+    assert {entry.name for entry in linked.iterdir()} == {".bin", "vite"}
+    assert all(entry.is_symlink() for entry in linked.iterdir())
+    assert not (worktree / ".env").exists()
+
+
+def test_real_executor_rejects_root_node_modules_symlink(tmp_path):
+    primary = tmp_path / "primary"
+    worktree = tmp_path / "worktree"
+    dependencies = primary / "frontend" / "node_modules"
+    dependencies.mkdir(parents=True)
+    target = worktree / "frontend" / "node_modules"
+    target.parent.mkdir(parents=True)
+    target.symlink_to(dependencies.resolve(), target_is_directory=True)
+    fixture = _fixture_with_commands([PinnedCommand(argv=["npm", "test"], cwd="frontend")])
+
+    with pytest.raises(RuntimeError, match="unexpected node_modules symlink"):
+        RealConductorExecutor._prepare_trusted_dependencies(
+            fixture=fixture,
+            primary_repo_path=str(primary),
+            worktree_path=str(worktree),
+        )
+
+
+@pytest.mark.asyncio
+async def test_real_executor_rejects_workspace_project_mismatch_before_issue_creation(
+    monkeypatch,
+):
+    import app.bootstrap as bootstrap_module
+    import app.interfaces.api as api_module
+
+    class Store(_AsyncRuntimeStore):
+        async def load_codex_workspace(self, workspace_id: str):
+            return SimpleNamespace(id=workspace_id, project_id="other-project")
+
+    created = False
+
+    async def create_issue(_request):
+        nonlocal created
+        created = True
+
+    monkeypatch.setattr(bootstrap_module, "codex_store", Store())
+    monkeypatch.setattr(api_module, "create_codex_issue", create_issue)
+    fixture = _fixture_with_commands([PinnedCommand(argv=["{python}", "-c", "print(1)"])])
+
+    result = await RealConductorExecutor(
+        project_id="project-1",
+        workspace_id="workspace-1",
+    ).execute(fixture, 0)
+
+    assert created is False
+    assert result.error is not None
+    assert "different project" in result.error
+    assert result.artifacts.qa_results == []
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +560,34 @@ async def test_run_baseline_flag_pins_after_completion():
     baseline = store.get_baseline()
     assert baseline is not None
     assert baseline.id == run.id
+
+
+@pytest.mark.asyncio
+async def test_completed_baseline_run_replaces_existing_baseline():
+    store = InMemoryStore()
+    executor = FakeExecutor(per_fixture_results=_all_pass_results())
+    runner = BenchmarkRunner(store, executor)
+    first = await runner.run(RunOptions(epochs=1, is_baseline=True))
+
+    second = await runner.run(RunOptions(epochs=1, is_baseline=True))
+
+    baseline = store.get_baseline()
+    assert baseline is not None
+    assert baseline.id == second.id
+    first_stored = store.get_run(first.id)
+    assert first_stored is not None
+    assert first_stored.is_baseline is False
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_synthetic_baseline_before_persisting():
+    store = InMemoryStore()
+    runner = BenchmarkRunner(store, FakeExecutor(per_fixture_results=_all_pass_results()))
+
+    with pytest.raises(ValueError, match="synthetic benchmark runs cannot be baselines"):
+        await runner.run(RunOptions(epochs=1, is_baseline=True, is_synthetic=True))
+
+    assert store.list_runs() == []
 
 
 @pytest.mark.asyncio
@@ -285,6 +675,19 @@ async def test_run_artifacts_json_is_persisted():
     blob = json.loads(eps[0].artifacts_json)
     assert blob["issue_id"] == "codex-add-backend-echo-endpoint"
     assert "Add the endpoint" in blob["tasks"]
+    assert blob["qa"] == [
+        {
+            "command": "python3 -c 'print(1)'",
+            "argv": ["python3", "-c", "print(1)"],
+            "cwd": "backend",
+            "exit_code": 0,
+            "expected_exit_code": 0,
+            "duration_s": 0.1,
+            "timed_out": False,
+            "stdout_tail": "1\n",
+            "stderr_tail": "",
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +721,8 @@ async def test_run_persists_executor_error_as_failed_epoch():
     by_id = {e.fixture_id: e for e in eps}
     assert by_id["add-backend-echo-endpoint"].error is None
     assert by_id["add-backend-ping-endpoint"].error == "boom: conductor crashed"
+    assert by_id["add-backend-ping-endpoint"].pass_execution is False
+    assert by_id["add-backend-ping-endpoint"].score_execution == 0.0
     # The failed epoch is counted as a failure in the aggregate.
     assert run.aggregate_pass_at_1 is not None
     assert run.aggregate_pass_at_1 < 1.0

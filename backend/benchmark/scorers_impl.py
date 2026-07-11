@@ -25,7 +25,7 @@ from .types import IssueArtifacts, Score
 
 
 class ExecutionScorer:
-    """Pass iff **every** pinned QA command returned ``exit_code == 0``.
+    """Pass iff every pinned QA command returned its expected exit code.
 
     The score is the fraction of commands that passed; ``passed`` is
     the strict all-pass view (matching the SWE-bench ``FAIL_TO_PASS``
@@ -50,11 +50,17 @@ class ExecutionScorer:
                 notes="no QA command ran; treating as failure",
             )
         total = len(artifacts.qa_results)
-        passed = sum(1 for r in artifacts.qa_results if r.exit_code == 0)
+        passed = sum(1 for r in artifacts.qa_results if r.exit_code == r.expected_exit_code)
         failed = [
-            {"command": r.command, "exit_code": r.exit_code, "duration_s": r.duration_s}
+            {
+                "command": r.command,
+                "exit_code": r.exit_code,
+                "expected_exit_code": r.expected_exit_code,
+                "duration_s": r.duration_s,
+                "timed_out": r.timed_out,
+            }
             for r in artifacts.qa_results
-            if r.exit_code != 0
+            if r.exit_code != r.expected_exit_code
         ]
         return Score(
             value=passed / total,

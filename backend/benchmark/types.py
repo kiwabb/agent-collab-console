@@ -59,6 +59,10 @@ class CommandResult:
     duration_s: float
     stdout_tail: str = ""
     stderr_tail: str = ""
+    argv: list[str] = field(default_factory=list)
+    cwd: str = "."
+    expected_exit_code: int = 0
+    timed_out: bool = False
 
 
 @dataclass
@@ -82,6 +86,7 @@ class IssueArtifacts:
     # Reserved for PR3:
     pm_artifacts: dict[str, str] = field(default_factory=dict)
     architect_artifacts: dict[str, str] = field(default_factory=dict)
+    precondition_results: list[CommandResult] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

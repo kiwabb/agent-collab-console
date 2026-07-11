@@ -19,7 +19,7 @@ The tests cover the full HTTP contract:
 
 from __future__ import annotations  # noqa: I001
 
-import asyncio  # noqa: F401
+import asyncio
 import json  # noqa: F401
 import time  # noqa: F401
 from pathlib import Path  # noqa: F401
@@ -43,7 +43,7 @@ from benchmark.runner import (
     RunOptions,  # noqa: F401
 )
 from benchmark.scorers_impl import default_registry  # noqa: F401
-from benchmark.store import InMemoryStore, SqliteStore  # noqa: F401
+from benchmark.store import InMemoryStore, SqliteStore, make_run_row  # noqa: F401
 from benchmark.types import CommandResult, IssueArtifacts  # noqa: F401
 
 
@@ -193,6 +193,7 @@ def test_list_and_get_run_round_trip(client):
     body = res.json()
     assert len(body["runs"]) == 1
     assert body["runs"][0]["id"] == "r1"
+    assert body["runs"][0]["is_synthetic"] is False
 
     res = c.get("/codex/benchmark/runs/r1")
     assert res.status_code == 200
@@ -353,6 +354,37 @@ async def test_trigger_run_creates_job_in_pending_then_running(monkeypatch):
     assert j["kind"] == "benchmark_run"
 
 
+@pytest.mark.asyncio
+async def test_dry_run_is_persisted_as_synthetic():
+    store = InMemoryStore()
+    registry = JobRegistry()
+    benchmark_handlers.init_for_app(store, registry)
+
+    response = await benchmark_handlers.trigger_run(
+        {
+            "label": "synthetic-smoke",
+            "dry_run": True,
+            "epochs": 1,
+            "fixture_ids": ["add-backend-echo-endpoint"],
+        }
+    )
+    job = registry.get(response["job_id"])
+    assert job is not None
+    for _ in range(20):
+        if job.status in (JOB_STATUS_COMPLETED, JOB_STATUS_FAILED):
+            break
+        await asyncio.sleep(0)
+        job = registry.get(response["job_id"])
+        assert job is not None
+
+    assert job.status == JOB_STATUS_COMPLETED
+    assert job.result_ref is not None
+    run = store.get_run(job.result_ref)
+    assert run is not None
+    assert run.is_synthetic is True
+    assert run.is_baseline is False
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
@@ -370,3 +402,57 @@ def test_trigger_with_epochs_zero_rejected(client):
     # only assert the request was rejected (the exact message is
     # an implementation detail of Pydantic).
     assert detail
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"dry_run": False},
+        {"dry_run": False, "project_id": "project-1"},
+        {"dry_run": False, "workspace_id": "workspace-1"},
+        {"dry_run": False, "project_id": "  ", "workspace_id": "workspace-1"},
+        {"dry_run": False, "project_id": "project-1", "workspace_id": "  "},
+    ],
+)
+def test_real_trigger_rejects_missing_project_or_workspace(client, payload):
+    c, _store, registry = client
+
+    res = c.post("/codex/benchmark/runs", json=payload)
+
+    assert res.status_code == 422
+    assert res.json()["detail"] == (
+        "project_id and workspace_id are required for real benchmark runs"
+    )
+    assert registry.list() == []
+
+
+def test_dry_run_cannot_request_baseline(client):
+    c, _store, registry = client
+
+    res = c.post(
+        "/codex/benchmark/runs",
+        json={"dry_run": True, "is_baseline": True},
+    )
+
+    assert res.status_code == 422
+    assert res.json()["detail"] == "synthetic dry runs cannot be baselines"
+    assert registry.list() == []
+
+
+def test_synthetic_run_cannot_be_pinned_as_baseline(client):
+    c, store, _registry = client
+    store.create_run(
+        make_run_row(
+            run_id="synthetic-1",
+            label="dry run",
+            fixture_ids=["a"],
+            epoch_count=1,
+            is_synthetic=True,
+        )
+    )
+
+    res = c.post("/codex/benchmark/baseline/synthetic-1")
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "synthetic benchmark runs cannot be baselines"
+    assert store.get_baseline() is None

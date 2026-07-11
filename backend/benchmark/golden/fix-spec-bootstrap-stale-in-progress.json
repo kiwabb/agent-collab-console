@@ -9,17 +9,20 @@
   ],
   "pinned_qa_commands": [
     {
-      "command": "! python3 .trellis/scripts/task.py list 2>&1 | grep -q '00-bootstrap-guidelines'",
+      "argv": ["{python}", "-c", "import subprocess; result = subprocess.run(['python3', '.trellis/scripts/task.py', 'list'], check=True, capture_output=True, text=True); assert '00-bootstrap-guidelines' not in result.stdout"],
+      "cwd": ".",
       "description": "Active task list does not contain the bootstrap task",
       "timeout_s": 5
     },
     {
-      "command": "python3 .trellis/scripts/task.py list-archive 2026-06 2>&1 | grep -q '00-bootstrap-guidelines'",
+      "argv": ["{python}", "-c", "import subprocess; result = subprocess.run(['python3', '.trellis/scripts/task.py', 'list-archive', '2026-06'], check=True, capture_output=True, text=True); assert '00-bootstrap-guidelines' in result.stdout"],
+      "cwd": ".",
       "description": "Archive list contains the bootstrap task",
       "timeout_s": 5
     },
     {
-      "command": "! grep -rn 'To be filled' .trellis/spec/ 2>&1 | grep -v ':0' | grep -q .",
+      "argv": ["{python}", "-c", "from pathlib import Path; matches = [str(path) for path in Path('.trellis/spec').rglob('*') if path.is_file() and 'To be filled' in path.read_text()]; assert not matches, matches"],
+      "cwd": ".",
       "description": "No 'To be filled' placeholders remain in any spec file",
       "timeout_s": 5
     }

@@ -39,12 +39,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shlex
+import signal
+import sys
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field  # noqa: F401
 from datetime import datetime
 from inspect import iscoroutinefunction
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeGuard, runtime_checkable
+
+from app.application.project_command import build_project_child_env
 
 from .aggregations import (
     FixtureStats,  # noqa: F401
@@ -55,7 +63,7 @@ from .aggregations import (
     aggregate as aggregate_stats,
 )
 from .golden_loader import load_all
-from .golden_schema import GoldenIssue, PinnedCommand  # noqa: F401
+from .golden_schema import GoldenIssue, PinnedCommand
 from .scorers import ScorerRegistry
 from .scorers_impl import default_registry
 from .store import (
@@ -68,7 +76,23 @@ from .store import (
 from .types import CommandResult, IssueArtifacts, Score
 
 if TYPE_CHECKING:
-    from app.domain.models import ExecutionProcess
+    from app.domain.models import (
+        CodexSession,
+        ExecutionProcess,
+        Project,
+        WorkflowEdge,
+        WorkflowGraph,
+        WorkflowNode,
+    )
+
+
+_OUTPUT_TAIL_BYTES = 16 * 1024
+_PRECONDITION_INFRA_EXIT_CODES = frozenset({124, 126, 127})
+_FRONTEND_PACKAGE_EXECUTABLES = frozenset({"bun", "npm", "npx", "pnpm", "yarn"})
+
+
+def _decode_output_tail(data: bytes) -> str:
+    return data[-_OUTPUT_TAIL_BYTES:].decode("utf-8", errors="replace")
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +115,19 @@ class IssueExecutor(Protocol):
 
 @runtime_checkable
 class BenchmarkRuntimeStore(Protocol):
+    async def load_codex_workspace(self, workspace_id: str) -> CodexSession | None: ...
+
+    async def load_project(self, project_id: str) -> Project | None: ...
+
+    async def load_workflow_graph_for_issue(self, issue_id: str) -> WorkflowGraph | None: ...
+
+    async def save_workflow_graph(
+        self,
+        graph: WorkflowGraph,
+        nodes: list[WorkflowNode] | None = None,
+        edges: list[WorkflowEdge] | None = None,
+    ) -> None: ...
+
     async def list_codex_tasks(
         self,
         session_id: str | None = None,
@@ -106,6 +143,10 @@ class BenchmarkRuntimeStore(Protocol):
 def _is_benchmark_runtime_store(store: object) -> TypeGuard[BenchmarkRuntimeStore]:
     return (
         isinstance(store, BenchmarkRuntimeStore)
+        and iscoroutinefunction(store.load_codex_workspace)
+        and iscoroutinefunction(store.load_project)
+        and iscoroutinefunction(store.load_workflow_graph_for_issue)
+        and iscoroutinefunction(store.save_workflow_graph)
         and iscoroutinefunction(store.list_codex_tasks)
         and iscoroutinefunction(store.list_execution_processes)
     )
@@ -196,20 +237,18 @@ class RealConductorExecutor:
       2. ``create_codex_issue`` with the fixture's title /
          description / acceptance_criteria, capturing the returned
          issue id.
-      3. ``auto_start_issue_graph`` + ``run_issue_conductor_loop``
-         (the existing PR1/PR2 conductor entry points) and wait
-         for the loop to finalise.
-      4. Read the resulting ``qa/qa_plan.json`` and the
-         ``ExecutionProcess`` rows to assemble ``CommandResult``s.
-      5. Read the engineer's completed task titles from
+      3. Link only the trusted primary repo's frontend dependency directory
+         when the fixture needs it, then require at least one pinned check
+         to fail before spending model budget.
+      4. Create the issue WorkflowGraph and run ``run_issue_conductor_loop``
+         with the real workflow task dispatcher.
+      5. Run every fixture-pinned command in the issue worktree with
+         structured argv and capture exact ``CommandResult`` evidence.
+      6. Read the engineer's completed task titles from
          ``codex_tasks``.
-      6. Drop the worktree (the runner's caller may keep it
-         pinned for debugging; default is clean).
-
-    The full implementation lands as a follow-up to PR2 if/when
-    the team is ready to spend real CLI cycles on it. For now
-    this class is the **shape** of the real path; the unit
-    tests use ``FakeExecutor``.
+      7. Leave the issue/worktree in the normal console lifecycle so failed
+         paid epochs remain inspectable and can be cleaned through existing
+         issue controls.
     """
 
     def __init__(self, *, project_id: str, workspace_id: str) -> None:
@@ -219,10 +258,11 @@ class RealConductorExecutor:
     async def execute(self, fixture: GoldenIssue, epoch_index: int) -> ExecutorResult:
         # Defer real imports to call time so unit tests can
         # construct the class without the conductor on the path.
-        from app.application.event_bus import event_bus  # noqa: I001
-        from app.bootstrap import codex_store
-        from app.interfaces.api import CreateIssueRequest, create_codex_issue
+        from app.application.event_bus import _workflow_task_dispatcher, event_bus  # noqa: I001
         from app.application.conductor_main_loop import run_issue_conductor_loop
+        from app.bootstrap import codex_store
+        from app.domain.models import WorkflowGraph
+        from app.interfaces.api import CreateIssueRequest, create_codex_issue
 
         started = time.monotonic()
         error: str | None = None
@@ -235,6 +275,17 @@ class RealConductorExecutor:
         try:
             if not _is_benchmark_runtime_store(codex_store):
                 raise RuntimeError("benchmark real executor requires async codex store")
+            workspace = await codex_store.load_codex_workspace(self._workspace_id)
+            if workspace is None:
+                raise RuntimeError(f"benchmark workspace not found: {self._workspace_id}")
+            if workspace.project_id != self._project_id:
+                raise RuntimeError(
+                    "benchmark workspace belongs to a different project: "
+                    f"expected {self._project_id!r}, got {workspace.project_id!r}"
+                )
+            project = await codex_store.load_project(self._project_id)
+            if project is None:
+                raise RuntimeError(f"benchmark project not found: {self._project_id}")
             description = fixture.description
             if fixture.acceptance_criteria:
                 criteria = "\n".join(f"- {item}" for item in fixture.acceptance_criteria)
@@ -244,24 +295,83 @@ class RealConductorExecutor:
                     session_id=self._workspace_id,
                     title=fixture.title,
                     description=description,
+                    acceptance_criteria=list(fixture.acceptance_criteria),
+                    acceptance_criteria_confirmed=True,
                 )
             )
             issue_id = issue.id
 
-            # Run the conductor to completion. The loop finalises
-            # on its own when the LLM calls ``finalize_task``.
-            await run_issue_conductor_loop(
-                issue,
-                project_id=self._project_id,
-                store=codex_store,
-                event_bus=event_bus,
-            )
+            if issue.project_id != self._project_id:
+                raise RuntimeError(
+                    "benchmark workspace belongs to a different project: "
+                    f"expected {self._project_id!r}, got {issue.project_id!r}"
+                )
 
-            # Read the QA real-command results and the engineer's
-            # completed task titles from the store.
-            artifacts = await self._collect_artifacts(codex_store, fixture, issue.id)
+            if issue.git_worktree_path is None:
+                raise RuntimeError("benchmark issue has no worktree after creation")
+
+            self._prepare_trusted_dependencies(
+                fixture=fixture,
+                primary_repo_path=project.repo_path,
+                worktree_path=issue.git_worktree_path,
+            )
+            precondition_results = await self._run_pinned_commands(
+                fixture,
+                issue.git_worktree_path,
+            )
+            artifacts = IssueArtifacts(
+                issue_id=issue.id,
+                prd_acceptance_criteria=list(fixture.acceptance_criteria),
+                precondition_results=precondition_results,
+            )
+            self._require_failing_precondition(precondition_results)
+
+            graph = await codex_store.load_workflow_graph_for_issue(issue.id)
+            if graph is None:
+                now = datetime.now()
+                graph = WorkflowGraph(
+                    id=str(uuid.uuid4()),
+                    issue_id=issue.id,
+                    status="running",
+                    dag_json=json.dumps(
+                        {
+                            "nodes": [],
+                            "edges": [],
+                            "meta": {"created_by": "benchmark"},
+                        }
+                    ),
+                    created_by="benchmark",
+                    created_at=now,
+                    updated_at=now,
+                )
+                await codex_store.save_workflow_graph(graph, nodes=[], edges=[])
+
+            try:
+                # Pinned checks still run after a failed outcome so a paid epoch
+                # retains evidence, but the epoch itself cannot score as successful.
+                conductor_result = await run_issue_conductor_loop(
+                    issue,
+                    project_id=self._project_id,
+                    store=codex_store,
+                    event_bus=event_bus,
+                    task_dispatcher_fn=_workflow_task_dispatcher,
+                )
+                if conductor_result.status != "done":
+                    error = f"conductor finished with status {conductor_result.status!r}"
+            except Exception as exc:  # External orchestration boundary; evidence must persist.
+                error = f"{type(exc).__name__}: {exc}"
+
+            artifacts = await self._collect_artifacts(
+                codex_store,
+                fixture,
+                issue.id,
+                issue.git_worktree_path,
+                precondition_results,
+            )
             spent, in_tok, out_tok = await self._collect_cost(codex_store, issue.id)
-        except Exception as exc:  # noqa: BLE001, RUF100
+        # This is the executor boundary: conductor, store, git, and process-launch
+        # failures must become persisted epoch evidence instead of losing the run.
+        except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
 
         return ExecutorResult(
@@ -275,52 +385,217 @@ class RealConductorExecutor:
         )
 
     async def _collect_artifacts(
-        self, codex_store: BenchmarkRuntimeStore, fixture: GoldenIssue, issue_id: str
+        self,
+        codex_store: BenchmarkRuntimeStore,
+        fixture: GoldenIssue,
+        issue_id: str,
+        worktree_path: str,
+        precondition_results: list[CommandResult],
     ) -> IssueArtifacts:
-        """Reconstruct ``IssueArtifacts`` from the store.
-
-        Tries the QA workflow's stored command results first; if
-        the project doesn't yet persist them (the QA workflow is
-        still iterating on its own persistence story), falls
-        back to the ``ExecutionProcess`` exit_code as a
-        proxy — ``exit_code == 0`` is treated as pass.
-        """
-        qa_results: list[CommandResult] = []
-
-        # Derive a coarse pass/fail from current ExecutionProcess rows.
+        """Run pinned checks and collect the completed task titles."""
+        qa_results = await self._run_pinned_commands(fixture, worktree_path)
         tasks = await codex_store.list_codex_tasks(issue_id=issue_id)
-        for task in tasks:
-            task_id = task.get("id")
-            if not isinstance(task_id, str) or not task_id:
-                continue
-            procs = await codex_store.list_execution_processes(task_id=task_id)
-            qa_results.extend(
-                CommandResult(
-                    command=f"{p.executor or 'executor'}:{p.kind}",
-                    exit_code=int(p.exit_code if p.exit_code is not None else 1),
-                    duration_s=(
-                        max((p.completed_at - p.started_at).total_seconds(), 0.0)
-                        if p.started_at and p.completed_at
-                        else 0.0
-                    ),
-                )
-                for p in procs
-                if p.kind in ("rerun", "refine", "initial")
-            )
-
-        # Engineer completed task titles.
         completed = [
             title
             for t in tasks
-            if t.get("status") in ("done", "completed")
-            and isinstance(title := t.get("title"), str)
+            if t.get("status") in ("done", "completed") and isinstance(title := t.get("title"), str)
         ]
 
         return IssueArtifacts(
             issue_id=issue_id,
             prd_acceptance_criteria=list(fixture.acceptance_criteria),
+            precondition_results=precondition_results,
             qa_results=qa_results,
             completed_engineer_tasks=completed,
+        )
+
+    @staticmethod
+    def _require_failing_precondition(results: list[CommandResult]) -> None:
+        infrastructure_failures = [
+            result
+            for result in results
+            if result.timed_out or result.exit_code in _PRECONDITION_INFRA_EXIT_CODES
+        ]
+        if infrastructure_failures:
+            commands = ", ".join(result.command for result in infrastructure_failures)
+            raise RuntimeError(
+                "benchmark precondition could not be established because pinned "
+                f"checks had infrastructure failures: {commands}"
+            )
+        if all(result.exit_code == result.expected_exit_code for result in results):
+            raise RuntimeError(
+                "benchmark fixture already passes before the Conductor runs; "
+                "select a project revision where at least one pinned check fails"
+            )
+
+    @staticmethod
+    def _prepare_trusted_dependencies(
+        *,
+        fixture: GoldenIssue,
+        primary_repo_path: str,
+        worktree_path: str,
+    ) -> None:
+        needs_frontend_dependencies = any(
+            Path(command.cwd).parts[:1] == ("frontend",)
+            and Path(command.argv[0]).name in _FRONTEND_PACKAGE_EXECUTABLES
+            for command in fixture.pinned_qa_commands
+        )
+        if not needs_frontend_dependencies:
+            return
+
+        primary_root = Path(primary_repo_path).resolve()
+        worktree_root = Path(worktree_path).resolve()
+        if primary_root == worktree_root:
+            raise RuntimeError("benchmark issue worktree must be isolated from the primary repo")
+
+        target = worktree_root / "frontend" / "node_modules"
+        target_parent = target.parent.resolve()
+        try:
+            target_parent.relative_to(worktree_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                "benchmark frontend directory resolves outside the issue worktree"
+            ) from exc
+
+        source_path = primary_root / "frontend" / "node_modules"
+        if not source_path.exists() and not source_path.is_symlink():
+            raise RuntimeError(
+                "trusted primary frontend dependencies are missing; install "
+                "frontend/node_modules in the selected project before this benchmark"
+            )
+        source = source_path.resolve()
+        try:
+            source.relative_to(primary_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                "trusted primary frontend dependencies resolve outside the project repo"
+            ) from exc
+        if not source.is_dir():
+            raise RuntimeError("trusted primary frontend/node_modules is not a directory")
+
+        if target.is_symlink():
+            raise RuntimeError("benchmark worktree has an unexpected node_modules symlink")
+        if not target.is_dir():
+            raise RuntimeError(
+                "benchmark worktree frontend dependencies were not prepared by WorktreeManager"
+            )
+
+        trusted_entries: dict[str, Path] = {}
+        for entry in source.iterdir():
+            resolved_entry = entry.resolve()
+            try:
+                resolved_entry.relative_to(primary_root)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "trusted frontend dependency entry resolves outside the project repo"
+                ) from exc
+            trusted_entries[entry.name] = resolved_entry
+
+        actual_entries = {entry.name: entry for entry in target.iterdir()}
+        if actual_entries.keys() != trusted_entries.keys():
+            raise RuntimeError(
+                "benchmark worktree frontend dependencies do not match the trusted source"
+            )
+        for name, entry in actual_entries.items():
+            if not entry.is_symlink() or entry.resolve() != trusted_entries[name]:
+                raise RuntimeError(
+                    "benchmark worktree frontend dependency entry is not a trusted symlink"
+                )
+
+    async def _run_pinned_commands(
+        self,
+        fixture: GoldenIssue,
+        worktree_path: str,
+    ) -> list[CommandResult]:
+        root = Path(worktree_path).resolve()
+        if not root.is_dir():
+            raise RuntimeError(f"benchmark issue worktree does not exist: {root}")
+
+        results: list[CommandResult] = []
+        for command in fixture.pinned_qa_commands:
+            results.append(await self._run_pinned_command(root, command))
+        return results
+
+    async def _run_pinned_command(
+        self,
+        worktree_root: Path,
+        command: PinnedCommand,
+    ) -> CommandResult:
+        argv = list(command.argv)
+        if argv[0] == "{python}":
+            argv[0] = sys.executable
+        display = shlex.join(argv)
+        command_cwd = (worktree_root / command.cwd).resolve()
+        try:
+            command_cwd.relative_to(worktree_root)
+        except ValueError:
+            return CommandResult(
+                command=display,
+                argv=argv,
+                cwd=command.cwd,
+                exit_code=126,
+                expected_exit_code=command.expected_exit_code,
+                duration_s=0.0,
+                stderr_tail="refused command cwd outside the issue worktree",
+            )
+        if not command_cwd.is_dir():
+            return CommandResult(
+                command=display,
+                argv=argv,
+                cwd=command.cwd,
+                exit_code=126,
+                expected_exit_code=command.expected_exit_code,
+                duration_s=0.0,
+                stderr_tail=f"command cwd does not exist: {command_cwd}",
+            )
+
+        started = time.monotonic()
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=str(command_cwd),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={**build_project_child_env(), "CI": "1"},
+                start_new_session=True,
+            )
+        except OSError as exc:
+            return CommandResult(
+                command=display,
+                argv=argv,
+                cwd=command.cwd,
+                exit_code=127,
+                expected_exit_code=command.expected_exit_code,
+                duration_s=time.monotonic() - started,
+                stderr_tail=f"{type(exc).__name__}: {exc}",
+            )
+
+        timed_out = False
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=command.timeout_s,
+            )
+        except TimeoutError:
+            timed_out = True
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = await process.communicate()
+            stderr += f"\nbenchmark command timed out after {command.timeout_s}s".encode()
+
+        exit_code = 124 if timed_out else process.returncode
+        if exit_code is None:
+            raise RuntimeError(f"benchmark command did not produce an exit code: {display}")
+        return CommandResult(
+            command=display,
+            argv=argv,
+            cwd=command.cwd,
+            exit_code=exit_code,
+            expected_exit_code=command.expected_exit_code,
+            duration_s=time.monotonic() - started,
+            stdout_tail=_decode_output_tail(stdout),
+            stderr_tail=_decode_output_tail(stderr),
+            timed_out=timed_out,
         )
 
     async def _collect_cost(
@@ -365,6 +640,7 @@ class RunOptions:
     epochs: int = 3
     fixture_ids: list[str] | None = None
     is_baseline: bool = False
+    is_synthetic: bool = False
     notes: str | None = None
     catalog_snapshot: str | None = None
     orchestrator_version: str | None = None
@@ -390,6 +666,9 @@ class BenchmarkRunner:
         self._registry = registry or default_registry()
 
     async def run(self, options: RunOptions) -> BenchmarkRun:
+        if options.is_baseline and options.is_synthetic:
+            raise ValueError("synthetic benchmark runs cannot be baselines")
+
         # 1. Load + filter the golden set.
         fixtures = load_all(ids=options.fixture_ids) if options.fixture_ids else load_all()
         if not fixtures:
@@ -402,7 +681,10 @@ class BenchmarkRunner:
             label=options.label,
             fixture_ids=[f.id for f in fixtures],
             epoch_count=options.epochs,
-            is_baseline=options.is_baseline,
+            # Pin only after every epoch completed. Marking the initial row as
+            # baseline would evict the current baseline before this run proved usable.
+            is_baseline=False,
+            is_synthetic=options.is_synthetic,
             status="running",
             notes=options.notes,
             catalog_snapshot=options.catalog_snapshot,
@@ -471,6 +753,7 @@ class BenchmarkRunner:
 
         if options.is_baseline:
             self._store.set_baseline(run_row.id)
+            run_row.is_baseline = True
 
         return run_row
 
@@ -485,9 +768,15 @@ class BenchmarkRunner:
         result: ExecutorResult,
         score_results: dict[str, Score],
     ) -> BenchmarkEpoch:
+        has_executor_error = result.error is not None
+        effective_values = {
+            name: 0.0 if has_executor_error and name == "execution" else score.value
+            for name, score in score_results.items()
+        }
         agg_score = sum(
-            s.value * self._registry.get(name).weight for name, s in score_results.items()
+            effective_values[name] * self._registry.get(name).weight for name in score_results
         ) / max(1, sum(self._registry.get(n).weight for n in score_results))
+        execution_score = score_results.get("execution")
         return BenchmarkEpoch(
             id=f"ep-{run_id}-{fixture.id}-{epoch_index}",
             run_id=run_id,
@@ -496,15 +785,19 @@ class BenchmarkRunner:
             issue_id=result.issue_id,
             started_at=datetime.now().isoformat(timespec="seconds"),
             completed_at=datetime.now().isoformat(timespec="seconds"),
-            pass_execution=score_results["execution"].passed
-            if "execution" in score_results
-            else False,
+            pass_execution=(
+                execution_score.passed
+                if execution_score is not None and not has_executor_error
+                else False
+            ),
             pass_coverage=score_results["coverage"].passed
             if "coverage" in score_results
             else False,
-            score_execution=score_results["execution"].value
-            if "execution" in score_results
-            else 0.0,
+            score_execution=(
+                execution_score.value
+                if execution_score is not None and not has_executor_error
+                else 0.0
+            ),
             score_coverage=score_results["coverage"].value if "coverage" in score_results else 0.0,
             score_aggregate=agg_score,
             spent_usd=result.spent_usd,
@@ -516,11 +809,31 @@ class BenchmarkRunner:
                 {
                     "issue_id": result.artifacts.issue_id,
                     "criteria": result.artifacts.prd_acceptance_criteria,
+                    "precondition": [
+                        {
+                            "command": r.command,
+                            "argv": r.argv,
+                            "cwd": r.cwd,
+                            "exit_code": r.exit_code,
+                            "expected_exit_code": r.expected_exit_code,
+                            "duration_s": r.duration_s,
+                            "timed_out": r.timed_out,
+                            "stdout_tail": r.stdout_tail,
+                            "stderr_tail": r.stderr_tail,
+                        }
+                        for r in result.artifacts.precondition_results
+                    ],
                     "qa": [
                         {
                             "command": r.command,
+                            "argv": r.argv,
+                            "cwd": r.cwd,
                             "exit_code": r.exit_code,
+                            "expected_exit_code": r.expected_exit_code,
                             "duration_s": r.duration_s,
+                            "timed_out": r.timed_out,
+                            "stdout_tail": r.stdout_tail,
+                            "stderr_tail": r.stderr_tail,
                         }
                         for r in result.artifacts.qa_results
                     ],

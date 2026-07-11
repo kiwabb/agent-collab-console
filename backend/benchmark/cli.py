@@ -112,6 +112,10 @@ def _build_argparser() -> argparse.ArgumentParser:
 
 
 async def _async_main(args: argparse.Namespace) -> int:
+    if args.dry_run and args.baseline:
+        print("error: synthetic --dry-run results cannot be pinned as a baseline", file=sys.stderr)
+        return 2
+
     fixture_ids = (
         [s.strip() for s in args.fixture_ids.split(",") if s.strip()] if args.fixture_ids else None
     )
@@ -141,6 +145,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                 epochs=args.epochs,
                 fixture_ids=fixture_ids,
                 is_baseline=args.baseline,
+                is_synthetic=args.dry_run,
                 max_budget_usd=args.max_budget_usd,
                 catalog_snapshot=catalog_snapshot,
                 orchestrator_version=args.orchestrator_version,

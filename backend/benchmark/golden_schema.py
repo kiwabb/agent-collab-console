@@ -17,10 +17,12 @@ checked-in fixture is well-formed.
 Design choices:
 
   - ``pinned_qa_commands`` carries the FAIL_TO_PASS analog: the runner
-    runs each command in the worktree, captures ``(exit_code, duration,
-    stdout/stderr tail)``, and the execution scorer compares against
-    ``expected_exit_code``. The hard "is the agent's code correct"
-    signal lives here.
+    runs each command before and after the Conductor, captures
+    ``(exit_code, duration, stdout/stderr tail)``, and requires at least
+    one command to fail before spending model budget. The execution scorer
+    compares the post-run evidence against ``expected_exit_code``. The hard
+    "did the agent change a failing task into a passing task" signal lives
+    here.
   - ``acceptance_criteria`` is the rubric layer: a separate scorer
     measures how many of the criteria the agent's completed work
     addresses. The matcher is intentionally simple (string keyword
@@ -35,9 +37,10 @@ Design choices:
 from __future__ import annotations  # noqa: I001
 
 import re
+from pathlib import PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 _DIFFICULTY = Literal["trivial", "small", "medium", "large"]
@@ -49,31 +52,40 @@ class PinnedCommand(BaseModel):
     The expected exit code defaults to 0 (success) because most golden
     tasks are "make this command pass". A non-zero expected is allowed
     for tasks that assert a *failure* (e.g. "this command should now
-    reject the bad input").
+    reject the bad input). ``{python}`` in argv[0] resolves to the
+    benchmark service's current Python interpreter, so ignored virtualenv
+    directories do not have to exist inside each git worktree.
     """
 
-    command: str = Field(min_length=1, max_length=2000)
+    model_config = ConfigDict(extra="forbid")
+
+    argv: list[str] = Field(min_length=1, max_length=64)
+    cwd: str = Field(default=".", min_length=1, max_length=500)
     expected_exit_code: int = 0
     timeout_s: int = Field(default=60, ge=1, le=600)
     description: str | None = None
 
-    @field_validator("command")
+    @field_validator("argv")
     @classmethod
-    def _no_dangerous_shell(cls, v: str) -> str:
-        """The runner runs these strings; reject anything that smells like
-        a destructive shell pattern even in the test fixtures.
+    def _validate_argv(cls, value: list[str]) -> list[str]:
+        shell_names = {"bash", "cmd", "fish", "powershell", "pwsh", "sh", "zsh"}
+        for index, argument in enumerate(value):
+            if not argument or "\0" in argument:
+                raise ValueError(f"argv[{index}] must be a non-empty string without NUL bytes")
+        executable = PurePosixPath(value[0])
+        if executable.is_absolute() or ".." in executable.parts:
+            raise ValueError("argv[0] must be a PATH command or worktree-relative executable")
+        if executable.name.lower() in shell_names:
+            raise ValueError("shell interpreters are not allowed in pinned benchmark commands")
+        return value
 
-        This is belt-and-suspenders. The runner itself enforces a strict
-        allowlist (no ``rm -rf``, no ``sudo``, no outbound network);
-        validating at JSON-load time catches mistakes earlier.
-        """
-        forbidden = re.compile(
-            r"(\brm\s+-rf\b|\bsudo\b|\bcurl\s+[^|]*\|\s*(ba)?sh\b|\bdd\s+if=)",
-            re.IGNORECASE,
-        )
-        if forbidden.search(v):
-            raise ValueError(f"pinned_qa_commands entry contains a forbidden shell pattern: {v!r}")
-        return v
+    @field_validator("cwd")
+    @classmethod
+    def _validate_cwd(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("cwd must stay within the issue worktree")
+        return value
 
 
 class GoldenIssue(BaseModel):
@@ -111,7 +123,8 @@ class GoldenIssue(BaseModel):
         max_length=20,
         description=(
             "The FAIL_TO_PASS analog: one or more commands the runner "
-            "executes in the worktree after the Conductor finalises."
+            "executes in the worktree before and after the Conductor. At least "
+            "one command must fail before the epoch can start."
         ),
     )
     expected_outcome: Literal["pass", "fail", "partial"] = "pass"

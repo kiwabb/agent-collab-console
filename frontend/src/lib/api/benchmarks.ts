@@ -36,16 +36,24 @@ export async function getBenchmarkRunDiff(runId: string): Promise<BenchmarkDiff 
     },
   );
 }
-export interface TriggerBenchmarkBody {
+interface TriggerBenchmarkBase {
   label?: string | undefined;
   epochs?: number | undefined;
   fixture_ids?: string[] | undefined;
   is_baseline?: boolean | undefined;
   max_budget_usd?: number | undefined;
-  project_id?: string;
-  workspace_id?: string;
-  dry_run?: boolean;
 }
+export type TriggerBenchmarkBody =
+  | (TriggerBenchmarkBase & {
+      dry_run: true;
+      project_id?: never;
+      workspace_id?: never;
+    })
+  | (TriggerBenchmarkBase & {
+      dry_run: false;
+      project_id: string;
+      workspace_id: string;
+    });
 export interface TriggerBenchmarkResponse {
   job_id: string;
   status: BenchmarkJobStatus;

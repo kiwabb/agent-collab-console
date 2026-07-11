@@ -6,6 +6,8 @@ import test from "node:test";
 import { at } from "./testAssertions";
 
 import {
+  benchmarkTargetError,
+  buildBenchmarkTriggerBody,
   classifyDelta,
   fmtPassAt1,
   fmtTimestamp,
@@ -22,6 +24,50 @@ import type { BenchmarkDiffFixture } from "../src/lib/types";
 // ---------------------------------------------------------------------------
 // Formatters
 // ---------------------------------------------------------------------------
+
+test("real benchmark target validation requires both selections", () => {
+  assert.equal(benchmarkTargetError(true, "", ""), null);
+  assert.equal(benchmarkTargetError(false, "", ""), "project_required");
+  assert.equal(benchmarkTargetError(false, "project-1", ""), "workspace_required");
+  assert.equal(benchmarkTargetError(false, "project-1", "workspace-1"), null);
+});
+
+test("benchmark trigger body carries target ids only for real runs", () => {
+  assert.deepEqual(
+    buildBenchmarkTriggerBody({
+      label: "synthetic",
+      epochs: 1,
+      dryRun: true,
+      projectId: "",
+      workspaceId: "",
+      maxBudgetUsd: undefined,
+    }),
+    {
+      label: "synthetic",
+      epochs: 1,
+      dry_run: true,
+      max_budget_usd: undefined,
+    },
+  );
+  assert.deepEqual(
+    buildBenchmarkTriggerBody({
+      label: "real",
+      epochs: 2,
+      dryRun: false,
+      projectId: "project-1",
+      workspaceId: "workspace-1",
+      maxBudgetUsd: 4,
+    }),
+    {
+      label: "real",
+      epochs: 2,
+      dry_run: false,
+      project_id: "project-1",
+      workspace_id: "workspace-1",
+      max_budget_usd: 4,
+    },
+  );
+});
 
 test("fmtUsd handles edge cases", () => {
   assert.equal(fmtUsd(0), "$0");

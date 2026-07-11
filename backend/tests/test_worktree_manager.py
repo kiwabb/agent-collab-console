@@ -1,5 +1,6 @@
 from __future__ import annotations  # noqa: I001
 
+import asyncio
 import shutil
 import subprocess
 from datetime import datetime
@@ -111,6 +112,172 @@ async def test_prepare_chat_task_worktree(project: Project, manager: WorktreeMan
     assert branch.startswith("chat/task-ddd")
     assert Path(path).exists()
     assert base == "main"
+
+
+def _add_ignored_frontend_dependencies(project: Project) -> Path:
+    repo = Path(project.repo_path)
+    frontend = repo / "frontend"
+    dependencies = frontend / "node_modules"
+    dependencies.mkdir(parents=True)
+    vite = dependencies / "vite"
+    vite.mkdir()
+    (vite / "package.json").write_text('{"name":"vite"}\n')
+    (frontend / "package.json").write_text('{"scripts":{"test":"node --test"}}\n')
+    (repo / ".gitignore").write_text("frontend/node_modules/\n")
+    _git("add", ".gitignore", "frontend/package.json", cwd=repo)
+    _git("commit", "-m", "add frontend", cwd=repo)
+    return dependencies.resolve()
+
+
+@pytest.mark.asyncio
+async def test_frontend_dependencies_are_linked_into_issue_chat_and_swarm_worktrees(
+    project: Project,
+    manager: WorktreeManager,
+) -> None:
+    dependencies = _add_ignored_frontend_dependencies(project)
+    issue = CodexIssue(
+        id="issue-deps0001",
+        session_id="s1",
+        project_id=project.id,
+        title="frontend work",
+    )
+
+    issue_branch, issue_path, issue_base = await manager.prepare_issue_worktree(project, issue)
+    issue.git_branch = issue_branch
+    issue.git_worktree_path = issue_path
+    issue.git_base_branch = issue_base
+    _, swarm_path, _ = await manager.prepare_agent_worktree(project, issue, "frontend")
+
+    task = CodexTask(
+        id="task-deps0001",
+        session_id="s1",
+        project_id=project.id,
+        title="frontend chat",
+        prompt="test frontend",
+    )
+    _, chat_path, _ = await manager.prepare_chat_task_worktree(project, task)
+
+    for path in (issue_path, swarm_path, chat_path):
+        linked = Path(path) / "frontend" / "node_modules"
+        assert linked.is_dir()
+        assert linked.is_symlink() is False
+        assert (linked / "vite").is_symlink()
+        assert (linked / "vite").resolve() == dependencies / "vite"
+        assert "frontend/node_modules" not in await manager.git.status_porcelain(path)
+
+
+@pytest.mark.asyncio
+async def test_frontend_dependency_link_rejects_unexpected_worktree_symlink(
+    project: Project,
+    manager: WorktreeManager,
+    tmp_path: Path,
+) -> None:
+    _add_ignored_frontend_dependencies(project)
+    issue = CodexIssue(
+        id="issue-deps0002",
+        session_id="s1",
+        project_id=project.id,
+        title="frontend work",
+    )
+    branch, path, base = await manager.prepare_issue_worktree(project, issue)
+    issue.git_branch = branch
+    issue.git_worktree_path = path
+    issue.git_base_branch = base
+    linked = Path(path) / "frontend" / "node_modules"
+    shutil.rmtree(linked)
+    outside = tmp_path / "unexpected-node-modules"
+    outside.mkdir()
+    linked.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(WorktreeError, match="unexpected frontend/node_modules symlink"):
+        await manager.prepare_issue_worktree(project, issue)
+
+
+@pytest.mark.asyncio
+async def test_frontend_dependency_link_rejects_primary_symlink_outside_repo(
+    project: Project,
+    manager: WorktreeManager,
+    tmp_path: Path,
+) -> None:
+    repo = Path(project.repo_path)
+    frontend = repo / "frontend"
+    frontend.mkdir()
+    outside = tmp_path / "external-node-modules"
+    outside.mkdir()
+    (frontend / "node_modules").symlink_to(outside, target_is_directory=True)
+    (frontend / "package.json").write_text("{}\n")
+    (repo / ".gitignore").write_text("frontend/node_modules/\n")
+    _git("add", ".gitignore", "frontend/package.json", cwd=repo)
+    _git("commit", "-m", "add frontend", cwd=repo)
+    issue = CodexIssue(
+        id="issue-deps0003",
+        session_id="s1",
+        project_id=project.id,
+        title="frontend work",
+    )
+
+    with pytest.raises(WorktreeError, match="resolve outside the project repo"):
+        await manager.prepare_issue_worktree(project, issue)
+
+
+@pytest.mark.asyncio
+async def test_setup_script_runs_structured_commands_with_minimal_env(
+    tmp_path: Path,
+    manager: WorktreeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frontend = tmp_path / "frontend"
+    backend = tmp_path / "backend"
+    frontend.mkdir()
+    backend.mkdir()
+    (backend / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def fake_spawn(*argv: str, **kwargs: object) -> FakeProcess:
+        calls.append((argv, kwargs))
+        return FakeProcess()
+
+    monkeypatch.setenv("CONSOLE_AUTH_TOKEN", "console-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "model-secret")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+
+    await manager._run_setup(
+        "(cd frontend && npm install) && "
+        "(cd backend && python -m pip install -r requirements.txt)",
+        tmp_path,
+    )
+
+    assert [call[0] for call in calls] == [
+        ("npm", "install"),
+        ("python", "-m", "pip", "install", "-r", "requirements.txt"),
+    ]
+    assert [call[1]["cwd"] for call in calls] == [str(frontend), str(backend)]
+    for _, kwargs in calls:
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        assert "CONSOLE_AUTH_TOKEN" not in env
+        assert "OPENAI_API_KEY" not in env
+
+
+@pytest.mark.asyncio
+async def test_setup_script_refusal_happens_before_spawn(
+    tmp_path: Path,
+    manager: WorktreeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unexpected_spawn(*args: object, **kwargs: object) -> None:
+        raise AssertionError("refused setup command must not create a process")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_spawn)
+
+    with pytest.raises(WorktreeError, match="shell_syntax_not_allowed"):
+        await manager._run_setup("npm install > leaked.log", tmp_path)
 
 
 # ---- Per-agent (swarm) worktree ----

@@ -2,17 +2,28 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/providers/I18nProvider";
-import type { BenchmarkDiff, BenchmarkJob, BenchmarkRun, CalibrationReport } from "@/lib/types";
+import type {
+  BenchmarkDiff,
+  BenchmarkJob,
+  BenchmarkRun,
+  CalibrationReport,
+  Project,
+  Workspace,
+} from "@/lib/types";
 import {
   getBenchmarkJob,
   triggerBenchmarkRun,
   type TriggerBenchmarkResponse,
 } from "@/lib/api/benchmarks";
+import { listProjects } from "@/lib/api/projects";
+import { getWorkspaces } from "@/lib/api/workspaces";
 import { cn } from "@/lib/utils";
 import {
   fmtPassAt1,
   fmtTimestamp,
   fmtUsd,
+  benchmarkTargetError,
+  buildBenchmarkTriggerBody,
   pickLogTicksRounded,
   projectPoints,
   summarizeDiff,
@@ -30,6 +41,17 @@ const CHART_BOX: ChartBox = {
   padTop: 12,
   padBottom: 32,
 };
+
+type BenchmarkTargetLoadErrorKey =
+  | "benchmark.trigger.target.noProjects"
+  | "benchmark.trigger.target.projectsLoadFailed"
+  | "benchmark.trigger.target.noWorkspaces"
+  | "benchmark.trigger.target.workspacesLoadFailed";
+
+const BENCHMARK_TARGET_ERROR_KEYS = {
+  project_required: "benchmark.trigger.target.projectRequired",
+  workspace_required: "benchmark.trigger.target.workspaceRequired",
+} as const;
 
 // ---------------------------------------------------------------------------
 // Trigger form
@@ -49,22 +71,94 @@ export function TriggerForm({ onStarted, onError, onViewJob }: TriggerFormProps)
   const [maxBudget, setMaxBudget] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [lastJob, setLastJob] = useState<TriggerBenchmarkResponse | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [projectId, setProjectId] = useState("");
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [workspacesLoading, setWorkspacesLoading] = useState(false);
+  const [targetLoadError, setTargetLoadError] = useState<BenchmarkTargetLoadErrorKey | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setProjectsLoading(true);
+      try {
+        const items = await listProjects();
+        if (cancelled) return;
+        setProjects(items);
+        setProjectId((current) => current || items[0]?.id || "");
+        if (items.length === 0) {
+          setTargetLoadError("benchmark.trigger.target.noProjects");
+        }
+      } catch (error) {
+        console.error("Failed to load benchmark projects", error);
+        if (!cancelled) setTargetLoadError("benchmark.trigger.target.projectsLoadFailed");
+      } finally {
+        if (!cancelled) setProjectsLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    const load = async () => {
+      setWorkspacesLoading(true);
+      setTargetLoadError(null);
+      try {
+        const items = await getWorkspaces(projectId);
+        if (cancelled) return;
+        setWorkspaces(items);
+        setWorkspaceId((current) =>
+          items.some((workspace) => workspace.id === current) ? current : items[0]?.id || "",
+        );
+        if (items.length === 0) {
+          setTargetLoadError("benchmark.trigger.target.noWorkspaces");
+        }
+      } catch (error) {
+        console.error("Failed to load benchmark workspaces", error);
+        if (!cancelled) {
+          setTargetLoadError("benchmark.trigger.target.workspacesLoadFailed");
+        }
+      } finally {
+        if (!cancelled) setWorkspacesLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
+      const selectionError = benchmarkTargetError(dryRun, projectId, workspaceId);
+      if (selectionError) {
+        onError(t(BENCHMARK_TARGET_ERROR_KEYS[selectionError]));
+        return;
+      }
       setSubmitting(true);
       onError("");
       try {
-        const body: Parameters<typeof triggerBenchmarkRun>[0] = {
-          label: label || undefined,
-          epochs,
-          dry_run: dryRun,
-        };
+        let maxBudgetUsd: number | undefined;
         if (maxBudget.trim()) {
-          const v = Number.parseFloat(maxBudget);
-          if (Number.isFinite(v) && v > 0) body.max_budget_usd = v;
+          const parsed = Number.parseFloat(maxBudget);
+          if (Number.isFinite(parsed) && parsed > 0) maxBudgetUsd = parsed;
         }
+        const body = buildBenchmarkTriggerBody({
+          label,
+          epochs,
+          dryRun,
+          projectId,
+          workspaceId,
+          maxBudgetUsd,
+        });
         const res = await triggerBenchmarkRun(body);
         setLastJob(res);
         onStarted(res);
@@ -75,7 +169,7 @@ export function TriggerForm({ onStarted, onError, onViewJob }: TriggerFormProps)
         setSubmitting(false);
       }
     },
-    [label, epochs, dryRun, maxBudget, onError, onStarted],
+    [label, epochs, dryRun, maxBudget, onError, onStarted, projectId, t, workspaceId],
   );
 
   return (
@@ -136,11 +230,76 @@ export function TriggerForm({ onStarted, onError, onViewJob }: TriggerFormProps)
           />
           <span className="text-[12px] text-foreground">{t("benchmark.trigger.dryRun")}</span>
         </label>
+        {!dryRun && (
+          <fieldset className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-border-subtle/40 pt-4">
+            <legend className="font-mono text-[9px] uppercase font-extrabold text-text-muted pr-2">
+              {t("benchmark.trigger.target.legend")}
+            </legend>
+            <label className="flex flex-col gap-1.5">
+              <span className="font-mono text-[9px] uppercase font-extrabold text-text-muted">
+                {t("benchmark.trigger.target.project")}
+              </span>
+              <select
+                value={projectId}
+                onChange={(event) => {
+                  setProjectId(event.target.value);
+                  setWorkspaceId("");
+                  setWorkspaces([]);
+                }}
+                disabled={projectsLoading || projects.length === 0}
+                required
+                className="min-h-11 bg-surface-input/50 border border-border-subtle/40 rounded-md px-3 py-2 text-[13px] text-foreground focus:outline-none focus:border-brand/60 disabled:opacity-50"
+              >
+                <option value="">
+                  {projectsLoading
+                    ? t("benchmark.trigger.target.loadingProjects")
+                    : t("benchmark.trigger.target.selectProject")}
+                </option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1.5">
+              <span className="font-mono text-[9px] uppercase font-extrabold text-text-muted">
+                {t("benchmark.trigger.target.workspace")}
+              </span>
+              <select
+                value={workspaceId}
+                onChange={(event) => setWorkspaceId(event.target.value)}
+                disabled={!projectId || workspacesLoading || workspaces.length === 0}
+                required
+                className="min-h-11 bg-surface-input/50 border border-border-subtle/40 rounded-md px-3 py-2 text-[13px] text-foreground focus:outline-none focus:border-brand/60 disabled:opacity-50"
+              >
+                <option value="">
+                  {workspacesLoading
+                    ? t("benchmark.trigger.target.loadingWorkspaces")
+                    : t("benchmark.trigger.target.selectWorkspace")}
+                </option>
+                {workspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>
+                    {workspace.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {targetLoadError && (
+              <p role="alert" className="sm:col-span-2 text-[11px] text-status-failed">
+                {t(targetLoadError)}
+              </p>
+            )}
+          </fieldset>
+        )}
       </div>
       <div className="px-5 py-3 border-t border-border-subtle/40 flex items-center gap-3">
         <button
           type="submit"
-          disabled={submitting}
+          disabled={
+            submitting ||
+            (!dryRun && (projectsLoading || workspacesLoading || !projectId || !workspaceId))
+          }
           className="px-4 py-2 rounded-md bg-brand text-white text-[12.5px] font-bold tracking-wide hover:opacity-90 disabled:opacity-50 transition"
         >
           {submitting ? t("benchmark.trigger.submitting") : t("benchmark.trigger.submit")}
@@ -289,6 +448,11 @@ export function Leaderboard({
                           {t("benchmark.leaderboard.baseline")}
                         </span>
                       )}
+                      {r.is_synthetic && (
+                        <span className="font-mono text-[9px] uppercase font-extrabold text-status-awaiting bg-status-awaiting/10 px-1.5 py-0.5 rounded">
+                          {t("benchmark.leaderboard.synthetic")}
+                        </span>
+                      )}
                     </div>
                     <div className="font-mono text-[9px] text-text-faint">{r.id}</div>
                   </td>
@@ -309,7 +473,7 @@ export function Leaderboard({
                   </td>
                   <td className="px-3 py-2.5 text-right">
                     <div className="flex justify-end gap-1.5">
-                      {!isBaseline && r.status === "completed" && (
+                      {!isBaseline && !r.is_synthetic && r.status === "completed" && (
                         <button
                           type="button"
                           onClick={() => onSetBaseline(r.id)}
@@ -318,7 +482,7 @@ export function Leaderboard({
                           {t("benchmark.leaderboard.setBaseline")}
                         </button>
                       )}
-                      {r.status === "completed" && (
+                      {!r.is_synthetic && r.status === "completed" && (
                         <button
                           type="button"
                           onClick={() => onViewDiff(r.id)}
@@ -374,6 +538,7 @@ export function ScoreCostFrontier({ runs, baseline, onPickRun }: ScoreCostFronti
   const completed = runs.filter(
     (r) =>
       r.status === "completed" &&
+      !r.is_synthetic &&
       typeof r.cost_per_issue_usd === "number" &&
       typeof r.aggregate_pass_at_1 === "number",
   );

@@ -9,12 +9,14 @@
   ],
   "pinned_qa_commands": [
     {
-      "command": "cd backend && .venv/bin/python -m pytest tests/test_issue_budget_endpoint.py -v 2>&1 | tail -15",
+      "argv": ["{python}", "-m", "pytest", "tests/test_issue_budget_endpoint.py", "-v"],
+      "cwd": "backend",
       "description": "Existing budget endpoint tests must still pass",
       "timeout_s": 60
     },
     {
-      "command": "cd backend && grep -n 'from app.application.budget_service' app/interfaces/api.py",
+      "argv": ["{python}", "-c", "from pathlib import Path; text = Path('app/interfaces/api.py').read_text(); assert 'from app.application.budget_service' in text"],
+      "cwd": "backend",
       "description": "Endpoint imports and uses the shared budget service",
       "timeout_s": 5
     }

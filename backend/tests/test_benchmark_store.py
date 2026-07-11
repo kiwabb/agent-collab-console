@@ -35,6 +35,7 @@ def _make_run(
     fixture_ids: list[str] | None = None,
     epoch_count: int = 3,
     is_baseline: bool = False,
+    is_synthetic: bool = False,
 ) -> BenchmarkRun:
     return make_run_row(
         run_id=run_id,
@@ -42,6 +43,7 @@ def _make_run(
         fixture_ids=fixture_ids or ["a", "b", "c"],
         epoch_count=epoch_count,
         is_baseline=is_baseline,
+        is_synthetic=is_synthetic,
     )
 
 
@@ -169,6 +171,15 @@ def test_set_baseline_rejects_unknown_id(store):
         store.set_baseline("nope")
 
 
+def test_set_baseline_rejects_synthetic_run(store):
+    store.create_run(_make_run(is_synthetic=True))
+
+    with pytest.raises(ValueError, match="synthetic benchmark runs cannot be baselines"):
+        store.set_baseline("run-1")
+
+    assert store.get_baseline() is None
+
+
 # ---------------------------------------------------------------------------
 # Epoch CRUD
 # ---------------------------------------------------------------------------
@@ -221,6 +232,51 @@ def test_sqlite_store_creates_parent_dir(tmp_path: Path):
         s.create_run(_make_run())
     assert db.exists()
     assert (tmp_path / "nested").is_dir()
+
+
+def test_sqlite_store_migrates_legacy_run_table_with_synthetic_flag(tmp_path: Path):
+    import sqlite3
+
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE benchmark_run (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            label TEXT,
+            catalog_snapshot TEXT,
+            orchestrator_version TEXT,
+            epoch_count INTEGER NOT NULL,
+            fixture_ids TEXT NOT NULL,
+            is_baseline INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            notes TEXT,
+            aggregate_pass_at_1 REAL,
+            aggregate_pass_at_1_stderr REAL,
+            cost_total_usd REAL,
+            cost_per_issue_usd REAL,
+            total_input_tokens INTEGER,
+            total_output_tokens INTEGER,
+            total_duration_s REAL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO benchmark_run (
+            id, created_at, epoch_count, fixture_ids, is_baseline, status
+        ) VALUES ('legacy', '2026-06-03T10:00:00', 1, '[]', 0, 'completed')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    with SqliteStore(db) as store:
+        run = store.get_run("legacy")
+
+    assert run is not None
+    assert run.is_synthetic is False
 
 
 def test_sqlite_store_baseline_unique_constraint(tmp_path: Path):
