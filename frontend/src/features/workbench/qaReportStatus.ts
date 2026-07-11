@@ -1,6 +1,12 @@
 import { safeJsonRecord } from "@/lib/utils";
 
-const QA_REPORT_STATUSES = ["passed", "failed", "blocked", "needs_follow_up"] as const;
+const QA_REPORT_STATUSES = [
+  "passed",
+  "failed",
+  "blocked",
+  "needs_follow_up",
+  "unverified",
+] as const;
 
 export type QaReportStatus = (typeof QA_REPORT_STATUSES)[number];
 

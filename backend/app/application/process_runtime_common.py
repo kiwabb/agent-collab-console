@@ -16,7 +16,9 @@ from uuid import uuid4
 from app.application import timeouts
 from app.application.help_orchestrator import is_help_request_terminal_status
 from app.application.task_statuses import (
+    execution_process_state_for_task,
     is_task_active_status,
+    is_task_failure_status,
     is_task_success_status,
     is_task_terminal_status,
 )
@@ -1155,12 +1157,20 @@ class BaseProcessRuntime:
                     await self._mark_task_failed(task_id, entry)
                     return
 
+            fresh = await self.codex_store.load_codex_task(task.id)
+            if fresh is not None and (
+                is_task_failure_status(fresh.status)
+                or fresh.status in ("waiting_for_specialist", "waiting_for_help")
+            ):
+                task = fresh
+
+            process_status, process_exit_code = execution_process_state_for_task(task.status)
             if execution_process_id:
                 await self.codex_store.update_execution_process_status(
                     execution_process_id,
-                    "Completed",
-                    exit_code=0,
-                    completed_at=datetime.now(),
+                    process_status,
+                    exit_code=process_exit_code,
+                    completed_at=datetime.now() if is_task_terminal_status(task.status) else None,
                 )
             await self.codex_store.save_codex_task(task)
             # For chat runs the agent reply is plain natural language — show it as-is.
@@ -1179,8 +1189,8 @@ class BaseProcessRuntime:
                 task,
                 execution_process_id,
                 entry,
-                process_status="Completed",
-                exit_code=0,
+                process_status=process_status,
+                exit_code=process_exit_code,
             )
 
             await self._emit_task_status(
@@ -1191,7 +1201,11 @@ class BaseProcessRuntime:
                 execution_process_id=execution_process_id,
             )
 
-            await self._complete_help_child_if_needed(task, child_status="done", child_result=task.result)
+            await self._complete_help_child_if_needed(
+                task,
+                child_status=task.status,
+                child_result=task.result,
+            )
 
     async def _mark_task_failed(self, task_id: str, entry: AsyncProcessEntry) -> None:
         if entry.help_requested:
@@ -1356,7 +1370,6 @@ class BaseProcessRuntime:
 
         if entry.had_error:
             task.status = "failed"
-            process_status = "Failed"
         elif entry.result_text or exit_code == 0:
             task.status = "done"
             if entry.result_text and not is_unusable_result_text(entry.result_text) and not is_chat:
@@ -1376,7 +1389,6 @@ class BaseProcessRuntime:
                     task.status = "failed"
                     task.result = str(exc)
 
-            process_status = "Completed" if is_task_success_status(task.status) else "Failed"
         else:
             task.status = "failed"
             if entry.idle_timed_out:
@@ -1385,7 +1397,6 @@ class BaseProcessRuntime:
                     "Runtime went idle before emitting a final result "
                     f"(idle timeout: {timeout_seconds} seconds)."
                 )
-            process_status = "Failed"
 
         task.updated_at = datetime.now()
 
@@ -1393,18 +1404,25 @@ class BaseProcessRuntime:
         # request that changed task.status in the DB. Saving our stale local
         # copy would overwrite that state.
         fresh = await self.codex_store.load_codex_task(task.id)
-        if fresh is not None and fresh.status != task.status:
+        if fresh is not None and (
+            is_task_failure_status(fresh.status)
+            or fresh.status in ("waiting_for_specialist", "waiting_for_help")
+        ):
             task = fresh
+
+        process_status, projected_exit_code = execution_process_state_for_task(task.status)
+        final_exit_code = projected_exit_code
+        if process_status == "Failed" and exit_code not in (None, 0):
+            final_exit_code = exit_code
 
         await self.codex_store.save_codex_task(task)
 
         if execution_process_id:
-            final_exit_code = 0 if is_task_success_status(task.status) and exit_code is None else exit_code
             await self.codex_store.update_execution_process_status(
                 execution_process_id,
                 process_status,
                 exit_code=final_exit_code,
-                completed_at=datetime.now(),
+                completed_at=datetime.now() if is_task_terminal_status(task.status) else None,
             )
 
         await self._emit_task_status(
@@ -1418,7 +1436,7 @@ class BaseProcessRuntime:
             execution_process_id,
             entry,
             process_status=process_status,
-            exit_code=final_exit_code if execution_process_id else exit_code,
+            exit_code=final_exit_code,
         )
         await self._complete_help_child_if_needed(task, child_status=task.status, child_result=task.result)
 

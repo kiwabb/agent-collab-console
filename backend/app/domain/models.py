@@ -125,23 +125,6 @@ class Prototype(BaseModel):
     updated_at: datetime | None = None
 
 
-class ProjectEnvVar(BaseModel):
-    """A single project-level environment variable stored by the console.
-
-    Secret values (``secret=True``) are stored as ciphertext via the
-    ``env_crypto`` module and never returned as plaintext through the API.
-    Non-secret values (ports, hosts, URLs) are stored in plaintext.
-    """
-
-    project_id: str
-    name: str  # e.g. APP_PORT, OPENAI_API_KEY
-    value: str  # plaintext for non-secret, ciphertext for secret
-    secret: bool = False
-    source: str = ""  # "agent" | "user" | "compose" | "env_example"
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
 class PrototypeVersion(BaseModel):
     """A stored HTML iteration of a prototype."""
 
@@ -212,6 +195,8 @@ class CodexIssue(BaseModel):
     project_id: str | None = None
     title: str
     description: str | None = None
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    acceptance_criteria_confirmed: bool = False
     current_phase: str = "requirements"
     status: str = "open"
     review_comment: str | None = None

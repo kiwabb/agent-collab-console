@@ -9,6 +9,8 @@ export interface CodexIssue {
   project_id: string | null;
   title: string;
   description: string | null;
+  acceptance_criteria: string[];
+  acceptance_criteria_confirmed: boolean;
   current_phase: string;
   status: string;
   review_comment?: string | null;
@@ -114,6 +116,8 @@ export interface CreateIssueRequest {
   session_id: string;
   title: string;
   description?: string;
+  acceptance_criteria?: string[];
+  acceptance_criteria_confirmed?: boolean;
   base_branch?: string | null;
   executor?: string | null;
   provider?: string | null;
@@ -122,6 +126,10 @@ export interface CreateIssueRequest {
 
 export interface UpdateIssuePhaseRequest {
   current_phase: string;
+}
+
+export interface ConfirmIssueAcceptanceCriteriaRequest {
+  acceptance_criteria: string[];
 }
 
 export interface IssueTemplate {

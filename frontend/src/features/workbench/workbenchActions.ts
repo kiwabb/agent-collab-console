@@ -8,6 +8,8 @@ type CreateCodexIssueFn = (
   executor?: string | null,
   provider?: string | null,
   model?: string | null,
+  acceptanceCriteria?: string[],
+  acceptanceCriteriaConfirmed?: boolean,
 ) => Promise<CodexIssue>;
 type AutoStartIssueGraphFn = (issueId: string) => Promise<WorkflowGraph>;
 type CreateCodexTaskFn = (
@@ -50,6 +52,8 @@ export async function createIssueAndInitialTask({
   issueTitle,
   provider,
   model,
+  acceptanceCriteria,
+  acceptanceCriteriaConfirmed,
 }: {
   workspaceId: string;
   title: string;
@@ -64,6 +68,8 @@ export async function createIssueAndInitialTask({
   issueTitle?: string | undefined;
   provider?: string | null | undefined;
   model?: string | null | undefined;
+  acceptanceCriteria?: string[] | undefined;
+  acceptanceCriteriaConfirmed?: boolean | undefined;
 }): Promise<{
   issue: CodexIssue;
   initialTask?: CodexTask;
@@ -77,6 +83,8 @@ export async function createIssueAndInitialTask({
     executor ?? null,
     provider ?? null,
     model ?? null,
+    acceptanceCriteria ?? [],
+    acceptanceCriteriaConfirmed ?? false,
   );
   if (createCodexTask && runCodexTask) {
     const initialTask = await createCodexTask(

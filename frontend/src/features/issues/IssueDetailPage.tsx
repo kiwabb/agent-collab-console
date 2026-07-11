@@ -428,7 +428,12 @@ export function IssueDetailPage({ issueId }: Props) {
 
             <aside className="min-w-0 space-y-3 2xl:sticky 2xl:top-3">
               {issue && <GitInfoCard issue={issue} onIssueUpdated={setIssue} />}
-              <IssueSideStack issueId={issueId} checklist={checklist} issue={issue} />
+              <IssueSideStack
+                issueId={issueId}
+                checklist={checklist}
+                issue={issue}
+                onIssueUpdated={setIssue}
+              />
             </aside>
           </div>
         </div>

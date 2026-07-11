@@ -19,6 +19,10 @@ from app.application.specialist_requests import SpecialistCallRequest
 from app.application.knowledge_index_service import KnowledgeStore
 from app.application.specialist_orchestrator import SpecialistStore
 from app.application.team_notes_service import TeamNotesStore
+from app.application.verification_evidence import (
+    VERIFICATION_EVIDENCE_ROLES,
+    append_acceptance_criteria_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +30,7 @@ if TYPE_CHECKING:
     from app.application.embedding_service import EmbeddingService
     from app.application.knowledge_index_service import ArtifactRow
     from app.application.project_script_suggestions import ProjectScriptSuggestion
-    from app.domain.models import CodexTask, Project
+    from app.domain.models import CodexIssue, CodexTask, Project, ProjectEnvVar
 
 
 class RoleWorkflowStore(KnowledgeStore, SpecialistStore, TeamNotesStore, Protocol):
@@ -35,6 +39,24 @@ class RoleWorkflowStore(KnowledgeStore, SpecialistStore, TeamNotesStore, Protoco
     async def load_project(self, project_id: str) -> Project | None: ...
 
     async def save_project(self, project: Project) -> None: ...
+
+    async def load_codex_issue(self, issue_id: str) -> CodexIssue | None: ...
+
+    async def load_project_env_var(
+        self,
+        project_id: str,
+        name: str,
+    ) -> ProjectEnvVar | None: ...
+
+    async def save_project_env_var(
+        self,
+        project_id: str,
+        name: str,
+        value: str,
+        *,
+        secret: bool = False,
+        source: str = "user",
+    ) -> None: ...
 
 ENGINEER_ROLES = frozenset({"engineer", "engineer_frontend", "engineer_backend"})
 OPERATIONS_ROLES = frozenset({"operations_engineer"})
@@ -73,6 +95,12 @@ class RoleWorkflowService:
         so they win against any other context.
         """
         role = task.role
+        acceptance_criteria: list[str] = []
+        acceptance_criteria_confirmed = False
+        if role in VERIFICATION_EVIDENCE_ROLES:
+            acceptance_criteria, acceptance_criteria_confirmed = (
+                await self._load_issue_acceptance_context(task)
+            )
         if role == "product_manager":
             base = self._pm_service.build_prompt(task, workspace_title)
         elif role == "architect":
@@ -85,11 +113,23 @@ class RoleWorkflowService:
             # based on task.role.
             base = self._engineer_service.build_prompt(task, workspace_title)
         elif role == "qa":
-            base = self._qa_service.build_prompt(task, workspace_title)
+            base = self._qa_service.build_prompt(
+                task,
+                workspace_title,
+                acceptance_criteria=acceptance_criteria,
+                acceptance_criteria_confirmed=acceptance_criteria_confirmed,
+            )
         elif self._is_specialist_role(role):
             base = self._specialist_service.build_prompt(task, workspace_title)
         else:
             return None  # general — handled elsewhere
+
+        if role in VERIFICATION_EVIDENCE_ROLES:
+            base = append_acceptance_criteria_context(
+                base,
+                acceptance_criteria,
+                confirmed=acceptance_criteria_confirmed,
+            )
 
         # Always tell every role about the clarification escape hatch so it
         # has a structured way to ask a question instead of guessing.
@@ -110,7 +150,7 @@ class RoleWorkflowService:
                 memory_text = await team_notes.format_for_prompt(
                     self.codex_store, project_id, project_repo_path
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "team notes prompt context unavailable: project_id=%s error=%s",
                     project_id,
@@ -168,7 +208,15 @@ class RoleWorkflowService:
         elif role in ENGINEER_ROLES:
             doc = self._engineer_service.persist_result(task, workspace_title)
         elif role == "qa":
-            doc = self._qa_service.persist_result(task, workspace_title)
+            acceptance_criteria, acceptance_criteria_confirmed = (
+                await self._load_issue_acceptance_context(task)
+            )
+            doc = self._qa_service.persist_result(
+                task,
+                workspace_title,
+                acceptance_criteria=acceptance_criteria,
+                acceptance_criteria_confirmed=acceptance_criteria_confirmed,
+            )
         elif self._is_specialist_role(role):
             doc = self._specialist_service.persist_result(task, workspace_title)
 
@@ -275,6 +323,26 @@ class RoleWorkflowService:
                     asyncio.create_task(_embed())  # noqa: RUF006
 
         return doc
+
+    async def _load_issue_acceptance_context(
+        self,
+        task: CodexTask,
+    ) -> tuple[list[str], bool]:
+        if self.codex_store is None or task.issue_id is None:
+            return [], False
+        try:
+            issue = await self.codex_store.load_codex_issue(task.issue_id)
+        except Exception:  # Persistence boundary; unavailable means unverified.
+            logger.warning(
+                "acceptance criteria unavailable: task_id=%s issue_id=%s",
+                task.id,
+                task.issue_id,
+                exc_info=True,
+            )
+            return [], False
+        if issue is None:
+            return [], False
+        return list(issue.acceptance_criteria), issue.acceptance_criteria_confirmed
 
     @staticmethod
     def _is_specialist_role(role: str | None) -> bool:
@@ -510,15 +578,16 @@ class RoleWorkflowService:
                             "run_command": project.run_command,
                         }
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("project script update events failed: %s", exc, exc_info=True)
         task.result = suggestion.model_dump_json()
 
         # Persist agent-inferred env_vars to project_env_vars (user-stored values win).
-        if project_id and suggestion.env_vars:
+        if project_id and suggestion.env_vars and self.codex_store is not None:
             try:
+                from app.application.env_crypto import encrypt
+                from app.application.env_crypto import is_configured as _crypto_ready
                 from app.application.env_materializer import is_secret_name
-                from app.application.env_crypto import encrypt, is_configured as _crypto_ready
 
                 for ev in suggestion.env_vars:
                     # Skip if user already set this var (user wins over agent).
@@ -537,10 +606,7 @@ class RoleWorkflowService:
                         value = None
                     stored_value = value or ""
                     if secret and stored_value.strip():
-                        if _crypto_ready():
-                            stored_value = encrypt(stored_value)
-                        else:
-                            stored_value = ""  # Can't encrypt → treat as unset
+                        stored_value = encrypt(stored_value) if _crypto_ready() else ""
 
                     await self.codex_store.save_project_env_var(
                         project_id,

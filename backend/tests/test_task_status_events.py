@@ -36,5 +36,8 @@ def test_build_task_status_event_includes_shared_correlation_fields():
         "task_kind": "project_script_suggestion",
         "status": "failed",
         "execution_process_id": "ep-1",
+        "trace_id": None,
+        "span_id": None,
+        "parent_span_id": None,
         "result": "boom",
     }

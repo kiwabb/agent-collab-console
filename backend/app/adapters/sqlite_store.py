@@ -97,6 +97,18 @@ def _json_string_list(value: str | None) -> list[str] | None:
     return [item for item in parsed if isinstance(item, str)]
 
 
+def _issue_acceptance_criteria(value: object) -> list[str]:
+    if not isinstance(value, str) or not value:
+        return []
+    try:
+        parsed: object = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        return []
+    return [item.strip() for item in parsed if item.strip()]
+
+
 def _codex_settings(value: str | None) -> dict[str, bool]:
     parsed = _json_object(value)
     if parsed is None:
@@ -250,6 +262,8 @@ class SQLiteStore:
                     project_id TEXT,
                     title TEXT NOT NULL,
                     description TEXT,
+                    acceptance_criteria TEXT NOT NULL DEFAULT '[]',
+                    acceptance_criteria_confirmed INTEGER NOT NULL DEFAULT 0,
                     current_phase TEXT NOT NULL DEFAULT 'requirements',
                     status TEXT NOT NULL DEFAULT 'open',
                     review_comment TEXT,
@@ -440,6 +454,14 @@ class SQLiteStore:
                 conn.execute("ALTER TABLE agents ADD COLUMN agent_tier TEXT DEFAULT 'managed'")
             with suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE codex_issues ADD COLUMN project_id TEXT")
+            with suppress(sqlite3.OperationalError):
+                conn.execute(
+                    "ALTER TABLE codex_issues ADD COLUMN acceptance_criteria TEXT NOT NULL DEFAULT '[]'"
+                )
+            with suppress(sqlite3.OperationalError):
+                conn.execute(
+                    "ALTER TABLE codex_issues ADD COLUMN acceptance_criteria_confirmed INTEGER NOT NULL DEFAULT 0"
+                )
             for _issue_exec_col in ("executor", "provider", "model"):
                 with suppress(sqlite3.OperationalError):
                     conn.execute(f"ALTER TABLE codex_issues ADD COLUMN {_issue_exec_col} TEXT")
@@ -1240,13 +1262,15 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO codex_issues (id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, executor, provider, model, budget_usd, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO codex_issues (id, session_id, project_id, title, description, acceptance_criteria, acceptance_criteria_confirmed, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, executor, provider, model, budget_usd, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 issue.id,
                 issue.session_id,
                 issue.project_id,
                 issue.title,
                 issue.description,
+                json.dumps(issue.acceptance_criteria, ensure_ascii=False),
+                1 if issue.acceptance_criteria_confirmed else 0,
                 issue.current_phase,
                 issue.status,
                 issue.review_comment,
@@ -1278,12 +1302,21 @@ class SQLiteStore:
         conn.close()
         if not row:
             return None
+        acceptance_criteria = _issue_acceptance_criteria(
+            row["acceptance_criteria"] if _row_has_key(row, "acceptance_criteria") else None
+        )
         return CodexIssue(
             id=row["id"],
             session_id=row["session_id"],
             project_id=row["project_id"] if _row_has_key(row, "project_id") else None,
             title=row["title"],
             description=row["description"],
+            acceptance_criteria=acceptance_criteria,
+            acceptance_criteria_confirmed=(
+                bool(row["acceptance_criteria_confirmed"])
+                if _row_has_key(row, "acceptance_criteria_confirmed") and acceptance_criteria
+                else False
+            ),
             current_phase=row["current_phase"],
             status=row["status"],
             review_comment=row["review_comment"] if _row_has_key(row, "review_comment") else None,
@@ -1308,13 +1341,22 @@ class SQLiteStore:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        select_sql = "SELECT id, session_id, project_id, title, description, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, budget_usd, created_at, updated_at FROM codex_issues"
+        select_sql = "SELECT id, session_id, project_id, title, description, acceptance_criteria, acceptance_criteria_confirmed, current_phase, status, review_comment, is_pinned, milestone, git_branch, git_base_branch, git_worktree_path, git_merge_status, git_last_commit_sha, github_pr_url, github_pr_state, budget_usd, created_at, updated_at FROM codex_issues"
         if session_id:
             rows = conn.execute(f"{select_sql} WHERE session_id = ? ORDER BY is_pinned DESC, updated_at DESC, created_at DESC", (session_id,)).fetchall()
         else:
             rows = conn.execute(f"{select_sql} ORDER BY is_pinned DESC, updated_at DESC, created_at DESC").fetchall()
         conn.close()
-        return [dict(r) for r in rows]
+        items: list[dict[str, object]] = []
+        for row in rows:
+            item = dict(row)
+            acceptance_criteria = _issue_acceptance_criteria(item["acceptance_criteria"])
+            item["acceptance_criteria"] = acceptance_criteria
+            item["acceptance_criteria_confirmed"] = (
+                bool(item["acceptance_criteria_confirmed"]) and bool(acceptance_criteria)
+            )
+            items.append(item)
+        return items
 
     # --- Codex Tasks ---
 

@@ -13,9 +13,19 @@ from app.application.command_safety import REFUSED_COMMAND_PATTERNS as _REFUSED_
 from app.application.command_safety import parse_allowed_command as _parse_allowed_command
 from app.application.command_safety import refuse_reason as _shared_refuse_reason
 from app.application.issue_artifact_documents import IssueArtifactDocuments
+from app.application.qa_output_redaction import QAOutputRedactionError, QAOutputRedactor
 from app.application.qa_failure_summary import format_qa_failure_narrative
 from app.application.specialist_requests import SpecialistCallRequest
 from app.application import timeouts
+from app.application.verification_evidence import (
+    AcceptanceCriterionEvidence,
+    VerificationState,
+    VerificationStateError,
+    append_acceptance_criteria_context,
+    build_verified_criterion_evidence,
+    capture_verification_state,
+    sanitize_model_criterion_evidence,
+)
 from app.domain.models import CodexTask
 from app.json_safety import object_dict
 
@@ -32,9 +42,9 @@ class QAWorkflowError(ValueError):
 QA_COMMAND_TIMEOUT_S = timeouts.qa_command_timeout_s()
 # Total time budget across ALL verification commands for one QA pass.
 QA_TOTAL_BUDGET_S = timeouts.qa_total_budget_s()
-# Whether to actually execute verification commands. Default OFF: commands are
-# LLM-proposed and may include prompt-injected content, so execution requires an
-# explicit operator opt-in via QA_EXECUTE_COMMANDS=true.
+# Real CLI mode executes verification commands by default through the narrow
+# argv allowlist below. Offline/mock mode remains disabled unless explicitly
+# opted in with QA_EXECUTE_COMMANDS=true.
 QA_EXECUTE_COMMANDS = timeouts.qa_execute_commands()
 
 # Patterns we refuse to run even if the LLM proposes them live in the shared
@@ -56,9 +66,10 @@ class QAReportDocument(BaseModel):
     project_name: str
     issue_id: str
     issue_title: str
-    status: str = Field(pattern="^(passed|failed|blocked|needs_follow_up)$")
+    status: str = Field(pattern="^(passed|failed|blocked|needs_follow_up|unverified)$")
     test_scope: str
     acceptance_coverage: list[str]
+    criterion_evidence: list[AcceptanceCriterionEvidence] = Field(default_factory=list)
     commands_run: list[str]
     recommended_commands: list[str]
     manual_scenarios: list[str]
@@ -66,6 +77,10 @@ class QAReportDocument(BaseModel):
     risks: list[str]
     test_gaps: list[str]
     final_recommendation: str
+    # Framework-owned evidence. Any model-supplied value is overwritten after
+    # the trusted argv runner returns, before this document is persisted.
+    execution_results: list[QACommandResult] = Field(default_factory=list)
+    verification_state: VerificationState | None = None
     # Set this when you cannot reasonably proceed without user input.
     # The framework will pause the pipeline and re-run you once answered.
     clarification_question: str | None = None
@@ -93,6 +108,8 @@ class QAWorkflow:
         "test_scope": "test_scope",
         "acceptancecoverage": "acceptance_coverage",
         "acceptance_coverage": "acceptance_coverage",
+        "criterionevidence": "criterion_evidence",
+        "criterion_evidence": "criterion_evidence",
         "commandsrun": "commands_run",
         "commands_run": "commands_run",
         "recommendedcommands": "recommended_commands",
@@ -113,7 +130,14 @@ class QAWorkflow:
     def __init__(self) -> None:
         self._docs = IssueArtifactDocuments()
 
-    def build_prompt(self, task: CodexTask, workspace_title: str | None = None) -> str:
+    def build_prompt(
+        self,
+        task: CodexTask,
+        workspace_title: str | None = None,
+        *,
+        acceptance_criteria: list[str] | None = None,
+        acceptance_criteria_confirmed: bool = False,
+    ) -> str:
         project_name = workspace_title or "workspace-project"
         issue_id = task.issue_id or task.id
         workspace_path = task.workspace_path or ""
@@ -137,6 +161,11 @@ class QAWorkflow:
             implementation_plan,
             implementation_md,
         )
+        user_requirement = append_acceptance_criteria_context(
+            task.prompt,
+            acceptance_criteria or [],
+            confirmed=acceptance_criteria_confirmed,
+        )
 
         return (
             "You are acting as QA. Follow a QA workflow: "
@@ -158,9 +187,11 @@ class QAWorkflow:
             '"project_name": "string",\n'
             '"issue_id": "string",\n'
             '"issue_title": "string",\n'
-            '"status": "passed|failed|blocked|needs_follow_up",\n'
+            '"status": "passed|failed|blocked|needs_follow_up|unverified",\n'
             '"test_scope": "string",\n'
             '"acceptance_coverage": ["string"],\n'
+            '"criterion_evidence": [{"criterion_index": 0, "criterion": "exact confirmed '
+            'criterion text", "command": "one exact recommended_commands value"}],\n'
             '"commands_run": ["string"],\n'
             '"recommended_commands": ["string"],\n'
             '"manual_scenarios": ["string"],\n'
@@ -169,10 +200,17 @@ class QAWorkflow:
             '"test_gaps": ["string"],\n'
             '"final_recommendation": "string"\n'
             "}\n\n"
-            f"user_requirement:\n{task.prompt}"
+            f"user_requirement:\n{user_requirement}"
         )
 
-    def persist_result(self, task: CodexTask, workspace_title: str | None = None) -> QAReportDocument:
+    def persist_result(
+        self,
+        task: CodexTask,
+        workspace_title: str | None = None,
+        *,
+        acceptance_criteria: list[str] | None = None,
+        acceptance_criteria_confirmed: bool = False,
+    ) -> QAReportDocument:
         if not task.workspace_path:
             raise QAWorkflowError("Task workspace_path is required for QA artifacts")
         if not task.result or not task.result.strip():
@@ -188,6 +226,15 @@ class QAWorkflow:
             raise QAWorkflowError(f"QA output is not valid JSON: {exc}") from exc
 
         payload = self._normalize_payload_keys(payload)
+        # This field is produced by the framework, never accepted from the
+        # model. Removing it before validation also prevents malformed claimed
+        # evidence from breaking the real verification pass.
+        payload.pop("execution_results", None)
+        payload.pop("verification_state", None)
+        if "criterion_evidence" in payload:
+            payload["criterion_evidence"] = sanitize_model_criterion_evidence(
+                payload["criterion_evidence"]
+            )
 
         payload.setdefault("project_name", workspace_title or "workspace-project")
         payload.setdefault("issue_id", canonical_issue_id)
@@ -203,33 +250,47 @@ class QAWorkflow:
         # codes drive the final QA verdict instead of trusting the LLM's
         # self-reported status.
         execution_results = self._execute_verification_commands(
-            report.recommended_commands, task.workspace_path
+            report.recommended_commands,
+            task.workspace_path,
+            task.id,
         )
         # Mirror each executed verification command into the unified audit_log
         # (PR2). Source of truth stays in task.result + on-disk qa artifacts;
         # this is an additive calls-level audit row per command.
         self._audit_command_execs(execution_results, canonical_issue_id, task.id)
-        if execution_results is not None:
-            real_status, framework_notes = self._reconcile_status_with_execution(
-                report.status, execution_results
-            )
-            if real_status != report.status:
-                report.status = real_status
-            # Replace commands_run with what we ACTUALLY ran so downstream
-            # reviewers see the truth. The LLM's claim is preserved in the
-            # raw qa_plan.json above this — we override only the UX copy.
-            report.commands_run = [
-                f"{r['command']} → exit {r['exit_code']}" for r in execution_results
-            ]
-            existing_notes = list(report.test_gaps or [])
-            report.test_gaps = framework_notes + existing_notes
+        real_status, framework_notes = self._reconcile_status_with_execution(
+            report.status, execution_results
+        )
+        report.status = real_status
+        # Persist only what the framework actually attempted. This prevents an
+        # LLM-authored commands_run list from masquerading as execution evidence.
+        report.execution_results = execution_results or []
+        report.commands_run = [
+            f"{result['command']} → exit {result['exit_code']}"
+            for result in report.execution_results
+        ]
+        report.test_gaps = framework_notes + list(report.test_gaps)
 
-        # D1 — independent git cross-check (soft, additive). Even when the
-        # Engineer recommended no commands (so the reconcile above is a no-op),
-        # an implementation that claims it landed code but shows a ZERO real git
-        # diff is suspicious. Bump to `needs_follow_up` (soft, sticky over a
-        # `passed` claim) so a human looks — never harder than the command
-        # reconcile (a real command FAILURE keeps `failed`).
+        confirmed_criteria = (
+            list(acceptance_criteria or []) if acceptance_criteria_confirmed else []
+        )
+        criterion_evidence, criterion_error = build_verified_criterion_evidence(
+            confirmed_criteria,
+            report.criterion_evidence,
+            report.execution_results,
+        )
+        report.criterion_evidence = criterion_evidence
+        if criterion_error is not None:
+            report.test_gaps = [
+                f"[framework] Acceptance criteria are unverified: {criterion_error}.",
+                *report.test_gaps,
+            ]
+            if report.status == "passed":
+                report.status = "unverified"
+
+        # D1 — independent git cross-check (soft, additive). A zero real git
+        # diff can downgrade a verified pass, but it cannot turn missing command
+        # evidence into any other state; `unverified` remains sticky.
         git_status, git_note = self._git_cross_check(
             report.status, task.workspace_path, canonical_issue_id
         )
@@ -237,6 +298,27 @@ class QAWorkflow:
             if git_status != report.status:
                 report.status = git_status
             report.test_gaps = [git_note, *list(report.test_gaps or [])]
+
+        if report.status == "passed":
+            try:
+                report.verification_state = capture_verification_state(
+                    workspace_path=task.workspace_path,
+                    issue_id=canonical_issue_id,
+                    task_id=task.id,
+                    role=task.role,
+                )
+            except VerificationStateError:
+                logger.warning(
+                    "QA worktree fingerprint unavailable; refusing verified pass: task_id=%s",
+                    task.id,
+                    exc_info=True,
+                )
+                report.status = "unverified"
+                report.test_gaps = [
+                    "[framework] The tested worktree state could not be fingerprinted. "
+                    "Status overridden to 'unverified'.",
+                    *report.test_gaps,
+                ]
 
         self._docs.ensure_issue_root(task.workspace_path, canonical_issue_id)
 
@@ -253,17 +335,17 @@ class QAWorkflow:
         task.result = report.model_dump_json()
 
         qa_relpath = str(qa_report_path.relative_to(task.workspace_path))
-        if report.status == "failed":
-            # Mark the task failed so the scheduler's rework gate fires.
+        if report.status != "passed":
+            # Every non-passing QA verdict is a terminal non-success task. The
+            # structured report retains the precise blocked/follow-up/unverified
+            # reason while the scheduler receives an unambiguous rework signal.
             task.status = "failed"
-            task.review_comment = format_qa_failure_narrative(
+            review_comment = format_qa_failure_narrative(
                 report.model_dump(), qa_report_relpath=qa_relpath
             )
-        elif report.status in ("blocked", "needs_follow_up"):
-            # Keep status="done" (no rework loop), but surface the verdict.
-            task.review_comment = f"[{report.status.upper()}] " + format_qa_failure_narrative(
-                report.model_dump(), qa_report_relpath=qa_relpath
-            )
+            if report.status != "failed":
+                review_comment = f"[{report.status.upper()}] {review_comment}"
+            task.review_comment = review_comment
         # Attach written_files to the payload using object.__setattr__ to bypass Pydantic validation
         object.__setattr__(
             report,
@@ -273,9 +355,6 @@ class QAWorkflow:
                 {"name": "qa/qa_report.md", "path": str(qa_report_path), "kind": "testing"},
             ],
         )
-        # Surface execution results so the scheduler / replanner can reason
-        # about whether to dispatch an Engineer rework.
-        object.__setattr__(report, "execution_results", execution_results or [])
         return report
 
     @staticmethod
@@ -295,7 +374,10 @@ class QAWorkflow:
         audit.record_command_execs(execution_results, issue_id, task_id)
 
     def _execute_verification_commands(
-        self, commands: list[str], workspace_path: str
+        self,
+        commands: list[str],
+        workspace_path: str,
+        task_id: str,
     ) -> list[QACommandResult] | None:
         """Run each verification command in the worktree and capture results.
 
@@ -314,17 +396,52 @@ class QAWorkflow:
         if not commands:
             return []
 
+        child_env = {"PATH": os.environ.get("PATH", ""), "CI": "1"}
+        try:
+            redactor = QAOutputRedactor.from_workspace(workspace_path, child_env)
+        except QAOutputRedactionError:
+            logger.warning(
+                "QA output redaction unavailable; refusing commands: task_id=%s",
+                task_id,
+                exc_info=True,
+            )
+            return [
+                {
+                    "command": "[REDACTED]",
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": "verification output redaction unavailable",
+                    "duration_s": 0.0,
+                    "refused": "redaction_unavailable",
+                }
+                for command in commands
+                if command.strip()
+            ]
+
         results: list[QACommandResult] = []
         start = time.monotonic()
         for cmd in commands:
             cmd = (cmd or "").strip()
             if not cmd:
                 continue
+            safe_cmd = redactor.redact(cmd)
+            if safe_cmd != cmd:
+                results.append(
+                    {
+                        "command": safe_cmd,
+                        "exit_code": -1,
+                        "stdout": "",
+                        "stderr": "refused by framework: secret_in_command",
+                        "duration_s": 0.0,
+                        "refused": "secret_in_command",
+                    }
+                )
+                continue
             elapsed = time.monotonic() - start
             if elapsed >= QA_TOTAL_BUDGET_S:
                 results.append(
                     {
-                        "command": cmd,
+                        "command": safe_cmd,
                         "exit_code": -1,
                         "stdout": "",
                         "stderr": "",
@@ -333,12 +450,15 @@ class QAWorkflow:
                     }
                 )
                 continue
-            argv, allow_error = _parse_allowed_command(cmd)
+            argv, allow_error = _parse_allowed_command(
+                cmd,
+                workspace_root=workspace_path,
+            )
             refusal = allow_error or self._refuse_reason(cmd)
             if refusal:
                 results.append(
                     {
-                        "command": cmd,
+                        "command": safe_cmd,
                         "exit_code": -1,
                         "stdout": "",
                         "stderr": f"refused by framework: {refusal}",
@@ -355,36 +475,46 @@ class QAWorkflow:
                     capture_output=True,
                     text=True,
                     timeout=QA_COMMAND_TIMEOUT_S,
-                    env={"PATH": os.environ.get("PATH", ""), "CI": "1"},
+                    env=child_env,
                 )
                 results.append(
                     {
-                        "command": cmd,
+                        "command": safe_cmd,
                         "exit_code": proc.returncode,
-                        "stdout": (proc.stdout or "")[-4000:],
-                        "stderr": (proc.stderr or "")[-4000:],
+                        "stdout": redactor.redact(proc.stdout or "")[-4000:],
+                        "stderr": redactor.redact(proc.stderr or "")[-4000:],
                         "duration_s": round(time.monotonic() - t0, 2),
                     }
                 )
             except TimeoutExpired as exc:
                 results.append(
                     {
-                        "command": cmd,
+                        "command": safe_cmd,
                         "exit_code": -1,
-                        "stdout": (exc.stdout or "")[-4000:] if isinstance(exc.stdout, str) else "",
+                        "stdout": (
+                            redactor.redact(exc.stdout or "")[-4000:]
+                            if isinstance(exc.stdout, str)
+                            else ""
+                        ),
                         "stderr": f"timed out after {QA_COMMAND_TIMEOUT_S}s",
                         "duration_s": round(time.monotonic() - t0, 2),
                         "refused": "timeout",
                     }
                 )
             except Exception as exc:  # noqa: BLE001, RUF100
-                logger.warning("QA command %r raised: %s", cmd, exc)
+                safe_error = redactor.redact(str(exc))
+                logger.warning(
+                    "QA command runner failed: task_id=%s command=%r error=%s",
+                    task_id,
+                    safe_cmd,
+                    safe_error,
+                )
                 results.append(
                     {
-                        "command": cmd,
+                        "command": safe_cmd,
                         "exit_code": -1,
                         "stdout": "",
-                        "stderr": f"command runner error: {exc}",
+                        "stderr": f"command runner error: {safe_error}",
                         "duration_s": round(time.monotonic() - t0, 2),
                         "refused": "runner_error",
                     }
@@ -397,21 +527,35 @@ class QAWorkflow:
 
     @staticmethod
     def _reconcile_status_with_execution(
-        claimed_status: str, results: list[QACommandResult]
+        claimed_status: str, results: list[QACommandResult] | None
     ) -> tuple[str, list[str]]:
         """Override the LLM's claimed status with what actually happened.
 
         - If any executed command exited non-zero (and wasn't refused for
           safety reasons), the QA verdict is `failed` regardless of what the
           LLM said.
-        - If every command was refused / timed out / errored, surface as
-          `needs_follow_up` so a human can adjudicate.
-        - Otherwise, trust the LLM's claim but bound it: a `passed` claim is
-          downgraded to `needs_follow_up` when zero commands actually ran.
+        - Disabled execution, no commands, or no cleanly executed commands are
+          `unverified`; an LLM claim never substitutes for execution evidence.
+        - Otherwise, preserve explicit failed/blocked/follow-up/unverified
+          claims because passing commands do not disprove those findings.
         """
         notes: list[str] = []
+        if results is None:
+            return (
+                "unverified",
+                [
+                    "[framework] Verification command execution is disabled. "
+                    "Status overridden to 'unverified'."
+                ],
+            )
         if not results:
-            return claimed_status, notes
+            return (
+                "unverified",
+                [
+                    "[framework] No verification command was executed. "
+                    "Status overridden to 'unverified'."
+                ],
+            )
 
         ran = [r for r in results if not r.get("refused")]
         refused = [r for r in results if r.get("refused")]
@@ -436,15 +580,15 @@ class QAWorkflow:
             notes.insert(
                 0,
                 "[framework] No verification command ran cleanly (all refused or timed out). "
-                "Marking 'needs_follow_up' for human review.",
+                "Status overridden to 'unverified'.",
             )
-            return "needs_follow_up", notes
+            return "unverified", notes
 
         if claimed_status == "passed":
             return "passed", notes
 
-        # Anything else (LLM said failed/blocked/needs_follow_up) — trust it,
-        # since the model knows context the executed commands don't.
+        # Anything else (LLM said failed/blocked/needs_follow_up/unverified) is
+        # sticky because the model may have found a non-command blocker.
         return claimed_status, notes
 
     @staticmethod
@@ -466,7 +610,7 @@ class QAWorkflow:
         """
         # A real command failure is the stronger, more certain fact: don't
         # weaken it. Also nothing to add to an already-needs_follow_up verdict.
-        if current_status in ("failed", "needs_follow_up"):
+        if current_status in ("failed", "needs_follow_up", "unverified"):
             return current_status, None
         try:
             from app.application.engineer_workflow import git_changed_files
@@ -613,6 +757,16 @@ class QAWorkflow:
             "## Acceptance Coverage",
         ]
         lines.extend([f"- {c}" for c in report.acceptance_coverage] or ["- None"])
+        lines.extend(["", "## Criterion Evidence"])
+        if report.criterion_evidence:
+            for item in report.criterion_evidence:
+                lines.append(
+                    f"- [{item.criterion_index}] {item.criterion} -> `{item.command}` "
+                    f"(execution result {item.execution_result_index})"
+                )
+                lines.extend(["  ```", *item.evidence.splitlines()[-12:], "  ```"])
+        else:
+            lines.append("- None")
         lines.extend(["", "## Commands Run"])
         lines.extend([f"- `{c}`" for c in report.commands_run] or ["- None"])
         lines.extend(["", "## Recommended Commands"])

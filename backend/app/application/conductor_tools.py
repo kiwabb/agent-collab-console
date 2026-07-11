@@ -7,8 +7,11 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Protocol, cast  # noqa: UP035
 from uuid import uuid4
+
+from pydantic import ValidationError
 
 from app.application.budget_service import BudgetStore
 from app.application.github_pr_followup import EventBusLike
@@ -25,6 +28,13 @@ from app.application.task_dispatcher import (
     DispatchRoleStore,
     TaskDispatcherFn,
     normalize_role,
+)
+from app.application.verification_evidence import (
+    VERIFICATION_EVIDENCE_ROLES,
+    VerificationState,
+    VerificationStateError,
+    capture_verification_state,
+    persisted_criterion_evidence_error,
 )
 from app.json_safety import JsonObject, object_dict
 
@@ -69,16 +79,7 @@ IMPLEMENTATION_FINALIZE_ROLES = {
     "operations_engineer",
     "specialist:doc_writer",
 }
-VERIFICATION_FINALIZE_ROLES = {
-    "qa",
-    "specialist:accessibility_reviewer",
-    "specialist:api_contract_checker",
-    "specialist:code_reviewer",
-    "specialist:dependency_auditor",
-    "specialist:i18n_checker",
-    "specialist:performance_reviewer",
-    "specialist:security_reviewer",
-}
+VERIFICATION_FINALIZE_ROLES = set(VERIFICATION_EVIDENCE_ROLES)
 
 _DISPATCH_START_LOCKS_BY_ISSUE: dict[str, asyncio.Lock] = {}
 
@@ -129,6 +130,115 @@ def _int_tool_value(value: object, default: int) -> int:
         except ValueError:
             return default
     return default
+
+
+def _passed_verification_evidence_error(
+    task: CodexTask,
+    acceptance_criteria: list[str],
+    *,
+    expected_issue_id: str,
+    expected_role: str,
+    current_workspace_path: str,
+) -> str | None:
+    """Return why a verification task cannot prove a successful finalize.
+
+    QA owns the evidence producer: its framework runner overwrites
+    ``execution_results`` before persisting the report. The finalize gate only
+    consumes that exact structured shape and never infers execution from an LLM
+    status or a human-readable commands list.
+    """
+    if not is_task_success_status(task.status):
+        return f"verification task status is {normalize_task_status(task.status)!r}, not success"
+    if not task.result or not task.result.strip():
+        return "verification task has no persisted report"
+    try:
+        report = object_dict(json.loads(task.result))
+    except json.JSONDecodeError:
+        return "verification task report is not valid JSON"
+    if report.get("status") != "passed":
+        return f"verification report status is {report.get('status')!r}, not 'passed'"
+    raw_results = report.get("execution_results")
+    if not isinstance(raw_results, list) or not raw_results:
+        return "verification report has no structured execution results"
+
+    clean_passes = 0
+    validated_results: list[JsonObject] = []
+    for index, raw_result in enumerate(raw_results):
+        result = object_dict(raw_result)
+        command = result.get("command")
+        exit_code = result.get("exit_code")
+        duration_s = result.get("duration_s")
+        stdout = result.get("stdout")
+        stderr = result.get("stderr")
+        if not isinstance(command, str) or not command.strip():
+            return f"execution result {index} has no command"
+        if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+            return f"execution result {index} has no integer exit code"
+        if isinstance(duration_s, bool) or not isinstance(duration_s, (int, float)):
+            return f"execution result {index} has no numeric duration"
+        if not isinstance(stdout, str) or not isinstance(stderr, str):
+            return f"execution result {index} has no captured output fields"
+        validated_results.append(result)
+        if result.get("refused") is not None:
+            continue
+        if exit_code != 0:
+            return f"execution result {index} exited with {exit_code}"
+        clean_passes += 1
+
+    if clean_passes == 0:
+        return "verification report has no cleanly executed passing command"
+    criterion_error = persisted_criterion_evidence_error(
+        acceptance_criteria,
+        report.get("criterion_evidence"),
+        validated_results,
+    )
+    if criterion_error is not None:
+        return criterion_error
+
+    if task.issue_id != expected_issue_id:
+        return "verification task belongs to a different issue"
+    if normalize_role(task.role) != expected_role:
+        return "verification task role does not match its workflow node"
+    if not task.workspace_path:
+        return "verification task has no tested workspace path"
+    try:
+        current_workspace = Path(current_workspace_path).resolve()
+        tested_workspace = Path(task.workspace_path).resolve()
+    except OSError:
+        return "verification workspace path could not be resolved"
+    if tested_workspace != current_workspace:
+        return "verification evidence was produced in a different worktree"
+
+    try:
+        persisted_state = VerificationState.model_validate(report.get("verification_state"))
+    except ValidationError:
+        return "verification report has no valid framework-owned worktree fingerprint"
+    if persisted_state.issue_id != expected_issue_id or persisted_state.task_id != task.id:
+        return "verification fingerprint identity does not match the task"
+    if normalize_role(persisted_state.role) != expected_role:
+        return "verification fingerprint role does not match the workflow node"
+    try:
+        persisted_workspace = Path(persisted_state.workspace_path).resolve()
+    except OSError:
+        return "verification fingerprint workspace path could not be resolved"
+    if persisted_workspace != current_workspace:
+        return "verification fingerprint belongs to a different worktree"
+
+    try:
+        current_state = capture_verification_state(
+            workspace_path=str(current_workspace),
+            issue_id=expected_issue_id,
+            task_id=task.id,
+            role=task.role,
+        )
+    except VerificationStateError:
+        return "current worktree state could not be fingerprinted"
+    if (
+        persisted_state.git_head != current_state.git_head
+        or persisted_state.worktree_state_sha256 != current_state.worktree_state_sha256
+    ):
+        return "verification evidence is stale because the worktree changed after testing"
+    return None
 
 
 def build_conductor_tools(
@@ -252,7 +362,9 @@ def build_conductor_tools(
             },
         }
 
-    async def _load_graph_for_governance(*, tool: str, gate: str):
+    async def _load_graph_for_governance(
+        *, tool: str, gate: str
+    ) -> tuple[WorkflowGraph | None, JsonObject | None]:
         if not issue_id:
             return None, None
         try:
@@ -487,7 +599,108 @@ def build_conductor_tools(
                     "cannot finalize as done"
                 ),
             }
-        return None
+        if issue_id is None:
+            return {
+                "status": "failed",
+                "reason": "issue identity is missing; cannot verify acceptance criteria",
+            }
+        try:
+            # The conductor can run for hours, so completion must use the latest
+            # persisted user confirmation rather than its startup snapshot.
+            finalize_issue = await cast(_IssueLoader, store).load_codex_issue(issue_id)
+        except Exception as exc:  # noqa: BLE001, RUF100 - fail-closed governance boundary
+            failure = await _governance_failure(
+                tool="finalize_task",
+                gate="acceptance_criteria",
+                error=exc,
+                issue_ref=issue_id,
+            )
+            failure["reason"] = failure.get("error")
+            return failure
+        if finalize_issue is None:
+            return {
+                "status": "failed",
+                "reason": "issue could not be loaded; cannot verify acceptance criteria",
+            }
+        if not finalize_issue.acceptance_criteria:
+            return {
+                "status": "failed",
+                "reason": "issue has no acceptance criteria; cannot finalize as done",
+            }
+        if not finalize_issue.acceptance_criteria_confirmed:
+            return {
+                "status": "failed",
+                "reason": "issue acceptance criteria are not user-confirmed; cannot finalize as done",
+            }
+        if not finalize_issue.git_worktree_path:
+            return {
+                "status": "failed",
+                "reason": "issue worktree is missing; cannot validate verification evidence",
+            }
+        evidence_failures: list[JsonObject] = []
+        for node in nodes:
+            node_status = normalize_task_status(node.status)
+            node_key = str(node.node_key or "")
+            base_role = normalize_role(node_key.split("#", 1)[0])
+            if node_status not in TASK_SUCCESS_STATUSES or base_role not in VERIFICATION_FINALIZE_ROLES:
+                continue
+            if not node.task_id:
+                evidence_failures.append(
+                    {
+                        "node_key": node_key,
+                        "status": "missing_verification_evidence",
+                        "reason": "verification node has no task_id",
+                    }
+                )
+                continue
+            try:
+                verification_task = await cast(_TaskStatusStore, store).load_codex_task(
+                    node.task_id
+                )
+            except Exception as exc:  # noqa: BLE001, RUF100 - fail-closed governance boundary
+                failure = await _governance_failure(
+                    tool="finalize_task",
+                    gate="verification_evidence",
+                    error=exc,
+                    issue_ref=issue_id,
+                )
+                failure["reason"] = failure.get("error")
+                return failure
+            if verification_task is None:
+                evidence_failures.append(
+                    {
+                        "node_key": node_key,
+                        "task_id": node.task_id,
+                        "status": "missing_verification_evidence",
+                        "reason": "verification task could not be loaded",
+                    }
+                )
+                continue
+            evidence_error = _passed_verification_evidence_error(
+                verification_task,
+                list(finalize_issue.acceptance_criteria),
+                expected_issue_id=issue_id,
+                expected_role=base_role,
+                current_workspace_path=finalize_issue.git_worktree_path,
+            )
+            if evidence_error is None:
+                return None
+            evidence_failures.append(
+                {
+                    "node_key": node_key,
+                    "task_id": node.task_id,
+                    "status": "missing_verification_evidence",
+                    "reason": evidence_error,
+                }
+            )
+        return {
+            "status": "failed",
+            "reason": (
+                "workflow graph has no verification node with auditable passed "
+                "command execution evidence; cannot finalize as done"
+            ),
+            "blocking_nodes": evidence_failures[:10],
+        }
 
     async def _run_single_dispatch(
         *,
@@ -1242,8 +1455,13 @@ def build_conductor_tools(
                         "blocking_nodes": blocked.get("blocking_nodes"),
                     },
                 )
-                reason = str(blocked.get("reason") or "success gate rejected finalize_task")
-                blocking = blocked.get("blocking_nodes") or []
+                reason = str(
+                    blocked.get("reason")
+                    or blocked.get("error")
+                    or "success gate rejected finalize_task"
+                )
+                raw_blocking = blocked.get("blocking_nodes")
+                blocking = raw_blocking if isinstance(raw_blocking, list) else []
                 msg = f"[finalize rejected] {reason}"
                 if blocking:
                     msg += f"\nBlocking nodes: {json.dumps(blocking[:10], default=str)}"

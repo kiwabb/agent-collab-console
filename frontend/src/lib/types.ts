@@ -144,6 +144,7 @@ export type {
   ProjectConductorState,
   ProjectConductorToolEvent,
   ProjectPullResult,
+  ProjectRunEnvError,
   ProjectRunLogLine,
   ProjectRunLogsResponse,
   ProjectRunStartReason,
@@ -165,6 +166,8 @@ export interface CodexIssue {
   project_id: string | null;
   title: string;
   description: string | null;
+  acceptance_criteria: string[];
+  acceptance_criteria_confirmed: boolean;
   current_phase: string;
   status: string;
   is_pinned?: boolean;
@@ -509,6 +512,8 @@ export interface CreateIssueRequest {
   session_id: string;
   title: string;
   description?: string;
+  acceptance_criteria?: string[];
+  acceptance_criteria_confirmed?: boolean;
   base_branch?: string | null;
   executor?: string | null;
   provider?: string | null;
@@ -517,6 +522,10 @@ export interface CreateIssueRequest {
 
 export interface UpdateIssuePhaseRequest {
   current_phase: string;
+}
+
+export interface ConfirmIssueAcceptanceCriteriaRequest {
+  acceptance_criteria: string[];
 }
 
 export interface RequestHelpRequest {

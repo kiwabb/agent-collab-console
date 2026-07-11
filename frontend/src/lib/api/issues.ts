@@ -5,6 +5,7 @@ import type {
   Artifact,
   CodexIssue,
   CodexTask,
+  ConfirmIssueAcceptanceCriteriaRequest,
   CreateIssueRequest,
   IssueDiffResult,
   MergeIssueResult,
@@ -98,13 +99,34 @@ export async function createCodexIssue(
   executor: string | null = null,
   provider: string | null = null,
   model: string | null = null,
+  acceptanceCriteria: string[] = [],
+  acceptanceCriteriaConfirmed = false,
 ): Promise<CodexIssue> {
-  const body: CreateIssueRequest = { session_id: sessionId, title, description };
+  const body: CreateIssueRequest = {
+    session_id: sessionId,
+    title,
+    description,
+    acceptance_criteria: acceptanceCriteria,
+    acceptance_criteria_confirmed: acceptanceCriteriaConfirmed,
+  };
   if (baseBranch) body.base_branch = baseBranch;
   if (executor) body.executor = executor;
   if (provider) body.provider = provider;
   if (model) body.model = model;
   return apiJsonRequest<CodexIssue>(`${API_BASE}/codex/issues`, "POST", body);
+}
+export async function confirmIssueAcceptanceCriteria(
+  issueId: string,
+  acceptanceCriteria: string[],
+): Promise<CodexIssue> {
+  const body: ConfirmIssueAcceptanceCriteriaRequest = {
+    acceptance_criteria: acceptanceCriteria,
+  };
+  return apiJsonRequest<CodexIssue>(
+    `${API_BASE}/codex/issues/${issueId}/acceptance-criteria/confirm`,
+    "POST",
+    body,
+  );
 }
 export async function approveCodexIssuePlan(
   issueId: string,

@@ -276,6 +276,7 @@ class RuntimeStoreStub:
         self.saved_messages: list[CodexTaskMessage] = []
         self.saved_traces: list[AgentCallTrace] = []
         self.log_events: list[LogEvent] = []
+        self.process_updates: list[tuple[str, str, int | None, datetime | None]] = []
 
     async def load_codex_task(self, task_id: str) -> CodexTask | None:
         if task_id == self.task.id:
@@ -300,7 +301,7 @@ class RuntimeStoreStub:
         exit_code: int | None = None,
         completed_at: datetime | None = None,
     ) -> None:
-        return None
+        self.process_updates.append((process_id, status, exit_code, completed_at))
 
     async def load_execution_process(self, process_id: str) -> ExecutionProcess | None:
         return None
@@ -367,6 +368,13 @@ class RuntimeUnderTest(BaseProcessRuntime):
         return True
 
 
+class DetachedRuntimeStoreStub(RuntimeStoreStub):
+    async def load_codex_task(self, task_id: str) -> CodexTask | None:
+        if task_id == self.task.id:
+            return self.task.model_copy(deep=True)
+        return None
+
+
 @pytest.mark.asyncio
 async def test_process_runtime_mark_task_done_awaits_async_refresh_callback():
     now = datetime.now()
@@ -413,6 +421,102 @@ async def test_process_runtime_mark_task_done_awaits_async_refresh_callback():
 
     assert refreshed["called"] is True
     assert store.task.result == "persisted-from-runtime"
+
+
+@pytest.mark.asyncio
+async def test_process_runtime_preserves_qa_downgrade_in_task_and_process_state():
+    now = datetime.now()
+    task = CodexTask(
+        id="task-qa-unverified",
+        session_id="workspace-qa",
+        issue_id="issue-qa",
+        title="QA task",
+        prompt="verify criteria",
+        role="qa",
+        executor="codex",
+        status="running",
+        workspace_path="/tmp/workspace",
+        last_execution_process_id="process-qa",
+        created_at=now,
+        updated_at=now,
+    )
+    store = RuntimeStoreStub(task)
+    bus = EventBusStub()
+
+    async def refresh_task_result(refreshed_task):
+        refreshed_task.status = "failed"
+        refreshed_task.result = '{"status":"unverified","execution_results":[]}'
+
+    runtime = RuntimeUnderTest(
+        codex_store=store,
+        log_store=store,
+        event_bus=bus,
+        refresh_task_result=refresh_task_result,
+    )
+    entry = AsyncProcessEntry(
+        proc=_null_process(),
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        executor="codex",
+        cwd="/tmp/workspace",
+        resume_session_id=None,
+        result_text='{"status":"passed"}',
+    )
+
+    await runtime._mark_task_done(task.id, entry)
+
+    assert store.task.status == "failed"
+    assert store.process_updates[-1][1:3] == ("Failed", -1)
+    task_status = [event for event in bus.events if event.get("type") == "task_status"][-1]
+    assert task_status["status"] == "failed"
+    assert json.loads(store.saved_traces[-1].metadata_json)["process_status"] == "Failed"
+
+
+@pytest.mark.asyncio
+async def test_reader_exit_does_not_replace_qa_failure_with_stale_running_row():
+    now = datetime.now()
+    task = CodexTask(
+        id="task-qa-reader-exit",
+        session_id="workspace-qa-reader",
+        issue_id="issue-qa-reader",
+        title="QA task",
+        prompt="verify criteria",
+        role="qa",
+        executor="claude",
+        status="running",
+        workspace_path="/tmp/workspace",
+        last_execution_process_id="process-qa-reader",
+        created_at=now,
+        updated_at=now,
+    )
+    store = DetachedRuntimeStoreStub(task)
+
+    async def refresh_task_result(refreshed_task):
+        refreshed_task.status = "failed"
+        refreshed_task.result = '{"status":"unverified","execution_results":[]}'
+
+    runtime = RuntimeUnderTest(
+        codex_store=store,
+        log_store=store,
+        event_bus=EventBusStub(),
+        refresh_task_result=refresh_task_result,
+    )
+    entry = AsyncProcessEntry(
+        proc=_null_process(),
+        output_task=None,
+        alive=False,
+        session_id=task.session_id,
+        executor="claude",
+        cwd="/tmp/workspace",
+        resume_session_id=None,
+        result_text='{"status":"passed"}',
+    )
+
+    await runtime._finalize_task_on_reader_exit(task.id, entry)
+
+    assert store.task.status == "failed"
+    assert store.process_updates[-1][1:3] == ("Failed", -1)
 
 
 @pytest.mark.asyncio

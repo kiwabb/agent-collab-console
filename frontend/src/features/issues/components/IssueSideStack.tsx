@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Circle, Clock, BarChart3, type LucideIcon } from "lucide-react";
+import { Clock, BarChart3, type LucideIcon } from "lucide-react";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { cn } from "@/lib/utils";
 import {
@@ -29,6 +29,7 @@ import { SimilarIssuesCard } from "./SimilarIssuesCard";
 import { BudgetMeter } from "./BudgetMeter";
 import { useIssueBudget } from "./useIssueBudget";
 import { DecisionExplanationCard } from "./DecisionExplanationCard";
+import { AcceptanceCriteriaCard } from "./AcceptanceCriteriaCard";
 
 interface Props {
   issueId: string;
@@ -36,6 +37,7 @@ interface Props {
   reloadKey?: string | number;
   /** Optional full issue — used to drive budget-meter active-state polling. */
   issue?: CodexIssue | null;
+  onIssueUpdated: (issue: CodexIssue) => void;
 }
 
 /**
@@ -44,7 +46,7 @@ interface Props {
  *   - 活动 (activity timeline distilled from tasks/pipeline stages)
  *   - 消耗 (token/cost/duration telemetry + budget meter)
  */
-export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) {
+export function IssueSideStack({ issueId, checklist, reloadKey, issue, onIssueUpdated }: Props) {
   const { t } = useI18n();
   const [cost, setCost] = useState<CodexCostStats | null>(null);
   const [pipeline, setPipeline] = useState<PipelineStagesResponse | null>(null);
@@ -116,7 +118,11 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue }: Props) 
   return (
     <aside data-density="insight-rail" className="flex flex-col gap-2.5 2xl:sticky 2xl:top-3">
       <DecisionExplanationCard policy={policy} loading={policyLoading} />
-      <AcceptanceCard checklist={checklist} t={t} />
+      <AcceptanceCriteriaCard
+        issue={issue ?? null}
+        checklist={checklist}
+        onIssueUpdated={onIssueUpdated}
+      />
       <TelemetryCard
         cost={cost}
         pipeline={pipeline}
@@ -159,81 +165,6 @@ function Card({
       </div>
       {children}
     </div>
-  );
-}
-
-function AcceptanceCard({ checklist, t }: { checklist: IssueChecklist | null; t: TFn }) {
-  const criteria = checklist?.criteria ?? [];
-  const total = criteria.length;
-  const covered = criteria.filter((c) => c.covered).length;
-  const pct = total > 0 ? Math.round((covered / total) * 100) : 0;
-
-  return (
-    <Card
-      title={t("issue.side.acceptance")}
-      sub={t("issue.side.acceptanceBy")}
-      icon={CheckCircle2}
-      iconClass="text-status-done"
-    >
-      <div className="px-3 py-2.5 flex items-center gap-3 bg-surface-input/30 m-2.5 rounded-lg border border-border-subtle/50">
-        <span className="font-mono text-[20px] font-black tracking-tight leading-none text-foreground tabular-nums">
-          {covered}
-          <em className="not-italic text-text-muted font-normal text-sm">/{total}</em>
-        </span>
-        <div className="flex-1 h-2 bg-surface-input rounded-full overflow-hidden relative">
-          <span
-            className="block h-full rounded-full"
-            style={{
-              width: `${pct}%`,
-              background: "linear-gradient(90deg, #34d977, var(--color-status-done))",
-              boxShadow:
-                "0 0 12px -2px color-mix(in srgb, var(--color-status-done) 60%, transparent)",
-            }}
-          />
-        </div>
-        <span className="font-mono text-[11px] font-bold text-status-done tabular-nums bg-status-done/10 px-1.5 py-0.5 rounded border border-status-done/20">
-          {pct}%
-        </span>
-      </div>
-      {total === 0 ? (
-        <div className="px-4 pb-4 text-[12px] text-text-muted">
-          {t("issue.side.acceptanceEmpty")}
-        </div>
-      ) : (
-        <ul className="px-1.5 pb-3 flex flex-col gap-0.5">
-          {criteria.map((c, i) => (
-            <li
-              key={i}
-              className="flex items-start gap-2.5 px-3 py-2.5 rounded-md transition-colors"
-            >
-              <span
-                className={cn(
-                  "shrink-0 size-[18px] rounded-full flex items-center justify-center mt-px transition-all duration-200",
-                  c.covered
-                    ? "bg-status-done/12 text-status-done border border-status-done/20"
-                    : "bg-surface-input text-text-muted border border-border-subtle/40",
-                )}
-                style={c.covered ? { backgroundColor: "var(--color-done-bg)" } : undefined}
-              >
-                {c.covered ? (
-                  <CheckCircle2 size={11} strokeWidth={3} />
-                ) : (
-                  <Circle size={11} strokeWidth={2.5} />
-                )}
-              </span>
-              <div className="text-[13px] leading-snug text-foreground">
-                {c.text}
-                {c.source && (
-                  <span className="block font-mono text-[10px] text-text-faint mt-1 uppercase tracking-wider font-extrabold">
-                    {t("issue.side.verifiedBy", { source: c.source })}
-                  </span>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
   );
 }
 

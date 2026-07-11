@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
 import { createIssueAndInitialTask } from "@/features/workbench/workbenchActions";
@@ -19,6 +20,7 @@ import { describeExecutorOption } from "@/components/runtime/ExecutionConfigSele
 import { autoStartIssueGraph } from "@/lib/api/conductors";
 import { createCodexIssue } from "@/lib/api/issues";
 import type { CodexIssue, Project, RuntimeCatalog } from "@/lib/types";
+import { parseAcceptanceCriteriaInput } from "@/lib/acceptanceCriteria";
 import { formatWorkspaceConsoleRepoLabel } from "./workspaceConsoleState";
 
 interface Props {
@@ -42,6 +44,8 @@ export function NewIssueDialog({
   const { addToast } = useToast();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [acceptanceCriteriaInput, setAcceptanceCriteriaInput] = useState("");
+  const [acceptanceCriteriaConfirmed, setAcceptanceCriteriaConfirmed] = useState(false);
   const [executor, setExecutor] = useState("codex");
   const [model, setModel] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -81,6 +85,8 @@ export function NewIssueDialog({
     if (!open) return;
     setTitle("");
     setDescription("");
+    setAcceptanceCriteriaInput("");
+    setAcceptanceCriteriaConfirmed(false);
     const fallbackExecutor = enabledExecutors[0]?.id ?? "codex";
     const fallbackModel = enabledExecutors[0]?.default_model ?? null;
     setExecutor(fallbackExecutor);
@@ -97,6 +103,10 @@ export function NewIssueDialog({
   }, [open, selectedExecutor, model, modelOptions, defaultModel]);
 
   const canSubmit = title.trim().length > 0 && !submitting;
+  const acceptanceCriteria = useMemo(
+    () => parseAcceptanceCriteriaInput(acceptanceCriteriaInput),
+    [acceptanceCriteriaInput],
+  );
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -111,6 +121,8 @@ export function NewIssueDialog({
         createCodexIssue,
         autoStartIssueGraph,
         model,
+        acceptanceCriteria,
+        acceptanceCriteriaConfirmed,
       });
       onCreated(issue);
       onOpenChange(false);
@@ -128,7 +140,7 @@ export function NewIssueDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t("workspace.console.newIssue")}</DialogTitle>
           <DialogDescription>{t("workspace.console.newIssueDesc")}</DialogDescription>
@@ -175,6 +187,33 @@ export function NewIssueDialog({
               placeholder={t("workspace.console.issueDescriptionPlaceholder")}
               className="mt-1 w-full rounded-md border border-border-subtle bg-surface-input px-3 py-2 text-sm outline-none resize-y focus:ring-2 focus:ring-brand/50"
             />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-text-muted">
+              {t("workspace.console.acceptanceCriteria")}
+            </span>
+            <Textarea
+              value={acceptanceCriteriaInput}
+              onChange={(event) => {
+                setAcceptanceCriteriaInput(event.target.value);
+                setAcceptanceCriteriaConfirmed(false);
+              }}
+              rows={4}
+              placeholder={t("workspace.console.acceptanceCriteriaPlaceholder")}
+              className="mt-1 min-h-24 resize-y bg-surface-input border-border-subtle"
+            />
+          </label>
+
+          <label className="flex items-start gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={acceptanceCriteriaConfirmed}
+              disabled={acceptanceCriteria.length === 0}
+              onChange={(event) => setAcceptanceCriteriaConfirmed(event.target.checked)}
+              className="mt-0.5 size-4 accent-brand disabled:cursor-not-allowed"
+            />
+            <span>{t("workspace.console.acceptanceCriteriaConfirm")}</span>
           </label>
 
           <div className="grid gap-4 md:grid-cols-2">

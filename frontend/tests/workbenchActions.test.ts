@@ -5,6 +5,8 @@ import {
   createIssueAndInitialTask,
   runCodexTaskWithExecutor,
 } from "../src/features/workbench/workbenchActions";
+import { parseAcceptanceCriteriaInput } from "../src/lib/acceptanceCriteria";
+import { createCodexIssue as createCodexIssueRequest } from "../src/lib/api/issues";
 import {
   updateCodexTaskExecutor,
   chatCodexTask,
@@ -23,14 +25,30 @@ test("createIssueAndInitialTask creates issue then auto-starts the DAG graph", a
     workspaceId: "ws-1",
     title: "Add delete button",
     description: "Please add a delete action",
-    createCodexIssue: async (workspaceId, title, description) => {
-      calls.push(`issue:${workspaceId}:${title}:${description}`);
+    acceptanceCriteria: ["Delete succeeds", "Unauthorized users receive 403"],
+    acceptanceCriteriaConfirmed: true,
+    createCodexIssue: async (
+      workspaceId,
+      title,
+      description,
+      _baseBranch,
+      _executor,
+      _provider,
+      _model,
+      acceptanceCriteria,
+      acceptanceCriteriaConfirmed,
+    ) => {
+      calls.push(
+        `issue:${workspaceId}:${title}:${description}:${acceptanceCriteria?.join("|")}:${String(acceptanceCriteriaConfirmed)}`,
+      );
       return {
         id: "issue-1",
         session_id: workspaceId,
         project_id: null,
         title,
         description,
+        acceptance_criteria: acceptanceCriteria ?? [],
+        acceptance_criteria_confirmed: acceptanceCriteriaConfirmed ?? false,
         current_phase: "requirements",
         status: "open",
         git_branch: null,
@@ -62,9 +80,46 @@ test("createIssueAndInitialTask creates issue then auto-starts the DAG graph", a
 
   assert.equal(result.issue.id, "issue-1");
   assert.deepEqual(calls, [
-    "issue:ws-1:Add delete button:Please add a delete action",
+    "issue:ws-1:Add delete button:Please add a delete action:Delete succeeds|Unauthorized users receive 403:true",
     "autoStart:issue-1",
   ]);
+});
+
+test("parseAcceptanceCriteriaInput trims blank lines and preserves criterion order", () => {
+  assert.deepEqual(
+    parseAcceptanceCriteriaInput(" First criterion \n\nSecond criterion\r\n  Third criterion  "),
+    ["First criterion", "Second criterion", "Third criterion"],
+  );
+});
+
+test("createCodexIssue sends acceptance criteria and explicit confirmation", async () => {
+  await withMockFetch(
+    () => new Response(JSON.stringify({ id: "issue-1" }), { status: 201 }),
+    async (calls) => {
+      await createCodexIssueRequest(
+        "ws-1",
+        "Ship auth",
+        "Protect the API",
+        null,
+        null,
+        null,
+        null,
+        ["Anonymous requests return 401"],
+        true,
+      );
+
+      const call = at(calls, 0, "create issue fetch call");
+      assert.equal(call.input, "/api/codex/issues");
+      assert.equal(call.init?.method, "POST");
+      assert.deepEqual(jsonRequestBody(call), {
+        session_id: "ws-1",
+        title: "Ship auth",
+        description: "Protect the API",
+        acceptance_criteria: ["Anonymous requests return 401"],
+        acceptance_criteria_confirmed: true,
+      });
+    },
+  );
 });
 
 test("chatCodexTask posts to /chat with content", async () => {

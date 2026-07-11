@@ -50,3 +50,11 @@ def is_task_failure_status(status: object | None) -> bool:
 
 def is_task_terminal_status(status: object | None) -> bool:
     return normalize_task_status(status) in TASK_TERMINAL_STATUSES
+
+
+def execution_process_state_for_task(status: object | None) -> tuple[str, int | None]:
+    if is_task_success_status(status):
+        return "Completed", 0
+    if is_task_failure_status(status):
+        return "Failed", -1
+    return "Running", None

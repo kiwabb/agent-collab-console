@@ -29,6 +29,7 @@ import { shouldShowTopErrorCard } from "@/lib/runDetailErrorState";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { AgentLiveTimeline } from "./AgentLiveTimeline";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
+import type { QaReportStatus } from "@/features/workbench/qaReportStatus";
 
 interface RunDetailProps {
   process: ExecutionProcess | null;
@@ -67,7 +68,7 @@ interface RunDetailProps {
   canTransitionToTesting?: boolean;
   isTransitioningToTesting?: boolean;
   onTransitionToTesting?: () => Promise<void> | void;
-  qaReportStatus?: "passed" | "failed" | "blocked" | "needs_follow_up" | null;
+  qaReportStatus?: QaReportStatus | null;
   onViewQaReport?: () => void;
   lastResolvedMode?: "chat" | "refine" | null;
   onSubmitForReview?: () => Promise<void> | void;
@@ -315,9 +316,9 @@ export function RunDetail({
             {t("run.console")}
           </h2>
           <div className="flex items-center gap-2">
-            {taskMeta?.role === "qa" && taskMeta?.status === "done" && qaReportStatus && (
-              <QaReportBadge status={qaReportStatus} onView={onViewQaReport} />
-            )}
+            {taskMeta?.role === "qa" &&
+              (taskMeta.status === "done" || taskMeta.status === "failed") &&
+              qaReportStatus && <QaReportBadge status={qaReportStatus} onView={onViewQaReport} />}
             <AnimatePresence mode="wait">
               <motion.div
                 key={process.status}
@@ -535,7 +536,11 @@ export function RunDetail({
               >
                 {isError ? <AlertCircle size={12} /> : <Check size={12} />}
                 {isQaFailed
-                  ? t("task.review.qaFailed")
+                  ? qaReportStatus === "failed"
+                    ? t("task.review.qaFailed")
+                    : qaReportStatus === "unverified"
+                      ? t("task.review.qaUnverified")
+                      : t("task.review.qaNeedsAttention")
                   : taskMeta!.status === "rework"
                     ? t("task.review.architectRejected")
                     : t("task.review.architectApproved")}
@@ -830,8 +835,6 @@ export function RunDetail({
   );
 }
 
-type QaReportStatus = "passed" | "failed" | "blocked" | "needs_follow_up";
-
 function QaReportBadge({
   status,
   onView,
@@ -847,6 +850,10 @@ function QaReportBadge({
     needs_follow_up: {
       cls: "bg-warning/10 text-warning border-warning/30",
       label: t("qa.status.needs_follow_up"),
+    },
+    unverified: {
+      cls: "bg-warning/10 text-warning border-warning/30",
+      label: t("qa.status.unverified"),
     },
   };
   const entry = styles[status];

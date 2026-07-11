@@ -1,4 +1,8 @@
 import asyncio
+import json
+import subprocess
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,8 +17,42 @@ from app.application.conductor_main_loop import (
 )
 from app.application.conductor_tools import build_conductor_tools
 from app.application.llm_runner import extract_tool_use_blocks
+from app.application.verification_evidence import capture_verification_state
 from app.domain.models import CodexIssue, ProjectMemoryEmbedding
 from app.json_safety import JsonObject, object_dict
+
+_DEFAULT_ACCEPTANCE_CRITERION = "Verified behavior matches the request"
+_VERIFICATION_TEMP_DIR: tempfile.TemporaryDirectory[str] | None = None
+
+
+def _verification_workspace() -> str:
+    global _VERIFICATION_TEMP_DIR
+    if _VERIFICATION_TEMP_DIR is not None:
+        return _VERIFICATION_TEMP_DIR.name
+    _VERIFICATION_TEMP_DIR = tempfile.TemporaryDirectory()
+    root = Path(_VERIFICATION_TEMP_DIR.name)
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "conductor@example.test"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Conductor Test"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    (root / "README.md").write_text("verified state\n")
+    subprocess.run(["git", "add", "README.md"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    return str(root)
 
 
 async def _tool_result(registry, name: str, payload: JsonObject) -> JsonObject:
@@ -27,6 +65,80 @@ async def _tool_result(registry, name: str, payload: JsonObject) -> JsonObject:
 def _text(payload: JsonObject, key: str) -> str:
     value = payload.get(key)
     return value if isinstance(value, str) else ""
+
+
+class _FinalizeStore:
+    def __init__(
+        self,
+        nodes,
+        tasks=None,
+        *,
+        acceptance_criteria=None,
+        confirmed=True,
+        worktree_path=None,
+    ):
+        self.nodes = nodes
+        self.tasks = tasks or {}
+        self.issue = SimpleNamespace(
+            id="issue-1",
+            acceptance_criteria=(
+                acceptance_criteria
+                if acceptance_criteria is not None
+                else [_DEFAULT_ACCEPTANCE_CRITERION]
+            ),
+            acceptance_criteria_confirmed=confirmed,
+            git_worktree_path=worktree_path or _verification_workspace(),
+        )
+
+    async def load_workflow_graph_for_issue(self, issue_id):
+        return SimpleNamespace(nodes=self.nodes)
+
+    async def load_codex_task(self, task_id):
+        return self.tasks.get(task_id)
+
+    async def load_codex_issue(self, issue_id):
+        return self.issue
+
+
+def _passed_qa_task(task_id: str = "qa-task", *, workspace_path: str | None = None):
+    workspace = workspace_path or _verification_workspace()
+    verification_state = capture_verification_state(
+        workspace_path=workspace,
+        issue_id="issue-1",
+        task_id=task_id,
+        role="qa",
+    )
+    return SimpleNamespace(
+        id=task_id,
+        issue_id="issue-1",
+        role="qa",
+        workspace_path=workspace,
+        status="done",
+        result=json.dumps(
+            {
+                "status": "passed",
+                "execution_results": [
+                    {
+                        "command": "pytest -q",
+                        "exit_code": 0,
+                        "stdout": "1 passed",
+                        "stderr": "",
+                        "duration_s": 0.1,
+                    }
+                ],
+                "criterion_evidence": [
+                    {
+                        "criterion_index": 0,
+                        "criterion": _DEFAULT_ACCEPTANCE_CRITERION,
+                        "command": "pytest -q",
+                        "execution_result_index": 0,
+                        "evidence": "1 passed",
+                    }
+                ],
+                "verification_state": verification_state.model_dump(mode="json"),
+            }
+        ),
+    )
 
 
 def test_conductor_language_directive_auto_is_empty():
@@ -281,7 +393,17 @@ async def test_conductor_loop_unknown_finalize_status_fails_closed():
 
 @pytest.mark.asyncio
 async def test_finalize_task_tool_normalizes_statuses():
-    registry = build_conductor_tools(project_id="project-1", store=object())
+    qa_task = _passed_qa_task()
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
 
     ok = await _tool_result(registry, "finalize_task", {"status": "completed", "answer": "done"})
     unknown = await _tool_result(registry, "finalize_task", {"status": "maybe", "answer": "hmm"})
@@ -324,8 +446,8 @@ async def test_finalize_task_tool_rejects_done_with_unresolved_graph_node():
     result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "ship it"})
 
     assert result["status"] == "failed"
-    assert "finalize rejected" in _text(result, "answer")
-    assert "unresolved nodes" in _text(result, "answer")
+    assert "finalize rejected" in _text(result, "error")
+    assert "unresolved nodes" in _text(result, "error")
 
 
 @pytest.mark.asyncio
@@ -345,7 +467,7 @@ async def test_finalize_task_tool_does_not_count_skipped_as_completed_work():
     )
 
     assert result["status"] == "failed"
-    assert "no completed work node" in _text(result, "answer")
+    assert "no completed work node" in _text(result, "error")
 
 
 @pytest.mark.asyncio
@@ -359,7 +481,7 @@ async def test_finalize_task_tool_fails_closed_when_graph_missing():
     result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "ship it"})
 
     assert result["status"] == "failed"
-    assert "graph is missing" in _text(result, "answer")
+    assert "graph is missing" in _text(result, "error")
 
 
 @pytest.mark.asyncio
@@ -373,7 +495,7 @@ async def test_finalize_task_tool_fails_closed_when_graph_load_raises():
     result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "ship it"})
 
     assert result["status"] == "failed"
-    assert "could not be loaded" in _text(result, "answer")
+    assert "could not be evaluated" in _text(result, "error")
 
 
 @pytest.mark.asyncio
@@ -392,7 +514,7 @@ async def test_finalize_task_tool_rejects_planning_only_graph():
     result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "planned"})
 
     assert result["status"] == "failed"
-    assert "only has planning/design completed" in _text(result, "answer")
+    assert "only has planning/design completed" in _text(result, "error")
 
 
 @pytest.mark.asyncio
@@ -412,7 +534,7 @@ async def test_finalize_task_tool_rejects_implementation_without_verification():
     )
 
     assert result["status"] == "failed"
-    assert "no verification node completed" in _text(result, "answer")
+    assert "no verification node completed" in _text(result, "error")
 
 
 @pytest.mark.asyncio
@@ -430,21 +552,22 @@ async def test_finalize_task_tool_rejects_verification_only_graph():
     result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "verified"})
 
     assert result["status"] == "failed"
-    assert "only has verification completed" in _text(result, "answer")
+    assert "only has verification completed" in _text(result, "error")
 
 
 @pytest.mark.asyncio
-async def test_finalize_task_tool_accepts_implementation_with_verification():
-    class Store:
-        async def load_workflow_graph_for_issue(self, issue_id):
-            return SimpleNamespace(
-                nodes=[
-                    SimpleNamespace(node_key="engineer", status="done"),
-                    SimpleNamespace(node_key="qa", status="done"),
-                ]
-            )
-
-    registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
+async def test_finalize_task_tool_accepts_implementation_with_passed_execution_evidence():
+    qa_task = _passed_qa_task()
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
 
     result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "verified"})
 
@@ -453,18 +576,399 @@ async def test_finalize_task_tool_accepts_implementation_with_verification():
 
 
 @pytest.mark.asyncio
-async def test_finalize_task_tool_accepts_parallel_engineer_with_verification():
-    class Store:
-        async def load_workflow_graph_for_issue(self, issue_id):
-            return SimpleNamespace(
-                nodes=[
-                    SimpleNamespace(node_key="engineer_frontend", status="done"),
-                    SimpleNamespace(node_key="engineer_backend", status="done"),
-                    SimpleNamespace(node_key="qa", status="done"),
-                ]
-            )
+async def test_finalize_ignores_qa_artifact_changes_after_verification():
+    workspace = Path(_verification_workspace())
+    qa_task = _passed_qa_task(workspace_path=str(workspace))
+    qa_root = workspace / "issues" / "issue-1" / "qa"
+    qa_root.mkdir(parents=True, exist_ok=True)
+    (qa_root / "qa_plan.json").write_text('{"status":"passed"}\n')
+    (qa_root / "qa_report.md").write_text("updated presentation artifact\n")
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+        worktree_path=str(workspace),
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
 
-    registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
+    result = await _tool_result(
+        registry,
+        "finalize_task",
+        {"status": "done", "answer": "artifact-only update"},
+    )
+
+    assert result["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_missing_verification_fingerprint():
+    qa_task = _passed_qa_task()
+    report = json.loads(qa_task.result)
+    report.pop("verification_state")
+    qa_task.result = json.dumps(report)
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry,
+        "finalize_task",
+        {"status": "done", "answer": "missing fingerprint"},
+    )
+
+    assert result["status"] == "failed"
+    assert "no valid framework-owned worktree fingerprint" in _text(result, "error")
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_verification_after_the_tested_worktree_changes(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "stale@example.test"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Stale Evidence Test"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    source = root / "app.py"
+    source.write_text("VALUE = 1\n")
+    subprocess.run(["git", "add", "app.py"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    qa_task = _passed_qa_task(workspace_path=str(root))
+    source.write_text("VALUE = 2\n")
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+        worktree_path=str(root),
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry,
+        "finalize_task",
+        {"status": "done", "answer": "stale verification"},
+    )
+
+    assert result["status"] == "failed"
+    assert "worktree changed after testing" in _text(result, "error")
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_verification_after_untracked_code_is_added(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "untracked@example.test"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Untracked Evidence Test"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    (root / "README.md").write_text("verified state\n")
+    subprocess.run(["git", "add", "README.md"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    qa_task = _passed_qa_task(workspace_path=str(root))
+    (root / "new_feature.py").write_text("VALUE = 1\n")
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+        worktree_path=str(root),
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry,
+        "finalize_task",
+        {"status": "done", "answer": "untracked code change"},
+    )
+
+    assert result["status"] == "failed"
+    assert "worktree changed after testing" in _text(result, "error")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("acceptance_criteria", "confirmed", "reason"),
+    [
+        ([], False, "no acceptance criteria"),
+        (["Anonymous requests return 401"], False, "not user-confirmed"),
+    ],
+)
+async def test_finalize_task_tool_requires_confirmed_acceptance_criteria(
+    acceptance_criteria,
+    confirmed,
+    reason,
+):
+    qa_task = _passed_qa_task()
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+        acceptance_criteria=acceptance_criteria,
+        confirmed=confirmed,
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "verified"}
+    )
+
+    assert result["status"] == "failed"
+    assert reason in _text(result, "error")
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_passing_command_without_criterion_evidence():
+    qa_task = _passed_qa_task()
+    report = json.loads(qa_task.result)
+    report.pop("criterion_evidence")
+    qa_task.result = json.dumps(report)
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "generic green"}
+    )
+
+    assert result["status"] == "failed"
+    assert "no criterion-level acceptance evidence" in _text(result, "error")
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_trivial_true_as_criterion_evidence():
+    qa_task = _passed_qa_task()
+    report = json.loads(qa_task.result)
+    report["execution_results"] = [
+        {
+            "command": "true",
+            "exit_code": 0,
+            "stdout": "",
+            "stderr": "",
+            "duration_s": 0.01,
+        }
+    ]
+    report["criterion_evidence"] = [
+        {
+            "criterion_index": 0,
+            "criterion": _DEFAULT_ACCEPTANCE_CRITERION,
+            "command": "true",
+            "execution_result_index": 0,
+            "evidence": "command exited with code 0",
+        }
+    ]
+    qa_task.result = json.dumps(report)
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "noop green"}
+    )
+
+    assert result["status"] == "failed"
+    assert "trivial command" in _text(result, "error")
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_reused_command_across_acceptance_criteria():
+    criteria = ["Anonymous requests return 401", "Wrong tokens return 401"]
+    qa_task = _passed_qa_task()
+    report = json.loads(qa_task.result)
+    report["criterion_evidence"] = [
+        {
+            "criterion_index": index,
+            "criterion": criterion,
+            "command": "pytest -q",
+            "execution_result_index": 0,
+            "evidence": "1 passed",
+        }
+        for index, criterion in enumerate(criteria)
+    ]
+    qa_task.result = json.dumps(report)
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+        acceptance_criteria=criteria,
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "suite reused"}
+    )
+
+    assert result["status"] == "failed"
+    assert "reuses another criterion's verification command" in _text(result, "error")
+
+
+@pytest.mark.asyncio
+async def test_finalize_task_tool_rejects_role_and_status_without_execution_evidence():
+    qa_task = SimpleNamespace(
+        id="qa-task",
+        status="done",
+        result=json.dumps(
+            {
+                "status": "passed",
+                "commands_run": ["pytest -q → exit 0"],
+            }
+        ),
+    )
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "self-reported pass"}
+    )
+
+    assert result["status"] == "failed"
+    assert "no verification node with auditable passed" in _text(result, "error")
+    assert "no structured execution results" in _text(result, "error")
+
+
+@pytest.mark.asyncio
+async def test_finalize_task_tool_rejects_unverified_qa_task_even_with_stale_done_node():
+    qa_task = _passed_qa_task()
+    qa_task.status = "failed"
+    qa_task.result = json.dumps(
+        {
+            "status": "unverified",
+            "execution_results": [],
+        }
+    )
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "unverified"}
+    )
+
+    assert result["status"] == "failed"
+    assert "verification task status is 'failed'" in _text(result, "error")
+
+
+@pytest.mark.asyncio
+async def test_finalize_task_tool_rejects_unreadable_verification_report():
+    qa_task = SimpleNamespace(id="qa-task", status="done", result="not-json")
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(node_key="engineer", status="done", task_id="engineer-task"),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
+
+    result = await _tool_result(
+        registry, "finalize_task", {"status": "done", "answer": "unreadable"}
+    )
+
+    assert result["status"] == "failed"
+    assert "verification task report is not valid JSON" in _text(result, "error")
+
+
+@pytest.mark.asyncio
+async def test_finalize_task_tool_accepts_parallel_engineer_with_verification():
+    qa_task = _passed_qa_task()
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(
+                node_key="engineer_frontend", status="done", task_id="frontend-task"
+            ),
+            SimpleNamespace(
+                node_key="engineer_backend", status="done", task_id="backend-task"
+            ),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
 
     result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "verified"})
 
@@ -473,16 +977,19 @@ async def test_finalize_task_tool_accepts_parallel_engineer_with_verification():
 
 @pytest.mark.asyncio
 async def test_finalize_task_tool_accepts_operations_engineer_with_verification():
-    class Store:
-        async def load_workflow_graph_for_issue(self, issue_id):
-            return SimpleNamespace(
-                nodes=[
-                    SimpleNamespace(node_key="operations_engineer", status="done"),
-                    SimpleNamespace(node_key="qa", status="done"),
-                ]
-            )
-
-    registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
+    qa_task = _passed_qa_task()
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(
+                node_key="operations_engineer", status="done", task_id="operations-task"
+            ),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
 
     result = await _tool_result(
         registry, "finalize_task", {"status": "done", "answer": "scripts verified"}
@@ -494,16 +1001,19 @@ async def test_finalize_task_tool_accepts_operations_engineer_with_verification(
 
 @pytest.mark.asyncio
 async def test_finalize_task_tool_accepts_delivery_specialist_with_verification():
-    class Store:
-        async def load_workflow_graph_for_issue(self, issue_id):
-            return SimpleNamespace(
-                nodes=[
-                    SimpleNamespace(node_key="specialist:doc_writer", status="done"),
-                    SimpleNamespace(node_key="qa", status="done"),
-                ]
-            )
-
-    registry = build_conductor_tools(project_id="project-1", store=Store(), issue_id="issue-1")
+    qa_task = _passed_qa_task()
+    store = _FinalizeStore(
+        [
+            SimpleNamespace(
+                node_key="specialist:doc_writer", status="done", task_id="docs-task"
+            ),
+            SimpleNamespace(node_key="qa", status="done", task_id=qa_task.id),
+        ],
+        {qa_task.id: qa_task},
+    )
+    registry = build_conductor_tools(
+        project_id="project-1", store=store, issue_id="issue-1"
+    )
 
     result = await _tool_result(
         registry, "finalize_task", {"status": "done", "answer": "docs verified"}
@@ -530,8 +1040,7 @@ async def test_finalize_task_tool_rejects_unclassified_specialist_only_graph():
     )
 
     assert result["status"] == "failed"
-    assert "no recognized implementation or delivery evidence" in _text(result, "answer")
-    assert result["unclassified_roles"] == ["specialist:log_summarizer"]
+    assert "no recognized implementation or delivery evidence" in _text(result, "error")
 
 
 @pytest.mark.asyncio
@@ -552,8 +1061,7 @@ async def test_finalize_task_tool_rejects_planning_plus_unclassified_specialist_
     )
 
     assert result["status"] == "failed"
-    assert "no recognized implementation or delivery evidence" in _text(result, "answer")
-    assert result["unclassified_roles"] == ["specialist:log_summarizer"]
+    assert "no recognized implementation or delivery evidence" in _text(result, "error")
 
 
 @pytest.mark.asyncio
@@ -572,7 +1080,7 @@ async def test_finalize_task_tool_rejects_planning_with_verification_but_no_deli
     result = await _tool_result(registry, "finalize_task", {"status": "done", "answer": "reviewed"})
 
     assert result["status"] == "failed"
-    assert "no recognized implementation or delivery evidence" in _text(result, "answer")
+    assert "no recognized implementation or delivery evidence" in _text(result, "error")
 
 
 @pytest.mark.asyncio
@@ -911,19 +1419,30 @@ async def test_conductor_loop_passes_token_delta_callback_to_llm():
             chunk="hello",
         )
         return {
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "hello"},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "hello"},
+                },
+            ],
             "usage": {"output_tokens": 1},
         }
 
     async def capture_delta(**payload):
         deltas.append(payload)
 
+    async def finalize_task(tool_input):
+        return tool_input
+
     result = await run_conductor_loop(
         prompt="Stream a token.",
         llm=fake_llm,
-        tools={},
-        tool_definitions=[],
+        tools={"finalize_task": finalize_task},
+        tool_definitions=[{"name": "finalize_task"}],
         on_token_delta=capture_delta,
     )
 
@@ -965,8 +1484,16 @@ async def test_conductor_loop_injects_user_interjection_before_next_llm_call():
             for entry in messages
         )
         return {
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Skipping architect."}],
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "Skipping architect."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "Skipping architect."},
+                },
+            ],
         }
 
     async def retrieve_cold_memory(tool_input):
@@ -975,11 +1502,17 @@ async def test_conductor_loop_injects_user_interjection_before_next_llm_call():
     async def drain_inbox():
         return pending_inbox.pop(0) if pending_inbox else []
 
+    async def finalize_task(tool_input):
+        return tool_input
+
     result = await run_conductor_loop(
         prompt="Plan this issue.",
         llm=fake_llm,
-        tools={"retrieve_cold_memory": retrieve_cold_memory},
-        tool_definitions=[{"name": "retrieve_cold_memory"}],
+        tools={
+            "retrieve_cold_memory": retrieve_cold_memory,
+            "finalize_task": finalize_task,
+        },
+        tool_definitions=[{"name": "retrieve_cold_memory"}, {"name": "finalize_task"}],
         inbox_drain=drain_inbox,
     )
 
@@ -1035,17 +1568,31 @@ async def test_conductor_loop_runs_multiple_tool_uses_in_one_turn_concurrently()
         # tool_results must come back aligned with the original tool_use ids/order.
         blocks = messages[-1]["content"]
         assert [b["tool_use_id"] for b in blocks] == ["t1", "t2", "t3"]
-        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "all reviewed"}]}
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "all reviewed"},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_final",
+                    "name": "finalize_task",
+                    "input": {"status": "done", "answer": "all reviewed"},
+                },
+            ],
+        }
+
+    async def finalize_task(tool_input):
+        return tool_input
 
     result = await run_conductor_loop(
         prompt="Review from three angles.",
         llm=fake_llm,
-        tools={"dispatch_subagent": slow_dispatch},
-        tool_definitions=[{"name": "dispatch_subagent"}],
+        tools={"dispatch_subagent": slow_dispatch, "finalize_task": finalize_task},
+        tool_definitions=[{"name": "dispatch_subagent"}, {"name": "finalize_task"}],
     )
 
     assert result.final_text == "all reviewed"
-    assert len(result.tool_events) == 3
+    assert sum(event["name"] == "dispatch_subagent" for event in result.tool_events) == 3
     # If execution were serial, max_concurrent would be 1. Parallel => 3.
     assert max_concurrent == 3
 
