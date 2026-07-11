@@ -1,0 +1,9 @@
+{"file":".trellis/spec/vibe-kanban/backend/database-guidelines.md","reason":"Verify schema migration and secret round trip"}
+{"file":".trellis/spec/vibe-kanban/backend/error-handling.md","reason":"Verify all trust gates fail closed"}
+{"file":".trellis/spec/vibe-kanban/backend/quality-guidelines.md","reason":"Verify subprocess, QA, Benchmark, WS, and finalize contracts"}
+{"file":".trellis/spec/vibe-kanban/backend/logging-guidelines.md","reason":"Verify no token or secret leakage"}
+{"file":".trellis/spec/ccgui/frontend/state-management.md","reason":"Verify authentication failures preserve visible state"}
+{"file":".trellis/spec/ccgui/frontend/quality-guidelines.md","reason":"Verify frontend tests and shared transport pattern"}
+{"file":".trellis/spec/ccgui/frontend/type-safety.md","reason":"Verify exact API/WS type contracts"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Audit end-to-end data and failure paths"}
+{"file":".trellis/tasks/07-11-trusted-execution-boundary/research/trusted-execution-design.md","reason":"Check implementation against selected trust model"}

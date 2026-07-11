@@ -3781,3 +3781,220 @@ await event_bus.append(
 > `protocol_error`). Do not hand-roll partial sets such as
 > `{done, failed, cancelled}` in runtime, websocket, help, or specialist
 > orchestration paths.
+
+---
+
+### Scenario: Trusted Project Command Execution Boundary
+
+#### 1. Scope / Trigger
+
+- Trigger: changing project start commands, command suggestions, or the process
+  launch path. A command that is syntactically shell-free is not automatically
+  safe: many package/build tools expose their own execution escape hatches.
+
+#### 2. Signatures
+
+- Parser: `parse_project_command(command: str, project_root: str | Path) -> ParsedProjectCommand`.
+- Result: structured `argv: tuple[str, ...]` and project-relative `cwd`.
+- Refusal: `ProjectCommandError` with a stable user-facing reason.
+
+#### 3. Contracts
+
+- Parse once, then launch only the returned argv and cwd with `shell=False`.
+- Resolve cwd and reject symlink traversal outside `project_root`.
+- Apply per-tool subcommand/goal/flag allowlists; a generic executable allowlist
+  is insufficient.
+- `npx` must use `--no-install` and a locally available package. Downloading or
+  installing code during project launch is forbidden.
+- Reject nested runtimes, eval/init-script/plugin injection, remote package
+  execution, and shell separator/redirection syntax.
+
+#### 4. Validation & Error Matrix
+
+- Shell syntax or cwd escape -> reject before process creation.
+- `npm explore ... -- <command>`, `yarn node`, `bun --eval`, Maven exec,
+  Gradle init scripts, or Make eval/include injection -> reject.
+- `npx` without `--no-install`, `cargo install`, or remote `go run ...@version`
+  -> reject.
+- Parser/internal gate failure -> fail closed and emit a refusal audit record;
+  never fall back to the original command string.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `npx --no-install vite` in `.` when Vite exists locally.
+- Base: an allowlisted package-manager script with ordinary argv-safe flags.
+- Bad: `npm explore foo -- sh -c id` or `go run example.com/tool@latest`.
+
+#### 6. Tests Required
+
+- Parser tests assert exact argv/cwd for accepted commands and stable refusal
+  reasons for every tool-specific bypass class.
+- API/process tests assert a refused command creates no subprocess and records
+  the audit refusal.
+- Symlinked-cwd tests assert the resolved path cannot leave the project root.
+
+#### 7. Wrong vs Correct
+
+Wrong: allow every command whose first token is `npm`, `go`, or `make`.
+
+Correct: parse to structured argv/cwd, then enforce the selected tool's
+subcommand, goal, and flag policy before any spawn.
+
+---
+
+### Scenario: Framework-Owned Verification Fingerprint
+
+#### 1. Scope / Trigger
+
+- Trigger: changing QA evidence, task finalization, worktree state, or model
+  payload handling. The model must not be able to attest that its own evidence
+  is current.
+
+#### 2. Signatures
+
+- Boundary module: `backend/app/application/verification_evidence.py`.
+- Fingerprint inputs: issue/task/role/worktree identity, Git HEAD, and current
+  tracked plus untracked code state.
+- Finalization consumes stored framework-generated evidence, not a fingerprint
+  supplied in model output.
+
+#### 3. Contracts
+
+- Strip/ignore model-supplied fingerprint fields and compute the fingerprint in
+  framework code after verification.
+- Exclude the framework-owned QA artifact subtree from dirty-state identity so
+  writing the evidence does not immediately stale itself.
+- Any other tracked or untracked code change changes the fingerprint.
+- Missing or stale verification evidence blocks finalization.
+
+#### 4. Validation & Error Matrix
+
+- Missing fingerprint/evidence -> reject finalization.
+- Current fingerprint differs from stored fingerprint -> reject as stale.
+- Only QA artifact files changed -> evidence remains current.
+- Model provides a matching-looking fingerprint -> ignore it and use the
+  framework value.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: verification runs, framework stores the computed identity, unchanged
+  code finalizes.
+- Base: writing the QA report after verification does not invalidate evidence.
+- Bad: edit an untracked source file after verification and still finalize.
+
+#### 6. Tests Required
+
+- Assert model fingerprints are discarded.
+- Assert tracked and untracked code changes stale evidence.
+- Assert QA artifact-only changes do not stale evidence.
+- Assert missing/stale evidence refuses finalization.
+
+#### 7. Wrong vs Correct
+
+Wrong: trust `verification_fingerprint` from an agent response.
+
+Correct: derive and compare the fingerprint inside the application boundary at
+verification and finalization time.
+
+---
+
+### Scenario: Trusted Frontend Dependency Reuse
+
+#### 1. Scope / Trigger
+
+- Trigger: changing Git worktree preparation or benchmark setup for frontend
+  projects whose ignored dependencies are absent from new worktrees.
+
+#### 2. Signatures
+
+- Owner: `WorktreeManager` creates `frontend/node_modules` in a worktree.
+- Source: primary checkout's real `frontend/node_modules` directory.
+- Benchmark runner validates the resulting layout; it does not invent a second
+  dependency-linking scheme.
+
+#### 3. Contracts
+
+- `frontend/node_modules` must be ignored and must be a real directory in the
+  worktree.
+- Reuse only trusted top-level entries through controlled symlinks to the
+  primary checkout; never link the entire directory or repository root.
+- Reject an unexpected existing symlink or a non-directory source.
+- The repository-root `node_modules` symlink is forbidden.
+
+#### 4. Validation & Error Matrix
+
+- Primary dependency source missing/not a directory -> explicit setup error.
+- Worktree `frontend/node_modules` is a symlink -> reject.
+- Dependency path is not Git-ignored -> skip/refuse reuse according to the
+  manager contract; do not create tracked artifacts.
+- Benchmark sees extra, missing, or wrong-target links -> fail validation.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: real ignored directory containing only expected top-level symlinks.
+- Base: no reuse when the primary checkout has no installed dependencies.
+- Bad: `worktree/node_modules -> primary/node_modules`.
+
+#### 6. Tests Required
+
+- Worktree tests assert directory type, exact link names/targets, ignore state,
+  and rejection of pre-existing unexpected symlinks.
+- Benchmark tests assert the exact `WorktreeManager` layout and prove the
+  benchmark does not create a competing layout.
+
+#### 7. Wrong vs Correct
+
+Wrong: let each benchmark/runtime create whichever `node_modules` symlink it
+needs.
+
+Correct: keep creation in `WorktreeManager` and make all consumers validate the
+same explicit layout.
+
+---
+
+### Scenario: Reproducible Frontend Docker Context
+
+#### 1. Scope / Trigger
+
+- Trigger: changing the frontend Dockerfile, build context, or generated Next.js
+  inputs.
+
+#### 2. Signatures
+
+- Image recipe: `frontend/Dockerfile`.
+- Context exclusions: `frontend/.dockerignore`.
+- Build input permits projects with no checked-in `public/` directory.
+
+#### 3. Contracts
+
+- The builder creates an empty `public/` before the runner-stage copy.
+- Exclude local `node_modules`, `.next`, `.env*`, logs, and package/build caches
+  from the Docker context.
+- Dependencies inside the image come from the lockfile install stage, never the
+  developer machine.
+
+#### 4. Validation & Error Matrix
+
+- Missing repository `public/` -> image still builds with an empty directory.
+- Local dependency/build cache enters context -> contract failure; add the
+  precise `.dockerignore` entry.
+- Lockfile install or production build fails -> image build fails closed.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: small context and reproducible lockfile-installed dependencies.
+- Base: repository has no public assets.
+- Bad: copy host `node_modules` or require `COPY public` to exist.
+
+#### 6. Tests Required
+
+- Run `docker build -f frontend/Dockerfile frontend`.
+- Inspect build output/context size and confirm local `.env*`, `.next`, and
+  `node_modules` are excluded.
+
+#### 7. Wrong vs Correct
+
+Wrong: rely on a host `public/` directory and send local caches in the context.
+
+Correct: create the optional directory in the builder and define a narrow
+`.dockerignore` contract.

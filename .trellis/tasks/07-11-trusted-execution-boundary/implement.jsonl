@@ -1,0 +1,13 @@
+{"file":".trellis/spec/vibe-kanban/backend/index.md","reason":"Backend layer ownership and mandatory real-QA contract"}
+{"file":".trellis/spec/vibe-kanban/backend/database-guidelines.md","reason":"Issue schema migration and legacy-row compatibility"}
+{"file":".trellis/spec/vibe-kanban/backend/error-handling.md","reason":"Fail-closed governance and typed boundary errors"}
+{"file":".trellis/spec/vibe-kanban/backend/quality-guidelines.md","reason":"Subprocess, Benchmark, WebSocket, QA, and finalize contracts"}
+{"file":".trellis/spec/vibe-kanban/backend/logging-guidelines.md","reason":"Credential redaction and boundary logging"}
+{"file":".trellis/spec/vibe-kanban/backend/observability-guidelines.md","reason":"Auditable side-effect evidence"}
+{"file":".trellis/spec/ccgui/frontend/index.md","reason":"Frontend package conventions"}
+{"file":".trellis/spec/ccgui/frontend/state-management.md","reason":"Preserve stale data and surface transport failures"}
+{"file":".trellis/spec/ccgui/frontend/quality-guidelines.md","reason":"Shared API transport and frontend verification requirements"}
+{"file":".trellis/spec/ccgui/frontend/type-safety.md","reason":"Typed cross-layer API and WebSocket changes"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Map auth, issue, QA, benchmark, and secret data flows"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Centralize repeated auth and command policy"}
+{"file":".trellis/tasks/07-11-trusted-execution-boundary/research/trusted-execution-design.md","reason":"Selected strict-local execution architecture and evidence"}

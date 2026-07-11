@@ -5,6 +5,10 @@ import shutil
 import tempfile
 
 os.environ["CODEX_LAUNCH_ENABLED"] = "false"
+os.environ["CONSOLE_AUTH_TOKEN"] = "backend-test-console-token-0000000000000000"
+os.environ["CONSOLE_ALLOWED_HOSTS"] = "testserver,localhost,127.0.0.1,::1"
+os.environ["CONSOLE_INTERNAL_HOSTS"] = "testserver"
+os.environ["CONSOLE_ALLOWED_ORIGINS"] = "http://testserver,http://localhost:4000"
 
 # Use an isolated test SQLite database so tests never touch the real console.db
 _test_db_path = os.path.join(os.path.dirname(__file__), "test_console.db")
@@ -65,7 +69,13 @@ def client():
     from app.main import app  # noqa: I001
     from fastapi.testclient import TestClient  # noqa: F811
 
-    yield TestClient(app)
+    yield TestClient(
+        app,
+        headers={
+            "X-Console-Token": os.environ["CONSOLE_AUTH_TOKEN"],
+            "Origin": "http://testserver",
+        },
+    )
 
 
 @pytest.fixture(autouse=True)

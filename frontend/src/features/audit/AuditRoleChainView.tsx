@@ -86,12 +86,7 @@ function isString(value: string | null): value is string {
 
 function parsePayload(value: string | null): Record<string, unknown> | null {
   if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  return safeJsonRecord(value);
 }
 
 function previewString(payload: Record<string, unknown> | null, key: string): string | null {
@@ -111,7 +106,11 @@ function shortId(value: string | null): string | null {
   return value.length > 8 ? value.slice(0, 8) : value;
 }
 
-function roleLabel(role: string | null, fallback: string | null, t: ReturnType<typeof useI18n>["t"]): string {
+function roleLabel(
+  role: string | null,
+  fallback: string | null,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
   if (
     role === "operations_engineer" ||
     fallback === "operations_engineer" ||
@@ -134,7 +133,8 @@ function taskStatusParts(
   t: ReturnType<typeof useI18n>["t"],
 ): { role: string; task: string; status: string | null } | null {
   const payload = parsePayload(entry.payload_json);
-  const eventType = payloadString(payload, "type") ?? (entry.category === "event" ? entry.actor : null);
+  const eventType =
+    payloadString(payload, "type") ?? (entry.category === "event" ? entry.actor : null);
   if (eventType !== "task_status") return null;
   const role = payloadString(payload, "role") ?? entry.role ?? entry.actor;
   const status = payloadString(payload, "status") ?? entry.status;
@@ -191,10 +191,13 @@ function taskStatusCompact(entry: AuditLog, t: ReturnType<typeof useI18n>["t"]):
 
 function taskStatusMeta(entry: AuditLog, t: ReturnType<typeof useI18n>["t"]): string | null {
   const payload = parsePayload(entry.payload_json);
-  const eventType = payloadString(payload, "type") ?? (entry.category === "event" ? entry.actor : null);
+  const eventType =
+    payloadString(payload, "type") ?? (entry.category === "event" ? entry.actor : null);
   if (eventType !== "task_status") return null;
   const taskId = shortId(payloadString(payload, "task_id") ?? entry.task_id);
-  const executionId = shortId(payloadString(payload, "execution_process_id") ?? entry.execution_process_id);
+  const executionId = shortId(
+    payloadString(payload, "execution_process_id") ?? entry.execution_process_id,
+  );
   const taskTitle = entry.task_title;
   const parts = [
     taskTitle
@@ -256,7 +259,9 @@ function projectScriptMeta(entry: AuditLog, t: ReturnType<typeof useI18n>["t"]):
 
 function shouldHideRawPayload(entry: AuditLog): boolean {
   const type = eventType(entry);
-  return type === "task_status" || type === "project_script_updated" || entry.category === "cli_spawn";
+  return (
+    type === "task_status" || type === "project_script_updated" || entry.category === "cli_spawn"
+  );
 }
 
 function shouldShowStepTrace(entry: AuditLog): boolean {
@@ -319,18 +324,34 @@ export function AuditRoleChainView({ operations }: Props) {
 }
 
 function entrySummary(entry: AuditLog, t: ReturnType<typeof useI18n>["t"]): string {
-  return taskStatusSummary(entry, t) || readableEventSummary(entry, t) || cliSpawnSummary(entry, t) || entry.call_summary || entry.error || entry.call_name || entry.actor || entry.category;
+  return (
+    taskStatusSummary(entry, t) ||
+    readableEventSummary(entry, t) ||
+    cliSpawnSummary(entry, t) ||
+    entry.call_summary ||
+    entry.error ||
+    entry.call_name ||
+    entry.actor ||
+    entry.category
+  );
 }
 
 function entryMachineName(entry: AuditLog): string | null {
   const type = eventType(entry);
-  if (type === "task_status" || type === "project_script_updated" || entry.category === "cli_spawn") {
+  if (
+    type === "task_status" ||
+    type === "project_script_updated" ||
+    entry.category === "cli_spawn"
+  ) {
     return null;
   }
   return entry.call_name ?? null;
 }
 
-function operationTitle(operation: AuditLogChainOperation, t: ReturnType<typeof useI18n>["t"]): string {
+function operationTitle(
+  operation: AuditLogChainOperation,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
   if (operation.timeline_kind === "agent_execution" && operation.title) return operation.title;
   if (operation.entry_count > 1 && operation.task_title) return operation.task_title;
   const firstTaskStatus = operation.entries.map((entry) => taskStatusParts(entry, t)).find(Boolean);
@@ -342,7 +363,10 @@ function operationTitle(operation: AuditLogChainOperation, t: ReturnType<typeof 
   return operation.title;
 }
 
-function operationSummary(operation: AuditLogChainOperation, t: ReturnType<typeof useI18n>["t"]): string {
+function operationSummary(
+  operation: AuditLogChainOperation,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
   if (isRecord(operation.result)) {
     const runCommand = operation.result["run_command"];
     if (typeof runCommand === "string" && runCommand.length > 0) {
@@ -473,7 +497,9 @@ function OperationCard({ operation }: { operation: AuditLogChainOperation }) {
     operation.task_title
       ? t("auditLog.detail.task", { id: operation.task_title })
       : operation.operation_task_id
-        ? t("auditLog.detail.task", { id: shortId(operation.operation_task_id) ?? operation.operation_task_id })
+        ? t("auditLog.detail.task", {
+            id: shortId(operation.operation_task_id) ?? operation.operation_task_id,
+          })
         : null,
     operation.execution_process_id
       ? t("auditLog.detail.execution", {
@@ -549,7 +575,7 @@ function OperationCard({ operation }: { operation: AuditLogChainOperation }) {
             const machineName = entryMachineName(entry);
             const fullSummary = entrySummary(entry, t);
             const compactSummary =
-              fullSummary === summary ? taskStatusCompact(entry, t) ?? fullSummary : fullSummary;
+              fullSummary === summary ? (taskStatusCompact(entry, t) ?? fullSummary) : fullSummary;
             const readableMeta =
               taskStatusMeta(entry, t) ?? cliSpawnMeta(entry, t) ?? projectScriptMeta(entry, t);
             const hideRawPayload = shouldHideRawPayload(entry);
@@ -600,7 +626,10 @@ function OperationCard({ operation }: { operation: AuditLogChainOperation }) {
                       {compactSummary}
                     </div>
                     {readableMeta && (
-                      <div className="text-text-muted mt-1 truncate text-[11px]" title={readableMeta}>
+                      <div
+                        className="text-text-muted mt-1 truncate text-[11px]"
+                        title={readableMeta}
+                      >
                         {readableMeta}
                       </div>
                     )}
@@ -819,7 +848,9 @@ function traceAssistantBusinessDedupeKey(content: string): string {
     if (setupScript || runCommand) {
       const accessUrl = traceText(record["access_url"]) ?? "";
       const notes = traceStringArray(record["notes"]).map(traceDedupeText).join("\n");
-      return ["startup-script", setupScript ?? "", runCommand ?? "", accessUrl, notes].join("\u0000");
+      return ["startup-script", setupScript ?? "", runCommand ?? "", accessUrl, notes].join(
+        "\u0000",
+      );
     }
   }
   return `text${"\u0000"}${traceDedupeText(content)}`;
@@ -935,7 +966,8 @@ function TraceRuntimeBlock({ rows }: { rows: TraceRuntimeRows }) {
     [runtimeEntries],
   );
   const displayMessages = useMemo(
-    () => rows.messages.filter((message) => !isDuplicateTraceAssistantMessage(message, displayEntries)),
+    () =>
+      rows.messages.filter((message) => !isDuplicateTraceAssistantMessage(message, displayEntries)),
     [rows.messages, displayEntries],
   );
   return (
@@ -1048,7 +1080,7 @@ function TraceDetailPanel({ entry }: { entry: AuditLog }) {
     detail && !detail.available
       ? detail.reason
       : detail && "items" in detail && detail.items.length === 0
-        ? detail.reason ?? "trace_not_recorded"
+        ? (detail.reason ?? "trace_not_recorded")
         : null;
 
   return (
@@ -1072,52 +1104,53 @@ function TraceDetailPanel({ entry }: { entry: AuditLog }) {
           {t("auditLog.trace.unavailable", { reason: unavailable })}
         </div>
       )}
-      {expanded && items.map((item) => {
-        const runtimeRows = traceRuntimeRows(item.response);
-        return (
-          <div
-            key={item.id}
-            className="border-border-subtle bg-surface-input/20 space-y-2 rounded-lg border p-3"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge
-                variant="outline"
-                className="border-brand/30 bg-brand/10 text-brand text-[10px]"
-              >
-                {item.kind}
-              </Badge>
-              {item.title && <span className="text-text-secondary text-xs">{item.title}</span>}
-              {item.is_truncated && (
-                <span className="text-status-awaiting text-[11px]">
-                  {t("auditLog.trace.truncated")}
-                </span>
+      {expanded &&
+        items.map((item) => {
+          const runtimeRows = traceRuntimeRows(item.response);
+          return (
+            <div
+              key={item.id}
+              className="border-border-subtle bg-surface-input/20 space-y-2 rounded-lg border p-3"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className="border-brand/30 bg-brand/10 text-brand text-[10px]"
+                >
+                  {item.kind}
+                </Badge>
+                {item.title && <span className="text-text-secondary text-xs">{item.title}</span>}
+                {item.is_truncated && (
+                  <span className="text-status-awaiting text-[11px]">
+                    {t("auditLog.trace.truncated")}
+                  </span>
+                )}
+              </div>
+              {runtimeRows ? (
+                <>
+                  <TraceRuntimeBlock rows={runtimeRows} />
+                  <details className="border-border-subtle rounded-lg border bg-surface/20">
+                    <summary className="text-text-muted cursor-pointer px-3 py-2 text-[11px] font-semibold">
+                      {t("auditLog.trace.metadata")}
+                    </summary>
+                    <div className="grid grid-cols-1 gap-2 px-3 pb-3 xl:grid-cols-2">
+                      <TraceValueBlock label={t("auditLog.trace.request")} value={item.request} />
+                      <TraceValueBlock label={t("auditLog.trace.metadata")} value={item.metadata} />
+                    </div>
+                  </details>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+                    <TraceValueBlock label={t("auditLog.trace.request")} value={item.request} />
+                    <TraceValueBlock label={t("auditLog.trace.response")} value={item.response} />
+                  </div>
+                  <TraceValueBlock label={t("auditLog.trace.metadata")} value={item.metadata} />
+                </>
               )}
             </div>
-            {runtimeRows ? (
-              <>
-                <TraceRuntimeBlock rows={runtimeRows} />
-                <details className="border-border-subtle rounded-lg border bg-surface/20">
-                  <summary className="text-text-muted cursor-pointer px-3 py-2 text-[11px] font-semibold">
-                    {t("auditLog.trace.metadata")}
-                  </summary>
-                  <div className="grid grid-cols-1 gap-2 px-3 pb-3 xl:grid-cols-2">
-                    <TraceValueBlock label={t("auditLog.trace.request")} value={item.request} />
-                    <TraceValueBlock label={t("auditLog.trace.metadata")} value={item.metadata} />
-                  </div>
-                </details>
-              </>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
-                  <TraceValueBlock label={t("auditLog.trace.request")} value={item.request} />
-                  <TraceValueBlock label={t("auditLog.trace.response")} value={item.response} />
-                </div>
-                <TraceValueBlock label={t("auditLog.trace.metadata")} value={item.metadata} />
-              </>
-            )}
-          </div>
-        );
-      })}
+          );
+        })}
     </div>
   );
 }

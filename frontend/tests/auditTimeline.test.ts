@@ -87,10 +87,7 @@ test("Agent Timeline hides machine event names for known semantic rows", () => {
 test("Agent Timeline cards prefer execution titles over first step labels", () => {
   const view = readCompactSource("features/audit/AuditRoleChainView.tsx");
 
-  assert.match(
-    view,
-    /operation\.timeline_kind === "agent_execution" && operation\.title/,
-  );
+  assert.match(view, /operation\.timeline_kind === "agent_execution" && operation\.title/);
   assert.match(view, /operation\.entry_count > 1 && operation\.task_title/);
 });
 
