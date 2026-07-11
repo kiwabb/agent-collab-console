@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
+- **Total Sessions**: 21
 - **Last Active**: 2026-07-11
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1336 | Active |
+| `journal-1.md` | ~1388 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 21 | 2026-07-11 | Trusted execution boundary and verified completion | `a5894a00`, `f3db2b7d`, `4fd798a3`, `7a11a116`, `bf7e2cf0` | `main` |
 | 20 | 2026-07-11 | Remove code-scan prototype generation | `b73ea0df` | `main` |
 | 19 | 2026-07-04 | Resume maintenance PDF import | `d238d1e6`, `7ed7574f`, `e41b2381` | `main` |
 | 18 | 2026-06-08 | Self-improvement proposal ledger | `d4823bc`, `3b405d0`, `2a08d2a`, `45d51f4`, `c912021`, `17c4edd` | `codex/self-improvement-loop` |
