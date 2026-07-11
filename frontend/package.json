@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev --port 4000",
+    "dev": "next dev --hostname 127.0.0.1 --port 4000",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit --pretty false",
     "test": "node --import tsx --test tests/*.test.ts",
     "lint": "eslint .",

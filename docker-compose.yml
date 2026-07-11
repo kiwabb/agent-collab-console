@@ -4,9 +4,15 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "9000:9000"
+      - "127.0.0.1:9000:9000"
     environment:
-      - REAL_CLI=false
+      REAL_CLI: "false"
+      CONSOLE_AUTH_TOKEN: ${CONSOLE_AUTH_TOKEN:?set CONSOLE_AUTH_TOKEN to at least 32 URL-safe characters}
+      CONSOLE_ALLOWED_HOSTS: localhost,127.0.0.1,backend
+      CONSOLE_INTERNAL_HOSTS: backend
+      CONSOLE_ALLOWED_ORIGINS: http://localhost:4000,http://127.0.0.1:4000
+    volumes:
+      - benchmark-data:/var/lib/agent-collab
     networks:
       - app-network
 
@@ -15,15 +21,19 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     environment:
-      - BACKEND_API_BASE=http://backend:9000
-      - NEXT_PUBLIC_WS_BASE=ws://localhost:9000
+      BACKEND_API_BASE: http://backend:9000
+      CONSOLE_AUTH_TOKEN: ${CONSOLE_AUTH_TOKEN:?set CONSOLE_AUTH_TOKEN to at least 32 URL-safe characters}
     depends_on:
       - backend
     networks:
       - app-network
+    command: ["./node_modules/.bin/next", "start", "--hostname", "0.0.0.0", "--port", "4000"]
 
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  benchmark-data:

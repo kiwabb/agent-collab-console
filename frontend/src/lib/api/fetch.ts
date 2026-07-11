@@ -6,7 +6,15 @@
 import { isRecord } from "@/lib/utils";
 
 export const API_BASE = process.env["NEXT_PUBLIC_API_BASE"] ?? "/api";
-export const WS_BASE = process.env["NEXT_PUBLIC_WS_BASE"] ?? "ws://localhost:9000";
+const CONFIGURED_WS_BASE = process.env["NEXT_PUBLIC_WS_BASE"]?.replace(/\/$/, "");
+export const WS_BASE = CONFIGURED_WS_BASE ?? "ws://127.0.0.1:9000";
+
+export function getWebSocketBase(): string {
+  if (CONFIGURED_WS_BASE) return CONFIGURED_WS_BASE;
+  if (typeof window === "undefined") return WS_BASE;
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.hostname}:9000`;
+}
 
 export function formatApiErrorDetail(detail: unknown, fallback: string): string {
   if (typeof detail === "string") return detail;

@@ -9,6 +9,7 @@ from typing import Protocol, TypeVar, cast
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.application.local_auth import authorize_websocket
 from app.bootstrap import codex_store
 from app.application import timeouts
 from app.application.task_statuses import is_task_terminal_status
@@ -671,6 +672,11 @@ async def _send_workspace_initial_snapshot(
 @router.websocket("/sessions/{workspace_id}/execution_processes/ws")
 async def execution_process_workspace_stream(websocket: WebSocket, workspace_id: str) -> None:
     """Stream execution-process workspace state via JSON Patch."""
+    auth_failure = authorize_websocket(websocket)
+    if auth_failure is not None:
+        await websocket.close(code=1008, reason=auth_failure.reason)
+        return
+
     if codex_store is None:
         await websocket.close(code=500, reason="Store not available")
         return
@@ -707,6 +713,11 @@ execution_process_stream = execution_process_workspace_stream
 @router.websocket("/execution-processes/{process_id}/logs/ws")
 async def execution_process_log_stream(websocket: WebSocket, process_id: str) -> None:
     """Stream raw log events for a single execution process."""
+    auth_failure = authorize_websocket(websocket)
+    if auth_failure is not None:
+        await websocket.close(code=1008, reason=auth_failure.reason)
+        return
+
     if codex_store is None:
         await websocket.close(code=500, reason="Store not available")
         return
@@ -740,6 +751,11 @@ async def execution_process_log_stream(websocket: WebSocket, process_id: str) ->
 @router.websocket("/execution-processes/{process_id}/messages/ws")
 async def execution_process_message_stream(websocket: WebSocket, process_id: str) -> None:
     """Stream task messages for a single execution process."""
+    auth_failure = authorize_websocket(websocket)
+    if auth_failure is not None:
+        await websocket.close(code=1008, reason=auth_failure.reason)
+        return
+
     if codex_store is None:
         await websocket.close(code=500, reason="Store not available")
         return

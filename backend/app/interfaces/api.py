@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.adapters.local_process import CalledProcessError, run_trusted_local
 from app.application import timeouts
@@ -60,6 +60,7 @@ from app.application.self_improvement_apply_service import (
 )
 from app.application.task_status_events import build_task_status_event
 from app.application.task_statuses import (
+    execution_process_state_for_task,
     is_task_active_status,
     is_task_failure_status,
     is_task_pending_status,
@@ -99,6 +100,7 @@ from app.domain.models import (
     LogEvent,
     Project,
     ProjectConductorState,
+    ProjectEnvVar,
     RuntimeCatalog,
     RuntimeExecutorConfig,
     SelfImprovementApplicationEvent,
@@ -682,18 +684,18 @@ async def _load_audit_task_metadata(rows: list[AuditLog], payloads: Mapping[str,
         return {}
     metadata: dict[str, JsonObject] = {}
     for task_id in task_ids:
-        task = await codex_store.load_codex_task(task_id)
-        if task is not None:
-            metadata[task_id] = {"role": task.role, "title": task.title}
+        loaded_task = await codex_store.load_codex_task(task_id)
+        if loaded_task is not None:
+            metadata[task_id] = {"role": loaded_task.role, "title": loaded_task.title}
     if len(metadata) == len(task_ids):
         return metadata
     tasks = await codex_store.list_codex_tasks()
-    for task in tasks:
-        task_id = _audit_str(task.get("id"))
+    for task_row in tasks:
+        task_id = _audit_str(task_row.get("id"))
         if task_id in task_ids and task_id not in metadata:
             metadata[task_id] = {
-                "role": _audit_str(task.get("role")),
-                "title": _audit_str(task.get("title")),
+                "role": _audit_str(task_row.get("role")),
+                "title": _audit_str(task_row.get("title")),
             }
     return metadata
 
@@ -704,7 +706,7 @@ def _serialize_audit_log(
     task_metadata: Mapping[str, JsonObject] | None = None,
 ) -> JsonObject:
     payload_obj = payload if payload is not None else _audit_payload_object(entry.payload_json)
-    result = {
+    result: JsonObject = {
         "id": entry.id,
         "category": entry.category,
         "created_at": entry.created_at.isoformat() if entry.created_at else None,
@@ -730,7 +732,8 @@ def _trace_json_value(raw: str | None) -> object | None:
     if raw is None:
         return None
     try:
-        return json.loads(raw)
+        parsed: object = json.loads(raw)
+        return parsed
     except json.JSONDecodeError:
         return raw
 
@@ -1006,7 +1009,11 @@ def _audit_chain_operation(key: str, entries: list[JsonObject]) -> JsonObject:
     )
     latest = max((_audit_str(item.get("created_at")) or "" for item in ordered), default="")
     first = min((_audit_str(item.get("created_at")) or "" for item in ordered), default="")
-    duration_values = [item.get("duration_ms") for item in ordered if isinstance(item.get("duration_ms"), int)]
+    duration_values: list[int] = []
+    for item in ordered:
+        duration_ms = item.get("duration_ms")
+        if isinstance(duration_ms, int) and not isinstance(duration_ms, bool):
+            duration_values.append(duration_ms)
     return {
         "id": key,
         "role": ordered[0].get("role"),
@@ -1336,8 +1343,7 @@ def _agent_timeline_aggregate_group(key: str, operations: list[JsonObject]) -> J
     entries = [
         entry
         for operation in ordered
-        for entry in operation.get("entries", [])
-        if isinstance(entry, dict)
+        for entry in _json_object_list(operation.get("entries"))
     ]
     is_execution = bool(task_id)
     return {
@@ -3257,34 +3263,33 @@ async def _load_project_for_run(project_id: str) -> Project:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+async def _reconcile_project_env_file(project: Project, store: CodexApiStore) -> None:
+    from app.application.env_materializer import materialize_env_file
+
+    stored_vars = await store.load_project_env_vars(project.id)
+    result = await materialize_env_file(
+        project_id=project.id,
+        repo_path=project.repo_path,
+        agent_env_vars=[],
+        stored_vars=stored_vars,
+    )
+    if result.valid:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "reason": "env_incomplete",
+            "errors": [error.to_dict() for error in result.errors],
+            "message": "项目环境变量未完整配置。请在「环境配置」面板填写所有必填项后再启动。",
+        },
+    )
+
+
 @router.post("/projects/{project_id}/run/start")
 async def start_project_run(project_id: str) -> object:
     project = await _load_project_for_run(project_id)
-
-    # --- .env materialization (Agent-driven, see env_materializer.py) ---
-    from app.application.env_materializer import materialize_env_file
-
     store = _require_codex_store()
-    stored_vars = await store.load_project_env_vars(project_id)
-    if stored_vars:
-        # We have stored env vars → materialize .env. Agent env_vars are
-        # empty here; the stored values are the truth source. The agent
-        # would have contributed defaults when it first ran.
-        result = await materialize_env_file(
-            project_id=project_id,
-            repo_path=project.repo_path,
-            agent_env_vars=[],  # stored values are the truth; agent defaults already merged
-            stored_vars=stored_vars,
-        )
-        if not result.valid:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "reason": "env_incomplete",
-                    "errors": [e.to_dict() for e in result.errors],
-                    "message": "项目环境变量未完整配置。请在「环境配置」面板填写所有必填项后再启动。",
-                },
-            )
+    await _reconcile_project_env_file(project, store)
 
     try:
         return await project_run_manager.start(
@@ -3293,6 +3298,12 @@ async def start_project_run(project_id: str) -> object:
             project.repo_path,
         )
     except ProjectRunError as exc:
+        if exc.reason == "refused":
+            await store.append_project_audit(
+                project_id=project.id,
+                issue_id=None,
+                event=f"run_refused:{exc.pattern or 'unknown'}",
+            )
         detail = {"reason": exc.reason}
         if exc.pattern:
             detail["pattern"] = exc.pattern
@@ -3376,7 +3387,7 @@ async def put_project_env_vars(project_id: str, body: JsonObject) -> object:
             if not is_configured():
                 raise HTTPException(
                     status_code=500,
-                    detail="CONSOLE_ENCRYPTION_KEY 未配置，无法存储密钥类变量。请管理员配置后重试。",
+                    detail="CONSOLE_ENCRYPTION_KEY 未配置, 无法存储密钥类变量。请管理员配置后重试。",
                 )
             stored_value = encrypt(value)
 
@@ -3389,17 +3400,7 @@ async def put_project_env_vars(project_id: str, body: JsonObject) -> object:
         )
         saved.append(name)
 
-    # After saving, materialize .env if there are stored vars
-    from app.application.env_materializer import materialize_env_file
-
-    all_stored = await store.load_project_env_vars(project.id)
-    if all_stored:
-        await materialize_env_file(
-            project_id=project.id,
-            repo_path=project.repo_path,
-            agent_env_vars=[],
-            stored_vars=all_stored,
-        )
+    await _reconcile_project_env_file(project, store)
 
     return {"saved": saved}
 
@@ -3407,9 +3408,10 @@ async def put_project_env_vars(project_id: str, body: JsonObject) -> object:
 @router.delete("/projects/{project_id}/env/{name}")
 async def delete_project_env_var(project_id: str, name: str) -> object:
     """Delete a single env var for a project."""
-    await _load_project_for_run(project_id)
+    project = await _load_project_for_run(project_id)
     store = _require_codex_store()
     await store.delete_project_env_var(project_id, name)
+    await _reconcile_project_env_file(project, store)
     return {"deleted": name}
 
 
@@ -4786,11 +4788,51 @@ class CreateTaskRequest(BaseModel):
     blocked_by_help_id: str | None = None
 
 
+def _normalize_acceptance_criteria(value: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        criterion = item.strip()
+        if not criterion or criterion in seen:
+            continue
+        seen.add(criterion)
+        normalized.append(criterion)
+    return normalized
+
+
 class CreateIssueRequest(BaseModel):
     session_id: str
     title: str
     description: str | None = None
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    acceptance_criteria_confirmed: bool = False
     base_branch: str | None = None  # Override fork point (defaults to project.default_branch)
+
+    @field_validator("acceptance_criteria")
+    @classmethod
+    def normalize_acceptance_criteria(cls, value: list[str]) -> list[str]:
+        return _normalize_acceptance_criteria(value)
+
+    @model_validator(mode="after")
+    def require_confirmed_criteria(self) -> "CreateIssueRequest":
+        if self.acceptance_criteria_confirmed and not self.acceptance_criteria:
+            raise ValueError("confirmed acceptance criteria must include at least one item")
+        return self
+
+
+class ConfirmIssueAcceptanceCriteriaRequest(BaseModel):
+    acceptance_criteria: list[str] = Field(min_length=1)
+
+    @field_validator("acceptance_criteria")
+    @classmethod
+    def normalize_acceptance_criteria(cls, value: list[str]) -> list[str]:
+        return _normalize_acceptance_criteria(value)
+
+    @model_validator(mode="after")
+    def require_criteria(self) -> "ConfirmIssueAcceptanceCriteriaRequest":
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance criteria must include at least one item")
+        return self
 
 
 class UpdateIssuePhaseRequest(BaseModel):
@@ -4823,6 +4865,8 @@ async def create_codex_issue(request: CreateIssueRequest) -> CodexIssue:
         project_id=project.id,
         title=request.title,
         description=request.description,
+        acceptance_criteria=request.acceptance_criteria,
+        acceptance_criteria_confirmed=request.acceptance_criteria_confirmed,
         current_phase="requirements",
         status="open",
         created_at=now,
@@ -4880,6 +4924,52 @@ async def update_codex_issue_phase(issue_id: str, request: UpdateIssuePhaseReque
     return issue
 
 
+@router.post(
+    "/codex/issues/{issue_id}/acceptance-criteria/confirm",
+    response_model=CodexIssue,
+)
+async def confirm_issue_acceptance_criteria(
+    issue_id: str,
+    request: ConfirmIssueAcceptanceCriteriaRequest,
+) -> CodexIssue:
+    if codex_store is None:
+        raise HTTPException(status_code=503, detail="SQLite store not available")
+    issue = await codex_store.load_codex_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"Issue '{issue_id}' not found")
+    if issue.acceptance_criteria_confirmed:
+        raise HTTPException(
+            status_code=409,
+            detail="Acceptance criteria are already confirmed and cannot be changed",
+        )
+    if issue.status in {"abandoned", "completed", "done", "merged"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Acceptance criteria cannot be confirmed after the issue is closed",
+        )
+
+    issue.acceptance_criteria = list(request.acceptance_criteria)
+    issue.acceptance_criteria_confirmed = True
+    issue.updated_at = datetime.now()
+    await codex_store.save_codex_issue(issue)
+    if issue.project_id:
+        await codex_store.append_project_audit(
+            project_id=issue.project_id,
+            issue_id=issue.id,
+            event=f"acceptance_criteria_confirmed:{len(issue.acceptance_criteria)}",
+        )
+    await event_bus.append(
+        {
+            "type": "issue_updated",
+            "issue_id": issue.id,
+            "session_id": issue.session_id,
+            "project_id": issue.project_id,
+            "status": issue.status,
+        }
+    )
+    return issue
+
+
 @router.post("/codex/issues/{issue_id}/pin")
 async def update_codex_issue_pin(issue_id: str, request: UpdateIssuePinRequest) -> object:
     if codex_store is None:
@@ -4907,6 +4997,8 @@ async def duplicate_codex_issue(issue_id: str) -> object:
         project_id=issue.project_id,
         title=f"{issue.title} (copy)",
         description=issue.description,
+        acceptance_criteria=list(issue.acceptance_criteria),
+        acceptance_criteria_confirmed=issue.acceptance_criteria_confirmed,
         current_phase="requirements",
         status="open",
         is_pinned=False,
@@ -5679,13 +5771,26 @@ async def _run_task_with_user_content(
         if kind != "chat":
             await _refresh_task_result(current_task)
         await codex_store.save_codex_task(current_task)
-        await codex_store.update_execution_process_status(exec_process.id, "Completed", exit_code=0, completed_at=datetime.now())
+        process_status, process_exit_code = execution_process_state_for_task(
+            current_task.status
+        )
+        await codex_store.update_execution_process_status(
+            exec_process.id,
+            process_status,
+            exit_code=process_exit_code,
+            completed_at=(
+                datetime.now()
+                if is_task_success_status(current_task.status)
+                or is_task_failure_status(current_task.status)
+                else None
+            ),
+        )
         from app.application.task_status_events import build_task_status_event
 
         await event_bus.append(
             build_task_status_event(
                 current_task,
-                "done",
+                current_task.status,
                 result=current_task.result,
                 execution_process_id=exec_process.id,
             )
@@ -6210,6 +6315,10 @@ class TestExecutorRequest(BaseModel):
     api_key: str | None = None
 
 
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
 def _runtime_test_error_status(value: object) -> str | None:
     if isinstance(value, int) and value >= 400:
         return str(value)
@@ -6228,7 +6337,7 @@ def _runtime_test_string_field(payload: dict[str, object], *keys: str) -> str | 
     return None
 
 
-def _runtime_test_body_error(response: object) -> str | None:
+def _runtime_test_body_error(response: _JsonResponse) -> str | None:
     try:
         payload = response.json()
     except ValueError:
@@ -6482,7 +6591,7 @@ async def test_runtime_executor_cli(request: TestExecutorRequest) -> object:
 
     try:
         stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         await proc.wait()
         return {"success": False, "error": f"Claude CLI test timed out after {timeout_s:g}s"}

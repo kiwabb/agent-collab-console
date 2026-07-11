@@ -10,8 +10,26 @@ FRONTEND_NODE_BIN=""
 BACKEND_VENV_PYTHON=""
 BACKEND_UVICORN_CMD=()
 BACKEND_LOG_PATH="${BACKEND_LOG_PATH:-/tmp/agent-collab-backend.log}"
+CONSOLE_TOKEN_FILE=""
 export CODEX_SOURCE_ROOT="$ROOT_DIR"
 export CODEX_WORKSPACE_ROOT="${CODEX_WORKSPACE_ROOT:-/tmp/agent-collab-console-workspaces}"
+if [[ -z "${CONSOLE_AUTH_TOKEN:-}" ]]; then
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "Error: openssl is required to generate CONSOLE_AUTH_TOKEN."
+    exit 1
+  fi
+  export CONSOLE_AUTH_TOKEN="$(openssl rand -hex 32)"
+  CONSOLE_TOKEN_FILE="$(mktemp "${TMPDIR:-/tmp}/agent-collab-console-token.XXXXXX")"
+  chmod 600 "$CONSOLE_TOKEN_FILE"
+  printf '%s\n' "$CONSOLE_AUTH_TOKEN" > "$CONSOLE_TOKEN_FILE"
+fi
+if [[ ! "$CONSOLE_AUTH_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]]; then
+  echo "Error: CONSOLE_AUTH_TOKEN must be at least 32 URL-safe characters."
+  exit 1
+fi
+export CONSOLE_ALLOWED_HOSTS="${CONSOLE_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}"
+export CONSOLE_ALLOWED_ORIGINS="${CONSOLE_ALLOWED_ORIGINS:-http://127.0.0.1:4000,http://localhost:4000}"
+export BACKEND_API_BASE="${BACKEND_API_BASE:-http://127.0.0.1:9000}"
 # Real-CLI mode is the production default — Engineer must actually patch the
 # worktree, QA must actually run tests. Override with `REAL_CLI=false ./dev-local.sh`
 # for offline / demo mode where you want mock outputs.
@@ -50,6 +68,9 @@ cleanup() {
   fi
   if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
     kill "$FRONTEND_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$CONSOLE_TOKEN_FILE" ]]; then
+    rm -f "$CONSOLE_TOKEN_FILE"
   fi
 }
 
@@ -135,7 +156,7 @@ fi
 free_port 9000 "backend"
 free_port 4000 "frontend"
 
-echo "Starting backend on http://localhost:9000"
+echo "Starting backend on http://127.0.0.1:9000"
 echo "Backend log: $BACKEND_LOG_PATH"
 echo "Codex workspace root: $CODEX_WORKSPACE_ROOT"
 if [[ -n "$BACKEND_VENV_PYTHON" ]]; then
@@ -147,25 +168,28 @@ fi
   cd "$BACKEND_DIR"
   : > "$BACKEND_LOG_PATH"
   if [[ "$DEV_RELOAD" == "true" ]]; then
-    "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --port 9000 2>&1 | tee "$BACKEND_LOG_PATH"
+    "${BACKEND_UVICORN_CMD[@]}" app.main:app --reload --host 127.0.0.1 --port 9000 2>&1 | tee "$BACKEND_LOG_PATH"
   else
-    "${BACKEND_UVICORN_CMD[@]}" app.main:app --port 9000 2>&1 | tee "$BACKEND_LOG_PATH"
+    "${BACKEND_UVICORN_CMD[@]}" app.main:app --host 127.0.0.1 --port 9000 2>&1 | tee "$BACKEND_LOG_PATH"
   fi
 ) &
 BACKEND_PID=$!
 
-echo "Starting frontend on http://localhost:4000"
+echo "Starting frontend on http://127.0.0.1:4000"
 (
   cd "$FRONTEND_DIR"
   export NEXT_SWC_PATH="$FRONTEND_SWC_CACHE_DIR"
-  exec env -u NODE_OPTIONS "$FRONTEND_NODE_BIN" ./node_modules/next/dist/bin/next dev --port 4000
+  exec env -u NODE_OPTIONS "$FRONTEND_NODE_BIN" ./node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 4000
 ) &
 FRONTEND_PID=$!
 
 echo
 echo "Codex Terminal Workspace is starting."
-echo "Frontend: http://localhost:4000"
-echo "Backend:  http://localhost:9000"
+echo "Frontend: http://127.0.0.1:4000"
+echo "Backend:  http://127.0.0.1:9000"
+if [[ -n "$CONSOLE_TOKEN_FILE" ]]; then
+  echo "CLI token file (removed on shutdown): $CONSOLE_TOKEN_FILE"
+fi
 echo "Press Ctrl+C to stop both services."
 echo
 

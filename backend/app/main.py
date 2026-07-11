@@ -1,13 +1,14 @@
 import inspect
 import logging
 import sys
-import traceback as _traceback
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+
+from app.application.local_auth import authorize_http_request, validate_local_auth_startup
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,8 @@ _started_at = datetime.now(UTC).isoformat()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    validate_local_auth_startup()
+
     # Startup: set the event loop on the global event bus so it can receive events from threads
     import asyncio
 
@@ -251,20 +254,30 @@ app = FastAPI(title="Agent Collaboration Console", lifespan=lifespan)
 app.state.started_at = _started_at
 
 
+@app.middleware("http")
+async def enforce_local_control_boundary(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    failure = authorize_http_request(request)
+    if failure is not None:
+        return JSONResponse(
+            status_code=failure.status_code,
+            content={"detail": failure.reason},
+        )
+    return await call_next(request)
+
+
 # FastAPI / Starlette already provide good defaults for HTTPException and
 # RequestValidationError (they produce structured {"detail": ...} JSON).
-# We only override the catch-all so a 500 includes the real error type and
-# message — otherwise frontend toasts show "Internal Server Error" which
-# makes user-reported bugs impossible to diagnose remotely.
+# The catch-all logs full server-side diagnostics but keeps the HTTP response
+# stable and free of implementation details or secret-bearing exception text.
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.error("Unhandled exception on %s %s", request.method, request.url.path, exc_info=exc)
     return JSONResponse(
         status_code=500,
-        content={
-            "detail": f"{type(exc).__name__}: {exc}",
-            "traceback": _traceback.format_exception_only(type(exc), exc),
-        },
+        content={"detail": "internal_server_error"},
     )
 
 

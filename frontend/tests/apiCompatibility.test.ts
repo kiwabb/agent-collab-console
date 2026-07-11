@@ -318,14 +318,14 @@ test("runtime-critical callers import split api modules directly", () => {
     "projects page project management calls should come from api/projects",
   );
   assert.match(
-    readSource("features/projects/ProjectsPage.tsx"),
+    readSource("features/projects/useProjectStartupConfig.ts"),
     /startProjectScriptTask,[\s\S]*} from "@\/lib\/api\/projects"/,
-    "projects page operations engineer script task should come from api/projects",
+    "startup configuration analysis should come from api/projects",
   );
   assert.match(
-    readSource("features/projects/ProjectsPage.tsx"),
+    readSource("features/projects/useProjectStartupConfig.ts"),
     /from "@\/lib\/api\/tasks"/,
-    "projects page script task polling should come from api/tasks",
+    "startup configuration task polling should come from api/tasks",
   );
   assert.match(
     readSource("features/projects/ProjectDashboard.tsx"),

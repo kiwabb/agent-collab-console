@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.application.event_bus import event_bus
+from app.application.local_auth import authorize_websocket
 
 
 router = APIRouter()
@@ -13,6 +14,11 @@ router = APIRouter()
 
 @router.websocket("/ws/events")
 async def global_events_ws(websocket: WebSocket) -> None:
+    auth_failure = authorize_websocket(websocket)
+    if auth_failure is not None:
+        await websocket.close(code=1008, reason=auth_failure.reason)
+        return
+
     await websocket.accept()
     queue = event_bus.subscribe()
     last_event_id = websocket.query_params.get("last_event_id")
