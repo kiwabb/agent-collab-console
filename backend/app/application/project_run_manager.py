@@ -19,7 +19,15 @@ import signal  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from typing import TypedDict  # noqa: E402
 
-from app.application.command_safety import refuse_reason  # noqa: E402
+from app.application.project_command import (  # noqa: E402
+    ProjectCommandError,
+    build_project_child_env,
+    parse_project_command,
+)
+from app.application.qa_output_redaction import (  # noqa: E402
+    SecretOutputRedactionError,
+    SecretOutputRedactor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +37,6 @@ _LOG_RING_MAXLEN = 2000
 _LINE_MAX_CHARS = 2000
 # Grace period between SIGTERM and SIGKILL when stopping a process group.
 _STOP_GRACE_S = 5.0
-
-# Env keys we drop from the child's inherited environment so the dev server
-# never connects to the console's own DB / codex internals. Mirrors
-# worktree_manager._run_setup's drop list (plus CODEX_* prefix).
-_ENV_DROP_EXACT = {"SQLITE_DB_PATH"}
-_ENV_DROP_PREFIXES = ("CODEX_",)
-
 
 class RunLogLine(TypedDict):
     seq: int
@@ -63,14 +64,6 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()  # noqa: UP017
 
 
-def _child_env() -> dict[str, str]:
-    return {
-        k: v
-        for k, v in os.environ.items()
-        if k not in _ENV_DROP_EXACT and not any(k.startswith(p) for p in _ENV_DROP_PREFIXES)
-    }
-
-
 class ProjectRunError(RuntimeError):
     """Raised by `start` for a known, machine-distinguishable refusal.
 
@@ -85,10 +78,17 @@ class ProjectRunError(RuntimeError):
 
 
 class _RunEntry:
-    def __init__(self, command: str, cwd: str, proc: asyncio.subprocess.Process) -> None:
+    def __init__(
+        self,
+        command: str,
+        cwd: str,
+        proc: asyncio.subprocess.Process,
+        redactor: SecretOutputRedactor,
+    ) -> None:
         self.command = command
         self.cwd = cwd
         self.proc = proc
+        self.redactor = redactor
         self.pid = proc.pid
         self.started_at = _now_iso()
         self.exit_code: int | None = None
@@ -98,11 +98,12 @@ class _RunEntry:
 
     def append_log(self, stream: str, line: str) -> None:
         self._seq += 1
+        safe_line = self.redactor.redact(line)
         self.logs.append(
             {
                 "seq": self._seq,
                 "stream": stream,
-                "line": line[:_LINE_MAX_CHARS],
+                "line": safe_line[:_LINE_MAX_CHARS],
                 "ts": _now_iso(),
             }
         )
@@ -138,24 +139,48 @@ class ProjectRunManager:
         command = (command or "").strip()
         if not command:
             raise ProjectRunError("no_run_command")
-        pattern = refuse_reason(command)
-        if pattern is not None:
-            raise ProjectRunError("refused", pattern=pattern)
+        try:
+            parsed = parse_project_command(command, cwd)
+        except ProjectCommandError as exc:
+            raise ProjectRunError("refused", pattern=exc.reason) from exc
 
         async with self._lock:
             existing = self._entries.get(project_id)
             if existing is not None and existing.running:
                 raise ProjectRunError("already_running")
 
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=_child_env(),
-                start_new_session=True,
+            child_env = build_project_child_env()
+            try:
+                redactor = SecretOutputRedactor.from_workspace(cwd, child_env)
+            except SecretOutputRedactionError as exc:
+                logger.warning(
+                    "project run output redaction unavailable; refusing launch: project_id=%s",
+                    project_id,
+                    exc_info=True,
+                )
+                raise ProjectRunError("refused", pattern="redaction_unavailable") from exc
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *parsed.argv,
+                    cwd=str(parsed.cwd),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=child_env,
+                    start_new_session=True,
+                )
+            except FileNotFoundError as exc:
+                raise ProjectRunError("refused", pattern="executable_not_found") from exc
+            except PermissionError as exc:
+                raise ProjectRunError("refused", pattern="executable_not_executable") from exc
+            except OSError as exc:
+                raise ProjectRunError("refused", pattern="process_spawn_failed") from exc
+            entry = _RunEntry(
+                command=parsed.display,
+                cwd=str(parsed.cwd),
+                proc=proc,
+                redactor=redactor,
             )
-            entry = _RunEntry(command=command, cwd=cwd, proc=proc)
             entry.readers = [
                 asyncio.create_task(self._drain(entry, proc.stdout, "stdout")),
                 asyncio.create_task(self._drain(entry, proc.stderr, "stderr")),

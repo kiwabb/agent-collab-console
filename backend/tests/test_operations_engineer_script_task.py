@@ -7,9 +7,16 @@ import pytest
 
 from app.application.engineer_workflow import EngineerWorkflow
 from app.application.knowledge_index_service import ArtifactRow, DbConnection, IssueInput
-from app.application.role_workflow_service import RoleWorkflowService
+from app.application.role_workflow_service import RoleWorkflowService, RoleWorkflowStore
 from app.application.specialist_orchestrator import SpecialistGraphRef
-from app.domain.models import AgentMessage, CodexSession, CodexTask, ExecutionProcess, Project
+from app.domain.models import (
+    AgentMessage,
+    CodexSession,
+    CodexTask,
+    ExecutionProcess,
+    Project,
+    ProjectEnvVar,
+)
 
 
 def _project(repo_path: str) -> Project:
@@ -48,6 +55,7 @@ class FakeStore:
         self.project = project
         self.saved_projects: list[Project] = []
         self.saved_tasks: list[CodexTask] = []
+        self.env_vars: dict[str, ProjectEnvVar] = {}
 
     async def load_project(self, project_id: str) -> Project | None:
         assert project_id == self.project.id
@@ -66,6 +74,32 @@ class FakeStore:
 
     async def load_codex_task(self, task_id: str) -> CodexTask | None:
         return next((task for task in self.saved_tasks if task.id == task_id), None)
+
+    async def load_project_env_var(
+        self,
+        project_id: str,
+        name: str,
+    ) -> ProjectEnvVar | None:
+        assert project_id == self.project.id
+        return self.env_vars.get(name)
+
+    async def save_project_env_var(
+        self,
+        project_id: str,
+        name: str,
+        value: str,
+        *,
+        secret: bool = False,
+        source: str = "user",
+    ) -> None:
+        assert project_id == self.project.id
+        self.env_vars[name] = ProjectEnvVar(
+            project_id=project_id,
+            name=name,
+            value=value,
+            secret=secret,
+            source=source,
+        )
 
     async def _get_conn(self) -> DbConnection:
         raise RuntimeError("FakeStore has no database connection")
@@ -99,7 +133,7 @@ class FakeStore:
 @pytest.mark.asyncio
 async def test_operations_prompt_preserves_explicit_empty_request_context(tmp_path):
     store = FakeStore(_project(str(tmp_path)))
-    service = RoleWorkflowService(codex_store=store)
+    service = RoleWorkflowService(codex_store=cast(RoleWorkflowStore, store))
     task = _task(
         prompt=(
             "Generate startup scripts. "
@@ -167,7 +201,7 @@ async def test_operations_persist_falls_back_to_repo_inference_for_empty_result(
     monkeypatch.setattr(event_bus_module, "event_bus", event_bus)
     (tmp_path / "package.json").write_text('{"scripts":{"dev":"vite"}}')
     store = FakeStore(_project(str(tmp_path)))
-    service = RoleWorkflowService(codex_store=store)
+    service = RoleWorkflowService(codex_store=cast(RoleWorkflowStore, store))
     task = _task(prompt="Generate startup scripts.", workspace_path=str(tmp_path), result="")
 
     suggestion = await service._persist_operations_engineer_result(task)
@@ -197,7 +231,7 @@ async def test_operations_persist_preserves_existing_field_when_suggestion_empty
     project.setup_script = "pnpm install"
     project.run_command = "pnpm old"
     store = FakeStore(project)
-    service = RoleWorkflowService(codex_store=store)
+    service = RoleWorkflowService(codex_store=cast(RoleWorkflowStore, store))
     task = _task(
         prompt="Generate startup scripts.",
         workspace_path=str(tmp_path),

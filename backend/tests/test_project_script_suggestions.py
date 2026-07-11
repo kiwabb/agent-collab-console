@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import sys
 from datetime import datetime
 
 import pytest
 
 from app.application.project_script_suggestions import (
+    ProjectScriptSuggestion,
     build_project_script_suggestion_prompt,
     collect_project_script_context,
     infer_project_script_suggestion,
@@ -175,7 +175,7 @@ async def test_verify_project_launch_reaches_local_http_server(tmp_path):
         port = sock.getsockname()[1]
 
     suggestion = parse_project_script_suggestion(
-        f'{{"setup_script":"","run_command":"{sys.executable} -m http.server {port}",'
+        f'{{"setup_script":"","run_command":"python3 -m http.server {port}",'
         f'"access_url":"http://127.0.0.1:{port}"}}'
     )
 
@@ -188,6 +188,151 @@ async def test_verify_project_launch_reaches_local_http_server(tmp_path):
 
     assert verification.status == "verified"
     assert verification.access_url == f"http://127.0.0.1:{port}"
+
+
+@pytest.mark.asyncio
+async def test_verify_project_launch_refuses_shell_syntax_before_spawn(tmp_path, monkeypatch):
+    suggestion = ProjectScriptSuggestion(
+        setup_script="",
+        run_command="npm run dev > leaked.log",
+    )
+
+    async def unexpected_spawn(*args: object, **kwargs: object) -> None:
+        raise AssertionError("refused launch command must not create a process")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_spawn)
+
+    verification = await verify_project_launch(
+        repo_path=str(tmp_path),
+        suggestion=suggestion,
+        timeout_s=0.1,
+    )
+
+    assert verification.status == "skipped"
+    assert "shell_syntax_not_allowed" in verification.message
+
+
+@pytest.mark.asyncio
+async def test_verify_project_launch_redacts_success_output(tmp_path):
+    from app.application.env_materializer import build_env_file_content
+
+    plaintext = "abc"
+    ciphertext = "gAAAAA" + "B" * 80 + "=="
+    (tmp_path / ".env").write_text(
+        build_env_file_content(
+            [
+                {
+                    "name": "DISPLAY_VALUE",
+                    "value": plaintext,
+                    "secret": True,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "launch_output.py").write_text(
+        "import sys\nimport time\n"
+        f"print({f'stdout={plaintext} cipher={ciphertext}'!r}, flush=True)\n"
+        f"print({f'stderr={plaintext} cipher={ciphertext}'!r}, file=sys.stderr, flush=True)\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+    suggestion = ProjectScriptSuggestion(
+        setup_script="",
+        run_command="python3 -u launch_output.py",
+    )
+
+    verification = await verify_project_launch(
+        repo_path=str(tmp_path),
+        suggestion=suggestion,
+        timeout_s=0.05,
+    )
+
+    persisted = "\n".join(verification.logs)
+    assert verification.status == "started"
+    assert plaintext not in persisted
+    assert ciphertext not in persisted
+    assert persisted.count("[REDACTED]") >= 2
+
+
+@pytest.mark.asyncio
+async def test_verify_project_launch_redacts_failure_output(tmp_path):
+    from app.application.env_materializer import build_env_file_content
+
+    plaintext = "failure-secret"
+    ciphertext = "gAAAAA" + "C" * 80 + "=="
+    (tmp_path / ".env").write_text(
+        build_env_file_content(
+            [
+                {
+                    "name": "DISPLAY_VALUE",
+                    "value": plaintext,
+                    "secret": True,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "launch_failure.py").write_text(
+        "import sys\n"
+        f"print({f'stdout={plaintext} cipher={ciphertext}'!r}, flush=True)\n"
+        f"print({f'stderr={plaintext} cipher={ciphertext}'!r}, file=sys.stderr, flush=True)\n"
+        "raise SystemExit(9)\n",
+        encoding="utf-8",
+    )
+    suggestion = ProjectScriptSuggestion(
+        setup_script="",
+        run_command="python3 -u launch_failure.py",
+    )
+
+    verification = await verify_project_launch(
+        repo_path=str(tmp_path),
+        suggestion=suggestion,
+        timeout_s=1.0,
+    )
+
+    persisted = "\n".join(verification.logs)
+    assert verification.status == "failed"
+    assert verification.exit_code == 9
+    assert plaintext not in persisted
+    assert ciphertext not in persisted
+    assert persisted.count("[REDACTED]") >= 2
+
+
+@pytest.mark.asyncio
+async def test_verify_project_launch_refuses_when_redaction_is_unavailable(
+    tmp_path, monkeypatch
+):
+    import app.application.project_script_suggestions as suggestions_module
+    from app.application.qa_output_redaction import SecretOutputRedactionError
+
+    (tmp_path / "server.py").write_text("print('not started')\n", encoding="utf-8")
+    suggestion = ProjectScriptSuggestion(
+        setup_script="",
+        run_command="python3 server.py",
+    )
+
+    def unavailable(cls, workspace_path, child_env):
+        raise SecretOutputRedactionError("unreadable")
+
+    async def unexpected_spawn(*args: object, **kwargs: object) -> None:
+        raise AssertionError("redaction failure must refuse before process spawn")
+
+    monkeypatch.setattr(
+        suggestions_module.SecretOutputRedactor,
+        "from_workspace",
+        classmethod(unavailable),
+    )
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_spawn)
+
+    verification = await verify_project_launch(
+        repo_path=str(tmp_path),
+        suggestion=suggestion,
+        timeout_s=0.1,
+    )
+
+    assert verification.status == "skipped"
+    assert "redaction was unavailable" in verification.message
 
 
 def test_project_script_suggestion_endpoint_returns_commands(client, tmp_path, monkeypatch):

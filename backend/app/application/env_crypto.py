@@ -20,14 +20,13 @@ Key management (deliberately simple for a local single-machine tool):
 Non-secret values (ports, hosts) are stored in plaintext columns; only the
 secret column goes through this module.
 """
+
 from __future__ import annotations
 
-import logging
 import os
+import sys
 
 from cryptography.fernet import Fernet, InvalidToken
-
-logger = logging.getLogger(__name__)
 
 ENV_KEY_NAME = "CONSOLE_ENCRYPTION_KEY"
 
@@ -52,6 +51,10 @@ class EnvCryptoDecryptError(EnvCryptoError):
     """
 
 
+class EnvCryptoEncryptError(EnvCryptoError):
+    """A plaintext value could not be encoded for encryption."""
+
+
 def generate_key() -> str:
     """Return a fresh urlsafe-base64 Fernet key suitable for CONSOLE_ENCRYPTION_KEY."""
     return Fernet.generate_key().decode("ascii")
@@ -67,11 +70,10 @@ def _load_fernet() -> Fernet:
         )
     try:
         return Fernet(raw.strip().encode("ascii"))
-    except (ValueError, TypeError) as exc:
+    except (TypeError, UnicodeError, ValueError):
         raise EnvCryptoKeyError(
-            f"{ENV_KEY_NAME} is malformed (expected a urlsafe-base64 32-byte "
-            f"Fernet key): {exc}"
-        ) from exc
+            f"{ENV_KEY_NAME} is malformed (expected a urlsafe-base64 32-byte Fernet key)."
+        ) from None
 
 
 def is_configured() -> bool:
@@ -94,7 +96,11 @@ def encrypt(plaintext: str) -> str:
     Raises EnvCryptoKeyError if the key is missing/malformed.
     """
     fernet = _load_fernet()
-    return fernet.encrypt(plaintext.encode("utf-8")).decode("ascii")
+    try:
+        encoded = plaintext.encode("utf-8")
+    except UnicodeError:
+        raise EnvCryptoEncryptError("Failed to encode a secret value for encryption.") from None
+    return fernet.encrypt(encoded).decode("ascii")
 
 
 def decrypt(ciphertext: str) -> str:
@@ -107,13 +113,13 @@ def decrypt(ciphertext: str) -> str:
     fernet = _load_fernet()
     try:
         return fernet.decrypt(ciphertext.encode("ascii")).decode("utf-8")
-    except (InvalidToken, ValueError) as exc:
+    except (InvalidToken, UnicodeError, ValueError):
         raise EnvCryptoDecryptError(
             "Failed to decrypt a stored value with the current "
             f"{ENV_KEY_NAME}. The key may have changed since it was saved; "
             "the value must be re-entered."
-        ) from exc
+        ) from None
 
 
 if __name__ == "__main__":  # pragma: no cover - developer convenience
-    print(generate_key())  # noqa: T201
+    sys.stdout.write(f"{generate_key()}\n")

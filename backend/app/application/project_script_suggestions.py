@@ -14,7 +14,15 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.application import timeouts
-from app.application.command_safety import refuse_reason
+from app.application.project_command import (
+    ProjectCommandError,
+    build_project_child_env,
+    parse_project_command,
+)
+from app.application.qa_output_redaction import (
+    SecretOutputRedactionError,
+    SecretOutputRedactor,
+)
 from app.domain.models import Project
 from app.json_safety import object_dict, parse_json_object
 
@@ -399,14 +407,6 @@ def infer_project_script_suggestion(repo_path: str) -> ProjectScriptSuggestion |
     return None
 
 
-def _child_env() -> dict[str, str]:
-    return {
-        key: value
-        for key, value in os.environ.items()
-        if key != "SQLITE_DB_PATH" and not key.startswith("CODEX_")
-    }
-
-
 _LOCAL_URL_RE = re.compile(
     r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d{1,5})?[^\s'\"<>)]+"
 )
@@ -440,7 +440,11 @@ def _candidate_access_urls(
 
 
 async def _read_process_lines(
-    stream: asyncio.StreamReader | None, tag: str, logs: list[str], limit: int = 80
+    stream: asyncio.StreamReader | None,
+    tag: str,
+    logs: list[str],
+    redactor: SecretOutputRedactor,
+    limit: int = 80,
 ) -> None:
     if stream is None:
         return
@@ -450,11 +454,15 @@ async def _read_process_lines(
             if not raw:
                 break
             line = raw.decode("utf-8", errors="replace").rstrip("\n")
-            logs.append(f"{tag}: {line}"[:1000])
+            logs.append(redactor.redact(f"{tag}: {line}")[:1000])
     except asyncio.CancelledError:
         raise
     except Exception:
-        return
+        logger.warning(
+            "project launch verification log reader failed: stream=%s",
+            tag,
+            exc_info=True,
+        )
 
 
 async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
@@ -505,33 +513,57 @@ async def verify_project_launch(
             status="skipped",
             message="Operations Engineer could not verify launch because run_command is empty.",
         )
-    pattern = refuse_reason(command)
-    if pattern is not None:
+    root = Path(repo_path)
+    try:
+        parsed = parse_project_command(command, root)
+    except ProjectCommandError as exc:
         return ProjectScriptVerification(
             status="skipped",
-            message=f"Operations Engineer skipped launch verification because command matched refused pattern: {pattern}",
+            message=(
+                "Operations Engineer skipped launch verification because the command was refused: "
+                f"{exc.reason}"
+            ),
         )
 
-    root = Path(repo_path)
+    child_env = build_project_child_env()
+    try:
+        redactor = SecretOutputRedactor.from_workspace(str(root), child_env)
+    except SecretOutputRedactionError:
+        logger.warning(
+            "project launch verification output redaction unavailable; refusing launch: repo=%s",
+            root,
+            exc_info=True,
+        )
+        return ProjectScriptVerification(
+            status="skipped",
+            message=(
+                "Operations Engineer skipped launch verification because output "
+                "redaction was unavailable."
+            ),
+        )
+
     logs: list[str] = []
     try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=str(root),
+        proc = await asyncio.create_subprocess_exec(
+            *parsed.argv,
+            cwd=str(parsed.cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=_child_env(),
+            env=child_env,
             start_new_session=True,
         )
     except OSError as exc:
         return ProjectScriptVerification(
             status="failed",
-            message=f"Operations Engineer could not start the command: {exc}",
+            message=(
+                "Operations Engineer could not start the command: "
+                f"{redactor.redact(str(exc))}"
+            ),
         )
 
     readers = [
-        asyncio.create_task(_read_process_lines(proc.stdout, "stdout", logs)),
-        asyncio.create_task(_read_process_lines(proc.stderr, "stderr", logs)),
+        asyncio.create_task(_read_process_lines(proc.stdout, "stdout", logs, redactor)),
+        asyncio.create_task(_read_process_lines(proc.stderr, "stderr", logs, redactor)),
     ]
     running_after_timeout = False
     effective_timeout_s = (
