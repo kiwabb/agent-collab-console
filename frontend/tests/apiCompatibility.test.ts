@@ -275,27 +275,6 @@ test("runtime-critical callers import split api modules directly", () => {
     "resume sidebar types should come from api/resume",
   );
   assert.match(
-    readSource("features/prototype/ProjectPrototypesPage.tsx"),
-    /from "@\/lib\/api\/prototypes"/,
-    "project prototypes page API calls should come from api/prototypes",
-  );
-  assert.match(
-    readSource("features/prototype/ProjectPrototypesRoutePage.tsx"),
-    /from "@\/lib\/api\/projects"/,
-    "project prototypes route should import project lookup from api/projects",
-  );
-  const prototypeCanvasSource = readSource("features/prototype/PrototypeCanvas.tsx");
-  assert.match(
-    prototypeCanvasSource,
-    /from "@\/lib\/api\/prototypes"/,
-    "prototype canvas API calls should come from api/prototypes",
-  );
-  assert.doesNotMatch(
-    prototypeCanvasSource,
-    /import\("@\/lib\/api"\)/,
-    "prototype canvas should not dynamically import the monolithic API barrel",
-  );
-  assert.match(
     readSource("features/conductors/ConductorMonitorPage.tsx"),
     /from "@\/lib\/api\/projects"/,
     "conductor monitor project-conductor calls should come from api/projects",

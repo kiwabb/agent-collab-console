@@ -110,18 +110,6 @@ DEFAULT_WS_MESSAGE_QUEUE_MAXSIZE = 512
 DEFAULT_MAX_CONCURRENT_INSTANCES_PER_ROLE = 2
 DEFAULT_ROLE_SLOT_WAIT_S = 30
 DEFAULT_CONDUCTOR_LOOP_MAX_S = 7200
-DEFAULT_PROTOTYPE_GENERATION_ENABLED = True
-DEFAULT_PROTOTYPE_PLANNING_TIMEOUT_S = 120.0
-DEFAULT_PROTOTYPE_PLANNING_MAX_TOKENS = 16_384
-DEFAULT_PROTOTYPE_GENERATION_MAX_CANDIDATES = 100
-DEFAULT_PROTOTYPE_GENERATION_ESTIMATED_USD_PER_PAGE = 0.25
-DEFAULT_PROTOTYPE_GENERATION_MAX_ESTIMATED_USD = 25.0
-DEFAULT_PROTOTYPE_GENERATION_GLOBAL_CONCURRENCY = 2
-DEFAULT_PROTOTYPE_GENERATION_MAX_TOKENS = 16_384
-DEFAULT_PROTOTYPE_ARTIFACT_MAX_BYTES = 1_000_000
-DEFAULT_PROTOTYPE_PLANNING_MCP_ENDPOINT = (
-    "http://127.0.0.1:9000/api/internal/prototype-planning-mcp"
-)
 DEFAULT_STRUCTURED_PROTOTYPE_AI_MCP_ENDPOINT = (
     "http://127.0.0.1:9000/api/internal/structured-prototype-ai-mcp"
 )
@@ -533,37 +521,6 @@ def max_concurrent_instances_per_role() -> int:
     )
 
 
-def prototype_generation_enabled() -> bool:
-    return _env_bool(
-        "PROTOTYPE_GENERATION_ENABLED",
-        DEFAULT_PROTOTYPE_GENERATION_ENABLED,
-    )
-
-
-def prototype_planning_timeout_s() -> float:
-    return max(
-        1.0,
-        _env_float(
-            "PROTOTYPE_PLANNING_TIMEOUT_S",
-            DEFAULT_PROTOTYPE_PLANNING_TIMEOUT_S,
-        ),
-    )
-
-
-def prototype_planning_max_tokens() -> int:
-    return max(
-        16_384,
-        _env_int(
-            "PROTOTYPE_PLANNING_MAX_TOKENS",
-            DEFAULT_PROTOTYPE_PLANNING_MAX_TOKENS,
-        ),
-    )
-
-
-def prototype_planning_mcp_endpoint() -> str:
-    return _env_str("PROTOTYPE_PLANNING_MCP_ENDPOINT") or DEFAULT_PROTOTYPE_PLANNING_MCP_ENDPOINT
-
-
 def structured_prototype_ai_mcp_endpoint() -> str:
     return (
         _env_str("STRUCTURED_PROTOTYPE_AI_MCP_ENDPOINT")
@@ -580,66 +537,6 @@ def structured_prototype_generation_mcp_endpoint() -> str:
 
 def project_startup_mcp_endpoint() -> str:
     return _env_str("PROJECT_STARTUP_MCP_ENDPOINT") or DEFAULT_PROJECT_STARTUP_MCP_ENDPOINT
-
-
-def prototype_generation_max_candidates() -> int:
-    return max(
-        1,
-        _env_int(
-            "PROTOTYPE_GENERATION_MAX_CANDIDATES",
-            DEFAULT_PROTOTYPE_GENERATION_MAX_CANDIDATES,
-        ),
-    )
-
-
-def prototype_generation_estimated_usd_per_page() -> float:
-    return max(
-        0.01,
-        _env_float(
-            "PROTOTYPE_GENERATION_ESTIMATED_USD_PER_PAGE",
-            DEFAULT_PROTOTYPE_GENERATION_ESTIMATED_USD_PER_PAGE,
-        ),
-    )
-
-
-def prototype_generation_max_estimated_usd() -> float:
-    return max(
-        0.01,
-        _env_float(
-            "PROTOTYPE_GENERATION_MAX_ESTIMATED_USD",
-            DEFAULT_PROTOTYPE_GENERATION_MAX_ESTIMATED_USD,
-        ),
-    )
-
-
-def prototype_generation_global_concurrency() -> int:
-    return max(
-        1,
-        _env_int(
-            "PROTOTYPE_GENERATION_GLOBAL_CONCURRENCY",
-            DEFAULT_PROTOTYPE_GENERATION_GLOBAL_CONCURRENCY,
-        ),
-    )
-
-
-def prototype_generation_max_tokens() -> int:
-    return max(
-        16_384,
-        _env_int(
-            "PROTOTYPE_GENERATION_MAX_TOKENS",
-            DEFAULT_PROTOTYPE_GENERATION_MAX_TOKENS,
-        ),
-    )
-
-
-def prototype_artifact_max_bytes() -> int:
-    return max(
-        1,
-        _env_int(
-            "PROTOTYPE_ARTIFACT_MAX_BYTES",
-            DEFAULT_PROTOTYPE_ARTIFACT_MAX_BYTES,
-        ),
-    )
 
 
 def role_slot_wait_s() -> int:
@@ -781,10 +678,6 @@ def check_invariants() -> list[str]:
         ("PROCESS_MAX_TIMEOUT", process_max_timeout_s()),
         ("WORKFLOW_ORCHESTRATOR_TIMEOUT", workflow_orchestrator_timeout_s()),
         ("WORKFLOW_ORCHESTRATOR_MAX_TOKENS", workflow_orchestrator_max_tokens()),
-        ("PROTOTYPE_PLANNING_TIMEOUT_S", prototype_planning_timeout_s()),
-        ("PROTOTYPE_PLANNING_MAX_TOKENS", prototype_planning_max_tokens()),
-        ("PROTOTYPE_GENERATION_MAX_TOKENS", prototype_generation_max_tokens()),
-        ("PROTOTYPE_ARTIFACT_MAX_BYTES", prototype_artifact_max_bytes()),
         ("CONDUCTOR_LLM_TIMEOUT", conductor_llm_timeout_s()),
         ("CONDUCTOR_LLM_MAX_TOKENS", conductor_llm_max_tokens()),
         ("EMBEDDING_TIMEOUT_S", embedding_timeout_s()),

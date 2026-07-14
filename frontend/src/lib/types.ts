@@ -123,31 +123,6 @@ export interface GitBranch {
 }
 
 export type {
-  Prototype,
-  PrototypeDetail,
-  PrototypeVersion,
-  PrototypePlan,
-  PrototypePlanAction,
-  PrototypePlanConfidence,
-  PrototypePlanDiscoveryOrigin,
-  PrototypePlanAnalysisPhase,
-  PrototypePlanEvidence,
-  PrototypePlanEvidenceKind,
-  PrototypePlanItem,
-  PrototypePlanOutputLocale,
-  PrototypePlanReviewStatus,
-  PrototypePlanScope,
-  PrototypePlanStatus,
-  PrototypePlanSurfaceKind,
-  PrototypeProjectContext,
-  PrototypeGenerationRun,
-  PrototypeGenerationRunItem,
-  PrototypeGenerationRunStatus,
-  PrototypeGenerationItemPhase,
-  PrototypeGenerationItemStatus,
-  PrototypeStreamHeartbeat,
-} from "./types/prototypes";
-export type {
   BenchmarkDiff,
   BenchmarkDiffFixture,
   BenchmarkJob,

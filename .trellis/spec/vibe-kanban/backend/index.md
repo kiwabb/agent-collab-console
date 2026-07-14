@@ -30,7 +30,6 @@ that should be closed.
 | [Database Guidelines](./database-guidelines.md) | aiosqlite store patterns, migrations, durable leases | Filled |
 | [Error Handling](./error-handling.md) | Typed errors, transport mapping, background loop safety | Filled |
 | [Project Resume API Contract](./project-resume-api.md) | Project-level resume markdown storage and PDF import API contract | Filled |
-| [Project Evidence](./project-evidence.md) | Deterministic React, Next.js, and Vue Router prototype-page discovery | Filled |
 | [MCP Management Contract](./mcp-management.md) | Framework-owned MCP registry, catalog API, redacted audit, and Settings UI | Filled |
 | [External Prototype Agent](./external-prototype-agent.md) | Project-scoped local Agent pairing, Skill packaging, MCP read/propose tools, and Studio proposal integration | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Forbidden / required patterns, tests, run kinds, QA workflow | Filled |

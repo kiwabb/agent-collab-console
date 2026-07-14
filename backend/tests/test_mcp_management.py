@@ -148,16 +148,10 @@ def test_mcp_catalog_endpoint_lists_framework_owned_servers(client) -> None:
     servers = {server["id"]: server for server in payload["servers"]}
     assert set(servers) == {
         "project-startup",
-        "prototype-planning",
         "structured-prototype-ai",
         "structured-prototype-generation",
     }
     assert {tool["id"] for tool in servers["project-startup"]["tools"]} == {"save_startup_config"}
-    assert {tool["id"] for tool in servers["prototype-planning"]["tools"]} == {
-        "list_discovered_pages",
-        "register_prototype_page",
-        "finalize_prototype_inventory",
-    }
     assert {tool["id"] for tool in servers["structured-prototype-ai"]["tools"]} == {
         "submit_prototype_assistant_outcome"
     }

@@ -45,7 +45,7 @@ function DraggablePaletteItem({
     <button
       ref={setNodeRef}
       type="button"
-      className="relative grid min-h-[72px] place-items-center gap-1 border border-[#d9dfdc] bg-[#f7f8f7] px-2 py-3 text-[#17201d] transition-colors hover:border-[#126b5f] hover:bg-[#e1f1ed] disabled:cursor-not-allowed disabled:opacity-50"
+      className="relative grid min-h-[72px] cursor-pointer place-items-center gap-1 rounded-lg border border-border-subtle bg-surface-raised px-2 py-3 text-foreground transition-colors hover:border-brand hover:bg-brand-bg disabled:cursor-not-allowed disabled:opacity-50"
       style={{
         transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
         opacity: isDragging ? 0.55 : 1,
@@ -56,9 +56,9 @@ function DraggablePaletteItem({
       {...listeners}
       {...attributes}
     >
-      <Icon size={18} className="text-[#126b5f]" aria-hidden />
+      <Icon size={18} className="text-brand" aria-hidden />
       <span className="text-xs font-semibold">{item.label}</span>
-      <GripVertical size={13} className="absolute right-1 top-1 text-[#7b8782]" aria-hidden />
+      <GripVertical size={13} className="absolute right-1 top-1 text-text-faint" aria-hidden />
     </button>
   );
 }

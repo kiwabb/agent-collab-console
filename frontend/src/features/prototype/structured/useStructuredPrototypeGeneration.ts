@@ -12,7 +12,10 @@ import {
 } from "@/lib/api/prototypes";
 import { useI18n } from "@/providers/I18nProvider";
 
-import { isStructuredPrototypeGenerationActive } from "./structuredPrototypeGenerationState";
+import {
+  isStructuredPrototypeGenerationActive,
+  structuredPrototypeGenerationBrief,
+} from "./structuredPrototypeGenerationState";
 import type { StructuredPrototypeDraft, StructuredPrototypeGenerationJob } from "./types";
 
 const POLL_INTERVAL_MS = 2_000;
@@ -128,8 +131,7 @@ export function useStructuredPrototypeGeneration({
 
   const start = useCallback(
     async (brief: string): Promise<boolean> => {
-      const trimmed = brief.trim();
-      if (!trimmed || mutating) return false;
+      if (mutating) return false;
       setMutating(true);
       setError(null);
       try {
@@ -137,7 +139,7 @@ export function useStructuredPrototypeGeneration({
           contractVersion: 1,
           clientRequestId: crypto.randomUUID(),
           mode: "requirements",
-          brief: trimmed,
+          brief: structuredPrototypeGenerationBrief(brief),
         });
         if (!mountedRef.current) return false;
         setJob(created);

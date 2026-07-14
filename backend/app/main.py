@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 from app.interfaces.api import router as api_router
 from app.interfaces.codex_ws import router as codex_ws_router
 from app.interfaces.external_prototype_agent_api import router as external_prototype_agent_router
-from app.interfaces.sse import router as sse_router
+from app.interfaces.project_startup_mcp_api import router as project_startup_mcp_router
 from app.interfaces.structured_prototype_ai_api import (
     configure_structured_prototype_ai,
 )
@@ -79,15 +79,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.bootstrap import async_store
 
         if async_store is not None:
-            interrupted_plans = await async_store.interrupt_active_prototype_plans()
-            if interrupted_plans:
-                logger.info(
-                    "Marked %d interrupted prototype analysis plan(s) on boot",
-                    interrupted_plans,
-                )
-            interrupted_generation = await async_store.interrupt_active_prototype_generation_runs()
-            if interrupted_generation:
-                logger.info("Marked %d interrupted prototype generation run(s) on boot", interrupted_generation)
             recovered = 0
             for proc in await async_store.list_execution_processes():
                 if str(proc.status).lower() != "running":
@@ -366,19 +357,6 @@ async def enforce_local_control_boundary(
 ) -> Response:
     if request.url.path == MCP_PATH:
         failure = authorize_loopback_request(request)
-    elif request.url.path == "/api/internal/prototype-planning-mcp":
-        failure = authorize_loopback_request(request)
-        if failure is None:
-            from app.bootstrap import prototype_planning_mcp_service
-
-            if prototype_planning_mcp_service is not None and prototype_planning_mcp_service.has_session_token(
-                request.headers.get("X-Prototype-Planning-Token")
-            ):
-                return await call_next(request)
-        return JSONResponse(
-            status_code=failure.status_code if failure is not None else 401,
-            content={"detail": failure.reason if failure is not None else "invalid_mcp_token"},
-        )
     elif request.url.path == "/api/internal/structured-prototype-ai-mcp":
         failure = authorize_loopback_request(request)
         if failure is None:
@@ -450,7 +428,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
 app.include_router(api_router)
 app.include_router(codex_ws_router, prefix="/api")  # Add prefix here
 app.include_router(ws_events_router, prefix="/api")
-app.include_router(sse_router)
+app.include_router(project_startup_mcp_router)
 app.include_router(external_prototype_agent_router)
 app.include_router(structured_prototype_router)
 app.include_router(structured_prototype_ai_router)

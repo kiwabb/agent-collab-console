@@ -6,10 +6,10 @@ from dataclasses import dataclass
 
 from app.adapters.prototype_object_store import canonical_json_bytes
 from app.application import timeouts
-from app.application.prototype_artifact_generator import (
-    PrototypeArtifactActivity,
-    PrototypeArtifactGenerator,
-    PrototypeScopedTaskResult,
+from app.application.prototype_ui_engineer_runner import (
+    PrototypeUiEngineerActivity,
+    PrototypeUiEngineerRunner,
+    PrototypeUiEngineerScopedTaskResult,
 )
 from app.application.structured_prototype_ai_contracts import PrototypeAssistantOutcomeV1
 from app.application.structured_prototype_ai_mcp import (
@@ -54,10 +54,10 @@ class PrototypeUiEngineerRuntime:
     def __init__(
         self,
         *,
-        generator: PrototypeArtifactGenerator,
+        runner: PrototypeUiEngineerRunner,
         mcp_service: PrototypeAiMcpService,
     ) -> None:
-        self._generator = generator
+        self._runner = runner
         self._mcp_service = mcp_service
 
     async def execute(
@@ -78,7 +78,7 @@ class PrototypeUiEngineerRuntime:
             task_id=request.task_id,
         )
 
-        async def activity_callback(activity: PrototypeArtifactActivity) -> None:
+        async def activity_callback(activity: PrototypeUiEngineerActivity) -> None:
             if activity.execution_process_id is not None:
                 self._mcp_service.bind_execution_process(
                     session,
@@ -86,7 +86,7 @@ class PrototypeUiEngineerRuntime:
                 )
 
         try:
-            scoped_result = await self._generator.execute_scoped_task(
+            scoped_result = await self._runner.execute_scoped_task(
                 project=request.project,
                 scope_id=request.edit_run_id,
                 prompt=self._build_prompt(request),
@@ -118,7 +118,7 @@ class PrototypeUiEngineerRuntime:
 
     @staticmethod
     def _assert_identity(
-        result: PrototypeScopedTaskResult,
+        result: PrototypeUiEngineerScopedTaskResult,
         request: PrototypeUiEngineerTaskRequest,
         submitted_process_id: str,
     ) -> None:

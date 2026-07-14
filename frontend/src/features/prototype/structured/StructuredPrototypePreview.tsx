@@ -53,9 +53,9 @@ export function StructuredPrototypePreview({
   );
   const notification = runtimeState.notifications.at(-1);
   return (
-    <div className="h-full min-h-0 overflow-auto bg-[#eef1ef] p-3 sm:p-5">
+    <div className="h-full min-h-0 overflow-auto bg-background/35 p-3 sm:p-5">
       <div
-        className="mx-auto min-h-[610px] overflow-hidden border border-[#c9d2ce] bg-white shadow-[0_12px_34px_rgba(18,31,27,0.12)] transition-[width] motion-reduce:transition-none"
+        className="mx-auto min-h-[610px] overflow-hidden rounded-lg border border-border-muted bg-white shadow-xl transition-[width] motion-reduce:transition-none"
         style={{ width: VIEWPORT_WIDTH[viewport], maxWidth: "100%" }}
       >
         <div className="grid min-h-9 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 border-b border-[#d9dfdc] bg-[#f7f8f7] px-3">

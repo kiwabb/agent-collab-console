@@ -259,7 +259,7 @@ class _ContextRunStore(_RunStore):
 
 
 @pytest.mark.asyncio
-async def test_start_task_run_sends_unmanaged_prototype_prompt_verbatim_with_team_notes(
+async def test_start_task_run_sends_ui_engineer_prompt_verbatim_without_team_notes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -271,9 +271,8 @@ async def test_start_task_run_sends_unmanaged_prototype_prompt_verbatim_with_tea
         encoding="utf-8",
     )
     prompt = (
-        "Generate the prototype from the repository.\n"
-        "Target route: /settings/feishu\n"
-        "Artifact path: .agent-collab/prototype-staging/item-1/index.html"
+        "Edit the structured prototype through its MCP boundary.\n"
+        "Submit exactly one typed outcome."
     )
     task = CodexTask(
         id="prototype-task-wire-prompt",

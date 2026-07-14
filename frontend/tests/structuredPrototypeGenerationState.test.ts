@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   canStartStructuredPrototypeGeneration,
   isStructuredPrototypeGenerationActive,
+  structuredPrototypeGenerationBrief,
   structuredPrototypeGenerationPercent,
 } from "../src/features/prototype/structured/structuredPrototypeGenerationState";
 import type { StructuredPrototypeGenerationJob } from "../src/features/prototype/structured/types";
@@ -59,4 +60,12 @@ test("a new generation starts only after no job or a terminal failure", () => {
   assert.equal(canStartStructuredPrototypeGeneration(job("interrupted")), true);
   assert.equal(canStartStructuredPrototypeGeneration(job("planning")), false);
   assert.equal(canStartStructuredPrototypeGeneration(job("ready")), false);
+});
+
+test("project analysis has a reproducible default brief when user guidance is empty", () => {
+  assert.match(structuredPrototypeGenerationBrief(""), /Analyze the registered project source/);
+  assert.equal(
+    structuredPrototypeGenerationBrief("  Focus on manager approval.  "),
+    "Focus on manager approval.",
+  );
 });

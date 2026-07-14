@@ -411,28 +411,28 @@ class WorktreeManager:
             except GitError:
                 pass
 
-    # ---- Prototype generation (ephemeral, one worktree per run item) ----
+    # ---- Prototype UI engineer (ephemeral, one worktree per scoped task) ----
 
-    async def prepare_prototype_worktree(
+    async def prepare_prototype_ui_engineer_worktree(
         self,
         project: Project,
-        run_item_id: str,
+        scope_id: str,
         *,
         source_paths: tuple[str, ...] = (),
     ) -> tuple[str, str, str]:
-        """Create an isolated worktree for one prototype task.
+        """Create an isolated worktree for one prototype UI engineer task.
 
         Repository-backed tasks pass explicit ``source_paths`` and start from
         the current tracked snapshot with non-ignored untracked files overlaid.
         Requirements-only tasks pass no paths and start from ``HEAD`` without
         scanning or copying unrelated dirty/untracked project state.
         """
-        key = _prototype_key(run_item_id)
+        key = _prototype_key(scope_id)
         lock = await self._lock_for(f"prototype:{key}")
         async with lock:
             project_lock = await self._lock_for(f"prototype-project:{project.id}")
             async with project_lock:
-                branch = _prototype_branch_name(run_item_id)
+                branch = _prototype_branch_name(scope_id)
                 worktree = _worktree_path(project, "prototype", key)
                 if worktree.exists():
                     await self._cleanup_path(project.repo_path, str(worktree))
@@ -456,20 +456,23 @@ class WorktreeManager:
                 project_worktree = worktree / project_prefix if project_prefix else worktree
                 try:
                     project_worktree.mkdir(parents=True, exist_ok=True)
-                    generated_outputs = project_worktree / "prototypes"
-                    if generated_outputs.is_symlink() or generated_outputs.is_file():
-                        generated_outputs.unlink()
-                    elif generated_outputs.exists():
-                        shutil.rmtree(generated_outputs)
                     for relative_path in untracked:
-                        if self._skip_prototype_snapshot_path(relative_path):
+                        if self._skip_prototype_ui_engineer_snapshot_path(relative_path):
                             continue
                         source = Path(project.repo_path) / relative_path
                         if source.is_symlink() or not source.is_file():
                             continue
-                        self._copy_prototype_snapshot_path(project, project_worktree, relative_path)
+                        self._copy_prototype_ui_engineer_snapshot_path(
+                            project,
+                            project_worktree,
+                            relative_path,
+                        )
                     for relative_path in source_paths:
-                        self._copy_prototype_snapshot_path(project, project_worktree, relative_path)
+                        self._copy_prototype_ui_engineer_snapshot_path(
+                            project,
+                            project_worktree,
+                            relative_path,
+                        )
                     if project_prefix:
                         base_revision = await self.git.initialize_snapshot_repository(
                             project_worktree
@@ -481,33 +484,33 @@ class WorktreeManager:
                     raise
                 return branch, str(project_worktree), base_revision
 
-    async def cleanup_prototype_worktree(
+    async def cleanup_prototype_ui_engineer_worktree(
         self,
         project: Project,
-        run_item_id: str,
+        scope_id: str,
     ) -> None:
         """Remove a generator-owned worktree and its dedicated branch."""
-        key = _prototype_key(run_item_id)
+        key = _prototype_key(scope_id)
         lock = await self._lock_for(f"prototype:{key}")
         async with lock:
             worktree = _worktree_path(project, "prototype", key)
             await self._cleanup_path(project.repo_path, str(worktree))
-            branch = _prototype_branch_name(run_item_id)
+            branch = _prototype_branch_name(scope_id)
             if not branch.startswith("prototype/"):
                 raise WorktreeError("refusing to delete a non-prototype branch")
             await self.git.delete_branch(project.repo_path, branch)
 
     @staticmethod
-    def _skip_prototype_snapshot_path(relative_path: str) -> bool:
+    def _skip_prototype_ui_engineer_snapshot_path(relative_path: str) -> bool:
         parts = Path(relative_path).parts
         return bool(
             not parts
-            or parts[0] in {".agent-collab", ".claude", ".codex", ".git", "prototypes"}
+            or parts[0] in {".agent-collab", ".claude", ".codex", ".git"}
             or any(part in {"node_modules", ".next", "build", "dist"} for part in parts)
         )
 
     @staticmethod
-    def _copy_prototype_snapshot_path(
+    def _copy_prototype_ui_engineer_snapshot_path(
         project: Project,
         worktree: Path,
         relative_path: str,
@@ -517,7 +520,7 @@ class WorktreeManager:
             not relative_path
             or relative.is_absolute()
             or ".." in relative.parts
-            or relative.parts[0] in {".git", ".agent-collab", "prototypes"}
+            or relative.parts[0] in {".git", ".agent-collab"}
         ):
             raise WorktreeError(f"unsafe prototype source path: {relative_path}")
 

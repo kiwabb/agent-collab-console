@@ -56,10 +56,6 @@ def test_default_values_match_shipped_ladder(monkeypatch):
     assert timeouts.workflow_orchestrator_model() is None
     assert timeouts.workflow_orchestrator_timeout_s() == 28.0
     assert timeouts.workflow_orchestrator_max_tokens() == 8192
-    assert timeouts.prototype_planning_timeout_s() == 120.0
-    assert timeouts.prototype_planning_max_tokens() == 16_384
-    assert timeouts.prototype_generation_max_tokens() == 16_384
-    assert timeouts.prototype_artifact_max_bytes() == 1_000_000
     assert timeouts.conductor_llm_executor_id() is None
     assert timeouts.conductor_llm_model() is None
     assert timeouts.conductor_llm_protocol() is None
@@ -264,40 +260,6 @@ def test_workflow_orchestrator_llm_knobs(monkeypatch):
         timeouts.workflow_orchestrator_max_tokens()
         == timeouts.DEFAULT_WORKFLOW_ORCHESTRATOR_MAX_TOKENS
     )
-
-
-def test_prototype_planning_timeout(monkeypatch):
-    monkeypatch.setenv("PROTOTYPE_PLANNING_TIMEOUT_S", "75.5")
-    assert timeouts.prototype_planning_timeout_s() == 75.5
-
-    monkeypatch.setenv("PROTOTYPE_PLANNING_TIMEOUT_S", "garbage")
-    assert timeouts.prototype_planning_timeout_s() == timeouts.DEFAULT_PROTOTYPE_PLANNING_TIMEOUT_S
-
-
-def test_prototype_planning_max_tokens_has_dedicated_floor(monkeypatch):
-    monkeypatch.setenv("PROTOTYPE_PLANNING_MAX_TOKENS", "32768")
-    monkeypatch.setenv("WORKFLOW_ORCHESTRATOR_MAX_TOKENS", "1024")
-    assert timeouts.prototype_planning_max_tokens() == 32_768
-
-    monkeypatch.setenv("PROTOTYPE_PLANNING_MAX_TOKENS", "4096")
-    assert timeouts.prototype_planning_max_tokens() == 16_384
-
-    monkeypatch.setenv("PROTOTYPE_PLANNING_MAX_TOKENS", "garbage")
-    assert (
-        timeouts.prototype_planning_max_tokens() == timeouts.DEFAULT_PROTOTYPE_PLANNING_MAX_TOKENS
-    )
-
-
-def test_prototype_generation_limits(monkeypatch):
-    monkeypatch.setenv("PROTOTYPE_GENERATION_MAX_TOKENS", "32768")
-    monkeypatch.setenv("PROTOTYPE_ARTIFACT_MAX_BYTES", "250000")
-    assert timeouts.prototype_generation_max_tokens() == 32_768
-    assert timeouts.prototype_artifact_max_bytes() == 250_000
-
-    monkeypatch.setenv("PROTOTYPE_GENERATION_MAX_TOKENS", "4096")
-    monkeypatch.setenv("PROTOTYPE_ARTIFACT_MAX_BYTES", "garbage")
-    assert timeouts.prototype_generation_max_tokens() == 16_384
-    assert timeouts.prototype_artifact_max_bytes() == timeouts.DEFAULT_PROTOTYPE_ARTIFACT_MAX_BYTES
 
 
 def test_conductor_llm_knobs(monkeypatch):

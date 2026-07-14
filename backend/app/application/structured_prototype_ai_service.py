@@ -16,7 +16,7 @@ from app.adapters.prototype_object_store import (
 from app.adapters.prototype_render_artifact_store import PrototypeRenderArtifactStoreError
 from app.adapters.prototype_renderer_worker import PrototypeRendererWorkerError
 from app.adapters.structured_prototype_store import StructuredPrototypeStoreError
-from app.application.prototype_artifact_generator import PrototypeArtifactError
+from app.application.prototype_ui_engineer_runner import PrototypeUiEngineerRunnerError
 from app.application.structured_prototype_ai_contracts import (
     AI_EDIT_CONTEXT_CONTRACT_VERSION,
     PrototypeAiSelectionV1,
@@ -782,7 +782,7 @@ class StructuredPrototypeAiService:
                 outcome=outcome,
             )
         except (
-            PrototypeArtifactError,
+            PrototypeUiEngineerRunnerError,
             PrototypeObjectStoreError,
             PrototypeRenderArtifactStoreError,
             PrototypeRendererWorkerError,
@@ -1536,7 +1536,7 @@ class StructuredPrototypeAiService:
                 outcome=runtime_result.outcome,
             )
         except (
-            PrototypeArtifactError,
+            PrototypeUiEngineerRunnerError,
             PrototypeObjectStoreError,
             PrototypeRenderArtifactStoreError,
             PrototypeRendererWorkerError,
@@ -2705,7 +2705,7 @@ def _error_code(exc: BaseException) -> str:
         ),
     ):
         return exc.code
-    if isinstance(exc, PrototypeArtifactError):
+    if isinstance(exc, PrototypeUiEngineerRunnerError):
         text = str(exc).lower()
         if "requires an available claude" in text or "runtime launch is disabled" in text:
             return "runtime_unavailable"

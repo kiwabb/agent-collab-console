@@ -120,7 +120,7 @@ async def test_async_store_migrates_legacy_issue_to_unconfirmed_defaults(tmp_pat
         cursor = await connection.execute("SELECT version FROM schema_version WHERE id = 1")
         version = await cursor.fetchone()
         assert version is not None
-        assert version[0] == 11
+        assert version[0] == 12
     finally:
         await store.close()
 

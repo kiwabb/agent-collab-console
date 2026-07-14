@@ -1523,7 +1523,7 @@ async def test_runtime_recovery_failure_marks_the_same_session_head_corrupt(
 
 
 @pytest.mark.asyncio
-async def test_main_async_store_migrates_structured_schema_to_version_11(tmp_path: Path) -> None:
+async def test_main_async_store_migrates_structured_schema_to_version_12(tmp_path: Path) -> None:
     store = AsyncSQLiteStore(tmp_path / "main-async.db")
     try:
         await store._init_db()
@@ -1531,7 +1531,7 @@ async def test_main_async_store_migrates_structured_schema_to_version_11(tmp_pat
         version = await (
             await conn.execute("SELECT version FROM schema_version WHERE id = 1")
         ).fetchone()
-        assert version == (11,)
+        assert version == (12,)
         tables = {
             str(row[0])
             for row in await (
@@ -1608,7 +1608,7 @@ async def test_schema_version_10_with_existing_document_migrates_runtime_tables(
             ).fetchall()
         }
 
-        assert version == (11,)
+        assert version == (12,)
         assert document == ("legacy-document", "历史采购原型")
         assert tables == {
             "prototype_runtime_sessions",

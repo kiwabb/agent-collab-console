@@ -157,407 +157,6 @@ release it before the await and re-acquire on the next call.
   under the gated prompt-logging flag.
 ---
 
-## Scenario: Prototype Code-Scan Removal With Legacy Provenance
-
-### 1. Scope / Trigger
-
-- Trigger: changing prototype creation, prototype list/get/iteration/regeneration,
-  the prototype SQLite schema, or the frontend `Prototype` contract.
-- Code-scan generation is removed, but prototypes created by that retired flow
-  remain normal user data and must stay usable without a migration.
-
-### 2. Signatures
-
-- Retained model fields: `source_kind: Literal["manual", "code"]`,
-  `source_ref`, `source_hash`, and `source_meta_json`.
-- Retained store APIs: `save_prototype`, `load_prototype`, and
-  `list_prototypes`.
-- Retained SQLite columns: `prototypes.source_kind`, `source_ref`,
-  `source_hash`, and `source_meta_json`.
-- Retained index: `idx_prototypes_project_source`.
-- Removed HTTP paths:
-  `GET /api/projects/{project_id}/prototypes/code-candidates` and
-  `GET /api/projects/{project_id}/prototypes/generate-from-code/stream`.
-- Removed dedicated store APIs: `load_prototype_by_source`,
-  `list_code_prototypes`, and `update_prototype_source_metadata`.
-
-### 3. Contracts
-
-- Manual creation writes `source_kind="manual"` and does not invoke source
-  discovery or browser capture.
-- A persisted `source_kind="code"` row remains visible through the normal list
-  and get APIs and supports iteration and regenerate-all.
-- The backend and frontend `Prototype` shapes retain all four provenance
-  fields, even though the frontend no longer renders a source badge/reference.
-- Removing code-scan does not drop columns, drop the provenance index, rewrite
-  historical rows, or add a schema migration.
-- The two removed routes are absent from OpenAPI and requests return `404`.
-
-### 4. Validation & Error Matrix
-
-- Legacy code prototype list/get -> return the row with provenance unchanged.
-- Legacy code prototype iteration/regenerate-all -> create the next normal
-  version and preserve prototype provenance.
-- Manual prototype creation -> persist `source_kind="manual"`.
-- Request to either retired route -> `404`; no compatibility shim.
-- Missing legacy provenance values -> preserve existing nullable-field behavior;
-  do not synthesize scanner metadata.
-
-### 5. Good/Base/Bad Cases
-
-- Good: a historical code prototype is listed, iterated, and regenerated while
-  `source_hash` and `source_meta_json` round-trip unchanged.
-- Base: a new manual prototype uses the ordinary create/stream flow.
-- Bad: filtering `list_prototypes` to manual rows, which hides user data.
-- Bad: dropping `source_*` fields or SQLite columns as part of removing the
-  scanner, which turns a feature removal into an API/data migration.
-
-### 6. Tests Required
-
-- Service regression: persist a legacy code prototype, then assert list, get,
-  iterate, regenerate-all, and provenance round-trip behavior.
-- API regression: assert both retired paths are absent from OpenAPI and return
-  `404`.
-- Frontend regression: manual creation and regenerate-all readers remain, while
-  code-scan API/types/UI identifiers have no active-source matches.
-- Run the prototype service/API tests without a `slow` marker on the legacy
-  compatibility test so the default pytest gate collects it.
-
-### 7. Wrong vs Correct
-
-Wrong:
-
-```python
-# Removing a feature must not silently delete its historical data contract.
-await conn.execute("ALTER TABLE prototypes DROP COLUMN source_kind")
-```
-
-Correct:
-
-```python
-# Remove scanner-only queries; normal CRUD still loads legacy provenance.
-async def list_prototypes(self, project_id: str) -> list[Prototype]:
-    ...
-```
-
----
-
-## Scenario: Project-Evidence Prototype Plans and Generation Runs
-
-### 1. Scope / Trigger
-
-- Trigger: changing project evidence discovery, prototype planning/generation
-  APIs, plan/run SQLite tables, or source-backed prototype versioning.
-- This is the supported replacement for the retired direct code-scan routes:
-  analysis first persists an editable plan; generation consumes a frozen plan.
-
-### 2. Signatures
-
-- Analysis: `POST /api/projects/{project_id}/prototype-plans` with an optional
-  JSON body; an empty body is valid.
-- Planning runtime: `PROTOTYPE_PLANNING_TIMEOUT_S` defaults to `120` seconds and
-  is independent from `WORKFLOW_ORCHESTRATOR_TIMEOUT`.
-- Recovery: `GET /api/projects/{project_id}/prototype-plans/latest` and
-  `GET /api/prototype-plans/{plan_id}/generation-runs/latest`.
-- Generation: `POST /api/prototype-plans/{plan_id}/generate` and retry through
-  the generation-run retry endpoint.
-- Store ownership: plan/run creation, run-item completion, prototype-version
-  persistence, and source-hash advancement remain typed store operations.
-- Freeze operation:
-  `freeze_prototype_generation_run(..., seed_briefs, reuse_terminal_run)` owns
-  idempotence across service instances and SQLite connections.
-- Artifact protocol: Claude Code writes
-  `.agent-collab/prototype-staging/<run-item-id>/index.html` and returns a
-  `prototype-artifact/v1` manifest, not HTML in assistant text.
-- Agent-facing prompt:
-  `_build_prompt(*, title, target_routes, output_locale, artifact_path)` accepts
-  only page identity and the artifact protocol. `PrototypeArtifactRequest`
-  keeps `candidate_id`, `source_hash`, and `source_paths` as server-only
-  worktree/fingerprint guards.
-- Durable version file:
-  `<project>/prototypes/<prototype-id>/<version-id>/index.html`. The version ID
-  is allocated before the SQLite version number and is safe for concurrent
-  writers; `disk_path` is committed with the version row.
-- UI analysis protocol:
-  `PrototypePlanningUIEngineer.plan(project, plan_id, prompt, source_paths)`
-  runs the built-in `prototype_ui_engineer` through the Claude executor in an
-  isolated read-only prototype worktree and returns strict plan JSON.
-- Legacy contract: schema version 7 reconstructs
-  `prototype_plan_items.evidence_ids_json` and
-  `prototype_generation_run_items.seed_brief` from durable legacy data.
-- Runtime-history contract: schema version 8 preserves complete
-  `prototype_generation` task results, messages, runtime logs, agent-call
-  traces, and audit rows byte-for-byte. Historical payloads destroyed by the
-  retired v8 scrub cannot be reconstructed.
-
-### 3. Contracts
-
-- Evidence IDs are stable, bounded, persisted in plan items, and validated
-  against the scanned manifest before a planner response is accepted.
-- Deterministic route/package/evidence discovery remains backend-owned. When a
-  UI engineer is configured, project context, titles, summaries, restore
-  briefs, and representative state selection are UI-engineer responsibilities;
-  the direct HTTP planner is not called.
-- Planner `states` are stable lowercase technical identifiers such as
-  `default`, `loading`, `empty`, `error`, and `success`. Route-derived state
-  identifiers may additionally use digits, colon, slash, dot, underscore, and
-  hyphen (for example `collections-:id`). They are not user-visible prose and
-  are excluded from `output_locale` validation.
-- The planning UI engineer uses the same Runtime Catalog Claude/MiniMax
-  resolution and built-in `prototype_ui_engineer` role as artifact generation.
-  It receives the exact manifest source paths, may inspect the isolated source,
-  must not edit it, and must not generate HTML during planning.
-- A plan records the source fingerprint used for analysis. If a post-planner
-  rescan differs, the plan is persisted as `stale`, never as ready.
-- Generation gives Claude an isolated full-project worktree and requires it to
-  locate router entries, imports, components, layouts, navigation, styles,
-  tokens, and assets itself. The generation prompt must not contain scanned
-  source paths, candidate/hash values, evidence, project context, restore seed,
-  or routes belonging only to other plan items.
-- Project-driven generation always requires the Claude artifact generator.
-  Missing CLI/runtime/configuration fails before `freeze_prototype_generation_run`;
-  it never falls back to direct HTTP because that model request cannot read the
-  repository. Manual prototype streaming remains a separate service path.
-- Concurrent generation requests for one plan resolve to one persisted run.
-- Prototype version creation and run-item `done` are one transaction. The
-  prototype `source_hash` advances only after that transaction succeeds.
-- A generation item succeeds only after a validated artifact manifest, durable
-  project-file write, and store-owned completion transaction. Restart recovery
-  converts in-flight items to interrupted and recalculates persisted counters.
-- MiniMax-M3 planning requests omit Anthropic assistant prefill because its
-  compatibility endpoint can return HTTP 200 with `content=null`; an empty
-  successful response is retried once with the alternate message shape.
-- Repository-scale planning calls contain at most six candidates per LLM
-  response. Batch outputs are merged in memory and persisted only after the
-  combined output covers every candidate exactly once.
-- Each batch uses strict JSON parsing first. At the external model boundary
-  only, known MiniMax JSON drift may pass through `tolerant_json_loads`; the
-  repaired object must still pass `_PlannerOutput`, candidate, and evidence-ID
-  validation before it is accepted.
-- Tolerant repair runs only after the raw planner response is proven to be one
-  complete top-level JSON object. Truncated, fenced, prefixed, suffixed, or
-  concatenated objects are not repair candidates.
-- An ordinary generate request reuses only an active latest run. After the
-  latest run is terminal, a new user request creates a new run from the plan's
-  current selection. If two service instances began the same request before
-  either froze a run, the second freeze still reuses the first winner even when
-  that fast run became terminal during preparation.
-- Restore seeds are materialized before dispatch and persisted on both the
-  version-zero seed and run item. They remain audit/version instructions and
-  are never forwarded to the generation agent; Claude derives the page from
-  the repository and target routes. A later plan edit cannot rewrite the
-  persisted instruction used by completion or retry.
-- Claude chooses how to create and inspect the staged file. The backend never
-  parses, constrains, or replays its Write/Edit/Bash sequence and never derives
-  HTML from audit logs. The final manifest is at most 2,048 UTF-8 bytes and its
-  exact path, byte size, checksum, UTF-8, HTML structure, URL policy, symlinks,
-  and source-tree diff are checked before version persistence. The default
-  resource allowlist is limited to Tailwind CDN plus Google Fonts
-  (`fonts.googleapis.com` and `fonts.gstatic.com`); inert URLs in copy and form
-  values are not resources.
-- Complete Claude runtime evidence, including commands, tool inputs/outputs,
-  thinking, assistant text, HTML, result, trace, status, and audit payloads, is
-  persisted for Agent debugging, review, and continuation. These records are
-  never artifact inputs and never prove generation success.
-- Prototype artifact audit data contains task/process identity, artifact path,
-  checksum, byte size, validation outcome, and safe errors. It does not store,
-  reconstruct, or generate the staged HTML.
-- A successful artifact is written with exclusive create and `fsync` before
-  SQLite completion. Preview and iteration read `disk_path` first. Only legacy
-  rows with `disk_path IS NULL` may use the database HTML copy; a missing,
-  escaped, symlinked, invalid UTF-8, or DB-mismatched file fails loudly.
-- SQL defaults are not migration semantics. Version 7 backfills evidence IDs
-  from validated evidence records and seed briefs from version-zero seeds; an
-  unreconstructable retryable row aborts startup instead of loading an empty
-  contract value.
-
-### 4. Validation & Error Matrix
-
-- Unknown evidence ID -> reject planner output and mark analysis failed.
-- Repository fingerprint changes during analysis -> persist `stale`.
-- Feature, budget, cost, candidate-count, or concurrency gate unavailable or
-  denied -> reject analysis/generation fail-closed.
-- Claude artifact generator absent or unavailable -> reject before freezing a
-  run or prototype; do not call manual/direct HTTP generation.
-- Repeated/concurrent request while a run is active -> return the active run.
-- Generate after a terminal run -> create a new run from the current selection.
-- Project-file write or version transaction failure -> item `failed`; do not
-  create a positive version or advance source hash.
-- Planner request exceeds `PROTOTYPE_PLANNING_TIMEOUT_S` -> analysis failed with
-  the saved draft retained and an explicit retry/reanalysis action.
-- Any batch is truncated, unrecoverable, or fails schema/evidence validation ->
-  the whole plan is `analysis_failed`; do not persist earlier batch items.
-- Manifest over 2 KiB, path mismatch/traversal/symlink, invalid UTF-8/HTML/URL,
-  byte-size or checksum mismatch, or source edit -> fail the item atomically.
-  A valid final artifact is accepted regardless of which Claude tools created
-  it or how many mutations were used.
-- Planner response with a missing closer, open string, markdown fence, prose
-  prefix, or multiple objects -> `analysis_failed`; tolerant repair is not run.
-- UI engineer unavailable, failed, returned no result, or edited project source
-  during planning -> `analysis_failed` with an explicit UI-engineer error; do
-  not fall through silently to the direct HTTP planner.
-- Localized or whitespace-bearing planner state (`默认`, `Loading state`) ->
-  schema rejection with the failing nested field path; use a stable technical
-  identifier. Valid `default` and `collections-:id` states on a zh-CN plan do
-  not trigger locale rejection.
-- Version 6 legacy create/update/unchanged item with no recoverable evidence,
-  or retryable run item with no version-zero seed -> migration fails loudly.
-
-### 5. Good/Base/Bad Cases
-
-- Good: a 19-item plan is reviewed, selected items generate once, and refresh
-  restores titles, counters, errors, versions, and retry state.
-- Base: an empty analysis body creates a restore plan and reuses the latest
-  saved project instruction.
-- Good: two service instances freeze the same ordinary request; the first run
-  completes before the second `BEGIN IMMEDIATE`, and both callers still receive
-  the same terminal run id.
-- Good: after that terminal run, a later user request with a different reviewed
-  selection receives a new run id containing only the newly selected items.
-- Good: a failed legacy run is migrated, retried, and uses the exact frozen seed
-  that produced its original version-zero row.
-- Good: a zh-CN plan returns Chinese context/brief copy plus
-  `states=["default", "empty"]`; locale validation accepts the state IDs and
-  validates only human-authored copy.
-- Good: production planning creates a `prototype_planning` Claude task with
-  role `prototype_ui_engineer` and never calls the configured direct HTTP
-  runner.
-- Good: generation sends only the current item's title/routes and artifact
-  protocol; Claude searches the worktree and restores the page from real router
-  and component imports.
-- Good: a successful version exists under `<project>/prototypes/...` before its
-  row is marked complete, and preview verifies the disk file against the DB
-  integrity copy.
-- Bad: create a run in one transaction and source prototypes in another,
-  allowing duplicate POSTs to create orphan rows.
-- Bad: update `source_hash` before version persistence succeeds.
-- Bad: serialize the evidence manifest, source paths, project context, frozen
-  seed, or all plan routes into the Claude generation prompt.
-- Bad: select a direct HTTP backend for project-driven generation; it cannot
-  inspect the repository and therefore cannot satisfy the restore contract.
-- Bad: treating balanced-looking HTML at socket EOF as provider completion.
-- Bad: accepting a JSON repair that invents missing closing structure after a
-  token-limit truncation.
-
-### 6. Tests Required
-
-- Evidence tests cover router aliases, dynamic-path diagnostics, deduplication,
-  content-derived page/style fingerprints, stable IDs, and prompt bounds.
-- Planning tests cover empty bodies, instruction reuse, invalid evidence IDs,
-  reanalysis, startup recovery, post-LLM stale detection, candidate batching,
-  real MiniMax asymmetric-quote repair followed by strict validation, and
-  rejection of incomplete/non-single JSON envelopes before repair.
-- UI-engineer planning tests assert executor/role/task kind, isolated worktree,
-  source-path forwarding, read-only enforcement, direct-runner precedence, and
-  zh-CN acceptance of stable state identifiers.
-- Generation tests synchronize two POSTs and assert one run, atomic version/item
-  completion, Claude-only fail-closed gates, interrupted counter
-  recovery, failed/interrupted-only retry, terminal-before-second-freeze reuse,
-  exact wire-prompt context non-injection, tool-sequence-independent final
-  artifact acceptance, and every manifest/filesystem validation branch.
-- Version-artifact tests assert the version-ID path, exclusive/concurrent writes,
-  symlink/escape rejection, disk-first reads, legacy DB-only fallback, missing
-  file failure, UTF-8 handling, and disk/DB mismatch detection.
-- Migration tests start from version 6 rows and assert deterministic evidence-ID
-  and seed backfills plus fail-closed behavior when either cannot be recovered.
-- API/frontend tests assert typed snapshots round-trip without reconstructing
-  lifecycle state in React.
-
-### 7. Wrong vs Correct
-
-Wrong:
-
-```python
-prototype.source_hash = item.source_hash
-await store.save_prototype(prototype)
-await store.mark_run_item_done(item.id)
-```
-
-Correct:
-
-```python
-await store.complete_prototype_generation_item(
-    run_item=item,
-    prototype=prototype,
-    version=version,
-)
-```
-
-Wrong:
-
-```python
-# A SQL default makes the column non-null but does not restore its meaning.
-seed_brief = row["seed_brief"] or rebuild_seed_from_current_plan(plan)
-```
-
-Correct:
-
-```python
-# Migration reconstructs the frozen value from the durable version-zero seed.
-# If a retryable row has no such seed, startup fails for explicit repair.
-seed_brief = row["seed_brief"]
-```
-
-Wrong:
-
-```python
-for state in item.states:
-    require_zh_cn_copy(state)  # Rejects the contract value "default".
-```
-
-Correct:
-
-```python
-validate_lowercase_technical_identifiers(item.states)
-validate_locale(item.title, item.summary, item.brief)
-```
-
-Wrong:
-
-```python
-prompt = build_prompt(
-    source_paths=item.source_paths,
-    project_context=plan.project_context,
-    seed=item.seed_brief,
-    project_routes=all_plan_routes,
-)
-```
-
-Correct:
-
-```python
-# The guard data remains on the server; Claude discovers implementation detail.
-prompt = build_prompt(
-    title=item.title,
-    target_routes=tuple(item.route_patterns),
-    output_locale=plan.output_locale,
-    artifact_path=staging_path,
-)
-```
-
-Wrong:
-
-```python
-# Tool logs describe one implementation strategy; they are not the artifact.
-logs = await store.load_log_events(task.id)
-html = replay_successful_write_and_edit_calls(logs)
-validate_artifact_bash_commands(logs)
-```
-
-Correct:
-
-```python
-# Claude owns the tool sequence. The backend validates only the final boundary.
-artifact = validate_prototype_artifact(
-    worktree_path=worktree_path,
-    expected_artifact_path=staging_path,
-    manifest_text=task.result,
-    max_bytes=max_artifact_bytes,
-)
-await assert_source_tree_unchanged(worktree_path)
-```
-
----
 
 ## Scenario: Durable Conductor Runner Leases
 
@@ -849,6 +448,101 @@ Correct:
 const draft = await getCurrentStructuredPrototypeDraft(projectId, crypto.randomUUID());
 if (!draft) return showRequirementsGeneration();
 return recoverStudioRuntime(draft);
+```
+
+---
+
+## Scenario: Structured Prototype Is the Only Editable Prototype System
+
+### 1. Scope / Trigger
+
+- Trigger: changing prototype persistence, project prototype routing, Claude UI
+  Engineer execution, renderer output, or removing/adding a prototype API.
+- The structured document, command journal, checkpoint, and object references are
+  the only editable prototype state. Stored HTML prototypes are retired.
+
+### 2. Signatures
+
+- Project entry: `/projects/{projectId}/prototypes` redirects to
+  `/projects/{projectId}/prototypes/studio`.
+- Editable APIs use `/api/structured-prototype-*` and
+  `/api/prototype-document-generation-jobs/*`; published previews use the
+  structured publication APIs.
+- Claude execution:
+  `PrototypeUiEngineerRunner.execute_scoped_task(...) -> PrototypeUiEngineerScopedTaskResult`.
+- Schema v12 drops, in dependency order:
+  `prototype_generation_run_items`, `prototype_generation_runs`,
+  `prototype_plan_items`, `prototype_plans`, `prototype_versions`, and
+  `prototypes`.
+
+### 3. Contracts
+
+- Do not define legacy `Prototype`, `PrototypeVersion`, plan, evidence, or HTML
+  generation domain models, services, routes, frontend types, or environment
+  knobs.
+- HTML is a deterministic publication/render output. It may exist under the
+  structured render-artifact store, but it is never read back as editable state.
+- The MCP catalog contains `project-startup`, `structured-prototype-ai`, and
+  `structured-prototype-generation`; there is no `prototype-planning` server.
+- The UI Engineer runner owns Claude availability checks, isolated worktree
+  creation, task/process correlation, activity callbacks, source-integrity
+  checks, and cleanup. It does not know an HTML manifest or staging path.
+- Missing Claude runtime/catalog/CLI capability refuses the task. Source edits
+  outside the runner baseline refuse the result after the process is cleaned up.
+
+### 4. Validation & Error Matrix
+
+- Existing database at schema <= 11 -> drop all six legacy tables and record
+  schema version 12; do not migrate old HTML rows into structured documents.
+- New database -> never create a legacy prototype table.
+- Request to a retired prototype plan/version/stream endpoint -> route absent
+  (`404`); do not add a compatibility handler.
+- Claude runtime disabled, executor misconfigured, CLI unavailable, missing task
+  result, or process mismatch -> `PrototypeUiEngineerRunnerError`; structured
+  generation/edit service maps it to its typed failure contract.
+- Claude modifies project source -> reject the result and clean the worktree.
+- Published HTML missing or corrupt -> structured publication/render failure;
+  never fall back to legacy HTML state.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Studio applies domain commands, checkpoints the structured document,
+  publishes a revision, and Renderer regenerates HTML from that revision.
+- Base: a project with no document opens Studio requirements generation.
+- Good: an old schema-11 database starts once, deletes legacy tables, and keeps
+  unrelated project/session data.
+- Bad: reintroduce `GET /api/prototypes/{id}` to read an HTML column.
+- Bad: let Claude write `.agent-collab/prototype-staging/index.html` and treat it
+  as successful prototype state.
+
+### 6. Tests Required
+
+- `test_legacy_prototype_schema_removal.py`: schema-11 rows/tables are removed,
+  schema becomes 12, and a fresh database never creates those tables.
+- `test_prototype_ui_engineer_runner.py`: launch-disabled and CLI-unavailable
+  paths fail closed; task/process identity, MCP args, source rejection, and
+  cleanup are asserted.
+- MCP catalog tests assert exactly the three supported framework-owned servers.
+- Structured AI/generation runtime tests use the runner Protocol and assert typed
+  MCP submission identity.
+- Frontend typecheck and node tests assert the Studio APIs remain available after
+  legacy routes/types/components are removed.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+html = await store.load_prototype_version(prototype_id, version_no)
+return {"html": html}
+```
+
+Correct:
+
+```python
+draft = await structured_store.load_active_draft(document_id)
+publication = await structured_service.publish_draft(draft.id, expected_head_hash)
+return publication
 ```
 
 ---

@@ -11,13 +11,13 @@ import pytest
 from test_structured_prototype_generation_assembler import _create_page_payload
 
 from app.adapters.prototype_object_store import PrototypeObjectStore, canonical_json_bytes
-from app.application.prototype_artifact_generator import (
-    PrototypeArtifactActivity,
-    PrototypeArtifactActivityCallback,
-    PrototypeArtifactError,
-    PrototypeArtifactGenerator,
-    PrototypeScopedTaskCompletionCallback,
-    PrototypeScopedTaskResult,
+from app.application.prototype_ui_engineer_runner import (
+    PrototypeUiEngineerActivity,
+    PrototypeUiEngineerActivityCallback,
+    PrototypeUiEngineerCompletionCallback,
+    PrototypeUiEngineerRunner,
+    PrototypeUiEngineerRunnerError,
+    PrototypeUiEngineerScopedTaskResult,
 )
 from app.application.structured_prototype_generation_contracts import (
     GeneratedPageV1,
@@ -66,10 +66,10 @@ class _SubmittingGenerator:
         task_kind: str,
         task_title: str,
         task_id: str,
-        activity_callback: PrototypeArtifactActivityCallback | None = None,
-        completion_callback: PrototypeScopedTaskCompletionCallback | None = None,
+        activity_callback: PrototypeUiEngineerActivityCallback | None = None,
+        completion_callback: PrototypeUiEngineerCompletionCallback | None = None,
         mcp_config: str | None = None,
-    ) -> PrototypeScopedTaskResult:
+    ) -> PrototypeUiEngineerScopedTaskResult:
         del project, prompt, source_paths, phase, task_kind, task_title
         self.called = True
         if self.failure is not None:
@@ -80,7 +80,7 @@ class _SubmittingGenerator:
         process_id = "generation-process-1"
         now = datetime.now(UTC)
         await activity_callback(
-            PrototypeArtifactActivity(
+            PrototypeUiEngineerActivity(
                 phase="running",
                 task_id=task_id,
                 execution_process_id=process_id,
@@ -138,7 +138,7 @@ class _SubmittingGenerator:
             assert isinstance(result, dict)
             assert result["isError"] is False
         await completion_callback(worktree, task_id, process_id)
-        return PrototypeScopedTaskResult(
+        return PrototypeUiEngineerScopedTaskResult(
             task_id=task_id,
             execution_process_id=process_id,
             assistant_result="submitted",
@@ -186,7 +186,7 @@ async def test_runtime_moves_one_verified_mcp_payload_into_managed_object_store(
     envelope = _envelope(request)
     generator = _SubmittingGenerator(root=tmp_path, mcp=mcp, envelope=envelope)
     runtime = StructuredPrototypeGenerationRuntime(
-        generator=cast(PrototypeArtifactGenerator, generator),
+        runner=cast(PrototypeUiEngineerRunner, generator),
         mcp_service=mcp,
         object_store=PrototypeObjectStore(tmp_path / "managed"),
     )
@@ -234,7 +234,7 @@ async def test_runtime_stores_normalized_canonical_payload_with_raw_request_hash
     )
     object_store = PrototypeObjectStore(tmp_path / "managed")
     runtime = StructuredPrototypeGenerationRuntime(
-        generator=cast(PrototypeArtifactGenerator, generator),
+        runner=cast(PrototypeUiEngineerRunner, generator),
         mcp_service=mcp,
         object_store=object_store,
     )
@@ -263,7 +263,7 @@ async def test_runtime_refuses_task_without_mcp_submission(tmp_path: Path) -> No
         submit=False,
     )
     runtime = StructuredPrototypeGenerationRuntime(
-        generator=cast(PrototypeArtifactGenerator, generator),
+        runner=cast(PrototypeUiEngineerRunner, generator),
         mcp_service=mcp,
         object_store=PrototypeObjectStore(tmp_path / "managed"),
     )
@@ -285,7 +285,7 @@ async def test_runtime_refuses_context_hash_mismatch_before_opening_mcp_session(
     mcp = StructuredPrototypeGenerationMcpService()
     generator = _SubmittingGenerator(root=tmp_path, mcp=mcp, envelope=_envelope(request))
     runtime = StructuredPrototypeGenerationRuntime(
-        generator=cast(PrototypeArtifactGenerator, generator),
+        runner=cast(PrototypeUiEngineerRunner, generator),
         mcp_service=mcp,
         object_store=PrototypeObjectStore(tmp_path / "managed"),
     )
@@ -303,7 +303,7 @@ async def test_runtime_refuses_context_hash_mismatch_before_opening_mcp_session(
     ("failure", "expected_code"),
     [
         (WorktreeError("worktree unavailable"), "generation_worktree_failed"),
-        (PrototypeArtifactError("Claude unavailable"), "generation_agent_failed"),
+        (PrototypeUiEngineerRunnerError("Claude unavailable"), "generation_agent_failed"),
     ],
 )
 async def test_runtime_normalizes_generator_startup_failures(
@@ -321,7 +321,7 @@ async def test_runtime_normalizes_generator_startup_failures(
         failure=failure,
     )
     runtime = StructuredPrototypeGenerationRuntime(
-        generator=cast(PrototypeArtifactGenerator, generator),
+        runner=cast(PrototypeUiEngineerRunner, generator),
         mcp_service=mcp,
         object_store=PrototypeObjectStore(tmp_path / "managed"),
     )

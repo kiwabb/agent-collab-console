@@ -9,12 +9,12 @@ from typing import cast
 import pytest
 
 from app.adapters.prototype_object_store import canonical_json_bytes
-from app.application.prototype_artifact_generator import (
-    PrototypeArtifactActivity,
-    PrototypeArtifactActivityCallback,
-    PrototypeArtifactGenerator,
-    PrototypeScopedTaskCompletionCallback,
-    PrototypeScopedTaskResult,
+from app.application.prototype_ui_engineer_runner import (
+    PrototypeUiEngineerActivity,
+    PrototypeUiEngineerActivityCallback,
+    PrototypeUiEngineerCompletionCallback,
+    PrototypeUiEngineerRunner,
+    PrototypeUiEngineerScopedTaskResult,
 )
 from app.application.structured_prototype_ai_mcp import PrototypeAiMcpService
 from app.application.structured_prototype_ai_runtime import (
@@ -49,10 +49,10 @@ class _SubmittingGenerator:
         task_kind: str,
         task_title: str,
         task_id: str,
-        activity_callback: PrototypeArtifactActivityCallback | None = None,
-        completion_callback: PrototypeScopedTaskCompletionCallback | None = None,
+        activity_callback: PrototypeUiEngineerActivityCallback | None = None,
+        completion_callback: PrototypeUiEngineerCompletionCallback | None = None,
         mcp_config: str | None = None,
-    ) -> PrototypeScopedTaskResult:
+    ) -> PrototypeUiEngineerScopedTaskResult:
         del project, scope_id, prompt, source_paths, phase, task_kind, task_title
         del completion_callback
         self.called = True
@@ -60,7 +60,7 @@ class _SubmittingGenerator:
         assert mcp_config is not None
         now = datetime.now(UTC)
         await activity_callback(
-            PrototypeArtifactActivity(
+            PrototypeUiEngineerActivity(
                 phase="running",
                 task_id=task_id,
                 execution_process_id=self.process_id,
@@ -96,7 +96,7 @@ class _SubmittingGenerator:
         result = response["result"]
         assert isinstance(result, dict)
         assert result["isError"] is False
-        return PrototypeScopedTaskResult(
+        return PrototypeUiEngineerScopedTaskResult(
             task_id=task_id,
             execution_process_id=self.process_id,
             assistant_result="submitted",
@@ -129,7 +129,7 @@ async def test_ai_runtime_accepts_one_process_bound_json_outcome() -> None:
         },
     )
     runtime = PrototypeUiEngineerRuntime(
-        generator=cast(PrototypeArtifactGenerator, generator),
+        runner=cast(PrototypeUiEngineerRunner, generator),
         mcp_service=mcp,
     )
 
@@ -155,7 +155,7 @@ async def test_ai_runtime_refuses_context_hash_mismatch_before_starting_agent() 
         },
     )
     runtime = PrototypeUiEngineerRuntime(
-        generator=cast(PrototypeArtifactGenerator, generator),
+        runner=cast(PrototypeUiEngineerRunner, generator),
         mcp_service=mcp,
     )
 

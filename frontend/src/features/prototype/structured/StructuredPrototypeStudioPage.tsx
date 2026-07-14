@@ -12,13 +12,13 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import {
+  ArrowLeft,
   CloudUpload,
   ExternalLink,
   Files,
   PanelsTopLeft,
   MessageSquare,
   Save,
-  Undo2,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -119,7 +119,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
 
   if (controller.loading && (!controller.draft || !runtime)) {
     return (
-      <div className="grid min-h-[100dvh] place-items-center bg-[#eef1ef] text-sm text-[#62706b]">
+      <div className="grid min-h-[420px] place-items-center rounded-xl border border-border-subtle bg-surface/70 text-sm text-text-muted">
         {t("prototype.structured.loading")}
       </div>
     );
@@ -134,14 +134,14 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   }
   if (!controller.draft || !runtime || !document || !activePage || !runtimeBindings) {
     return (
-      <div className="grid min-h-[100dvh] place-items-center bg-[#eef1ef] p-6">
-        <div className="max-w-md border border-[#d9dfdc] bg-white p-6 text-center">
-          <p className="text-sm leading-6 text-[#8c1d31]">
+      <div className="grid min-h-[420px] place-items-center rounded-xl border border-border-subtle bg-surface/70 p-6">
+        <div className="max-w-md rounded-lg border border-failed-ring bg-failed-bg p-6 text-center">
+          <p className="text-sm leading-6 text-status-failed">
             {controller.error ?? t("prototype.structured.loadFailed")}
           </p>
           <button
             type="button"
-            className="mt-4 min-h-10 bg-[#126b5f] px-4 text-sm font-semibold text-white"
+            className="mt-4 min-h-11 cursor-pointer rounded-lg bg-brand px-4 text-sm font-semibold text-black hover:bg-brand-strong"
             onClick={() => void controller.retry()}
           >
             {t("prototype.structured.retry")}
@@ -253,29 +253,32 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <div className="grid min-h-[100dvh] bg-[#eef1ef] pb-14 text-[#17201d] lg:h-[100dvh] lg:grid-rows-[58px_minmax(0,1fr)] lg:overflow-hidden lg:pb-0">
-        <header className="flex min-h-[58px] flex-wrap items-center gap-2 border-b border-[#d9dfdc] bg-white px-3 py-2 shadow-sm sm:flex-nowrap sm:py-0">
+      <div className="relative grid min-h-[640px] overflow-hidden rounded-xl border border-border-subtle bg-background/60 pb-14 text-foreground lg:h-[calc(100dvh-17rem)] lg:grid-rows-[58px_minmax(0,1fr)] lg:pb-0">
+        <header className="flex min-h-[58px] flex-wrap items-center gap-2 border-b border-border-subtle bg-surface px-3 py-2 sm:flex-nowrap sm:py-0">
           <div className="flex min-w-[150px] flex-1 items-center gap-2">
             <Link
-              href={`/projects/${projectId}/prototypes`}
-              className="grid size-8 shrink-0 place-items-center bg-[#17201d] text-white"
+              href={`/projects/${projectId}`}
+              className="inline-flex min-h-9 shrink-0 cursor-pointer items-center gap-2 rounded-md border border-border-muted bg-surface-raised px-2.5 text-text-secondary hover:bg-surface-hover hover:text-foreground"
               aria-label={t("prototype.structured.back")}
             >
-              <Undo2 size={15} aria-hidden />
+              <ArrowLeft size={15} aria-hidden />
+              <span className="hidden xl:inline">{t("prototype.structured.back")}</span>
             </Link>
             <div className="min-w-0">
               <div className="text-xs font-bold">{t("prototype.structured.brand")}</div>
-              <div className="truncate text-[10px] text-[#62706b]">{document.title}</div>
+              <div className="truncate text-[11px] text-text-muted">{document.title}</div>
             </div>
           </div>
-          <div className="inline-grid shrink-0 grid-cols-2 border border-[#d9dfdc] bg-[#ecefed] p-1">
+          <div className="inline-grid shrink-0 grid-cols-2 rounded-lg border border-border-muted bg-surface-input p-1">
             {(["design", "flow"] as const).map((value) => (
               <button
                 key={value}
                 type="button"
                 className={cn(
-                  "min-h-8 min-w-18 px-3 text-xs font-semibold",
-                  mode === value ? "bg-white text-[#17201d] shadow-sm" : "text-[#62706b]",
+                  "min-h-8 min-w-18 cursor-pointer rounded-md px-3 text-xs font-semibold",
+                  mode === value
+                    ? "bg-surface-raised text-foreground shadow-sm"
+                    : "text-text-muted hover:text-foreground",
                 )}
                 onClick={() => setMode(value)}
                 aria-pressed={mode === value}
@@ -285,13 +288,13 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
             ))}
           </div>
           <div className="order-3 flex w-full min-w-0 items-center justify-between gap-2 sm:order-none sm:w-auto sm:flex-1 sm:justify-end">
-            <span className="hidden text-[10px] text-[#62706b] xl:inline">
+            <span className="hidden text-[11px] text-text-muted xl:inline">
               {controller.saving
                 ? t("prototype.structured.saving")
                 : t("prototype.structured.saved")}
             </span>
             <select
-              className="min-h-9 max-w-32 border border-[#c9d2ce] bg-white px-2 text-xs"
+              className="min-h-9 max-w-32 cursor-pointer rounded-md border border-border-muted bg-surface-input px-2 text-xs text-foreground"
               aria-label={t("prototype.structured.role.label")}
               value={runtime.state.actorRoleId}
               disabled={controller.saving}
@@ -307,7 +310,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
             </select>
             <button
               type="button"
-              className="grid size-9 place-items-center border border-[#c9d2ce] bg-white text-[#126b5f] disabled:opacity-45"
+              className="grid size-9 cursor-pointer place-items-center rounded-md border border-border-muted bg-surface-raised text-brand hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => void controller.checkpointRuntime()}
               disabled={controller.saving}
               aria-label={t("prototype.structured.checkpoint")}
@@ -317,7 +320,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
             </button>
             <button
               type="button"
-              className="inline-flex min-h-9 items-center justify-center gap-2 bg-[#126b5f] px-3 text-xs font-semibold text-white disabled:opacity-45"
+              className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-2 rounded-md bg-brand px-3 text-xs font-semibold text-black hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => void controller.publish()}
               disabled={controller.saving}
               aria-label={t("prototype.structured.publish")}
@@ -331,7 +334,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                 href={controller.publication.sharePath}
                 target="_blank"
                 rel="noreferrer"
-                className="grid size-9 place-items-center border border-[#c9d2ce] bg-white text-[#126b5f]"
+                className="grid size-9 cursor-pointer place-items-center rounded-md border border-border-muted bg-surface-raised text-brand hover:bg-surface-hover"
                 aria-label={t("prototype.structured.openPublished")}
                 title={t("prototype.structured.openPublished")}
               >
@@ -344,13 +347,13 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         <main className="grid min-h-0 grid-cols-1 lg:grid-cols-[240px_minmax(440px,1fr)_300px]">
           <aside
             className={cn(
-              "min-h-0 grid-rows-[44px_minmax(130px,1fr)_44px_minmax(180px,1fr)] border-r border-[#d9dfdc] bg-white",
+              "min-h-0 grid-rows-[44px_minmax(130px,1fr)_44px_minmax(180px,1fr)] border-r border-border-subtle bg-surface",
               mobilePanel === "left" ? "grid" : "hidden lg:grid",
             )}
           >
-            <div className="flex items-center justify-between border-b border-[#d9dfdc] px-3 text-xs font-bold uppercase">
+            <div className="flex items-center justify-between border-b border-border-subtle px-3 text-xs font-bold uppercase">
               {t("prototype.structured.pages")}
-              <span className="font-normal text-[#62706b]">{document.pages.length}</span>
+              <span className="font-normal text-text-muted">{document.pages.length}</span>
             </div>
             <StructuredPrototypePageRail
               pages={document.pages}
@@ -360,9 +363,9 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                 setMobilePanel("canvas");
               }}
             />
-            <div className="flex items-center justify-between border-y border-[#d9dfdc] px-3 text-xs font-bold uppercase">
+            <div className="flex items-center justify-between border-y border-border-subtle px-3 text-xs font-bold uppercase">
               {t("prototype.structured.components")}
-              <span className="font-normal text-[#62706b]">6</span>
+              <span className="font-normal text-text-muted">6</span>
             </div>
             <div className="min-h-0 overflow-auto">
               <StructuredPrototypePalette
@@ -379,31 +382,33 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
               mobilePanel === "canvas" ? "grid" : "hidden lg:grid",
             )}
           >
-            <div className="flex items-center justify-between gap-3 border-b border-[#d9dfdc] bg-white px-3">
-              <div className="min-w-0 truncate text-xs text-[#62706b]">
+            <div className="flex items-center justify-between gap-3 border-b border-border-subtle bg-surface px-3">
+              <div className="min-w-0 truncate text-xs text-text-muted">
                 {mode === "design"
                   ? t("prototype.structured.mode.design")
                   : t("prototype.structured.mode.flow")}
                 <span className="mx-2">/</span>
-                <strong className="text-[#17201d]">{activePage.title}</strong>
-                <span className="ml-2 border border-[#d9dfdc] bg-[#f7f8f7] px-2 py-1 text-[10px]">
+                <strong className="text-foreground">{activePage.title}</strong>
+                <span className="ml-2 rounded border border-border-subtle bg-surface-raised px-2 py-1 text-[10px]">
                   doc {controller.draft.headSequenceNo}
                 </span>
               </div>
               {visibleError && (
-                <span className="min-w-0 max-w-64 truncate text-[10px] text-[#8c1d31]">
+                <span className="min-w-0 max-w-64 truncate text-[10px] text-status-failed">
                   {visibleError}
                 </span>
               )}
               {mode === "design" && (
-                <div className="hidden grid-cols-3 border border-[#d9dfdc] bg-[#ecefed] p-1 sm:grid">
+                <div className="hidden grid-cols-3 rounded-lg border border-border-muted bg-surface-input p-1 sm:grid">
                   {(["desktop", "tablet", "mobile"] as const).map((value) => (
                     <button
                       key={value}
                       type="button"
                       className={cn(
-                        "min-h-7 px-3 text-[10px] font-semibold",
-                        viewport === value ? "bg-white text-[#17201d] shadow-sm" : "text-[#62706b]",
+                        "min-h-7 cursor-pointer rounded-md px-3 text-[10px] font-semibold",
+                        viewport === value
+                          ? "bg-surface-raised text-foreground shadow-sm"
+                          : "text-text-muted hover:text-foreground",
                       )}
                       onClick={() => setViewport(value)}
                       aria-pressed={viewport === value}
@@ -453,18 +458,20 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
 
           <aside
             className={cn(
-              "min-h-0 grid-rows-[44px_minmax(0,1fr)] border-l border-[#d9dfdc] bg-white",
+              "min-h-0 grid-rows-[44px_minmax(0,1fr)] border-l border-border-subtle bg-surface",
               mobilePanel === "right" ? "grid" : "hidden lg:grid",
             )}
           >
-            <div className="grid grid-cols-2 border-b border-[#d9dfdc] bg-[#ecefed] p-1">
+            <div className="grid grid-cols-2 border-b border-border-subtle bg-surface-input p-1">
               {(["ai", "properties"] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
                   className={cn(
-                    "min-h-8 text-xs font-semibold",
-                    inspectorTab === tab ? "bg-white text-[#17201d] shadow-sm" : "text-[#62706b]",
+                    "min-h-8 cursor-pointer rounded-md text-xs font-semibold",
+                    inspectorTab === tab
+                      ? "bg-surface-raised text-foreground shadow-sm"
+                      : "text-text-muted hover:text-foreground",
                   )}
                   onClick={() => setInspectorTab(tab)}
                   aria-selected={inspectorTab === tab}
@@ -496,7 +503,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
           </aside>
         </main>
         <nav
-          className="fixed inset-x-0 bottom-0 z-50 grid h-14 grid-cols-3 border-t border-[#d9dfdc] bg-white p-1 lg:hidden"
+          className="absolute inset-x-0 bottom-0 z-50 grid h-14 grid-cols-3 border-t border-border-subtle bg-surface p-1 lg:hidden"
           aria-label={t("prototype.structured.mobile.navigation")}
         >
           {[
@@ -518,8 +525,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                 key={item.panel}
                 type="button"
                 className={cn(
-                  "inline-flex items-center justify-center gap-2 text-xs font-semibold",
-                  mobilePanel === item.panel ? "bg-[#e1f1ed] text-[#126b5f]" : "text-[#62706b]",
+                  "inline-flex cursor-pointer items-center justify-center gap-2 rounded-md text-xs font-semibold",
+                  mobilePanel === item.panel
+                    ? "bg-brand-bg text-brand"
+                    : "text-text-muted hover:text-foreground",
                 )}
                 onClick={() => setMobilePanel(item.panel)}
                 aria-pressed={mobilePanel === item.panel}

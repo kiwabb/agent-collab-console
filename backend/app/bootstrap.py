@@ -41,14 +41,7 @@ from app.application.project_startup_mcp import (
     ProjectStartupMcpService,
 )
 from app.application.project_startup_service import ProjectStartupConfigService
-from app.application.prototype_service import PrototypeService
-from app.application.prototype_artifact_generator import PrototypeArtifactGenerator
-from app.application.prototype_planning_service import PrototypePlanService
-from app.application.prototype_planning_mcp import (
-    PROTOTYPE_PLANNING_MCP_DESCRIPTOR,
-    PrototypePlanningMcpService,
-)
-from app.application.prototype_generation_service import PrototypeGenerationService
+from app.application.prototype_ui_engineer_runner import PrototypeUiEngineerRunner
 from app.application.structured_prototype_service import StructuredPrototypeService
 from app.application.structured_prototype_ai_mcp import (
     PROTOTYPE_AI_MCP_DESCRIPTOR,
@@ -66,7 +59,6 @@ from app.application.structured_prototype_generation_runtime import (
 from app.application.structured_prototype_generation_service import (
     StructuredPrototypeGenerationService,
 )
-from app.application.project_evidence_service import ProjectEvidenceService
 from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.application.skill_service import SkillService
 from app.application import timeouts
@@ -284,23 +276,10 @@ project_service = (
 skill_service = SkillService(store=async_store) if async_store is not None else None
 worktree_manager = WorktreeManager(git=git_service)
 
-# Runtime catalog service used by both the conductor loop and the prototype
-# design tool. Constructed lazily on first access so missing catalog settings
-# don't break boot; the conductor already does `await catalog_service.load_catalog()`
-# so the prototype path uses the same code path.
+# Runtime catalog service used by the conductor and Claude UI engineer runner.
 runtime_catalog_service = (
     RuntimeCatalogService(store=async_store) if async_store is not None else None
 )
-prototype_service = (
-    PrototypeService(
-        store=async_store,
-        runtime_catalog_service=runtime_catalog_service,
-    )
-    if async_store is not None and runtime_catalog_service is not None
-    else None
-)
-prototype_plan_service: PrototypePlanService | None = None
-prototype_planning_mcp_service: PrototypePlanningMcpService | None = None
 project_startup_config_service = (
     ProjectStartupConfigService(async_store) if async_store is not None else None
 )
@@ -309,25 +288,8 @@ project_startup_mcp_service = (
     if project_startup_config_service is not None
     else None
 )
-
-
-async def prototype_generation_governance_gate(count: int) -> None:
-    if not timeouts.prototype_generation_enabled():
-        raise RuntimeError("project prototype generation is disabled")
-    if count < 1:
-        raise RuntimeError("prototype generation requires at least one candidate")
-    if count > timeouts.prototype_generation_max_candidates():
-        raise RuntimeError("prototype generation candidate limit exceeded")
-    estimated_cost = count * timeouts.prototype_generation_estimated_usd_per_page()
-    if estimated_cost > timeouts.prototype_generation_max_estimated_usd():
-        raise RuntimeError(
-            f"prototype generation estimated cost ${estimated_cost:.2f} exceeds budget"
-        )
-
-
-prototype_generation_service: PrototypeGenerationService | None = None
-prototype_artifact_generator: PrototypeArtifactGenerator | None = None
-prototype_task_runner: CodexTaskRunner | None = None
+prototype_ui_engineer_runner: PrototypeUiEngineerRunner | None = None
+prototype_ui_engineer_task_runner: CodexTaskRunner | None = None
 structured_prototype_ai_mcp_service: PrototypeAiMcpService | None = None
 structured_prototype_ai_service: StructuredPrototypeAiService | None = None
 structured_prototype_generation_mcp_service: StructuredPrototypeGenerationMcpService | None = None
@@ -649,43 +611,27 @@ def get_help_orchestrator(refresh_task_result: RefreshTaskResult) -> HelpOrchest
     return help_orchestrator
 
 
-async def _refresh_prototype_task_result(_task: CodexTask) -> object:
-    # The process runtime has already captured the strict manifest in task.result.
-    # This unmanaged role intentionally has no role-workflow artifact persistence.
+async def _refresh_prototype_ui_engineer_task_result(_task: CodexTask) -> object:
+    # Structured prototype MCP services persist the accepted typed result.
     return None
 
 
-if async_store is not None and runtime_catalog_service is not None:
-    prototype_task_runner_factory = cast(TaskRunnerFactory, CodexTaskRunner)
-    prototype_task_runner = prototype_task_runner_factory(
+if async_store is not None:
+    prototype_ui_engineer_task_runner_factory = cast(TaskRunnerFactory, CodexTaskRunner)
+    prototype_ui_engineer_task_runner = prototype_ui_engineer_task_runner_factory(
         codex_store=async_store,
         event_bus=event_bus,
         process_manager_factory=get_codex_process_manager,
         mock_manager_cls=MockCodexProcessManager,
-        refresh_task_result=_refresh_prototype_task_result,
+        refresh_task_result=_refresh_prototype_ui_engineer_task_result,
         help_orchestrator_factory=None,
         role_workflow_service=role_workflow_service,
     )
-    prototype_artifact_generator = PrototypeArtifactGenerator(
+    prototype_ui_engineer_runner = PrototypeUiEngineerRunner(
         store=async_store,
-        task_runner=prototype_task_runner,
+        task_runner=prototype_ui_engineer_task_runner,
         worktree_manager=worktree_manager,
         claude_availability_probe=check_claude_available,
-    )
-    prototype_plan_service = PrototypePlanService(
-        store=async_store,
-        evidence_service=ProjectEvidenceService(),
-        ui_engineer=prototype_artifact_generator,
-    )
-    prototype_planning_mcp_service = PrototypePlanningMcpService(prototype_plan_service)
-    prototype_plan_service.mcp_service = prototype_planning_mcp_service
-    prototype_generation_service = PrototypeGenerationService(
-        store=async_store,
-        evidence_service=ProjectEvidenceService(),
-        governance_gate=prototype_generation_governance_gate,
-        artifact_generator=prototype_artifact_generator,
-        concurrency=2,
-        global_concurrency=timeouts.prototype_generation_global_concurrency(),
     )
     if (
         structured_prototype_store is not None
@@ -696,7 +642,7 @@ if async_store is not None and runtime_catalog_service is not None:
     ):
         structured_prototype_ai_mcp_service = PrototypeAiMcpService()
         structured_prototype_ai_runtime = PrototypeUiEngineerRuntime(
-            generator=prototype_artifact_generator,
+            runner=prototype_ui_engineer_runner,
             mcp_service=structured_prototype_ai_mcp_service,
         )
         structured_prototype_ai_service = StructuredPrototypeAiService(
@@ -713,7 +659,7 @@ if async_store is not None and runtime_catalog_service is not None:
                 StructuredPrototypeGenerationMcpService()
             )
             structured_prototype_generation_runtime = StructuredPrototypeGenerationRuntime(
-                generator=prototype_artifact_generator,
+                runner=prototype_ui_engineer_runner,
                 mcp_service=structured_prototype_generation_mcp_service,
                 object_store=structured_prototype_object_store,
             )
@@ -744,7 +690,6 @@ if (
 
 mcp_registry = McpRegistry()
 mcp_registry.register(PROJECT_STARTUP_MCP_DESCRIPTOR, project_startup_mcp_service)
-mcp_registry.register(PROTOTYPE_PLANNING_MCP_DESCRIPTOR, prototype_planning_mcp_service)
 mcp_registry.register(PROTOTYPE_AI_MCP_DESCRIPTOR, structured_prototype_ai_mcp_service)
 mcp_registry.register(
     GENERATION_MCP_DESCRIPTOR,

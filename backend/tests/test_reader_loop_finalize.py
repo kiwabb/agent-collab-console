@@ -85,7 +85,7 @@ class TerminalSaveGateStore(StoreStub):
     async def save_codex_task(self, task):
         if (
             task.status == "done"
-            and task.result == '{"schema_version":"prototype-artifact/v1"}'
+            and task.result == '{"submission":"accepted"}'
             and not self._blocked_terminal_save
         ):
             self._blocked_terminal_save = True
@@ -207,10 +207,10 @@ def _fixture(returncode=None, stdout=None, stderr=None):
 
 @pytest.mark.asyncio
 async def test_reader_waiter_releases_only_after_terminal_result_is_persisted():
-    manifest = '{"schema_version":"prototype-artifact/v1"}'
+    result = '{"submission":"accepted"}'
     frames = [
         b'{"type":"result","is_error":false,"result":'
-        b'"{\\"schema_version\\":\\"prototype-artifact/v1\\"}"}\n',
+        b'"{\\"submission\\":\\"accepted\\"}"}\n',
         b"",
     ]
 
@@ -239,7 +239,7 @@ async def test_reader_waiter_releases_only_after_terminal_result_is_persisted():
     await asyncio.wait_for(waiter.wait(), timeout=1)
 
     assert store.task.status == "done"
-    assert store.task.result == manifest
+    assert store.task.result == result
     await asyncio.wait_for(reader, timeout=1)
 
 

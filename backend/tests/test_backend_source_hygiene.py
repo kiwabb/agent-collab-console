@@ -22,8 +22,6 @@ INLINE_JSON_OBJECT_GUARD_NAMES = {
 }
 STREAMING_JSON_BOUNDARY_FILES = {
     APP_ROOT / "application" / "llm_runner.py",
-    APP_ROOT / "application" / "prototype_service.py",
-    APP_ROOT / "interfaces" / "sse.py",
 }
 SAFE_READ_JSON_BOUNDARY_FILES = {
     APP_ROOT / "application" / "conductor_policy.py",

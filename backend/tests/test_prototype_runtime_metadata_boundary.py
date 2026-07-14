@@ -20,8 +20,8 @@ from app.domain.models import (
 )
 from app.domain.ports import AuditSink
 
-SENTINEL_HTML = "<!DOCTYPE html><html><body>PROTOTYPE-SECRET</body></html>"
-SENTINEL_COMMAND = "printf 'PROTOTYPE-COMMAND-SECRET' > /tmp/prototype.html"
+SENTINEL_PAYLOAD = '{"contractVersion":1,"message":"PROTOTYPE-SECRET"}'
+SENTINEL_COMMAND = "echo 'PROTOTYPE-COMMAND-SECRET'"
 
 
 def _null_process() -> Process:
@@ -139,9 +139,9 @@ def _task(*, task_kind: str) -> CodexTask:
         id=f"task-{task_kind}",
         session_id="workspace-prototype",
         project_id="project-1",
-        title=f"Generate {SENTINEL_HTML}",
-        prompt=f"Write the artifact without returning {SENTINEL_HTML}",
-        role="prototype_ui_engineer" if task_kind == "prototype_generation" else "engineer",
+        title=f"Generate {SENTINEL_PAYLOAD}",
+        prompt=f"Submit a typed result without returning {SENTINEL_PAYLOAD}",
+        role="prototype_ui_engineer" if task_kind == "generation_page" else "engineer",
         executor="claude",
         status="running",
         task_kind=task_kind,
@@ -168,8 +168,8 @@ def _entry(task: CodexTask) -> AsyncProcessEntry:
 
 
 @pytest.mark.asyncio
-async def test_prototype_runtime_persists_complete_stream_and_terminal_html() -> None:
-    task = _task(task_kind="prototype_generation")
+async def test_ui_engineer_runtime_persists_complete_stream_and_terminal_result() -> None:
+    task = _task(task_kind="generation_page")
     store = _Store(task)
     bus = _EventBus(store)
     runtime = _Runtime(codex_store=store, log_store=store, event_bus=bus)
@@ -179,14 +179,14 @@ async def test_prototype_runtime_persists_complete_stream_and_terminal_html() ->
             "type": "assistant",
             "message": {
                 "content": [
-                    {"type": "thinking", "thinking": f"inspect {SENTINEL_HTML}"},
+                    {"type": "thinking", "thinking": f"inspect {SENTINEL_PAYLOAD}"},
                     {
                         "type": "tool_use",
                         "id": "toolu-write-1",
                         "name": "Bash",
-                        "input": {"command": SENTINEL_COMMAND, "html": SENTINEL_HTML},
+                        "input": {"command": SENTINEL_COMMAND, "payload": SENTINEL_PAYLOAD},
                     },
-                    {"type": "text", "text": SENTINEL_HTML},
+                    {"type": "text", "text": SENTINEL_PAYLOAD},
                 ]
             },
         }
@@ -199,14 +199,14 @@ async def test_prototype_runtime_persists_complete_stream_and_terminal_html() ->
                     {
                         "type": "tool_result",
                         "tool_use_id": "toolu-write-1",
-                        "content": SENTINEL_HTML,
+                        "content": SENTINEL_PAYLOAD,
                         "is_error": True,
                     }
                 ]
             },
         }
     )
-    result_frame = json.dumps({"type": "result", "result": SENTINEL_HTML})
+    result_frame = json.dumps({"type": "result", "result": SENTINEL_PAYLOAD})
 
     for frame in (assistant_frame, tool_result_frame, result_frame):
         await runtime._capture_on_reader(task.session_id, frame, entry, task.id)
@@ -219,30 +219,30 @@ async def test_prototype_runtime_persists_complete_stream_and_terminal_html() ->
         )
 
     assert store.load_task_calls == 1
-    assert entry.result_text == SENTINEL_HTML
+    assert entry.result_text == SENTINEL_PAYLOAD
 
     await runtime._mark_task_done(task.id, entry)
 
     assert store.task.status == "done"
-    assert store.task.result == SENTINEL_HTML
-    assert store.messages[-1].content == SENTINEL_HTML
+    assert store.task.result == SENTINEL_PAYLOAD
+    assert store.messages[-1].content == SENTINEL_PAYLOAD
     persisted_logs = "\n".join(event.content for event in store.logs)
-    assert SENTINEL_HTML in persisted_logs
+    assert "PROTOTYPE-SECRET" in persisted_logs
     assert SENTINEL_COMMAND in persisted_logs
 
     trace = store.traces[-1]
     serialized_trace = json.dumps(trace.model_dump(mode="json"), ensure_ascii=False)
-    assert SENTINEL_HTML in serialized_trace
+    assert "PROTOTYPE-SECRET" in serialized_trace
     assert SENTINEL_COMMAND in serialized_trace
     trace_request = json.loads(trace.request_json or "{}")
     trace_response = json.loads(trace.response_json or "{}")
     assert trace_request["prompt"] == task.prompt
-    assert trace_response["result"] == SENTINEL_HTML
+    assert trace_response["result"] == SENTINEL_PAYLOAD
     assert any(SENTINEL_COMMAND in item["content"] for item in trace_response["logs"])
 
     status_event = [event for event in bus.events if event.get("type") == "task_status"][-1]
     serialized_status = json.dumps(status_event, ensure_ascii=False)
-    assert SENTINEL_HTML in serialized_status
+    assert "PROTOTYPE-SECRET" in serialized_status
     assert status_event["task_id"] == task.id
     assert status_event["execution_process_id"] == task.last_execution_process_id
 
@@ -258,45 +258,44 @@ async def test_prototype_runtime_persists_complete_stream_and_terminal_html() ->
         {"type": "task_status", "payload": audit_payload},
         sink=cast(AuditSink, _Sink()),
     )
-    assert SENTINEL_HTML in json.dumps(audit_rows, ensure_ascii=False)
+    assert "PROTOTYPE-SECRET" in json.dumps(audit_rows, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
-async def test_prototype_runtime_persists_manifest_in_result_message_trace_and_status() -> None:
-    task = _task(task_kind="prototype_generation")
+async def test_ui_engineer_runtime_persists_typed_result_in_message_trace_and_status() -> None:
+    task = _task(task_kind="generation_page")
     store = _Store(task)
     bus = _EventBus(store)
     runtime = _Runtime(codex_store=store, log_store=store, event_bus=bus)
     entry = _entry(task)
-    manifest = json.dumps(
+    outcome = json.dumps(
         {
-            "schema_version": "prototype-artifact/v1",
-            "artifact_path": ".agent-collab/prototype-staging/run-item-1/index.html",
-            "sha256": "sha256:" + "a" * 64,
-            "byte_size": 1234,
+            "contractVersion": 1,
+            "kind": "answer",
+            "message": "submitted",
         }
     )
-    entry.result_text = manifest
+    entry.result_text = outcome
     entry.produced_real_turn = True
 
     await runtime._mark_task_done(task.id, entry)
 
-    assert json.loads(store.task.result or "{}") == json.loads(manifest)
-    assert store.messages[-1].content == manifest
+    assert json.loads(store.task.result or "{}") == json.loads(outcome)
+    assert store.messages[-1].content == outcome
     trace_response = json.loads(store.traces[-1].response_json or "{}")
-    assert trace_response["result"] == manifest
+    assert trace_response["result"] == outcome
     status_event = [event for event in bus.events if event.get("type") == "task_status"][-1]
-    assert status_event["result"] == manifest
+    assert status_event["result"] == outcome
 
 
 @pytest.mark.asyncio
-async def test_prototype_runtime_trace_does_not_truncate_large_content() -> None:
-    task = _task(task_kind="prototype_generation")
+async def test_ui_engineer_runtime_trace_does_not_truncate_large_content() -> None:
+    task = _task(task_kind="generation_page")
     store = _Store(task)
     runtime = _Runtime(codex_store=store, log_store=store, event_bus=_EventBus(store))
     entry = _entry(task)
-    large_html = f"<!DOCTYPE html><html><body>{'x' * 60_000}TRACE-END</body></html>"
-    entry.result_text = large_html
+    large_payload = json.dumps({"content": f"{'x' * 60_000}TRACE-END"})
+    entry.result_text = large_payload
     entry.produced_real_turn = True
 
     await runtime._mark_task_done(task.id, entry)
@@ -315,17 +314,18 @@ async def test_non_prototype_runtime_logging_and_trace_content_are_unchanged() -
     runtime = _Runtime(codex_store=store, log_store=store, event_bus=bus)
     entry = _entry(task)
 
-    await runtime._append_log(task.session_id, "stdout", SENTINEL_HTML, task.id)
-    entry.result_text = SENTINEL_HTML
+    await runtime._append_log(task.session_id, "stdout", SENTINEL_PAYLOAD, task.id)
+    entry.result_text = SENTINEL_PAYLOAD
     entry.produced_real_turn = True
     await runtime._mark_task_done(task.id, entry)
 
-    assert store.logs[-1].content == SENTINEL_HTML
-    assert store.task.result == SENTINEL_HTML
-    assert store.messages[-1].content == SENTINEL_HTML
-    assert SENTINEL_HTML in (store.traces[-1].response_json or "")
+    assert store.logs[-1].content == SENTINEL_PAYLOAD
+    assert store.task.result == SENTINEL_PAYLOAD
+    assert store.messages[-1].content == SENTINEL_PAYLOAD
+    trace_response = json.loads(store.traces[-1].response_json or "{}")
+    assert trace_response["result"] == SENTINEL_PAYLOAD
     status_event = [event for event in bus.events if event.get("type") == "task_status"][-1]
-    assert status_event["result"] == SENTINEL_HTML
+    assert status_event["result"] == SENTINEL_PAYLOAD
 
 
 @pytest.mark.asyncio
@@ -338,9 +338,9 @@ async def test_unresolved_task_identity_still_persists_complete_runtime_content(
     await runtime._append_log(
         task.session_id,
         "stdout",
-        SENTINEL_HTML,
+        SENTINEL_PAYLOAD,
         "missing-task-id",
     )
 
     assert len(store.logs) == 1
-    assert store.logs[0].content == SENTINEL_HTML
+    assert store.logs[0].content == SENTINEL_PAYLOAD

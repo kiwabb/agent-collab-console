@@ -153,16 +153,6 @@ export {
   updateCodexTaskExecutor,
 } from "./api/tasks";
 
-export {
-  createPrototype,
-  deletePrototype,
-  getPrototype,
-  getPrototypeStreamUrl,
-  getPrototypeVersion,
-  getRegenerateAllStreamUrl,
-  listPrototypes,
-} from "./api/prototypes";
-
 export { getProjectResume, importProjectResumePdf, saveProjectResume } from "./api/resume";
 export type { ProjectResume, ProjectResumeImport } from "./api/resume";
 

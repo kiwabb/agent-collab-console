@@ -111,15 +111,15 @@ function EditableInspector({ node, disabled, onApply }: Props & { node: Structur
   return (
     <div className="grid gap-5 p-4">
       <div>
-        <div className="text-xs font-bold uppercase text-[#62706b]">{node.type}</div>
-        <div className="mt-1 truncate text-sm font-semibold text-[#17201d]">{node.name}</div>
-        <div className="mt-1 truncate font-mono text-[10px] text-[#7b8782]">{node.id}</div>
+        <div className="text-xs font-bold uppercase text-text-muted">{node.type}</div>
+        <div className="mt-1 truncate text-sm font-semibold text-foreground">{node.name}</div>
+        <div className="mt-1 truncate font-mono text-[10px] text-text-faint">{node.id}</div>
       </div>
       {initialValue !== null && (
-        <label className="grid gap-2 text-xs font-semibold text-[#39443f]">
+        <label className="grid gap-2 text-xs font-semibold text-text-secondary">
           {t("prototype.structured.inspector.content")}
           <textarea
-            className="min-h-28 resize-y border border-[#c9d2ce] bg-white p-3 text-sm font-normal text-[#17201d] outline-none focus:border-[#126b5f] focus:ring-2 focus:ring-[#126b5f]/15"
+            className="min-h-28 resize-y rounded-lg border border-border-muted bg-surface-input p-3 text-sm font-normal text-foreground outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
             value={value}
             onChange={(event) => setValue(event.target.value)}
             disabled={disabled}
@@ -127,10 +127,10 @@ function EditableInspector({ node, disabled, onApply }: Props & { node: Structur
         </label>
       )}
       {node.type === "Button" && (
-        <label className="grid gap-2 text-xs font-semibold text-[#39443f]">
+        <label className="grid gap-2 text-xs font-semibold text-text-secondary">
           {t("prototype.structured.inspector.variant")}
           <select
-            className="min-h-10 border border-[#c9d2ce] bg-white px-3 text-sm font-normal text-[#17201d]"
+            className="min-h-10 cursor-pointer rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
             value={variant}
             onChange={(event) =>
               setVariant(event.target.value as "primary" | "secondary" | "danger" | "ghost")
@@ -144,10 +144,10 @@ function EditableInspector({ node, disabled, onApply }: Props & { node: Structur
           </select>
         </label>
       )}
-      <label className="grid gap-2 text-xs font-semibold text-[#39443f]">
+      <label className="grid gap-2 text-xs font-semibold text-text-secondary">
         {t("prototype.structured.inspector.visibility")}
         <select
-          className="min-h-10 border border-[#c9d2ce] bg-white px-3 text-sm font-normal text-[#17201d]"
+          className="min-h-10 cursor-pointer rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
           value={visibility}
           onChange={(event) => setVisibility(event.target.value as "visible" | "hidden")}
           disabled={disabled}
@@ -156,10 +156,10 @@ function EditableInspector({ node, disabled, onApply }: Props & { node: Structur
           <option value="hidden">{t("prototype.structured.inspector.hidden")}</option>
         </select>
       </label>
-      <label className="grid gap-2 text-xs font-semibold text-[#39443f]">
+      <label className="grid gap-2 text-xs font-semibold text-text-secondary">
         {t("prototype.structured.inspector.grow")}
         <input
-          className="min-h-10 border border-[#c9d2ce] bg-white px-3 text-sm font-normal text-[#17201d]"
+          className="min-h-10 rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
           type="number"
           min={0}
           max={12}
@@ -172,10 +172,10 @@ function EditableInspector({ node, disabled, onApply }: Props & { node: Structur
           disabled={disabled}
         />
       </label>
-      <label className="grid gap-2 text-xs font-semibold text-[#39443f]">
+      <label className="grid gap-2 text-xs font-semibold text-text-secondary">
         {t("prototype.structured.inspector.alignSelf")}
         <select
-          className="min-h-10 border border-[#c9d2ce] bg-white px-3 text-sm font-normal text-[#17201d]"
+          className="min-h-10 cursor-pointer rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
           value={alignSelf}
           onChange={(event) =>
             setAlignSelf(event.target.value as StructuredPrototypeLayoutItem["alignSelf"])
@@ -191,7 +191,7 @@ function EditableInspector({ node, disabled, onApply }: Props & { node: Structur
       </label>
       <button
         type="button"
-        className="inline-flex min-h-10 items-center justify-center gap-2 bg-[#126b5f] px-4 text-sm font-semibold text-white hover:bg-[#0b554b] disabled:cursor-not-allowed disabled:opacity-45"
+        className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-black hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-45"
         onClick={() => void save()}
         disabled={disabled}
       >
@@ -206,7 +206,7 @@ export function StructuredPrototypeInspector(props: Props) {
   const { t } = useI18n();
   if (!props.node) {
     return (
-      <div className="grid min-h-56 place-items-center p-6 text-center text-sm text-[#62706b]">
+      <div className="grid min-h-56 place-items-center p-6 text-center text-sm text-text-muted">
         {t("prototype.structured.inspector.empty")}
       </div>
     );

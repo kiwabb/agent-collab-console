@@ -12,6 +12,10 @@ const ACTIVE_GENERATION_STATUSES = new Set<StructuredPrototypeGenerationJobStatu
   "rendering_preview",
 ]);
 
+const PROJECT_ANALYSIS_DEFAULT_BRIEF =
+  "Analyze the registered project source and generate the smallest coherent editable prototype " +
+  "from its routes, pages, domain entities, roles, APIs, and observable business flows.";
+
 export function isStructuredPrototypeGenerationActive(
   status: StructuredPrototypeGenerationJobStatus,
 ): boolean {
@@ -34,4 +38,9 @@ export function canStartStructuredPrototypeGeneration(
     job.status === "interrupted" ||
     job.status === "cancelled"
   );
+}
+
+export function structuredPrototypeGenerationBrief(brief: string): string {
+  const trimmed = brief.trim();
+  return trimmed || PROJECT_ANALYSIS_DEFAULT_BRIEF;
 }

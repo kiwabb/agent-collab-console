@@ -210,20 +210,6 @@ will not work — Tailwind v4 resolves utility colors at theme build time.
 
 ## Common Mistakes
 
-### Scenario: Project Prototype Navigation
-
-- Source-backed prototypes read `route_patterns` from validated
-  `source_meta_json` through `safeJsonRecord`; malformed metadata contributes
-  no routes.
-- The preview host exposes one compact project-route selector and keeps the
-  outer project page mounted while switching the active prototype.
-- Dynamic patterns such as `/collections/:id` match concrete routes, while an
-  exact static route wins over a dynamic sibling.
-- The sandbox remains `allow-scripts` without `allow-same-origin`. Its injected
-  bridge intercepts internal anchors and `data-prototype-route`, then the host
-  accepts messages only from the current iframe's `contentWindow`.
-- An unknown route produces a visible error toast; it must not silently leave
-  the user on the wrong prototype.
 
 - **Self-referential `useCallback` deps.** Adding a `connect` callback to
   its own dependency array — directly or via a helper. TypeScript catches

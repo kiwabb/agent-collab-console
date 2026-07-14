@@ -278,21 +278,6 @@ test("runtime source has no generated placeholder copy", () => {
   assert.deepEqual(problems, []);
 });
 
-test("prototype SSE UI parses event data through typed helpers", () => {
-  const problems: string[] = [];
-  const prototypeRoot = join(SRC_ROOT, "features", "prototype");
-  const allowed = new Set(["prototypeStreamEvents.ts"]);
-  for (const file of collectSourceFiles(prototypeRoot)) {
-    if (allowed.has(relative(prototypeRoot, file))) continue;
-    const source = readFileSync(file, "utf-8");
-    if (/JSON\.parse\s*\(/.test(source)) {
-      problems.push(`${rel(file)} parses JSON directly instead of prototypeStreamEvents helpers`);
-    }
-  }
-
-  assert.deepEqual(problems, []);
-});
-
 test("execution process stream hooks parse frames through typed helpers", () => {
   const problems: string[] = [];
   const hookFiles = [
