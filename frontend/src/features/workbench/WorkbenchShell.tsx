@@ -58,16 +58,8 @@ function WorkbenchInner({
   }, [pathname]);
 
   return (
-    <div className="relative isolate h-dvh overflow-hidden bg-background text-foreground">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-60"
-        style={{
-          background:
-            "radial-gradient(circle at top left, rgba(230,149,82,0.12), transparent 30%), radial-gradient(circle at top right, rgba(96,165,250,0.08), transparent 25%), linear-gradient(180deg, rgba(255,255,255,0.02), transparent 24%)",
-        }}
-      />
-      <div className="relative z-10 flex h-full flex-col">
+    <div className="h-dvh overflow-hidden bg-background text-foreground">
+      <div className="flex h-full flex-col">
         <AppHeader
           breadcrumbs={breadcrumbs}
           onMenuClick={() => setSidebarOpen(true)}
@@ -81,16 +73,16 @@ function WorkbenchInner({
               className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
               onClick={() => setSidebarOpen(false)}
             />
-            <div className="absolute inset-y-2 left-2 w-72 max-w-[calc(100vw-1rem)]">
+            <div className="absolute inset-y-0 left-0 w-72 max-w-[calc(100vw-2rem)] border-r border-border-subtle bg-surface shadow-xl">
               <AppSidebar />
             </div>
           </div>
         )}
-        <div className="flex min-h-0 flex-1 gap-0 px-2 pb-2 sm:px-3 sm:pb-3 lg:gap-3">
-          <div className="hidden h-full shrink-0 lg:block">
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <div className="hidden h-full shrink-0 border-r border-border-subtle lg:block">
             <AppSidebar />
           </div>
-          <main className="enterprise-panel min-w-0 flex-1 overflow-hidden rounded-[22px] lg:rounded-[30px]">
+          <main className="min-w-0 flex-1 overflow-hidden bg-background">
             <div className="h-full overflow-auto">{children}</div>
           </main>
         </div>

@@ -35,7 +35,7 @@ import type { RuntimeCatalog } from "@/lib/types";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
 
 const settingsTabClassName =
-  "w-full flex items-center justify-center lg:justify-start gap-1.5 lg:gap-3 px-2 lg:px-4 py-2.5 lg:py-3 rounded-lg lg:rounded-xl text-[10px] lg:text-xs font-bold transition-all data-[state=active]:bg-brand/10 data-[state=active]:text-brand hover:bg-surface-hover hover:text-foreground text-text-secondary group border border-transparent data-[state=active]:border-brand/20";
+  "w-full flex items-center justify-center lg:justify-start gap-1.5 lg:gap-3 px-2 lg:px-4 py-2.5 lg:py-3 text-[10px] lg:text-xs font-bold transition-colors data-[state=active]:bg-brand/10 data-[state=active]:text-brand hover:bg-surface-hover hover:text-foreground text-text-secondary group border-l-2 border-transparent data-[state=active]:border-brand";
 const settingsTabIconClassName =
   "size-7 lg:size-8 rounded-lg bg-surface-raised flex items-center justify-center group-data-[state=active]:bg-brand/20 group-data-[state=active]:shadow-inner transition-colors";
 
@@ -104,7 +104,7 @@ export function SettingsPage() {
       eyebrow={t("settings.preferences")}
       title={t("settings.title")}
       description={t("settings.preferences")}
-      maxWidthClassName="max-w-[1280px]"
+      maxWidthClassName="max-w-none"
       actions={<AutoSaveIndicator status={saveStatus} error={saveError} />}
       contentClassName="flex overflow-hidden"
     >
@@ -147,8 +147,8 @@ export function SettingsPage() {
               </TabsList>
             </div>
 
-            <div className="mt-auto hidden lg:block">
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-brand/10 to-transparent border border-brand/10">
+            <div className="mt-auto hidden border-t border-border-subtle pt-4 lg:block">
+              <div className="px-4 py-2">
                 <p className="text-[10px] font-bold text-brand uppercase tracking-widest mb-1">
                   {t("settings.generalStatus")}
                 </p>
@@ -173,8 +173,8 @@ export function SettingsPage() {
                   <p className="text-xs text-text-muted">{t("settings.appearanceDesc")}</p>
                 </div>
 
-                <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-6">
-                  <Card className="bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
+                <div className="max-w-4xl divide-y divide-border-subtle">
+                  <Card className="rounded-none bg-transparent py-6 ring-0 hover:translate-y-0 hover:shadow-none">
                     <CardHeader className="pb-4">
                       <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
                         {t("settings.theme")}
@@ -223,7 +223,7 @@ export function SettingsPage() {
                     </CardContent>
                   </Card>
 
-                  <Card className="bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
+                  <Card className="rounded-none bg-transparent py-6 ring-0 hover:translate-y-0 hover:shadow-none">
                     <CardHeader className="pb-4">
                       <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
                         {t("settings.language")}
@@ -272,7 +272,7 @@ export function SettingsPage() {
                     </CardContent>
                   </Card>
 
-                  <Card className="bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
+                  <Card className="rounded-none bg-transparent py-6 ring-0 hover:translate-y-0 hover:shadow-none">
                     <CardHeader className="pb-4">
                       <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
                         {t("settings.fontSize")}
@@ -319,7 +319,7 @@ export function SettingsPage() {
                     </CardContent>
                   </Card>
 
-                  <Card className="bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
+                  <Card className="rounded-none bg-transparent py-6 ring-0 hover:translate-y-0 hover:shadow-none">
                     <CardHeader className="pb-4">
                       <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
                         {t("settings.reducedMotion")}
@@ -363,7 +363,7 @@ export function SettingsPage() {
                     </CardContent>
                   </Card>
 
-                  <Card className="bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
+                  <Card className="rounded-none bg-transparent py-6 ring-0 hover:translate-y-0 hover:shadow-none">
                     <CardHeader className="pb-4">
                       <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
                         {t("settings.compactMode")}
@@ -420,7 +420,7 @@ export function SettingsPage() {
                   <p className="text-xs text-text-muted">{t("settings.runtimeConfigDesc")}</p>
                 </div>
 
-                <Card className="w-full bg-surface-raised/50 border-border-subtle shadow-2xl shadow-black/5 overflow-hidden backdrop-blur-sm">
+                <Card className="w-full rounded-none bg-transparent ring-0 hover:translate-y-0 hover:shadow-none">
                   <CardHeader className="border-b border-border-subtle/50 pb-4 mb-4">
                     <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-brand">
                       {t("settings.advancedConfig")}

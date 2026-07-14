@@ -66,7 +66,10 @@ export function IssuePipelineTrace({ issueId, reloadKey }: Props) {
 
   return (
     <section
-      className={cn("enterprise-panel relative overflow-hidden rounded-[26px]", "px-5 pt-5 pb-4")}
+      className={cn(
+        "relative overflow-hidden border-y border-border-subtle bg-surface",
+        "px-5 pt-5 pb-4",
+      )}
       style={{
         background:
           "linear-gradient(180deg, color-mix(in srgb, var(--color-surface-raised) 92%, white 8%) 0%, var(--color-surface) 100%)",

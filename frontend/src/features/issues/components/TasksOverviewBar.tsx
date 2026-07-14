@@ -110,7 +110,7 @@ export function TasksOverviewBar({ issueId }: Props) {
   const stages = pipeline?.stages ?? [];
 
   return (
-    <div className="shrink-0 border-b border-border-subtle bg-surface/86 backdrop-blur-sm">
+    <div className="shrink-0 border-b border-border-subtle bg-surface">
       <div className="flex items-center justify-between gap-3.5 px-4 py-3 font-mono text-[12px] text-text-muted flex-wrap">
         <div className="flex items-center gap-3.5 flex-wrap">
           <span>

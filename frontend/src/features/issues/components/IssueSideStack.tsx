@@ -116,7 +116,10 @@ export function IssueSideStack({ issueId, checklist, reloadKey, issue, onIssueUp
   });
 
   return (
-    <aside data-density="insight-rail" className="flex flex-col gap-2.5 2xl:sticky 2xl:top-3">
+    <aside
+      data-density="insight-rail"
+      className="flex flex-col overflow-hidden border-y border-border-subtle bg-surface 2xl:sticky 2xl:top-3"
+    >
       <DecisionExplanationCard policy={policy} loading={policyLoading} />
       <AcceptanceCriteriaCard
         issue={issue ?? null}
@@ -153,7 +156,7 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <div className="enterprise-panel border-border-subtle/60 bg-surface/90 rounded-lg overflow-hidden hover:border-border-strong/45 transition-colors">
+    <section className="border-b border-border-subtle bg-surface last:border-b-0">
       <div className="px-3 py-2.5 flex items-center gap-2 border-b border-border-subtle/60 bg-surface-input/30">
         <Icon size={15} className={cn("text-brand shrink-0", iconClass)} />
         <span className="text-[13px] font-bold tracking-wide text-foreground">{title}</span>
@@ -164,7 +167,7 @@ function Card({
         )}
       </div>
       {children}
-    </div>
+    </section>
   );
 }
 
@@ -277,7 +280,7 @@ function TelemetryCard({
   const totalDuration = pipeline?.total_duration_seconds ?? null;
   return (
     <Card title={t("issue.side.telemetry")} sub={t("issue.side.telemetrySub")} icon={BarChart3}>
-      <div className="grid grid-cols-2 gap-2.5 p-2.5">
+      <div className="divide-y divide-border-subtle px-3">
         <TeleCell label={t("issue.side.tokens")}>
           {totalTokens != null ? (
             <>
@@ -318,13 +321,11 @@ function TelemetryCard({
 
 function TeleCell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="p-2.5 rounded-lg bg-surface-input/35 border border-border-subtle/50 transition-colors hover:bg-surface-input/50">
+    <div className="flex items-center justify-between gap-3 py-2.5">
       <div className="font-mono text-[9px] uppercase tracking-[0.18em] font-extrabold text-text-muted">
         {label}
       </div>
-      <div className="text-[16px] font-black text-foreground tracking-tight mt-1.5 font-mono">
-        {children}
-      </div>
+      <div className="font-mono text-[14px] font-bold text-foreground">{children}</div>
     </div>
   );
 }

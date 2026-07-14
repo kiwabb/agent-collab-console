@@ -98,6 +98,71 @@ the token, never an inline `bg-green-500`.
 chrome. Custom gradients or shadow recipes go through a shared utility
 in `globals.css` first; per-component one-offs are a smell.
 
+### Global workbench pane graph
+
+The authenticated workbench is an edge-to-edge pane graph. `AppHeader`, the
+desktop `AppSidebar`, route content, and `AppStatusBar` are sibling structural
+regions joined by a single `border-border-subtle` divider. Do not wrap the
+sidebar or route content in a detached `enterprise-panel`, large-radius frame,
+ambient gradient, blur, or structural shadow.
+
+`PageFrame` owns a neutral header strip and content pane. Data-heavy routes may
+use `max-w-none`; prose and forms constrain their readable inner content without
+adding another rounded card. Page sections use headings, spacing, and one-sided
+dividers. Summary metrics use one divided strip rather than peer KPI cards.
+
+```tsx
+// Wrong: page chrome and structural sections masquerade as objects.
+<main className="enterprise-panel rounded-[30px]">
+  <Card className="rounded-2xl shadow-xl">Settings</Card>
+</main>
+
+// Correct: structural siblings connect; only domain objects float.
+<div className="flex min-h-0 flex-1">
+  <aside className="border-r border-border-subtle bg-surface" />
+  <main className="min-w-0 flex-1 bg-background">
+    <section className="border-b border-border-subtle" />
+  </main>
+</div>
+```
+
+Cards remain correct for independently selectable/actionable domain records,
+real preview coordinate systems, dialogs, menus, sheets, alerts, and lifecycle
+boundaries such as terminals. Verify the shell and project paths with stable
+source-contract assertions in `frontend/tests/projectShellRouting.test.ts` and
+the affected route tests; do not snapshot entire markup.
+
+### Full-height editor chrome
+
+Project-scoped editors use one page surface and divider-based regions. Mount
+the route through `ProjectShell` with `layout="workspace"`, then compose the
+toolbar, rail, canvas, and inspector with borders between siblings. Do not put
+the entire editor in another rounded `enterprise-panel`, and do not render
+page or palette navigation as a grid of cards. Cards remain appropriate for
+repeated domain records, dialogs, and a real device/browser preview boundary.
+
+```tsx
+// Wrong: every structural level becomes another floating surface.
+<ProjectShell projectId={projectId} project={project}>
+  <section className="enterprise-panel rounded-xl">
+    <aside className="grid gap-2">{/* rounded navigation cards */}</aside>
+  </section>
+</ProjectShell>
+
+// Correct: one shell, then compact sibling regions separated by borders.
+<ProjectShell projectId={projectId} project={project} layout="workspace">
+  <section className="grid h-full grid-cols-[240px_minmax(0,1fr)_300px]">
+    <aside className="border-r border-border-subtle" />
+    <main className="min-w-0" />
+    <aside className="border-l border-border-subtle" />
+  </section>
+</ProjectShell>
+```
+
+Keep the structural regression assertions in
+`frontend/tests/projectShellRouting.test.ts` when changing the project shell or
+structured prototype Studio.
+
 ### Tailwind v4 gotcha (from CLAUDE.md)
 
 `bg-popover` requires an explicit alias in `@theme`:

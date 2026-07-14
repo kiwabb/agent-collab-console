@@ -60,7 +60,7 @@ export function McpManagementPanel() {
     catalog?.servers.reduce((sum, server) => sum + server.active_session_count, 0) ?? 0;
 
   return (
-    <Card className="w-full overflow-hidden border-border-subtle bg-surface-raised/50 shadow-2xl shadow-black/5 backdrop-blur-sm">
+    <Card className="w-full rounded-none bg-transparent ring-0 hover:translate-y-0 hover:shadow-none">
       <CardHeader className="border-b border-border-subtle/50 pb-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>

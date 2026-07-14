@@ -200,7 +200,7 @@ export default function BenchmarksRoutePage() {
       {tab === "diff" && (
         <div className="space-y-5">
           {!selectedRunId && (
-            <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] p-5 text-center text-[12px] text-text-muted">
+            <div className="border-y border-border-subtle bg-surface p-5 text-center text-[12px] text-text-muted">
               {"Pick a run from the leaderboard to view its diff against the current baseline."}
             </div>
           )}

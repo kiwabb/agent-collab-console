@@ -28,7 +28,7 @@ export function DecisionExplanationCard({ policy, loading }: Props) {
   return (
     <section
       data-decision-explanation-panel
-      className="enterprise-panel border-border-subtle/60 bg-surface/90 rounded-lg overflow-hidden hover:border-border-strong/45 transition-colors"
+      className="overflow-hidden border-b border-border-subtle bg-surface"
     >
       <header className="px-3 py-2.5 flex items-center gap-2 border-b border-border-subtle/60 bg-surface-input/30">
         <Network size={15} className="text-brand shrink-0" />

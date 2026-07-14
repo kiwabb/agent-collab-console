@@ -31,29 +31,21 @@ export function PageFrame({
 }: PageFrameProps) {
   if (compact) {
     return (
-      <div className={cn("min-h-full enterprise-page", className)}>
-        <div className="relative overflow-hidden border-b border-border-subtle">
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-0 opacity-90"
-            style={{
-              background:
-                "radial-gradient(700px 200px at 10% -40%, rgba(230,149,82,0.16), transparent 60%), linear-gradient(120deg, rgba(255,255,255,0.04), transparent 42%)",
-            }}
-          />
+      <div className={cn("min-h-full bg-background", className)}>
+        <header className="border-b border-border-subtle bg-surface">
           <div
             className={cn(
-              "relative mx-auto flex items-center gap-3 px-4 py-3.5 sm:gap-4 sm:px-6",
+              "mx-auto flex min-w-0 flex-wrap items-center gap-3 px-4 py-3.5 sm:gap-4 sm:px-6",
               maxWidthClassName,
             )}
           >
             {leading}
-            <h1 className="truncate text-[19px] font-semibold tracking-[-0.01em] leading-tight">
+            <h1 className="min-w-0 flex-1 truncate text-[19px] font-semibold leading-tight">
               {title}
             </h1>
             {actions && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
           </div>
-        </div>
+        </header>
         <div
           className={cn("mx-auto px-4 py-4 sm:px-6 sm:py-6", maxWidthClassName, contentClassName)}
         >
@@ -63,26 +55,9 @@ export function PageFrame({
     );
   }
   return (
-    <div className={cn("min-h-full enterprise-page", className)}>
-      <div className="relative overflow-hidden border-b border-border-subtle">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 opacity-90"
-          style={{
-            background:
-              "radial-gradient(900px 300px at 12% -10%, rgba(230,149,82,0.22), transparent 60%), radial-gradient(760px 260px at 92% -12%, rgba(96,165,250,0.18), transparent 62%), linear-gradient(120deg, rgba(255,255,255,0.055), transparent 42%)",
-          }}
-        />
-        <div
-          aria-hidden
-          className="agent-mesh-grid pointer-events-none absolute inset-0 opacity-[0.18]"
-        />
-        <div
-          className={cn(
-            "relative mx-auto px-4 pb-5 pt-6 sm:px-6 sm:pb-6 sm:pt-7",
-            maxWidthClassName,
-          )}
-        >
+    <div className={cn("min-h-full bg-background", className)}>
+      <header className="border-b border-border-subtle bg-surface">
+        <div className={cn("mx-auto px-4 pb-5 pt-6 sm:px-6 sm:pb-6 sm:pt-7", maxWidthClassName)}>
           {leading && <div className="mb-4 flex items-center">{leading}</div>}
           <div className="flex flex-col items-start justify-between gap-4 lg:flex-row lg:items-end lg:gap-6">
             <div className="min-w-0">
@@ -97,9 +72,7 @@ export function PageFrame({
                 </div>
               )}
               <div className="min-w-0">
-                <h1 className="truncate text-[28px] font-semibold tracking-[-0.035em] leading-tight">
-                  {title}
-                </h1>
+                <h1 className="truncate text-[28px] font-semibold leading-tight">{title}</h1>
                 {description && (
                   <p className="mt-2 max-w-3xl text-[13px] leading-relaxed text-text-muted">
                     {description}
@@ -108,13 +81,13 @@ export function PageFrame({
               </div>
             </div>
             {actions && (
-              <div className="flex w-full items-center gap-2 rounded-2xl border border-border-subtle bg-surface/55 p-1.5 shadow-[0_12px_34px_-30px_rgba(0,0,0,0.8)] backdrop-blur-sm lg:w-auto lg:shrink-0">
+              <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:shrink-0">
                 {actions}
               </div>
             )}
           </div>
         </div>
-      </div>
+      </header>
 
       <div className={cn("mx-auto px-4 py-4 sm:px-6 sm:py-6", maxWidthClassName, contentClassName)}>
         {children}

@@ -161,7 +161,7 @@ export function GitInfoCard({ issue, onIssueUpdated }: Props) {
   return (
     <Card
       data-density="git-ops"
-      className="enterprise-card overflow-hidden rounded-lg border-border-subtle/60 bg-surface/90 p-1 transition-colors hover:border-border-strong/40"
+      className="overflow-hidden border-b border-border-subtle bg-surface p-1"
     >
       <CardHeader className="flex flex-col gap-3 space-y-0 px-3 pb-3 pt-3 sm:px-4 lg:flex-row lg:items-start lg:justify-between">
         <CardTitle className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-bold tracking-wide text-foreground">

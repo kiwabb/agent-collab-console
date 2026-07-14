@@ -106,7 +106,7 @@ export function ArtifactsHubPage() {
       }
       contentClassName="space-y-5"
     >
-      <div className="enterprise-card relative max-w-md rounded-2xl p-1">
+      <div className="relative max-w-md border-b border-border-subtle p-1">
         <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
         <Input
           value={query}

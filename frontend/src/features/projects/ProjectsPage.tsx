@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InteractionEmptyState } from "@/components/ui/interaction-empty-state";
@@ -86,15 +85,15 @@ function SetupScriptCard({
   }
 
   return (
-    <Card className="enterprise-card rounded-2xl overflow-hidden">
-      <CardHeader>
+    <section className="border-t border-border-subtle py-5 first:border-t-0">
+      <div className="max-w-3xl px-1">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           className="flex w-full items-center justify-between gap-2 text-left"
           aria-expanded={open}
         >
-          <CardTitle className="text-base">{t("projects.setupScript")}</CardTitle>
+          <h2 className="text-sm font-semibold">{t("projects.setupScript")}</h2>
           <ChevronDown
             size={16}
             className={cn(
@@ -103,12 +102,10 @@ function SetupScriptCard({
             )}
           />
         </button>
-        {open && (
-          <CardDescription className="mt-1">{t("projects.setupScriptHelp")}</CardDescription>
-        )}
-      </CardHeader>
+        {open && <p className="mt-2 text-xs text-text-muted">{t("projects.setupScriptHelp")}</p>}
+      </div>
       {open && (
-        <CardContent className="space-y-2">
+        <div className="mt-4 max-w-3xl space-y-2 px-1">
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -121,9 +118,9 @@ function SetupScriptCard({
               {saving ? t("projects.savingSetup") : t("projects.saveSetup")}
             </Button>
           </div>
-        </CardContent>
+        </div>
       )}
-    </Card>
+    </section>
   );
 }
 
@@ -162,10 +159,10 @@ function RunCommandCard({
   }
 
   return (
-    <Card className="enterprise-card rounded-2xl overflow-hidden">
-      <CardHeader>
+    <section className="border-t border-border-subtle py-5">
+      <div className="max-w-3xl px-1">
         <div className="flex items-start justify-between gap-3">
-          <CardTitle className="text-base">{t("projects.runCommandLabel")}</CardTitle>
+          <h2 className="text-sm font-semibold">{t("projects.runCommandLabel")}</h2>
           <Link
             href={startupConfigHref}
             className={buttonVariants({ variant: "outline", size: "sm", className: "gap-2" })}
@@ -174,9 +171,9 @@ function RunCommandCard({
             {t("startupConfig.open")}
           </Link>
         </div>
-        <CardDescription>{t("projects.runCommandHelp")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2">
+        <p className="mt-2 text-xs text-text-muted">{t("projects.runCommandHelp")}</p>
+      </div>
+      <div className="mt-4 max-w-3xl space-y-2 px-1">
         <Textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -189,8 +186,8 @@ function RunCommandCard({
             {saving ? t("projects.savingSetup") : t("projects.saveSetup")}
           </Button>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
@@ -247,7 +244,6 @@ export function ProjectsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
-  const [branchesOpen, setBranchesOpen] = useState(true);
   const [stats, setStats] = useState<ProjectStats | null>(null);
   const [audit, setAudit] = useState<ProjectAuditEntry[]>([]);
   // Remote-update detection for the selected project. `null` status = not yet
@@ -492,9 +488,10 @@ export function ProjectsPage() {
           <ChevronLeft size={16} />
         </Button>
       }
-      contentClassName="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6"
+      maxWidthClassName="max-w-none"
+      contentClassName="grid min-h-[calc(100dvh-8.5rem)] grid-cols-1 p-0 sm:p-0 md:grid-cols-[260px_minmax(0,1fr)]"
     >
-      <aside className="enterprise-panel rounded-2xl p-3 space-y-2 self-start">
+      <aside className="space-y-2 border-b border-border-subtle bg-surface p-3 md:border-b-0 md:border-r">
         <h2 className="text-xs uppercase tracking-wider text-muted-foreground px-2">
           {t("projects.listHeading")}
         </h2>
@@ -529,8 +526,8 @@ export function ProjectsPage() {
                     setActiveId(p.id);
                   }}
                   className={cn(
-                    "w-full text-left pl-3 pr-9 py-2 rounded-xl text-sm hover:bg-surface-hover transition",
-                    activeId === p.id && "bg-brand/10 text-brand font-medium",
+                    "w-full border-l-2 border-transparent py-2 pl-3 pr-9 text-left text-sm transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40",
+                    activeId === p.id && "border-brand bg-brand/10 text-brand font-medium",
                   )}
                 >
                   <div className="truncate">{p.name}</div>
@@ -554,18 +551,20 @@ export function ProjectsPage() {
         )}
       </aside>
 
-      <section>
+      <section className="min-w-0 bg-background">
         {activeProject ? (
-          <div className="space-y-4">
-            <Card className="enterprise-card rounded-2xl overflow-hidden">
-              <CardHeader className="flex flex-row items-start justify-between space-y-0">
-                <div>
-                  <CardTitle className="text-brand">{activeProject.name}</CardTitle>
-                  <CardDescription className="font-mono text-xs mt-1">
+          <div>
+            <header className="border-b border-border-subtle px-4 py-4 sm:px-6">
+              <div className="flex flex-col items-start justify-between gap-4 xl:flex-row">
+                <div className="min-w-0">
+                  <h2 className="truncate text-lg font-semibold text-foreground">
+                    {activeProject.name}
+                  </h2>
+                  <p className="mt-1 truncate font-mono text-xs text-text-muted">
                     {activeProject.repo_path}
-                  </CardDescription>
+                  </p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex w-full flex-wrap gap-2 xl:w-auto xl:justify-end">
                   <Button
                     size="sm"
                     variant="outline"
@@ -614,95 +613,67 @@ export function ProjectsPage() {
                     <ArrowRight size={16} className="ml-1" />
                   </Button>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-                  <div>
-                    <div className="text-muted-foreground text-xs">
-                      {t("projects.defaultBranch")}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono">{activeProject.default_branch}</span>
-                      <RemoteUpdateBadge
-                        status={remoteStatus}
-                        checking={remoteChecking && remoteStatus === null}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground text-xs">{t("projects.origin")}</div>
-                    <div className="font-mono truncate">{activeProject.origin_url ?? "—"}</div>
-                  </div>
-                </div>
-                {stats && (
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs pt-2 border-t border-border-subtle">
-                    <span>
-                      <span className="text-muted-foreground">{STATS_LABELS.total}:</span>{" "}
-                      <span className="font-semibold">{stats.issues_total}</span>
-                    </span>
-                    <span>
-                      <span className="text-muted-foreground">{STATS_LABELS.open}:</span>{" "}
-                      <span className="font-semibold">{stats.issues_open}</span>
-                    </span>
-                    <span>
-                      <span className="text-muted-foreground">{STATS_LABELS.merged}:</span>{" "}
-                      <span className="font-semibold text-success">{stats.issues_merged}</span>
-                    </span>
-                    <span>
-                      <span className="text-muted-foreground">{STATS_LABELS.abandoned}:</span>{" "}
-                      <span className="font-semibold text-muted-foreground">
-                        {stats.issues_abandoned}
-                      </span>
-                    </span>
-                  </div>
-                )}
-                <div className="space-y-2 pt-3 border-t border-border-subtle">
-                  <button
-                    type="button"
-                    onClick={() => setBranchesOpen((v) => !v)}
-                    className="flex w-full items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground hover:text-foreground transition"
-                    aria-expanded={branchesOpen}
-                  >
-                    <GitBranchIcon size={14} />
-                    {t("projects.branches")}
-                    <ChevronDown
-                      size={14}
-                      className={cn("ml-auto transition-transform", !branchesOpen && "-rotate-90")}
+              </div>
+            </header>
+            <div className="border-b border-border-subtle bg-surface/40 px-4 py-3 text-sm sm:px-6">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div className="text-muted-foreground text-xs">{t("projects.defaultBranch")}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono">{activeProject.default_branch}</span>
+                    <RemoteUpdateBadge
+                      status={remoteStatus}
+                      checking={remoteChecking && remoteStatus === null}
                     />
-                  </button>
-                  {branchesOpen &&
-                    (branchesLoading ? (
-                      <ProjectBranchesToolLoading />
-                    ) : (
-                      <BranchListView
-                        branches={branches}
-                        defaultBranch={activeProject.default_branch}
-                      />
-                    ))}
+                  </div>
                 </div>
-              </CardContent>
-            </Card>
-            <SetupScriptCard
-              project={activeProject}
-              onUpdated={(next) => {
-                setProjects((prev) => (prev ?? []).map((p) => (p.id === next.id ? next : p)));
-              }}
-            />
-            <RunCommandCard
-              project={activeProject}
-              onUpdated={(next) => {
-                setProjects((prev) => (prev ?? []).map((p) => (p.id === next.id ? next : p)));
-              }}
-              startupConfigHref={`/projects/${activeProject.id}/env`}
-            />
-            <Card className="enterprise-card rounded-2xl overflow-hidden">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
+                <div>
+                  <div className="text-muted-foreground text-xs">{t("projects.origin")}</div>
+                  <div className="font-mono truncate">{activeProject.origin_url ?? "—"}</div>
+                </div>
+              </div>
+            </div>
+            {stats && (
+              <div className="flex flex-wrap gap-x-5 gap-y-2 border-b border-border-subtle px-4 py-3 text-xs sm:px-6">
+                <span>
+                  <span className="text-muted-foreground">{STATS_LABELS.total}:</span>{" "}
+                  <span className="font-semibold">{stats.issues_total}</span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">{STATS_LABELS.open}:</span>{" "}
+                  <span className="font-semibold">{stats.issues_open}</span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">{STATS_LABELS.merged}:</span>{" "}
+                  <span className="font-semibold text-success">{stats.issues_merged}</span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">{STATS_LABELS.abandoned}:</span>{" "}
+                  <span className="font-semibold text-muted-foreground">
+                    {stats.issues_abandoned}
+                  </span>
+                </span>
+              </div>
+            )}
+            <div className="px-4 sm:px-6">
+              <SetupScriptCard
+                project={activeProject}
+                onUpdated={(next) => {
+                  setProjects((prev) => (prev ?? []).map((p) => (p.id === next.id ? next : p)));
+                }}
+              />
+              <RunCommandCard
+                project={activeProject}
+                onUpdated={(next) => {
+                  setProjects((prev) => (prev ?? []).map((p) => (p.id === next.id ? next : p)));
+                }}
+                startupConfigHref={`/projects/${activeProject.id}/env`}
+              />
+              <section className="border-t border-border-subtle py-5">
+                <div className="mb-3 flex items-center gap-2 px-1 text-sm font-semibold">
                   <GitBranchIcon size={16} />
                   {t("projects.branches")}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+                </div>
                 {branchesLoading ? (
                   <ProjectBranchesToolLoading />
                 ) : (
@@ -711,14 +682,12 @@ export function ProjectsPage() {
                     defaultBranch={activeProject.default_branch}
                   />
                 )}
-              </CardContent>
-            </Card>
-            {audit.length > 0 && (
-              <Card className="enterprise-card rounded-2xl overflow-hidden">
-                <CardHeader>
-                  <CardTitle className="text-base">{t("projects.recentActivity")}</CardTitle>
-                </CardHeader>
-                <CardContent>
+              </section>
+              {audit.length > 0 && (
+                <section className="border-t border-border-subtle py-5">
+                  <h2 className="mb-3 px-1 text-sm font-semibold">
+                    {t("projects.recentActivity")}
+                  </h2>
                   <ul className="space-y-1 text-xs">
                     {audit.map((entry) => (
                       <li key={entry.id} className="flex items-center gap-2 font-mono">
@@ -750,19 +719,17 @@ export function ProjectsPage() {
                       </li>
                     ))}
                   </ul>
-                </CardContent>
-              </Card>
-            )}
+                </section>
+              )}
+            </div>
           </div>
         ) : (
-          <Card>
-            <CardContent className="p-4">
-              <InteractionEmptyState
-                title={t("projects.selectHint")}
-                description={t("projects.selectHintDescription")}
-              />
-            </CardContent>
-          </Card>
+          <section className="p-6">
+            <InteractionEmptyState
+              title={t("projects.selectHint")}
+              description={t("projects.selectHintDescription")}
+            />
+          </section>
         )}
       </section>
       <CreateProjectDialog

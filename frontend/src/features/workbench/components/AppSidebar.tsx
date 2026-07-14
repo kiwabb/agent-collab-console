@@ -187,12 +187,12 @@ export function AppSidebar() {
   }, [issuesByWs]);
 
   return (
-    <aside className="enterprise-panel w-64 shrink-0 h-full rounded-[30px] flex flex-col overflow-hidden">
+    <aside className="flex h-full w-64 shrink-0 flex-col overflow-hidden bg-surface">
       {/* PROJECT SELECTOR */}
       <div className="p-3">
         <DropdownMenu>
-          <DropdownMenuTrigger className="w-full flex items-center gap-3 p-2 rounded-2xl border border-border-subtle bg-surface-raised/80 hover:bg-surface-hover transition-colors text-left outline-none cursor-default">
-            <div className="size-8 shrink-0 rounded-xl bg-brand/15 flex items-center justify-center text-brand font-bold text-xs uppercase">
+          <DropdownMenuTrigger className="w-full flex items-center gap-3 p-2 rounded-md border border-border-subtle bg-surface-input hover:bg-surface-hover transition-colors text-left outline-none cursor-default focus-visible:ring-2 focus-visible:ring-brand/40">
+            <div className="size-8 shrink-0 rounded-md bg-brand/15 flex items-center justify-center text-brand font-bold text-xs uppercase">
               {(projects.find((p) => p.id === projectId)?.name || "P").charAt(0)}
             </div>
             <div className="flex-1 min-w-0">

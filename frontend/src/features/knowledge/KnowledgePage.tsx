@@ -154,9 +154,10 @@ export function KnowledgePage() {
           </button>
         </>
       }
-      contentClassName="space-y-4"
+      maxWidthClassName="max-w-none"
+      contentClassName="space-y-0 p-0 sm:p-0"
     >
-      <nav className="enterprise-card flex items-center gap-2 rounded-2xl px-2 text-xs">
+      <nav className="flex min-h-11 items-center gap-2 border-b border-border-subtle bg-surface px-4 text-xs sm:px-6">
         <TabButton active={tab === "search"} onClick={() => setTab("search")}>
           {t("knowledge.tab.search")}
         </TabButton>
@@ -171,9 +172,9 @@ export function KnowledgePage() {
       </nav>
 
       {tab === "search" ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-3">
-          <div className="enterprise-card flex flex-wrap items-center gap-2 rounded-2xl p-2">
-            <div className="flex flex-1 items-center gap-2 rounded-xl border border-border-subtle bg-surface-input/80 px-3 py-2 min-w-[260px]">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-background px-4 py-3 sm:px-6">
+            <div className="flex min-w-[min(260px,100%)] flex-1 items-center gap-2 rounded-md border border-border-subtle bg-surface-input px-3 py-2">
               <Search size={14} className="text-text-muted" />
               <input
                 value={query}
@@ -186,7 +187,7 @@ export function KnowledgePage() {
             <select
               value={projectFilter}
               onChange={(e) => setProjectFilter(e.target.value)}
-              className="rounded-xl border border-border-subtle bg-surface-input px-2 py-2 text-xs"
+              className="rounded-md border border-border-subtle bg-surface-input px-2 py-2 text-xs"
             >
               <option value="">{t("knowledge.allProjects")}</option>
               {projects.map((p) => (
@@ -195,7 +196,7 @@ export function KnowledgePage() {
                 </option>
               ))}
             </select>
-            <div className="flex items-center gap-1 rounded-xl border border-border-subtle bg-surface/70 p-0.5 text-[11px]">
+            <div className="flex items-center gap-1 border-l border-border-subtle pl-2 text-[11px]">
               {SCOPES.map((s) => (
                 <button
                   key={s.value}
@@ -210,7 +211,7 @@ export function KnowledgePage() {
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-1 rounded-xl border border-border-subtle bg-surface/70 p-0.5 text-[11px]">
+            <div className="flex items-center gap-1 border-l border-border-subtle pl-2 text-[11px]">
               {MODES.map((m) => (
                 <button
                   key={m.value}
@@ -233,8 +234,8 @@ export function KnowledgePage() {
             </div>
           </div>
 
-          <div className="flex min-h-0 flex-1 gap-3">
-            <section className="enterprise-panel min-h-0 flex-1 overflow-auto rounded-2xl">
+          <div className="flex min-h-0 flex-1">
+            <section className="min-h-[420px] min-w-0 flex-1 overflow-auto bg-background">
               {!query.trim() ? (
                 <InteractionEmptyState
                   title={t("knowledge.emptyHint")}

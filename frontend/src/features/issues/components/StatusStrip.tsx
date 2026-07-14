@@ -64,10 +64,10 @@ export function StatusStrip({
     <section
       data-density="command-header"
       className={cn(
-        "relative rounded-lg border p-2.5 transition-colors",
+        "relative border-y p-2.5 transition-colors",
         isAbandoned
           ? "border-border-subtle bg-slate-950/20 grayscale"
-          : "enterprise-panel border-border-subtle/60 bg-surface/90",
+          : "border-border-subtle bg-surface",
       )}
     >
       <div className="relative z-10 flex flex-col gap-2.5">

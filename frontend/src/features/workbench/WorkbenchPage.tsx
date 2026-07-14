@@ -99,7 +99,6 @@ import { readQaReportStatus, type QaReportStatus } from "@/features/workbench/qa
 import { KeyboardShortcutsModal } from "@/components/ui/keyboard-shortcuts-modal";
 import { CommandPalette } from "@/components/ui/command-palette";
 import { MacroRecorder, useMacros } from "@/components/ui/macro-recorder";
-import { HelloWorld } from "@/components/HelloWorld";
 
 type NavigationState = "home" | "workspace" | "issue";
 
@@ -900,7 +899,7 @@ function WorkbenchInner({
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background font-sans">
       {/* Universal Topbar */}
-      <header className="h-16 shrink-0 flex items-center justify-between px-8 border-b border-border-subtle bg-surface/80 backdrop-blur-xl z-50">
+      <header className="z-50 flex h-16 shrink-0 items-center justify-between border-b border-border-subtle bg-surface px-8">
         <div className="flex items-center gap-8">
           <div
             className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
@@ -1155,9 +1154,7 @@ function WorkbenchInner({
 
         {view === "home" && (
           <div className="h-full overflow-y-auto no-scrollbar">
-            <div className="p-8 max-w-7xl mx-auto w-full">
-              <HelloWorld className="mb-8" />
-            </div>
+            <div className="p-8 max-w-7xl mx-auto w-full"></div>
             <WorkspaceGrid
               workspaces={workspaces}
               onSelect={handleSelectWorkspace}

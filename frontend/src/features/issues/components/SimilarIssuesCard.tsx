@@ -31,7 +31,7 @@ export function SimilarIssuesCard({ issueId }: { issueId: string }) {
   }, [issueId]);
 
   return (
-    <div className="rounded-2xl border border-border-subtle bg-surface overflow-hidden">
+    <section className="overflow-hidden bg-surface">
       <div className="px-4 py-3.5 flex items-center gap-2.5 border-b border-border-subtle">
         <Sparkles size={14} className="text-brand" />
         <span className="text-[13px] font-semibold">{t("issue.similar")}</span>
@@ -64,6 +64,6 @@ export function SimilarIssuesCard({ issueId }: { issueId: string }) {
           ))}
         </ul>
       )}
-    </div>
+    </section>
   );
 }

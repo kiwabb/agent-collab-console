@@ -226,7 +226,7 @@ export function ProjectStartupConfigPage({ projectId, initialProject }: Props) {
 
       <section
         aria-labelledby="startup-summary-heading"
-        className="rounded-2xl border border-border-subtle bg-surface-raised p-5"
+        className="border-y border-border-subtle bg-surface py-5"
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>

@@ -74,7 +74,7 @@ export function AcceptanceCriteriaCard({ issue, checklist, onIssueUpdated }: Pro
   };
 
   return (
-    <section className="enterprise-panel overflow-hidden rounded-lg border border-border-subtle/60 bg-surface/90 transition-colors hover:border-border-strong/45">
+    <section className="overflow-hidden border-b border-border-subtle bg-surface">
       <header className="flex items-center gap-2 border-b border-border-subtle/60 bg-surface-input/30 px-3 py-2.5">
         <CheckCircle2 size={15} className="shrink-0 text-status-done" aria-hidden />
         <h3 className="text-[13px] font-bold tracking-wide text-foreground">

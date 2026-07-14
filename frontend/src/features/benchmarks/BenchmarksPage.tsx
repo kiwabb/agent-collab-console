@@ -175,7 +175,7 @@ export function TriggerForm({ onStarted, onError, onViewJob }: TriggerFormProps)
   return (
     <form
       onSubmit={handleSubmit}
-      className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden"
+      className="overflow-hidden border-y border-border-subtle bg-surface"
     >
       <div className="px-5 py-4 border-b border-border-subtle/50 bg-slate-900/30">
         <span className="text-[13px] font-bold tracking-wide text-foreground">
@@ -373,7 +373,7 @@ export function Leaderboard({
   const { t } = useI18n();
   if (runs.length === 0) {
     return (
-      <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden">
+      <div className="overflow-hidden border-y border-border-subtle bg-surface">
         <div className="px-5 py-4 border-b border-border-subtle/50 bg-slate-900/30 flex items-center gap-2">
           <span className="text-[13px] font-bold tracking-wide text-foreground">
             {t("benchmark.leaderboard.title")}
@@ -386,7 +386,7 @@ export function Leaderboard({
     );
   }
   return (
-    <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden">
+    <div className="overflow-hidden border-y border-border-subtle bg-surface">
       <div className="px-5 py-4 border-b border-border-subtle/50 bg-slate-900/30 flex items-center gap-2">
         <span className="text-[13px] font-bold tracking-wide text-foreground">
           {t("benchmark.leaderboard.title")}
@@ -544,7 +544,7 @@ export function ScoreCostFrontier({ runs, baseline, onPickRun }: ScoreCostFronti
   );
   if (completed.length < 2) {
     return (
-      <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden">
+      <div className="overflow-hidden border-y border-border-subtle bg-surface">
         <div className="px-5 py-4 border-b border-border-subtle/50 bg-slate-900/30">
           <span className="text-[13px] font-bold tracking-wide text-foreground">
             {t("benchmark.frontier.title")}
@@ -575,7 +575,7 @@ export function ScoreCostFrontier({ runs, baseline, onPickRun }: ScoreCostFronti
   const ticks = pickLogTicksRounded(axis.xMin, axis.xMax, 4);
 
   return (
-    <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden">
+    <div className="overflow-hidden border-y border-border-subtle bg-surface">
       <div className="px-5 py-4 border-b border-border-subtle/50 bg-slate-900/30">
         <span className="text-[13px] font-bold tracking-wide text-foreground">
           {t("benchmark.frontier.title")}
@@ -727,21 +727,21 @@ export function RunDiffPanel({ diff, loading }: RunDiffPanelProps) {
   const { t } = useI18n();
   if (loading) {
     return (
-      <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden p-5 text-center text-[12px] text-text-muted">
+      <div className="border-y border-border-subtle bg-surface p-5 text-center text-[12px] text-text-muted">
         {t("benchmark.empty")}
       </div>
     );
   }
   if (!diff) {
     return (
-      <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden p-5 text-center text-[12px] text-text-muted">
+      <div className="border-y border-border-subtle bg-surface p-5 text-center text-[12px] text-text-muted">
         {t("benchmark.empty")}
       </div>
     );
   }
   if (diff.diff === null) {
     return (
-      <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden">
+      <div className="overflow-hidden border-y border-border-subtle bg-surface">
         <div className="px-5 py-4 border-b border-border-subtle/50 bg-slate-900/30">
           <span className="text-[13px] font-bold tracking-wide text-foreground">
             {t("benchmark.diff.title")}
@@ -765,7 +765,7 @@ export function RunDiffPanel({ diff, loading }: RunDiffPanelProps) {
         : "text-text-muted";
 
   return (
-    <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden">
+    <div className="overflow-hidden border-y border-border-subtle bg-surface">
       <div className="px-5 py-4 border-b border-border-subtle/50 bg-slate-900/30 flex items-center gap-3">
         <span className="text-[13px] font-bold tracking-wide text-foreground">
           {t("benchmark.diff.title")}
@@ -923,7 +923,7 @@ export function CalibrationPanel({ report }: CalibrationPanelProps) {
   const { t } = useI18n();
   if (!report) {
     return (
-      <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden p-5 text-center text-[12px] text-text-muted">
+      <div className="border-y border-border-subtle bg-surface p-5 text-center text-[12px] text-text-muted">
         {t("benchmark.empty")}
       </div>
     );
@@ -932,7 +932,7 @@ export function CalibrationPanel({ report }: CalibrationPanelProps) {
     ? "text-status-done bg-status-done/10 border-status-done/20"
     : "text-status-awaiting bg-status-awaiting/10 border-status-awaiting/20";
   return (
-    <div className="enterprise-panel border-border-subtle/40 bg-surface/75 backdrop-blur-xl rounded-[24px] overflow-hidden">
+    <div className="overflow-hidden border-y border-border-subtle bg-surface">
       <div className="px-5 py-4 border-b border-border-subtle/50 bg-slate-900/30 flex items-center gap-3">
         <span className="text-[13px] font-bold tracking-wide text-foreground">
           {t("benchmark.calibration.title")}

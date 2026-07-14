@@ -20,7 +20,7 @@ export function AttentionRail({ items }: { items: AttentionItem[] }) {
   if (items.length === 0) return null;
 
   return (
-    <div className="mx-3 mb-3 rounded-2xl border border-border-subtle bg-surface/80 px-3 py-2 backdrop-blur-sm">
+    <div className="mx-3 mb-3 border-y border-border-subtle bg-surface px-3 py-2">
       <div className="mb-2 flex items-center justify-between text-[10px] font-mono uppercase tracking-[0.18em] text-text-muted">
         <span>attention</span>
         <span>{items.length}</span>

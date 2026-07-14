@@ -43,14 +43,17 @@ test("resume workbench layout keeps the editor usable on narrow screens", () => 
   const actions = readSource("features/resume/ResumePageActions.tsx");
 
   assert.match(shell, /h-dvh/);
-  assert.match(shell, /hidden h-full shrink-0 lg:block/);
-  assert.match(shell, /enterprise-panel min-w-0 flex-1/);
+  assert.match(shell, /hidden h-full shrink-0 border-r border-border-subtle lg:block/);
+  assert.match(shell, /min-w-0 flex-1 overflow-hidden bg-background/);
+  assert.doesNotMatch(shell, /rounded-\[22px\]|rounded-\[30px\]|radial-gradient/);
+  assert.match(shell, /border-r border-border-subtle/);
   assert.match(shell, /fixed inset-0 z-40 lg:hidden/);
   assert.match(shell, /t\("ui\.closeNavigation"\)/);
   assert.match(header, /t\("ui\.openNavigation"\)/);
   assert.match(header, /lg:hidden/);
   assert.match(pageFrame, /flex flex-col items-start justify-between/);
-  assert.match(pageFrame, /w-full items-center gap-2/);
+  assert.match(pageFrame, /w-full flex-wrap items-center gap-2/);
+  assert.doesNotMatch(pageFrame, /radial-gradient|agent-mesh-grid|backdrop-blur/);
   assert.match(actions, /w-full max-w-full flex-wrap/);
   assert.match(actions, /flex-\[1_1_220px\]/);
 });

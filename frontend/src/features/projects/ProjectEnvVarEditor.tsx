@@ -40,7 +40,7 @@ export function ProjectEnvVarEditor({
   return (
     <section
       aria-labelledby="startup-env-heading"
-      className="rounded-2xl border border-border-subtle bg-surface-raised"
+      className="border-y border-border-subtle bg-surface"
     >
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border-subtle px-5 py-4">
         <div>

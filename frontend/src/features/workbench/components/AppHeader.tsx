@@ -61,17 +61,11 @@ export function AppHeader({ breadcrumbs = [], onMenuClick, right, workspaceLabel
 
   return (
     <>
-      <header className="relative z-10 flex h-14 shrink-0 items-center gap-2.5 border-b border-border-subtle/80 bg-surface/85 px-3 backdrop-blur-md sm:gap-3.5 sm:px-4">
+      <header className="relative z-10 flex h-14 shrink-0 items-center gap-2.5 border-b border-border-subtle bg-surface px-3 sm:gap-3.5 sm:px-4">
         <Link
           href="/"
           aria-label={t("ui.home")}
-          className="flex items-center justify-center size-[28px] rounded-[9px] font-mono font-bold text-[14px] shrink-0 transition-transform hover:scale-[1.04]"
-          style={{
-            background: "linear-gradient(135deg, var(--color-brand-strong), #cf7838)",
-            color: "#1a0e05",
-            boxShadow:
-              "0 1px 0 rgba(255,255,255,0.18) inset, 0 4px 12px -3px var(--color-brand-ring)",
-          }}
+          className="flex size-[28px] shrink-0 items-center justify-center rounded-md bg-brand font-mono text-[14px] font-bold text-background transition-colors hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
         >
           C
         </Link>

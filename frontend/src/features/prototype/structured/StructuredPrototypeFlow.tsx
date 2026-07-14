@@ -15,8 +15,8 @@ export function StructuredPrototypeFlow({ document }: Props) {
   const rules = new Map(document.runtime.rules.map((rule) => [rule.id, rule]));
   const pages = new Map(document.pages.map((page) => [page.id, page]));
   return (
-    <div className="h-full min-h-0 overflow-auto bg-background/35 p-5">
-      <div className="enterprise-card mx-auto max-w-5xl overflow-hidden rounded-lg">
+    <div className="h-full min-h-0 overflow-auto bg-background/35">
+      <div className="mx-auto max-w-5xl">
         <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-border-subtle px-4">
           <div>
             <h2 className="text-sm font-bold text-foreground">
@@ -34,7 +34,7 @@ export function StructuredPrototypeFlow({ document }: Props) {
             {t("prototype.structured.flow.valid")}
           </span>
         </header>
-        <div className="grid gap-3 p-4 lg:grid-cols-3">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
           {document.pages.map((page) => (
             <article
               key={page.id}
@@ -52,14 +52,14 @@ export function StructuredPrototypeFlow({ document }: Props) {
           <div className="mb-3 text-xs font-bold uppercase text-text-muted">
             {t("prototype.structured.flow.rules")}
           </div>
-          <div className="grid gap-2">
+          <div className="divide-y divide-border-subtle border-y border-border-subtle">
             {document.flows.map((flow) => {
               const rule = rules.get(flow.ruleId);
               const target = flow.toPageId ? pages.get(flow.toPageId) : null;
               return (
                 <article
                   key={flow.id}
-                  className="grid items-center gap-3 rounded-lg border border-border-subtle bg-surface p-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
+                  className="grid items-center gap-3 px-1 py-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
                 >
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-foreground">

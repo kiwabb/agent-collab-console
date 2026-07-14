@@ -344,11 +344,11 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
           </div>
         </header>
 
-        <main className="grid min-h-0 grid-cols-1 lg:grid-cols-[240px_minmax(440px,1fr)_300px]">
+        <main className="grid min-h-0 grid-cols-1 xl:grid-cols-[240px_minmax(440px,1fr)_300px]">
           <aside
             className={cn(
               "min-h-0 grid-rows-[44px_minmax(130px,1fr)_44px_minmax(180px,1fr)] border-r border-border-subtle bg-surface",
-              mobilePanel === "left" ? "grid" : "hidden lg:grid",
+              mobilePanel === "left" ? "grid" : "hidden xl:grid",
             )}
           >
             <div className="flex items-center justify-between border-b border-border-subtle px-3 text-xs font-bold uppercase">
@@ -379,7 +379,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
           <section
             className={cn(
               "min-h-0 grid-rows-[44px_minmax(0,1fr)]",
-              mobilePanel === "canvas" ? "grid" : "hidden lg:grid",
+              mobilePanel === "canvas" ? "grid" : "hidden xl:grid",
             )}
           >
             <div className="flex items-center justify-between gap-3 border-b border-border-subtle bg-surface px-3">
@@ -459,10 +459,14 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
           <aside
             className={cn(
               "min-h-0 grid-rows-[44px_minmax(0,1fr)] border-l border-border-subtle bg-surface",
-              mobilePanel === "right" ? "grid" : "hidden lg:grid",
+              mobilePanel === "right" ? "grid" : "hidden xl:grid",
             )}
           >
-            <div className="grid grid-cols-2 border-b border-border-subtle bg-surface-input p-1">
+            <div
+              className="grid grid-cols-2 border-b border-border-subtle bg-surface-input p-1"
+              role="tablist"
+              aria-label={t("prototype.structured.inspector.properties")}
+            >
               {(["ai", "properties"] as const).map((tab) => (
                 <button
                   key={tab}
@@ -475,13 +479,20 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                   )}
                   onClick={() => setInspectorTab(tab)}
                   aria-selected={inspectorTab === tab}
+                  aria-controls={`structured-inspector-`}
+                  id={`structured-inspector-tab-`}
                   role="tab"
                 >
                   {t(`prototype.structured.inspector.${tab}`)}
                 </button>
               ))}
             </div>
-            <div className="min-h-0 overflow-auto">
+            <div
+              className="min-h-0 overflow-auto"
+              id={`structured-inspector-`}
+              role="tabpanel"
+              aria-labelledby={`structured-inspector-tab-`}
+            >
               {inspectorTab === "properties" ? (
                 <StructuredPrototypeInspector
                   node={selectedNode}

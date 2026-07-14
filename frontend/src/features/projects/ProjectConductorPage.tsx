@@ -91,7 +91,7 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
         isProjectConductorThinking ? "project-conductor-thinking-shell" : "project-conductor-shell"
       }
       className={cn(
-        "relative overflow-hidden rounded-3xl border border-border-subtle bg-[radial-gradient(circle_at_top_left,rgba(230,149,82,0.18),transparent_34%),linear-gradient(135deg,var(--surface-raised),var(--surface))] shadow-2xl shadow-black/5",
+        "relative overflow-hidden border-y border-border-subtle bg-background",
         isProjectConductorThinking && "motion-essential border-brand/35",
       )}
     >
@@ -158,7 +158,7 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
 
       <div className="p-5 grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-5">
         <div className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 divide-x divide-y divide-border-subtle border-y border-border-subtle bg-surface md:grid-cols-4 md:divide-y-0">
             <Metric label={t("projectConductor.metric.hotTokens")} value={state?.hot_tokens ?? 0} />
             <Metric
               label={t("projectConductor.metric.warmTokens")}
@@ -181,7 +181,7 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
                 : "project-conductor-actions"
             }
             className={cn(
-              "relative overflow-hidden rounded-2xl border border-border-subtle bg-surface/65 p-4",
+              "relative overflow-hidden border-y border-border-subtle bg-surface py-4",
               isProjectConductorThinking && "motion-essential border-brand/30 bg-brand-muted/10",
             )}
           >
@@ -267,7 +267,7 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-2xl border border-border-subtle bg-surface/70 p-3">
+    <div className="min-w-0 p-3">
       <div className="text-[10px] uppercase tracking-[0.2em] text-text-muted">{label}</div>
       <div className="mt-1 text-2xl font-black tabular-nums">{value}</div>
     </div>
@@ -276,14 +276,14 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 function MemoryBlock({ title, body }: { title: string; body: string }) {
   return (
-    <div className="rounded-2xl border border-border-subtle bg-surface/65 p-4">
+    <section className="border-y border-border-subtle bg-surface py-4">
       <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted mb-3">
         {title}
       </h3>
       <pre className="max-h-52 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">
         {body}
       </pre>
-    </div>
+    </section>
   );
 }
 
@@ -297,24 +297,21 @@ function ListBlock({
   items: Array<{ id: string; body: string }>;
 }) {
   return (
-    <div className="rounded-2xl border border-border-subtle bg-surface/65 p-4">
+    <section className="border-y border-border-subtle bg-surface py-4">
       <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted mb-3">
         {title}
       </h3>
       {items.length === 0 ? (
         <p className="text-xs text-text-muted">{empty}</p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-border-subtle border-y border-border-subtle">
           {items.map((item) => (
-            <li
-              key={item.id}
-              className="rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs leading-relaxed text-text-secondary"
-            >
+            <li key={item.id} className="px-1 py-3 text-xs leading-relaxed text-text-secondary">
               {item.body}
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </section>
   );
 }
