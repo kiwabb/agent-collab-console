@@ -4,7 +4,7 @@
 
 Define and demonstrate a product-manager-facing prototype studio where users can review runnable web prototypes, refine them through AI conversation, rearrange semantic UI components with constrained drag-and-drop, and visually connect pages into business flows. After validating the frontend interaction model, define the backend workflow, persistence contracts, state machines, transaction boundaries, and API surface required to implement the structured editor safely.
 
-The locked end-state, vertical-slice boundary, and user acceptance loop are recorded in [`final-goal.md`](final-goal.md). Implementation must complete that procurement workflow before expanding component, flow, collaboration, or export scope.
+The locked end-state and user acceptance loop are recorded in [`final-goal.md`](final-goal.md). Production generation must remain domain-neutral: project evidence and the confirmed blueprint determine pages and optional business behavior. `examples/admin-demo` is an acceptance fixture, never a default template or production business contract.
 
 ## Users and Core Jobs
 
@@ -20,6 +20,8 @@ The locked end-state, vertical-slice boundary, and user acceptance loop are reco
 - Page layout is constraint-first using Stack and Grid containers. The MVP has no free positioning; a future version may allow it only inside an explicit Freeform container.
 - AI changes are expressed as validated structured patches and shown as a draft before acceptance. Rejecting or failing a patch preserves the accepted version.
 - Initial AI generation is plan-first: the user confirms a multi-page blueprint before foundation and page generation begin, and only a fully validated assembled document can become an active draft.
+- The confirmed blueprint is the sole scope authority for generation. Page counts, routes, navigation, roles, entities, forms, flows, and scenarios must not be fixed to a procurement or admin domain in production code.
+- Roles, entities, forms, flows, and runtime scenarios are optional. The generator must not invent them when repository evidence and the confirmed product intent do not require them.
 - Requirements-driven generation, repository-backed restoration, and conversational modification all invoke the project-bound Claude Code `prototype_ui_engineer`; they use different task/context protocols but submit the same strict structured contracts.
 - Every AI request creates a fresh `CodexTask` and execution process in an isolated project worktree. Conversation continuity comes from persisted threads, messages, context manifests, and the current structured draft rather than hidden Claude session memory.
 - The product backend never calls a generic LLM API for prototype generation or editing. If the project UI Engineer runtime is unavailable, the operation fails closed without fallback.
@@ -55,6 +57,7 @@ The locked end-state, vertical-slice boundary, and user acceptance loop are reco
 - Recovery loads the latest verified checkpoint and deterministically replays the bounded command tail. Missing sequence, unsupported version, object corruption, or hash mismatch marks the draft corrupt and fails closed.
 - Publishing a draft creates an immutable document revision that references a verified document object. Rendered artifacts record document object hash, revision, renderer version, and output hash.
 - Assets are content-addressed and referenced by ID; large binaries are never embedded into document JSON.
+- Deleting a project prototype is an explicit, confirmed, idempotent project-level operation. It atomically removes drafts, publications, generation records, runtime sessions, and AI conversations, releases object references for later GC, and retains deletion operation evidence.
 
 ## AI Editing Contract
 
@@ -68,6 +71,7 @@ The locked end-state, vertical-slice boundary, and user acceptance loop are reco
 
 ## Workbench Information Architecture
 
+- The production Studio uses one application shell and divider-based editor regions. Project navigation, page rail, canvas and inspector must not be nested as floating cards inside one another.
 - Top bar: project identity, saved/draft state, responsive viewport control, Design/Flow mode switch, preview, scenario/simulated-role/reset controls, and share action.
 - Left rail in Design mode: page tree with shared-navigation order, then draggable component palette.
 - Center in Design mode: dominant runnable preview with selection outlines, insertion indicators, and responsive viewport framing.
@@ -116,6 +120,8 @@ The locked end-state, vertical-slice boundary, and user acceptance loop are reco
 - [x] No desktop or mobile viewport has incoherent overlap or document-level horizontal overflow.
 - [x] Keyboard focus is visible and primary controls expose accessible labels.
 - [x] Visual QA screenshots are captured at desktop and mobile widths.
+- [x] Production Studio chrome is full-width and divider-based; no page-level card is nested inside the project surface, and palette/page items render as compact rows.
+- [x] A confirmed project-level delete removes all editable/published prototype state atomically, returns the Studio to generation, and preserves all data on failure.
 - [x] The backend aggregate and SQLite table responsibilities are defined without treating HTML as canonical storage.
 - [x] Draft, AI edit, and publication/render state machines have explicit legal transitions and restart behavior.
 - [x] API contracts include optimistic concurrency, idempotency, typed errors, snapshots, and SSE recovery.
@@ -134,6 +140,10 @@ The locked end-state, vertical-slice boundary, and user acceptance loop are reco
 - [x] Runtime sessions pin document/scenario/core versions and persist semantic event/state hashes for deterministic recovery and replay.
 - [x] Browser preview and backend replay share one versioned TypeScript runtime core; Python does not implement a second evaluator.
 - [x] Initial AI generation includes at least one scripted business scenario whose event batches and milestone predicates pass in the pinned runtime core before candidate readiness.
+- [ ] Production generation contains no procurement-specific prompt, page set, route, role, entity, form, scenario, store ordering, or runtime replay requirement.
+- [ ] Generation work items and deterministic assembly derive entirely from the confirmed blueprint and strict generation artifacts.
+- [ ] `examples/admin-demo` produces editable dashboard, user-management, and order-management pages from repository evidence.
+- [ ] A second non-admin fixture passes generation contract tests, proving the implementation is not specialized to `admin-demo`.
 
 ## Implementation Plan
 

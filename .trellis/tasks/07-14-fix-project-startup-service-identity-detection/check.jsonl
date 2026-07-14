@@ -1,1 +1,7 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/07-14-fix-project-startup-service-identity-detection/research/readiness-identity-contract.md", "reason": "Verify implementation against approved state matrix, contract boundaries, and regression scenarios"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Verify probe safety, bounded body handling, shared evaluator semantics, and backend quality gates"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Verify strict schema persistence, migration behavior, and SQLite round trips"}
+{"file": ".trellis/spec/ccgui/frontend/state-management.md", "reason": "Verify readiness/process/occupation states and Start/Stop authority remain correctly separated"}
+{"file": ".trellis/spec/ccgui/frontend/type-safety.md", "reason": "Verify additive status and matcher types are precise at all frontend boundaries"}
+{"file": ".trellis/spec/ccgui/frontend/component-guidelines.md", "reason": "Verify UI wording, status presentation, controls, and actionable invalid-config behavior"}

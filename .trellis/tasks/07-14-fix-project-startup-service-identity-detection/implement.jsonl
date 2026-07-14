@@ -1,1 +1,7 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/07-14-fix-project-startup-service-identity-detection/research/readiness-identity-contract.md", "reason": "Approved architecture, state matrix, affected boundaries, tests, and readiness matcher constraints"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "Current loopback probe semantics, Operations Engineer startup contracts, backend quality and security boundaries"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "Authoritative multi-service startup configuration persistence and migration/round-trip requirements"}
+{"file": ".trellis/spec/ccgui/frontend/state-management.md", "reason": "Project startup polling, process/reachability derivation, control authority, and UI state semantics"}
+{"file": ".trellis/spec/ccgui/frontend/type-safety.md", "reason": "Typed startup service and status contracts across API boundaries"}
+{"file": ".trellis/spec/ccgui/frontend/component-guidelines.md", "reason": "Project startup status and action component behavior for new invalid/occupied/unhealthy states"}
